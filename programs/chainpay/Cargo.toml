@@ -1,0 +1,43 @@
+[package]
+name = "chainpay"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+no-entrypoint = []
+cpi = ["no-entrypoint"]
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+settlement-tests = [
+    "dep:litesvm",
+    "dep:solana-instruction",
+    "dep:solana-keypair",
+    "dep:solana-message",
+    "dep:solana-signer",
+    "dep:solana-system-interface",
+    "dep:solana-transaction",
+    "dep:spl-token-2022-interface",
+    "dep:spl-token-interface",
+]
+
+[dependencies]
+anchor-lang = "1.1.2"
+anchor-spl = { version = "1.1.2", default-features = false, features = ["mint", "token", "token_2022"] }
+litesvm = { version = "0.10.0", optional = true }
+solana-instruction = { version = "3.0", optional = true }
+solana-keypair = { version = "3.1", optional = true }
+solana-message = { version = "3.0.1", optional = true }
+solana-signer = { version = "3.0", optional = true }
+solana-system-interface = { version = "2.0", features = ["bincode"], optional = true }
+solana-transaction = { version = "3.0", features = ["verify"], optional = true }
+spl-token-2022-interface = { version = "2.1.0", optional = true }
+spl-token-interface = { version = "2.0.0", optional = true }
+
+[[test]]
+name = "settlement"
+path = "tests/settlement.rs"
+required-features = ["settlement-tests"]

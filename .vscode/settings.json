@@ -1,0 +1,10 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "cargo check": true,
+        "cargo test": true,
+        "/^python3 - <<'PY'\nimport math\nalphabet='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'\ncharmap=\\{c:i for i,c in enumerate\\(alphabet\\)\\}\n\ndef b58decode\\(s\\):\n    n=0\n    for c in s:\n        n=n\\*58\\+charmap\\[c\\]\n    full=n\\.to_bytes\\(\\(n\\.bit_length\\(\\)\\+7\\)//8,'big'\\)\n    pad=0\n    for c in s:\n        if c=='1': pad\\+=1\n        else: break\n    return b'\\\\x00'\\*pad\\+full\n\npk='TokenzQd6hVH2uoWjTANHheG4wRaSANSxedgK7P1oD5Ph'\nprint\\('len', len\\(pk\\)\\)\nprint\\(b58decode\\(pk\\)\\.hex\\(\\)\\)\nprint\\(len\\(b58decode\\(pk\\)\\)\\)\nPY$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "chainpay-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "sdk",
+    "mcp-server",
+    "app"
+  ],
+  "scripts": {
+    "check:sdk": "npm --prefix sdk run typecheck",
+    "check:mcp": "npm --prefix mcp-server run typecheck",
+    "check:app": "npm --prefix app run typecheck",
+    "dev:app": "npm --prefix app run dev",
+    "check": "npm run check:sdk && npm run check:mcp && npm run check:app"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2"
+  }
+}

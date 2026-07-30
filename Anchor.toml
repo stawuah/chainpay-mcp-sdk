@@ -1,0 +1,15 @@
+[toolchain]
+anchor_version = "1.1.2"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.devnet]
+chainpay = "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[hooks]

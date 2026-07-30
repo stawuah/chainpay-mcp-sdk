@@ -1,0 +1,10 @@
+/target/
+**/target/
+node_modules/
+dist/
+smart-contract/.anchor/
+smart-contract/deployments/
+npm-debug.log*
+.env
+.env.*
+!.env.example

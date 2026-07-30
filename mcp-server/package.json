@@ -1,0 +1,29 @@
+{
+  "name": "@chainpay/mcp-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/server.js",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "check:mcp": "npm run typecheck",
+    "check": "npm --prefix .. run check",
+    "check:sdk": "npm --prefix ../sdk run typecheck",
+    "check:app": "npm --prefix ../app run typecheck",
+    "build": "npm --prefix ../sdk run build && tsc",
+    "start": "node dist/server.js",
+    "start:http": "node dist/http.js",
+    "dev": "npm run build && npm start",
+    "dev:http": "npm run build && node dist/http.js",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:sdk": "npm --prefix ../sdk run test"
+  },
+  "dependencies": {
+    "@chainpay/sdk": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^5.0.0"
+  }
+}

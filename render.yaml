@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: chainpay-mcp
+    runtime: node
+    plan: free
+    buildCommand: npm ci --ignore-scripts && npm --prefix sdk run build && npm --prefix mcp-server run build
+    startCommand: node mcp-server/dist/http.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CHAINPAY_RPC_URL
+        sync: false
+      - key: CHAINPAY_PROGRAM_ID
+        value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
+      - key: CHAINPAY_HTTP_AUTH_TOKEN
+        sync: false
+      - key: CHAINPAY_ALLOWED_ORIGINS
+        value: ""
+

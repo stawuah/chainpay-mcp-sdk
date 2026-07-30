@@ -1,0 +1,139 @@
+export type Address = string;
+
+export type TokenProgram = "spl-token" | "token-2022";
+
+export type AccountMeta = {
+  address: Address;
+  isSigner: boolean;
+  isWritable: boolean;
+};
+
+export type ChainPayInstruction = {
+  name: string;
+  programId: Address;
+  keys: AccountMeta[];
+  data: Uint8Array;
+};
+
+export type PreparedTransaction = {
+  instructions: ChainPayInstruction[];
+  requiredSigners: Address[];
+  feePayer?: Address;
+};
+
+export type SimulationResult = {
+  ok: boolean;
+  logs: string[];
+  unitsConsumed?: bigint;
+  error?: string;
+};
+
+export type PaymentSubmission = {
+  signature: string;
+  slot?: bigint;
+  status?: "submitted" | "confirmed";
+};
+
+export type PaymentSubmissionAdapter = {
+  simulate(prepared: PreparedTransaction): Promise<SimulationResult>;
+  submit(prepared: PreparedTransaction): Promise<PaymentSubmission>;
+  confirm?(signature: string): Promise<{ slot?: bigint }>;
+};
+
+export type MandateStatus = "active" | "paused" | "revoked" | "expired";
+
+export type PaymentStatus =
+  | "prepared"
+  | "submitted"
+  | "confirmed"
+  | "failed";
+
+export type Mandate = {
+  address: Address;
+  owner: Address;
+  approvedAgent: Address;
+  sourceTokenAccount: Address;
+  allowedMint: Address;
+  allowedRecipient: Address;
+  maxPerPayment: bigint;
+  totalLimit: bigint;
+  amountSpent: bigint;
+  paymentCount: bigint;
+  expiresAtSlot: bigint;
+  paused: boolean;
+  revoked: boolean;
+  status: MandateStatus;
+  tokenProgram?: TokenProgram;
+};
+
+export type PaymentRequest = {
+  mandate: Address;
+  invoiceHash: Uint8Array;
+  paymentId: Uint8Array;
+  signatureReference: Uint8Array;
+  mint: Address;
+  recipient: Address;
+  amount: bigint;
+  tokenProgram?: TokenProgram;
+};
+
+export type PaymentReceipt = {
+  address: Address;
+  mandate: Address;
+  invoiceHash: Uint8Array;
+  paymentId: Uint8Array;
+  mint: Address;
+  recipient: Address;
+  sourceTokenAccount: Address;
+  recipientTokenAccount: Address;
+  amount: bigint;
+  agent: Address;
+  executedAtSlot: bigint;
+  signatureReference: Uint8Array;
+  status: PaymentStatus;
+  onChainStatus: number;
+  bump: number;
+  transactionSignature?: string;
+};
+
+export type PolicyCheck = {
+  name: string;
+  ok: boolean;
+  message: string;
+};
+
+export type PaymentPreflight = {
+  valid: boolean;
+  currentSlot: bigint;
+  checks: PolicyCheck[];
+};
+
+export type PreparedPayment = {
+  request: PaymentRequest;
+  mandate: Mandate;
+  receiptAddress: Address;
+  instruction: ChainPayInstruction;
+  transaction: PreparedTransaction;
+  preflight: PaymentPreflight;
+};
+
+export type PaymentExecutionResult = {
+  status: "submitted" | "confirmed" | "failed";
+  receiptAddress: Address;
+  signature?: string;
+  slot?: bigint;
+  simulation: SimulationResult;
+  error?: string;
+};
+
+export type PreparedMandate = {
+  mandateAddress: Address;
+  configAddress: Address;
+  transaction: PreparedTransaction;
+};
+
+export type ChainPayClientOptions = {
+  rpcUrl?: string;
+  programId?: Address;
+  commitment?: "processed" | "confirmed" | "finalized";
+};
