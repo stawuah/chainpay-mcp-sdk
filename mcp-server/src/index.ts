@@ -18,6 +18,8 @@ export function createDefaultContext(): ChainPayMcpContext {
       programId: process.env.CHAINPAY_PROGRAM_ID,
       commitment: "confirmed",
     }),
+    backendUrl: process.env.CHAINPAY_BACKEND_URL,
+    backendAuthToken: process.env.CHAINPAY_BACKEND_AUTH_TOKEN,
   };
 }
 
@@ -55,4 +57,3 @@ export async function callTool(
       throw new Error(`Unknown ChainPay tool: ${name}`);
   }
 }
-

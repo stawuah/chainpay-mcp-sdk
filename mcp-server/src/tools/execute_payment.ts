@@ -1,4 +1,5 @@
 import type { ChainPayMcpContext } from "./context.js";
+import { bytesToHex } from "@chainpay/sdk";
 import { serializeTransaction, toolResult } from "./common.js";
 import { parsePaymentInput, requireObject } from "./payment-input.js";
 
@@ -6,7 +7,8 @@ export async function executePayment(
   context: ChainPayMcpContext,
   args: Record<string, unknown>,
 ) {
-  const parsed = parsePaymentInput(requireObject(args));
+  const input = requireObject(args);
+  const parsed = parsePaymentInput(input);
   const prepared = await context.client.preparePayment(parsed.input, parsed.agent);
   if (!prepared.preflight.valid) {
     return toolResult(
@@ -18,6 +20,51 @@ export async function executePayment(
       },
       true,
     );
+  }
+
+  const signedTransaction = typeof input.signedTransaction === "string"
+    ? input.signedTransaction.trim()
+    : undefined;
+  if (signedTransaction) {
+    if (!context.backendUrl) {
+      return toolResult(
+        {
+          action: "backend_required",
+          message: "CHAINPAY_BACKEND_URL must be configured to relay a signed transaction.",
+          receiptAddress: prepared.receiptAddress,
+          preflight: prepared.preflight,
+          transaction: serializeTransaction(prepared.transaction),
+        },
+        true,
+      );
+    }
+
+    const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/payments`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(context.backendAuthToken
+          ? { Authorization: `Bearer ${context.backendAuthToken}` }
+          : {}),
+      },
+      body: JSON.stringify({
+        idempotency_key: `${parsed.input.mandate}:${bytesToHex(parsed.input.invoiceHash)}`,
+        mandate: parsed.input.mandate,
+        invoice_hash: bytesToHex(parsed.input.invoiceHash),
+        receipt_address: prepared.receiptAddress,
+        signed_transaction: signedTransaction,
+      }),
+    });
+    const payload = await response.json() as Record<string, unknown>;
+    if (!response.ok) {
+      return toolResult({ action: "backend_rejected", ...payload }, true);
+    }
+    return toolResult({
+      action: "backend_relayed",
+      ...payload,
+      receiptAddress: prepared.receiptAddress,
+      preflight: prepared.preflight,
+    }, payload.status === "failed");
   }
 
   if (!context.paymentExecutor) {

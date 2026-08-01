@@ -16,9 +16,11 @@ never accepts seed phrases or private keys. `create_mandate`, `pause_mandate`,
 and `revoke_mandate` return transactions that must be reviewed and signed by
 the owner wallet. `prepare_payment` returns an agent-signed transaction plan.
 
-`execute_payment` performs simulation and submission only when the embedding
-application injects a `PaymentSubmissionAdapter`; otherwise it returns the
-safe transaction plan and explains that a signer adapter is required.
+`execute_payment` performs SDK preflight first. When a base64 wallet-signed
+transaction is supplied and `CHAINPAY_BACKEND_URL` is configured, MCP relays
+it to the Rust backend for simulation, submission, finality confirmation, and
+status tracking. Without a signed transaction it returns a safe transaction
+plan; MCP never receives private keys.
 
 Build and run it locally:
 
@@ -29,7 +31,9 @@ npm --prefix sdk run test
 npm --prefix mcp-server run test
 npm --prefix sdk run build
 npm --prefix mcp-server run build
-CHAINPAY_RPC_URL=https://api.devnet.solana.com node mcp-server/dist/server.js
+CHAINPAY_RPC_URL=https://api.devnet.solana.com \
+CHAINPAY_BACKEND_URL=http://127.0.0.1:8080 \
+node mcp-server/dist/server.js
 ```
 
 If your shell is already in `mcp-server/`, use the local aliases instead:
@@ -68,7 +72,8 @@ The script builds the SDK and MCP server automatically. Override defaults when
 needed:
 
 ```bash
-CHAINPAY_HTTP_PORT=4000 CHAINPAY_HTTP_AUTH_TOKEN=change-me ./start-http.sh
+CHAINPAY_HTTP_PORT=4000 CHAINPAY_HTTP_AUTH_TOKEN=change-me \
+CHAINPAY_BACKEND_URL=http://127.0.0.1:8080 ./start-http.sh
 ```
 
 For a hosted deployment, deploy the repository root, not only
@@ -82,10 +87,10 @@ Start command: node mcp-server/dist/http.js
 Health check: /healthz
 ```
 
-Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, and
-`CHAINPAY_HTTP_AUTH_TOKEN` in the host's environment settings. Put HTTPS and
-authentication in front of the endpoint before using it for real payment
-traffic; the service warns when no bearer token is configured.
+Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, `CHAINPAY_BACKEND_URL`,
+`CHAINPAY_BACKEND_AUTH_TOKEN`, and `CHAINPAY_HTTP_AUTH_TOKEN` in the host's
+environment settings. Put HTTPS and authentication in front of both endpoints
+before using them for real payment traffic.
 
 Render is also supported through the root [render.yaml](../render.yaml)
 Blueprint. In Render, choose **New → Blueprint**, connect this repository, and

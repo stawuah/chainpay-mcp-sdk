@@ -84,6 +84,10 @@ export const TOOL_DEFINITIONS = [
         recipient: { type: "string" },
         amount: { type: "string" },
         tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+        signedTransaction: {
+          type: "string",
+          description: "Base64 wallet-signed transaction for relay through the Rust backend",
+        },
       },
       required: [
         "mandate",
@@ -132,4 +136,3 @@ export const TOOL_DEFINITIONS = [
     },
   },
 ] as const;
-
