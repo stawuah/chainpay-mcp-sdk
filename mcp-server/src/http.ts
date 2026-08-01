@@ -194,6 +194,16 @@ export function createHttpServer(
       return;
     }
 
+    if (url.pathname === "/tools" && req.method === "GET") {
+      writeJson(res, 200, {
+        service: "chainpay-mcp",
+        transport: "streamable-http",
+        endpoint: resolved.path,
+        tools: TOOL_DEFINITIONS,
+      }, headers);
+      return;
+    }
+
     if (url.pathname !== resolved.path) {
       writeJson(res, 404, { error: "Not found" }, headers);
       return;

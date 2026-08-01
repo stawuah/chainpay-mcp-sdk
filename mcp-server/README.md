@@ -48,9 +48,10 @@ npm run test:sdk
 
 ## Hosted HTTP MCP
 
-The server also exposes MCP Streamable HTTP at `/mcp` and a health endpoint at
-`/healthz`. The HTTP process is stateless and supports POST JSON-RPC requests
-plus GET event streams, so a remote MCP client can use a URL such as:
+The server also exposes MCP Streamable HTTP at `/mcp`, a health endpoint at
+`/healthz`, and a browser-friendly read-only tool catalog at `/tools`. The HTTP
+process is stateless and supports POST JSON-RPC requests plus GET event
+streams, so a remote MCP client can use a URL such as:
 
 ```json
 {
@@ -132,3 +133,6 @@ MCP settings; use the client’s “Add MCP server” UI when available.
 
 After deployment, replace `YOUR-HOST.example.com` with the HTTPS hostname and
 keep the `/mcp` suffix. The health check is the same hostname with `/healthz`.
+To inspect the deployed tool definitions directly in a browser, open the same
+hostname with `/tools`. This endpoint returns the same schemas exposed by
+MCP's `tools/list` method and does not execute tools or submit transactions.

@@ -19,5 +19,6 @@ npm --prefix mcp-server run build
 echo "Starting ChainPay MCP HTTP server"
 echo "Endpoint: http://${CHAINPAY_HTTP_HOST}:${CHAINPAY_HTTP_PORT}/mcp"
 echo "Health:   http://${CHAINPAY_HTTP_HOST}:${CHAINPAY_HTTP_PORT}/healthz"
+echo "Tools:    http://${CHAINPAY_HTTP_HOST}:${CHAINPAY_HTTP_PORT}/tools"
 
 exec node "${SCRIPT_DIR}/dist/http.js"
