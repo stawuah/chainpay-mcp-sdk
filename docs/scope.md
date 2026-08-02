@@ -31,8 +31,10 @@ already made in the ChainPay discussion:
 - The user remains the owner of funds.
 - The agent can only spend through user-approved on-chain policy.
 - Every successful payment must produce a verifiable receipt.
-- Stripe, PayPal, Visa, OpenUSD, x402, and other connectors are extensions,
-  not core MVP dependencies.
+- x402 challenge normalization is part of the first connector bundle; hosted
+  facilitators and custody remain out of scope.
+- Stripe, PayPal, Visa, OpenUSD, and other connectors are extensions, not core
+  settlement dependencies.
 
 ## Product Positioning
 
@@ -105,14 +107,22 @@ Responsibility:
 MCP is the interface. ChainPay is the settlement and policy system underneath
 it.
 
-Suggested MCP tools:
+MCP tools:
 
 ~~~
 get_mandate
+get_protocol_config
+get_asset
 create_mandate
+update_mandate
 prepare_payment
+quote_payment
+verify_payment_request
+prepare_x402_payment
 execute_payment
 get_payment
+wait_for_payment
+pause_mandate
 revoke_mandate
 ~~~
 
@@ -221,14 +231,21 @@ paused
 bump
 ~~~
 
-For the MVP, keep the mandate narrow:
+For the MVP, keep the mandate narrow while making the policy deterministic:
 
 - one user;
 - one approved agent;
 - one stablecoin mint;
 - one source token account;
 - one recipient or merchant;
-- simple limits.
+- per-payment and total spend limits;
+- optional payment-count cap;
+- optional slot cooldown between payments;
+- pause, revoke, and expiry controls.
+
+The protocol authority maintains a scalable `SupportedAsset` registry. Each
+registered mint is explicitly bound to either classic SPL Token or Token-2022;
+unregistered and disabled mints cannot be used to create or execute mandates.
 
 ### Payment Receipt Account
 
@@ -263,6 +280,8 @@ The MVP program should implement:
 
 ~~~
 create_mandate
+register_asset
+set_asset_status
 update_mandate
 pause_mandate
 revoke_mandate

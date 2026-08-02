@@ -114,6 +114,8 @@ export function encodeCreateMandate(params: {
   maxPerPayment: bigint;
   totalLimit: bigint;
   expiresAtSlot: bigint;
+  maxPaymentCount: bigint;
+  cooldownSlots: bigint;
 }): Uint8Array {
   return concat(
     DISCRIMINATORS.createMandate,
@@ -124,7 +126,17 @@ export function encodeCreateMandate(params: {
     writeU64(params.maxPerPayment, "maxPerPayment"),
     writeU64(params.totalLimit, "totalLimit"),
     writeU64(params.expiresAtSlot, "expiresAtSlot"),
+    writeU64(params.maxPaymentCount, "maxPaymentCount"),
+    writeU64(params.cooldownSlots, "cooldownSlots"),
   );
+}
+
+export function encodeRegisterAsset(mint: Address): Uint8Array {
+  return concat(DISCRIMINATORS.registerAsset, publicKey(mint).toBytes());
+}
+
+export function encodeSetAssetStatus(enabled: boolean): Uint8Array {
+  return concat(DISCRIMINATORS.setAssetStatus, Uint8Array.of(enabled ? 1 : 0));
 }
 
 export function encodeUpdateMandate(params: {
@@ -133,6 +145,8 @@ export function encodeUpdateMandate(params: {
   maxPerPayment: bigint;
   totalLimit: bigint;
   expiresAtSlot: bigint;
+  maxPaymentCount: bigint;
+  cooldownSlots: bigint;
   paused: boolean;
 }): Uint8Array {
   return concat(
@@ -142,6 +156,8 @@ export function encodeUpdateMandate(params: {
     writeU64(params.maxPerPayment, "maxPerPayment"),
     writeU64(params.totalLimit, "totalLimit"),
     writeU64(params.expiresAtSlot, "expiresAtSlot"),
+    writeU64(params.maxPaymentCount, "maxPaymentCount"),
+    writeU64(params.cooldownSlots, "cooldownSlots"),
     Uint8Array.of(params.paused ? 1 : 0),
   );
 }

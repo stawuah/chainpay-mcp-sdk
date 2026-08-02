@@ -4,6 +4,7 @@ export * from "./constants.js";
 export * from "./encoding.js";
 export * from "./mandate.js";
 export * from "./payment.js";
+export * from "./payment-request.js";
 export * from "./pda.js";
 export * from "./receipt.js";
 export * from "./solana.js";

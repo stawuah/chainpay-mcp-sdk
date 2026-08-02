@@ -1,6 +1,6 @@
 use crate::{
     errors::ChainPayError,
-    state::{PaymentMandate, PaymentReceipt, ProtocolConfig},
+    state::{PaymentMandate, PaymentReceipt, ProtocolConfig, SupportedAsset},
 };
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_option::COption;
@@ -20,9 +20,17 @@ pub struct ExecutePayment<'info> {
     #[account(
         seeds = [b"config"],
         bump = config.bump,
-        constraint = config.supported_mints.contains(&mandate.allowed_mint) @ ChainPayError::UnsupportedMint,
     )]
     pub config: Box<Account<'info, ProtocolConfig>>,
+    #[account(
+        seeds = [b"asset", mandate.allowed_mint.as_ref()],
+        bump = asset_registry.bump,
+        constraint = asset_registry.enabled @ ChainPayError::AssetNotEnabled,
+        constraint = asset_registry.mint == mandate.allowed_mint @ ChainPayError::InvalidMint,
+        constraint = asset_registry.token_program == token_program.key()
+            @ ChainPayError::InvalidTokenProgram,
+    )]
+    pub asset_registry: Box<Account<'info, SupportedAsset>>,
     #[account(
         mut,
         seeds = [b"mandate", mandate.owner.as_ref()],

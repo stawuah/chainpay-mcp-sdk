@@ -4,10 +4,17 @@ This server exposes ChainPay as a standard MCP tool provider over JSON-RPC
 stdio, so MCP-capable LLM clients can discover and call the same payment tools:
 
 - `get_mandate`
+- `get_protocol_config`
+- `get_asset`
 - `create_mandate`
+- `update_mandate`
 - `prepare_payment`
+- `quote_payment`
+- `verify_payment_request`
+- `prepare_x402_payment`
 - `execute_payment`
 - `get_payment`
+- `wait_for_payment`
 - `pause_mandate`
 - `revoke_mandate`
 
@@ -15,6 +22,9 @@ The server accepts only public addresses, payment identifiers, and amounts. It
 never accepts seed phrases or private keys. `create_mandate`, `pause_mandate`,
 and `revoke_mandate` return transactions that must be reviewed and signed by
 the owner wallet. `prepare_payment` returns an agent-signed transaction plan.
+`prepare_x402_payment` normalizes an x402 exact challenge into the same
+policy-checked flow and can relay a wallet-signed transaction through the Rust
+backend. The x402 adapter does not custody keys or operate a hosted facilitator.
 
 `execute_payment` performs SDK preflight first. When a base64 wallet-signed
 transaction is supplied and `CHAINPAY_BACKEND_URL` is configured, MCP relays
@@ -48,10 +58,11 @@ npm run test:sdk
 
 ## Hosted HTTP MCP
 
-The server also exposes MCP Streamable HTTP at `/mcp`, a health endpoint at
-`/healthz`, and a browser-friendly read-only tool catalog at `/tools`. The HTTP
-process is stateless and supports POST JSON-RPC requests plus GET event
-streams, so a remote MCP client can use a URL such as:
+The server also exposes a developer documentation preview at `/` (and `/docs`),
+the ChainPay logo at `/logo.svg`, MCP Streamable HTTP at `/mcp`, a health
+endpoint at `/healthz`, and a browser-friendly read-only tool catalog at
+`/tools`. The HTTP process is stateless and supports POST JSON-RPC requests plus
+GET event streams, so a remote MCP client can use a URL such as:
 
 ```json
 {

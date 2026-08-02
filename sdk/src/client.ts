@@ -12,10 +12,11 @@ import type {
   PreparedMandate,
   PreparedPayment,
   PreparedTransaction,
+  SupportedAsset,
   TokenProgram,
 } from "./types.js";
 import { DEFAULT_PROGRAM_ID, DEVNET_RPC_URL, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "./constants.js";
-import { decodeMandate, decodePaymentReceipt, decodeProtocolConfig } from "./accounts.js";
+import { decodeMandate, decodePaymentReceipt, decodeProtocolConfig, decodeSupportedAsset } from "./accounts.js";
 import {
   address,
   publicKey,
@@ -27,6 +28,8 @@ import {
   buildPauseMandateInstruction,
   buildRevokeDelegateInstruction,
   buildRevokeMandateInstruction,
+  buildRegisterAssetInstruction,
+  buildSetAssetStatusInstruction,
   buildUpdateMandateInstruction,
 } from "./mandate.js";
 import {
@@ -36,7 +39,7 @@ import {
   preparedPaymentTransaction,
   type PreparePaymentInput,
 } from "./payment.js";
-import { deriveConfigAddress, deriveReceiptAddress } from "./pda.js";
+import { deriveAssetAddress, deriveConfigAddress, deriveReceiptAddress } from "./pda.js";
 import { simulatePrepared } from "./solana.js";
 
 export type PaymentLookup =
@@ -85,6 +88,12 @@ export class ChainPayClient {
     );
     const tokenProgram = source ? tokenProgramFromAddress(source.owner.toBase58()) : undefined;
     return { ...decoded, tokenProgram };
+  }
+
+  async getSupportedAsset(mint: Address): Promise<SupportedAsset | null> {
+    const assetAddress = deriveAssetAddress(mint, this.programId);
+    const account = await this.getProgramAccount(assetAddress);
+    return account ? decodeSupportedAsset(account.data, account.address) : null;
   }
 
   async getPayment(lookup: PaymentLookup): Promise<PaymentReceipt | null> {
@@ -139,6 +148,30 @@ export class ChainPayClient {
       instructions: [buildUpdateMandateInstruction(input, owner, this.programId)],
       requiredSigners: [owner],
       feePayer: owner,
+    };
+  }
+
+  buildRegisterAsset(
+    mint: Address,
+    tokenProgram: TokenProgram,
+    authority: Address,
+  ): PreparedTransaction {
+    return {
+      instructions: [buildRegisterAssetInstruction({ mint, tokenProgram }, authority, this.programId)],
+      requiredSigners: [authority],
+      feePayer: authority,
+    };
+  }
+
+  buildSetAssetStatus(
+    mint: Address,
+    authority: Address,
+    enabled: boolean,
+  ): PreparedTransaction {
+    return {
+      instructions: [buildSetAssetStatusInstruction(mint, authority, enabled, this.programId)],
+      requiredSigners: [authority],
+      feePayer: authority,
     };
   }
 

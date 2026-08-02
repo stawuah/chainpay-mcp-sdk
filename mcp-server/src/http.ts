@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { createDefaultContext, TOOL_DEFINITIONS } from "./index.js";
+import { renderDocsHtml } from "./docs.js";
+import { CHAINPAY_LOGO_SVG } from "./logo.js";
 import {
   createMcpServer,
   type JsonRpcRequest,
@@ -41,6 +43,27 @@ function writeJson(res: ServerResponse, status: number, value: unknown, headers:
     ...headers,
   });
   res.end(body);
+}
+
+function writeSvg(res: ServerResponse, svg: string, headers: Record<string, string> = {}) {
+  res.writeHead(200, {
+    "Content-Type": "image/svg+xml; charset=utf-8",
+    "Cache-Control": "public, max-age=86400",
+    "Content-Length": Buffer.byteLength(svg).toString(),
+    ...headers,
+  });
+  res.end(svg);
+}
+
+function writeHtml(res: ServerResponse, html: string, headers: Record<string, string> = {}) {
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "public, max-age=300",
+    "Content-Length": Buffer.byteLength(html).toString(),
+    "X-Content-Type-Options": "nosniff",
+    ...headers,
+  });
+  res.end(html);
 }
 
 function corsHeaders(origin: string | undefined, allowedOrigins: string[]): Record<string, string> | null {
@@ -186,6 +209,16 @@ export function createHttpServer(
     if (req.method === "OPTIONS") {
       res.writeHead(204, headers);
       res.end();
+      return;
+    }
+
+    if (url.pathname === "/logo.svg" && req.method === "GET") {
+      writeSvg(res, CHAINPAY_LOGO_SVG, headers);
+      return;
+    }
+
+    if ((url.pathname === "/" || url.pathname === "/docs") && req.method === "GET") {
+      writeHtml(res, renderDocsHtml(), headers);
       return;
     }
 

@@ -1,8 +1,8 @@
-.PHONY: check fmt cargo-check test build start-backend sdk-typecheck mcp-typecheck app-typecheck app-dev contract-check contract-build contract-idl contract-smoke
+.PHONY: check fmt cargo-check test build start-backend sdk-typecheck mcp-typecheck app-typecheck frontend-typecheck frontend-build app-dev frontend-dev contract-check contract-build contract-idl contract-smoke
 
 ANCHOR ?= anchor
 
-check: fmt cargo-check sdk-typecheck mcp-typecheck app-typecheck
+check: fmt cargo-check sdk-typecheck mcp-typecheck app-typecheck frontend-typecheck
 
 fmt:
 	cargo fmt --all -- --check
@@ -28,8 +28,17 @@ mcp-typecheck:
 app-typecheck:
 	npm run check:app
 
+frontend-typecheck:
+	npm run check:frontend
+
+frontend-build:
+	npm run build:frontend
+
 app-dev:
 	npm run dev:app
+
+frontend-dev:
+	npm run dev:frontend
 
 contract-check:
 	cargo check -p chainpay

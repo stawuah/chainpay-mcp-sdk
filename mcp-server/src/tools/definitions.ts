@@ -10,6 +10,21 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "get_protocol_config",
+    description: "Read the ChainPay protocol configuration and bootstrap asset list.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_asset",
+    description: "Read whether a mint is enabled in the ChainPay asset registry.",
+    inputSchema: {
+      type: "object",
+      properties: { mint: { type: "string" } },
+      required: ["mint"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "create_mandate",
     description: "Prepare a wallet-signed mandate creation and limited delegate approval transaction.",
     inputSchema: {
@@ -24,6 +39,8 @@ export const TOOL_DEFINITIONS = [
         totalLimit: { type: "string", description: "Unsigned token amount in base units" },
         delegateAmount: { type: "string", description: "Optional delegate amount in base units" },
         expiresAtSlot: { type: "string" },
+        maxPaymentCount: { type: "string", description: "Optional maximum number of payments; 0 means unlimited" },
+        cooldownSlots: { type: "string", description: "Optional minimum slot gap between payments" },
         tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
       },
       required: [
@@ -36,6 +53,30 @@ export const TOOL_DEFINITIONS = [
         "totalLimit",
         "expiresAtSlot",
         "tokenProgram",
+      ],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "update_mandate",
+    description: "Prepare an owner-signed update to a mandate's agent, recipient, limits, expiry, and cooldown policy.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: { type: "string" },
+        approvedAgent: { type: "string" },
+        allowedRecipient: { type: "string" },
+        maxPerPayment: { type: "string" },
+        totalLimit: { type: "string" },
+        expiresAtSlot: { type: "string" },
+        maxPaymentCount: { type: "string" },
+        cooldownSlots: { type: "string" },
+        paused: { type: "boolean" },
+        tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+      },
+      required: [
+        "owner", "approvedAgent", "allowedRecipient", "maxPerPayment", "totalLimit",
+        "expiresAtSlot", "maxPaymentCount", "cooldownSlots", "tokenProgram",
       ],
       additionalProperties: false,
     },
@@ -103,6 +144,51 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "quote_payment",
+    description: "Return a policy quote and preflight result without signing or submitting a transaction.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mandate: { type: "string" }, agent: { type: "string" }, invoiceHash: { type: "string" },
+        paymentId: { type: "string" }, signatureReference: { type: "string" }, mint: { type: "string" },
+        recipient: { type: "string" }, amount: { type: "string" },
+        tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+      },
+      required: ["mandate", "agent", "invoiceHash", "paymentId", "signatureReference", "mint", "recipient", "amount"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "verify_payment_request",
+    description: "Verify a merchant-signed payment request before ChainPay settlement.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request: { type: "object", description: "Signed payment request with payload and base64 Ed25519 signature" },
+      },
+      required: ["request"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "prepare_x402_payment",
+    description: "Normalize a Solana x402 challenge and prepare a mandate-checked payment transaction.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        challenge: { type: "object", description: "x402 exact payment challenge" },
+        mandate: { type: "string" },
+        agent: { type: "string" },
+        signedTransaction: {
+          type: "string",
+          description: "Optional base64 wallet-signed transaction to relay through the Rust backend",
+        },
+      },
+      required: ["challenge", "mandate", "agent"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_payment",
     description: "Fetch a ChainPay receipt by address or by mandate and invoice hash.",
     inputSchema: {
@@ -112,6 +198,20 @@ export const TOOL_DEFINITIONS = [
         mandate: { type: "string" },
         invoiceHash: { type: "string" },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "wait_for_payment",
+    description: "Poll the Rust backend until a relayed payment is confirmed or failed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        paymentId: { type: "string" },
+        timeoutMs: { type: "string", description: "Maximum wait in milliseconds, up to 120000" },
+        pollMs: { type: "string", description: "Polling interval in milliseconds" },
+      },
+      required: ["paymentId"],
       additionalProperties: false,
     },
   },

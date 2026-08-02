@@ -5,14 +5,18 @@
   "workspaces": [
     "sdk",
     "mcp-server",
-    "app"
+    "app",
+    "frontend"
   ],
   "scripts": {
     "check:sdk": "npm --prefix sdk run typecheck",
     "check:mcp": "npm --prefix mcp-server run typecheck",
     "check:app": "npm --prefix app run typecheck",
+    "check:frontend": "npm --prefix frontend run typecheck",
     "dev:app": "npm --prefix app run dev",
-    "check": "npm run check:sdk && npm run check:mcp && npm run check:app"
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "check": "npm run check:sdk && npm run check:mcp && npm run check:app && npm run check:frontend"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",

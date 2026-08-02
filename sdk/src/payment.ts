@@ -151,6 +151,20 @@ export function preflightPayment(
         : "Payment exceeds the total spend limit",
     ),
     check(
+      "payment_count_limit",
+      mandate.maxPaymentCount === 0n || mandate.paymentCount + 1n <= mandate.maxPaymentCount,
+      mandate.maxPaymentCount === 0n || mandate.paymentCount + 1n <= mandate.maxPaymentCount
+        ? "Payment is within the payment-count limit"
+        : "Payment exceeds the payment-count limit",
+    ),
+    check(
+      "cooldown",
+      mandate.lastPaymentSlot === 0n || currentSlot >= mandate.lastPaymentSlot + mandate.cooldownSlots,
+      mandate.lastPaymentSlot === 0n || currentSlot >= mandate.lastPaymentSlot + mandate.cooldownSlots
+        ? "Mandate cooldown has elapsed"
+        : "Mandate cooldown is still active",
+    ),
+    check(
       "expiry",
       mandate.expiresAtSlot > currentSlot,
       mandate.expiresAtSlot > currentSlot ? "Mandate has not expired" : "Mandate has expired",

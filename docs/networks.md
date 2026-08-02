@@ -1,8 +1,8 @@
 # ChainPay settlement networks
 
-ChainPay keeps settlement mint configuration on the protocol `config` PDA.
-This makes the network and asset selection explicit instead of baking a
-mainnet address into a Devnet demo.
+ChainPay keeps the authority and legacy bootstrap list on the protocol `config`
+PDA, while the scalable settlement allowlist lives in one `asset` PDA per mint.
+Every asset entry binds the mint to the classic SPL Token program or Token-2022.
 
 ## Devnet
 
@@ -20,7 +20,7 @@ The target production assets from the ChainPay scope are:
 | PYUSD | `2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo` | Token-2022 |
 
 The mint and token-program mapping must be verified again for every deployment
-cluster before initializing or updating `config`. The scope calls this asset
+cluster before registering an asset. The scope calls this asset
 `PYUSD`; `pyusdc` is not a separate ChainPay asset.
 
 ChainPay currently supports the basic `transfer_checked` path. Token-2022

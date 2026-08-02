@@ -13,6 +13,19 @@ impl ProtocolConfig {
 }
 
 #[account]
+pub struct SupportedAsset {
+    pub authority: Pubkey,
+    pub mint: Pubkey,
+    pub token_program: Pubkey,
+    pub enabled: bool,
+    pub bump: u8,
+}
+
+impl SupportedAsset {
+    pub const LEN: usize = 32 * 3 + 2;
+}
+
+#[account]
 pub struct PaymentMandate {
     pub owner: Pubkey,
     pub approved_agent: Pubkey,
@@ -24,13 +37,16 @@ pub struct PaymentMandate {
     pub amount_spent: u64,
     pub payment_count: u64,
     pub expires_at_slot: u64,
+    pub max_payment_count: u64,
+    pub cooldown_slots: u64,
+    pub last_payment_slot: u64,
     pub paused: bool,
     pub revoked: bool,
     pub bump: u8,
 }
 
 impl PaymentMandate {
-    pub const LEN: usize = 32 * 5 + 8 * 5 + 3;
+    pub const LEN: usize = 32 * 5 + 8 * 8 + 3;
 }
 
 #[account]

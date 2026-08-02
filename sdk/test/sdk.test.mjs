@@ -26,12 +26,14 @@ test("builds Anchor-compatible mandate and payment instruction shapes", () => {
     maxPerPayment: 10n,
     totalLimit: 100n,
     expiresAtSlot: 10_000n,
+    maxPaymentCount: 0n,
+    cooldownSlots: 0n,
     tokenProgram: "spl-token",
   }, owner);
   assert.equal(mandate.name, "create_mandate");
-  assert.equal(mandate.keys.length, 8);
-  assert.equal(mandate.data.length, 160);
-  assert.equal(mandate.keys[2].isSigner, true);
+  assert.equal(mandate.keys.length, 9);
+  assert.equal(mandate.data.length, 176);
+  assert.equal(mandate.keys[3].isSigner, true);
 
   const request = preparePayment({
     mandate: mandateAddress,
@@ -55,6 +57,9 @@ test("builds Anchor-compatible mandate and payment instruction shapes", () => {
     amountSpent: 0n,
     paymentCount: 0n,
     expiresAtSlot: 10_000n,
+    maxPaymentCount: 0n,
+    cooldownSlots: 0n,
+    lastPaymentSlot: 0n,
     paused: false,
     revoked: false,
     status: "active",
@@ -89,6 +94,9 @@ test("preflight rejects an agent or recipient outside the mandate", () => {
     amountSpent: 0n,
     paymentCount: 0n,
     expiresAtSlot: 10_000n,
+    maxPaymentCount: 0n,
+    cooldownSlots: 0n,
+    lastPaymentSlot: 0n,
     paused: false,
     revoked: false,
     status: "active",

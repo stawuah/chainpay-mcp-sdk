@@ -1,6 +1,6 @@
 use crate::{
     errors::ChainPayError,
-    state::{PaymentMandate, ProtocolConfig},
+    state::{PaymentMandate, ProtocolConfig, SupportedAsset},
 };
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
@@ -14,6 +14,8 @@ pub struct MandateParams {
     pub max_per_payment: u64,
     pub total_limit: u64,
     pub expires_at_slot: u64,
+    pub max_payment_count: u64,
+    pub cooldown_slots: u64,
 }
 
 #[derive(Accounts)]
@@ -22,9 +24,17 @@ pub struct CreateMandate<'info> {
     #[account(
         seeds = [b"config"],
         bump = config.bump,
-        constraint = config.supported_mints.contains(&params.allowed_mint) @ ChainPayError::UnsupportedMint,
     )]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
+    #[account(
+        seeds = [b"asset", params.allowed_mint.as_ref()],
+        bump = asset_registry.bump,
+        constraint = asset_registry.enabled @ ChainPayError::AssetNotEnabled,
+        constraint = asset_registry.mint == params.allowed_mint @ ChainPayError::InvalidMint,
+        constraint = asset_registry.token_program == token_program.key()
+            @ ChainPayError::InvalidTokenProgram,
+    )]
+    pub asset_registry: Box<Account<'info, SupportedAsset>>,
     #[account(
         init,
         payer = owner,
@@ -32,7 +42,7 @@ pub struct CreateMandate<'info> {
         seeds = [b"mandate", owner.key().as_ref()],
         bump
     )]
-    pub mandate: Account<'info, PaymentMandate>,
+    pub mandate: Box<Account<'info, PaymentMandate>>,
     #[account(mut)]
     pub owner: Signer<'info>,
     #[account(

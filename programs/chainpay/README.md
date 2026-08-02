@@ -5,11 +5,11 @@ This Anchor program implements the ChainPay Devnet payment rail described in
 
 ## On-chain flow
 
-1. The protocol authority initializes the `config` PDA with a bounded list of
-   supported settlement mints.
+1. The protocol authority initializes the `config` PDA, then registers each
+   explicitly supported settlement mint in its own `asset` PDA.
 2. A wallet owner creates one `mandate` PDA for one agent, source token
-   account, mint, recipient token account, per-payment limit, total limit, and
-   expiry slot.
+   account, allowlisted mint, recipient token account, per-payment limit, total
+   limit, expiry slot, optional payment-count cap, and optional cooldown.
 3. The wallet owner explicitly approves the mandate PDA as the source token
    account's SPL Token delegate. The program never receives or stores the
    wallet private key.
@@ -40,10 +40,12 @@ Devnet configuration instructions:
 
 - `initialize_config`
 - `update_config`
+- `register_asset`
+- `set_asset_status`
 
-The config PDA allows Devnet demonstration mints, USDC, and PYUSD to be
-explicitly configured while rejecting every other mint on-chain. The config
-authority is an operational trust boundary and must be controlled by the
+The asset registry allows any explicitly approved SPL or Token-2022 mint while
+rejecting every unregistered or disabled mint on-chain. The config and asset
+authority are operational trust boundaries and must be controlled by the
 deployment owner.
 
 ## Token support boundary

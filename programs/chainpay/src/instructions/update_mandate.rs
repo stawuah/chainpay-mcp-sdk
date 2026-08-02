@@ -9,6 +9,8 @@ pub struct MandateUpdate {
     pub max_per_payment: u64,
     pub total_limit: u64,
     pub expires_at_slot: u64,
+    pub max_payment_count: u64,
+    pub cooldown_slots: u64,
     pub paused: bool,
 }
 

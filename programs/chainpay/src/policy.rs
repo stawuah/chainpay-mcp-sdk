@@ -57,6 +57,10 @@ pub fn validate_mandate_params(params: &MandateParams, current_slot: u64) -> Res
         params.expires_at_slot > current_slot,
         ChainPayError::InvalidExpiry
     );
+    require!(
+        params.max_payment_count == 0 || params.max_payment_count >= 1,
+        ChainPayError::PaymentCountExceeded
+    );
 
     Ok(())
 }
@@ -98,6 +102,24 @@ pub fn validate_payment(
         new_amount_spent <= mandate.total_limit,
         ChainPayError::TotalLimitExceeded
     );
+    let new_payment_count = mandate
+        .payment_count
+        .checked_add(1)
+        .ok_or(error!(ChainPayError::PaymentCountExceeded))?;
+    require!(
+        mandate.max_payment_count == 0 || new_payment_count <= mandate.max_payment_count,
+        ChainPayError::PaymentCountExceeded
+    );
+    if mandate.last_payment_slot > 0 {
+        let next_allowed_slot = mandate
+            .last_payment_slot
+            .checked_add(mandate.cooldown_slots)
+            .ok_or(error!(ChainPayError::PaymentCooldownActive))?;
+        require!(
+            current_slot >= next_allowed_slot,
+            ChainPayError::PaymentCooldownActive
+        );
+    }
 
     Ok(())
 }
@@ -115,6 +137,8 @@ mod tests {
             max_per_payment: 25,
             total_limit: 100,
             expires_at_slot: 101,
+            max_payment_count: 0,
+            cooldown_slots: 0,
         }
     }
 
@@ -131,6 +155,9 @@ mod tests {
             amount_spent: 0,
             payment_count: 0,
             expires_at_slot: params.expires_at_slot,
+            max_payment_count: params.max_payment_count,
+            cooldown_slots: params.cooldown_slots,
+            last_payment_slot: 0,
             paused: false,
             revoked: false,
             bump: 255,
@@ -210,6 +237,16 @@ mod tests {
         mandate.amount_spent = 80;
         payment.amount = 25;
         assert!(validate_payment(&mandate, &payment, 100).is_err());
+
+        let mut mandate = valid_mandate();
+        mandate.max_payment_count = 1;
+        mandate.payment_count = 1;
+        assert!(validate_payment(&mandate, &valid_payment(), 100).is_err());
+
+        let mut mandate = valid_mandate();
+        mandate.cooldown_slots = 10;
+        mandate.last_payment_slot = 95;
+        assert!(validate_payment(&mandate, &valid_payment(), 100).is_err());
     }
 
     #[test]

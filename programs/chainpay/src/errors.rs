@@ -8,6 +8,10 @@ pub enum ChainPayError {
     UnsupportedMint,
     #[msg("The supported mint list must contain unique, non-default mints.")]
     InvalidSupportedMintList,
+    #[msg("The supported asset registry entry is missing or disabled.")]
+    AssetNotEnabled,
+    #[msg("The supported asset registry authority is invalid.")]
+    InvalidAssetAuthority,
     #[msg("The token accounts and mint must use the same token program.")]
     InvalidTokenProgram,
     #[msg("The approved agent must be a non-default public key.")]
@@ -40,6 +44,10 @@ pub enum ChainPayError {
     AmountExceedsPerPayment,
     #[msg("The payment would exceed the mandate's total limit.")]
     TotalLimitExceeded,
+    #[msg("The payment would exceed the mandate's payment-count limit.")]
+    PaymentCountExceeded,
+    #[msg("The mandate cooldown has not elapsed since the previous payment.")]
+    PaymentCooldownActive,
     #[msg("The invoice hash must not be all zeroes.")]
     InvalidInvoiceHash,
     #[msg("The payment ID must not be all zeroes.")]

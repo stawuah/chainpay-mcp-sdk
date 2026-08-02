@@ -4,6 +4,7 @@ import type {
   Mandate,
   PaymentReceipt,
   PaymentStatus,
+  SupportedAsset,
   TokenProgram,
 } from "./types.js";
 import { ACCOUNT_DISCRIMINATORS, RECEIPT_STATUS_SETTLED } from "./constants.js";
@@ -57,6 +58,23 @@ export function decodeProtocolConfig(data: Uint8Array | Buffer, configAddress?: 
   };
 }
 
+export function decodeSupportedAsset(
+  data: Uint8Array | Buffer,
+  assetAddress: Address,
+): SupportedAsset {
+  const bytes = accountBytes(data);
+  assertDiscriminator(bytes, ACCOUNT_DISCRIMINATORS.supportedAsset, "SupportedAsset");
+  requireLength(bytes, 106, "SupportedAsset");
+  return {
+    address: address(assetAddress),
+    authority: readPublicKey(bytes, 8),
+    mint: readPublicKey(bytes, 40),
+    tokenProgram: readPublicKey(bytes, 72),
+    enabled: readU8(bytes, 104) !== 0,
+    bump: readU8(bytes, 105),
+  };
+}
+
 export function decodeMandate(
   data: Uint8Array | Buffer,
   mandateAddress: Address,
@@ -65,10 +83,13 @@ export function decodeMandate(
 ): Mandate {
   const bytes = accountBytes(data);
   assertDiscriminator(bytes, ACCOUNT_DISCRIMINATORS.paymentMandate, "PaymentMandate");
-  requireLength(bytes, 211, "PaymentMandate");
+  requireLength(bytes, 235, "PaymentMandate");
   const expiresAtSlot = readU64(bytes, 200);
-  const paused = readU8(bytes, 208) !== 0;
-  const revoked = readU8(bytes, 209) !== 0;
+  const maxPaymentCount = readU64(bytes, 208);
+  const cooldownSlots = readU64(bytes, 216);
+  const lastPaymentSlot = readU64(bytes, 224);
+  const paused = readU8(bytes, 232) !== 0;
+  const revoked = readU8(bytes, 233) !== 0;
 
   return {
     address: address(mandateAddress),
@@ -82,6 +103,9 @@ export function decodeMandate(
     amountSpent: readU64(bytes, 184),
     paymentCount: readU64(bytes, 192),
     expiresAtSlot,
+    maxPaymentCount,
+    cooldownSlots,
+    lastPaymentSlot,
     paused,
     revoked,
     status: mandateStatus(paused, revoked, expiresAtSlot, currentSlot),

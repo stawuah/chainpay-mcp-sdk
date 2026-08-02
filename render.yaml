@@ -1,5 +1,23 @@
 services:
   - type: web
+    name: chainpay-backend
+    runtime: rust
+    plan: free
+    buildCommand: cargo build --release -p chainpay-backend
+    startCommand: ./target/release/chainpay-backend
+    healthCheckPath: /healthz
+    envVars:
+      - key: CHAINPAY_CLUSTER
+        value: devnet
+      - key: CHAINPAY_RPC_URL
+        sync: false
+      - key: CHAINPAY_PROGRAM_ID
+        value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
+      - key: CHAINPAY_HTTP_AUTH_TOKEN
+        sync: false
+      - key: CHAINPAY_ALLOWED_ORIGINS
+        sync: false
+  - type: web
     name: chainpay-mcp
     runtime: node
     plan: free
@@ -13,8 +31,11 @@ services:
         sync: false
       - key: CHAINPAY_PROGRAM_ID
         value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
+      - key: CHAINPAY_BACKEND_URL
+        value: https://chainpay-backend.onrender.com
+      - key: CHAINPAY_BACKEND_AUTH_TOKEN
+        sync: false
       - key: CHAINPAY_HTTP_AUTH_TOKEN
         sync: false
       - key: CHAINPAY_ALLOWED_ORIGINS
-        value: ""
-
+        value: "http://localhost:5173"

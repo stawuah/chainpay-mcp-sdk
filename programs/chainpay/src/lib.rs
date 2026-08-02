@@ -14,6 +14,21 @@ use policy::{validate_mandate_params, validate_payment, validate_supported_mints
 pub const RECEIPT_STATUS_SETTLED: u8 = 1;
 
 #[event]
+pub struct AssetRegistered {
+    pub asset: Pubkey,
+    pub mint: Pubkey,
+    pub token_program: Pubkey,
+    pub enabled: bool,
+}
+
+#[event]
+pub struct AssetStatusChanged {
+    pub asset: Pubkey,
+    pub mint: Pubkey,
+    pub enabled: bool,
+}
+
+#[event]
 pub struct MandateCreated {
     pub mandate: Pubkey,
     pub owner: Pubkey,
@@ -21,6 +36,8 @@ pub struct MandateCreated {
     pub allowed_mint: Pubkey,
     pub allowed_recipient: Pubkey,
     pub expires_at_slot: u64,
+    pub max_payment_count: u64,
+    pub cooldown_slots: u64,
 }
 
 #[event]
@@ -46,6 +63,8 @@ pub struct MandateUpdated {
     pub max_per_payment: u64,
     pub total_limit: u64,
     pub expires_at_slot: u64,
+    pub max_payment_count: u64,
+    pub cooldown_slots: u64,
 }
 
 #[event]
@@ -106,6 +125,34 @@ pub mod chainpay {
         Ok(())
     }
 
+    pub fn register_asset(ctx: Context<RegisterAsset>, mint: Pubkey) -> Result<()> {
+        let asset = &mut ctx.accounts.asset;
+        asset.authority = ctx.accounts.authority.key();
+        asset.mint = mint;
+        asset.token_program = ctx.accounts.token_program.key();
+        asset.enabled = true;
+        asset.bump = ctx.bumps.asset;
+
+        emit!(AssetRegistered {
+            asset: asset.key(),
+            mint: asset.mint,
+            token_program: asset.token_program,
+            enabled: asset.enabled,
+        });
+        Ok(())
+    }
+
+    pub fn set_asset_status(ctx: Context<SetAssetStatus>, enabled: bool) -> Result<()> {
+        let asset = &mut ctx.accounts.asset;
+        asset.enabled = enabled;
+        emit!(AssetStatusChanged {
+            asset: asset.key(),
+            mint: asset.mint,
+            enabled,
+        });
+        Ok(())
+    }
+
     pub fn create_mandate(ctx: Context<CreateMandate>, params: MandateParams) -> Result<()> {
         let current_slot = Clock::get()?.slot;
         validate_mandate_params(&params, current_slot)?;
@@ -121,6 +168,9 @@ pub mod chainpay {
         mandate.amount_spent = 0;
         mandate.payment_count = 0;
         mandate.expires_at_slot = params.expires_at_slot;
+        mandate.max_payment_count = params.max_payment_count;
+        mandate.cooldown_slots = params.cooldown_slots;
+        mandate.last_payment_slot = 0;
         mandate.paused = false;
         mandate.revoked = false;
         mandate.bump = ctx.bumps.mandate;
@@ -132,6 +182,8 @@ pub mod chainpay {
             allowed_mint: mandate.allowed_mint,
             allowed_recipient: mandate.allowed_recipient,
             expires_at_slot: mandate.expires_at_slot,
+            max_payment_count: mandate.max_payment_count,
+            cooldown_slots: mandate.cooldown_slots,
         });
 
         Ok(())
@@ -163,12 +215,18 @@ pub mod chainpay {
             params.expires_at_slot > current_slot,
             errors::ChainPayError::InvalidExpiry
         );
+        require!(
+            params.max_payment_count == 0 || params.max_payment_count >= mandate.payment_count,
+            errors::ChainPayError::PaymentCountExceeded
+        );
 
         mandate.approved_agent = params.approved_agent;
         mandate.allowed_recipient = params.allowed_recipient;
         mandate.max_per_payment = params.max_per_payment;
         mandate.total_limit = params.total_limit;
         mandate.expires_at_slot = params.expires_at_slot;
+        mandate.max_payment_count = params.max_payment_count;
+        mandate.cooldown_slots = params.cooldown_slots;
         mandate.paused = params.paused;
 
         emit!(MandateUpdated {
@@ -179,6 +237,8 @@ pub mod chainpay {
             max_per_payment: mandate.max_per_payment,
             total_limit: mandate.total_limit,
             expires_at_slot: mandate.expires_at_slot,
+            max_payment_count: mandate.max_payment_count,
+            cooldown_slots: mandate.cooldown_slots,
         });
 
         Ok(())
@@ -256,6 +316,7 @@ pub mod chainpay {
         let mandate = &mut ctx.accounts.mandate;
         mandate.amount_spent = new_amount_spent;
         mandate.payment_count = new_payment_count;
+        mandate.last_payment_slot = current_slot;
 
         let receipt = &mut ctx.accounts.receipt;
         receipt.mandate = mandate_key;

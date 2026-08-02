@@ -12,6 +12,8 @@ import {
   encodePauseMandate,
   encodeRevokeDelegate,
   encodeRevokeMandate,
+  encodeRegisterAsset,
+  encodeSetAssetStatus,
   encodeUpdateMandate,
   instruction,
   meta,
@@ -20,7 +22,7 @@ import {
   tokenProgramAddress,
   writeU64,
 } from "./encoding.js";
-import { deriveConfigAddress, deriveMandateAddress } from "./pda.js";
+import { deriveAssetAddress, deriveConfigAddress, deriveMandateAddress } from "./pda.js";
 
 export type CreateMandateInput = {
   approvedAgent: Address;
@@ -30,6 +32,8 @@ export type CreateMandateInput = {
   maxPerPayment: bigint;
   totalLimit: bigint;
   expiresAtSlot: bigint;
+  maxPaymentCount: bigint;
+  cooldownSlots: bigint;
   tokenProgram: TokenProgram;
   delegateAmount?: bigint;
 };
@@ -40,7 +44,14 @@ export type UpdateMandateInput = {
   maxPerPayment: bigint;
   totalLimit: bigint;
   expiresAtSlot: bigint;
+  maxPaymentCount: bigint;
+  cooldownSlots: bigint;
   paused: boolean;
+  tokenProgram: TokenProgram;
+};
+
+export type RegisterAssetInput = {
+  mint: Address;
   tokenProgram: TokenProgram;
 };
 
@@ -52,6 +63,8 @@ export function validateMandateInput(input: CreateMandateInput): void {
   writeU64(input.maxPerPayment, "maxPerPayment");
   writeU64(input.totalLimit, "totalLimit");
   writeU64(input.expiresAtSlot, "expiresAtSlot");
+  writeU64(input.maxPaymentCount, "maxPaymentCount");
+  writeU64(input.cooldownSlots, "cooldownSlots");
   if (input.maxPerPayment <= 0n) {
     throw new Error("maxPerPayment must be positive");
   }
@@ -74,6 +87,7 @@ export function buildCreateMandateInstruction(
 ): ChainPayInstruction {
   validateMandateInput(input);
   const config = deriveConfigAddress(programId);
+  const asset = deriveAssetAddress(input.allowedMint, programId);
   const mandate = deriveMandateAddress(owner, programId);
   const tokenProgram = tokenProgramAddress(input.tokenProgram);
 
@@ -82,6 +96,7 @@ export function buildCreateMandateInstruction(
     programId,
     [
       meta(config),
+      meta(asset),
       meta(mandate, true),
       meta(owner, true, true),
       meta(input.allowedMint),
@@ -91,6 +106,48 @@ export function buildCreateMandateInstruction(
       systemProgramMeta(),
     ],
     encodeCreateMandate(input),
+  );
+}
+
+export function buildRegisterAssetInstruction(
+  input: RegisterAssetInput,
+  authority: Address,
+  programId: Address = DEFAULT_PROGRAM_ID,
+): ChainPayInstruction {
+  publicKey(input.mint);
+  publicKey(authority);
+  return instruction(
+    "register_asset",
+    programId,
+    [
+      meta(deriveConfigAddress(programId)),
+      meta(deriveAssetAddress(input.mint, programId), true),
+      meta(authority, false, true),
+      meta(input.mint),
+      meta(tokenProgramAddress(input.tokenProgram)),
+      systemProgramMeta(),
+    ],
+    encodeRegisterAsset(input.mint),
+  );
+}
+
+export function buildSetAssetStatusInstruction(
+  mint: Address,
+  authority: Address,
+  enabled: boolean,
+  programId: Address = DEFAULT_PROGRAM_ID,
+): ChainPayInstruction {
+  publicKey(mint);
+  publicKey(authority);
+  return instruction(
+    "set_asset_status",
+    programId,
+    [
+      meta(deriveConfigAddress(programId)),
+      meta(deriveAssetAddress(mint, programId), true),
+      meta(authority, false, true),
+    ],
+    encodeSetAssetStatus(enabled),
   );
 }
 
@@ -174,6 +231,8 @@ export function buildUpdateMandateInstruction(
   writeU64(input.maxPerPayment, "maxPerPayment");
   writeU64(input.totalLimit, "totalLimit");
   writeU64(input.expiresAtSlot, "expiresAtSlot");
+  writeU64(input.maxPaymentCount, "maxPaymentCount");
+  writeU64(input.cooldownSlots, "cooldownSlots");
   if (input.maxPerPayment <= 0n) throw new Error("maxPerPayment must be positive");
   if (input.totalLimit < input.maxPerPayment) throw new Error("totalLimit must cover maxPerPayment");
 

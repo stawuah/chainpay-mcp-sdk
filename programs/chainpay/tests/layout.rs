@@ -1,11 +1,12 @@
 use anchor_lang::prelude::Pubkey;
-use chainpay::state::{PaymentMandate, PaymentReceipt, ProtocolConfig};
+use chainpay::state::{PaymentMandate, PaymentReceipt, ProtocolConfig, SupportedAsset};
 
 #[test]
 fn mandate_and_receipt_have_stable_layout_constants() {
-    assert_eq!(PaymentMandate::LEN, 203);
+    assert_eq!(PaymentMandate::LEN, 227);
     assert_eq!(PaymentReceipt::LEN, 274);
     assert_eq!(ProtocolConfig::LEN, 129);
+    assert_eq!(SupportedAsset::LEN, 98);
 }
 
 #[test]

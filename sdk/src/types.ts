@@ -60,10 +60,49 @@ export type Mandate = {
   amountSpent: bigint;
   paymentCount: bigint;
   expiresAtSlot: bigint;
+  maxPaymentCount: bigint;
+  cooldownSlots: bigint;
+  lastPaymentSlot: bigint;
   paused: boolean;
   revoked: boolean;
   status: MandateStatus;
   tokenProgram?: TokenProgram;
+};
+
+export type SupportedAsset = {
+  address: Address;
+  authority: Address;
+  mint: Address;
+  tokenProgram: Address;
+  enabled: boolean;
+  bump: number;
+};
+
+export type PaymentRequestPayload = {
+  version: 1;
+  cluster: "devnet" | "mainnet-beta";
+  merchant: Address;
+  invoice: string;
+  mint: Address;
+  tokenProgram: TokenProgram;
+  recipient: Address;
+  amount: string;
+  decimals: number;
+  nonce: string;
+  expiresAtSlot?: string;
+  resource?: string;
+};
+
+export type SignedPaymentRequest = {
+  payload: PaymentRequestPayload;
+  signature: string;
+};
+
+export type PaymentRequestVerification = {
+  valid: boolean;
+  payload: PaymentRequestPayload;
+  invoiceHash: Uint8Array;
+  reason?: string;
 };
 
 export type PaymentRequest = {

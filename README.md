@@ -19,10 +19,12 @@ The root Cargo workspace contains the backend and ChainPay program. Connectors,
 confidential transfers, MEV reduction, and production payment integrations are
 outside the MVP.
 
-The contract accepts a bounded allowlist of up to three settlement mints. Its
-transfer CPI uses Anchor's `TokenInterface`, so the same policy path supports
-classic SPL Token and Token-2022 accounts. Devnet uses custom demonstration
-mints; production USDC and PYUSD addresses are configured per deployment.
+The protocol authority registers an explicit allowlist of settlement mint
+accounts. Each registry entry binds one mint to either the classic SPL Token
+program or Token-2022, so the same policy path supports USDC, other stablecoins,
+and normal SPL assets without accepting arbitrary token programs. Devnet uses
+custom demonstration mints; production USDC and PYUSD addresses are configured
+per deployment.
 
 ## Setup and checks
 
@@ -36,13 +38,14 @@ make build
 make start-backend
 ~~~
 
-The dashboard scaffold can be invoked with:
+The dashboard can be invoked with:
 
 ~~~bash
-make app-dev
+make frontend-dev
 ~~~
 
-The current app command is a placeholder and does not start an HTTP UI yet.
+The original `app/` package remains a lightweight page/component contract
+scaffold; the runnable React dashboard is in `frontend/`.
 Contract-specific checks use `make contract-check`. With the matching Anchor
 1.1.2 CLI, `make contract-build` produces the SBF artifact and generates
 `target/idl/chainpay.json` plus `target/types/chainpay.ts`. `make contract-smoke`
@@ -65,12 +68,13 @@ npm --prefix sdk run test
 npm --prefix mcp-server run test
 ~~~
 
-The MCP server speaks standard JSON-RPC MCP over stdio and exposes
-`get_mandate`, `create_mandate`, `prepare_payment`, `execute_payment`,
-`get_payment`, `pause_mandate`, and `revoke_mandate`. Any MCP-capable LLM
-client can discover these tools. Owner actions return wallet-signature plans;
-payment execution requires an injected `PaymentSubmissionAdapter`, so the MCP
-process never stores a private key.
+The MCP server speaks standard JSON-RPC MCP over stdio and exposes protocol
+configuration and asset discovery, mandate lifecycle, payment quote/preflight,
+merchant-signed request verification, x402 challenge preparation, signed
+payment relay, and receipt/status tools. Any MCP-capable LLM client can
+discover these tools. Owner actions return wallet-signature plans; payment
+execution requires an injected `PaymentSubmissionAdapter`, so the MCP process
+never stores a private key.
 
 Set `CHAINPAY_RPC_URL` and optionally `CHAINPAY_PROGRAM_ID` before starting it:
 

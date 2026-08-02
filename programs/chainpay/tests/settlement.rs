@@ -160,6 +160,8 @@ fn run_settlement(kind: TokenKind) {
     let merchant_owner = Pubkey::new_unique();
     let token_program = kind.program_id();
     let (config, _) = Pubkey::find_program_address(&[b"config"], &chainpay::ID);
+    let (asset, _) =
+        Pubkey::find_program_address(&[b"asset", mint.pubkey().as_ref()], &chainpay::ID);
     let (mandate, _) =
         Pubkey::find_program_address(&[b"mandate", owner.pubkey().as_ref()], &chainpay::ID);
     let invoice_hash = [11u8; 32];
@@ -239,8 +241,26 @@ fn run_settlement(kind: TokenKind) {
     submit(
         &mut svm,
         vec![chainpay_instruction(
+            accounts::RegisterAsset {
+                config,
+                asset,
+                authority: owner.pubkey(),
+                mint_account: mint.pubkey(),
+                token_program,
+                system_program: system_program::ID,
+            },
+            instruction::RegisterAsset {
+                mint: mint.pubkey(),
+            },
+        )],
+        &[&owner],
+    );
+    submit(
+        &mut svm,
+        vec![chainpay_instruction(
             accounts::CreateMandate {
                 config,
+                asset_registry: asset,
                 mandate,
                 owner: owner.pubkey(),
                 allowed_mint: mint.pubkey(),
@@ -258,6 +278,8 @@ fn run_settlement(kind: TokenKind) {
                     max_per_payment: PAYMENT_AMOUNT,
                     total_limit: INITIAL_BALANCE,
                     expires_at_slot: expiration,
+                    max_payment_count: 0,
+                    cooldown_slots: 0,
                 },
             },
         )],
@@ -274,6 +296,7 @@ fn run_settlement(kind: TokenKind) {
         vec![chainpay_instruction(
             accounts::ExecutePayment {
                 config,
+                asset_registry: asset,
                 mandate,
                 receipt,
                 agent: agent.pubkey(),
@@ -301,6 +324,7 @@ fn run_settlement(kind: TokenKind) {
     let duplicate = chainpay_instruction(
         accounts::ExecutePayment {
             config,
+            asset_registry: asset,
             mandate,
             receipt,
             agent: agent.pubkey(),
@@ -335,6 +359,7 @@ fn run_settlement(kind: TokenKind) {
     let invalid_amount = chainpay_instruction(
         accounts::ExecutePayment {
             config,
+            asset_registry: asset,
             mandate,
             receipt: invalid_receipt,
             agent: agent.pubkey(),

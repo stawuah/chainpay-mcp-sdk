@@ -53,6 +53,11 @@ export async function executePayment(
         invoice_hash: bytesToHex(parsed.input.invoiceHash),
         receipt_address: prepared.receiptAddress,
         signed_transaction: signedTransaction,
+        agent: parsed.agent,
+        mint: parsed.input.mint,
+        recipient: parsed.input.recipient,
+        amount: parsed.input.amount.toString(),
+        token_program: parsed.input.tokenProgram,
       }),
     });
     const payload = await response.json() as Record<string, unknown>;

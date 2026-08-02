@@ -1,9 +1,9 @@
-//! Minimal process entrypoint for the backend workspace boundary.
-//!
-//! The relay service is not implemented in the restructuring phase. Keeping
-//! an executable here makes the backend independently startable without
-//! pretending that settlement endpoints already exist.
+use chainpay_backend::{BackendState, server::BackendConfig, storage::StatusStore};
 
-fn main() {
-    println!("ChainPay backend scaffold ready");
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let config = BackendConfig::from_env()?;
+    let store = StatusStore::from_env()?;
+    let state = BackendState::new(config, store)?;
+    chainpay_backend::server::run(state).await
 }

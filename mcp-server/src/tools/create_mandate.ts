@@ -21,6 +21,8 @@ export async function createMandate(
     maxPerPayment: unsignedInteger(args.maxPerPayment, "maxPerPayment"),
     totalLimit: unsignedInteger(args.totalLimit, "totalLimit"),
     expiresAtSlot: unsignedInteger(args.expiresAtSlot, "expiresAtSlot"),
+    maxPaymentCount: args.maxPaymentCount === undefined ? 0n : unsignedInteger(args.maxPaymentCount, "maxPaymentCount"),
+    cooldownSlots: args.cooldownSlots === undefined ? 0n : unsignedInteger(args.cooldownSlots, "cooldownSlots"),
     tokenProgram: tokenProgram(args.tokenProgram),
     delegateAmount: args.delegateAmount === undefined
       ? undefined
@@ -37,4 +39,3 @@ export async function createMandate(
     message: "The owner wallet must review and sign this transaction. MCP does not hold wallet keys.",
   });
 }
-

@@ -2,6 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 import type { Address } from "./types.js";
 import {
   CONFIG_SEED,
+  ASSET_SEED,
   DEFAULT_PROGRAM_ID,
   MANDATE_SEED,
   RECEIPT_SEED,
@@ -33,3 +34,12 @@ export function deriveReceiptAddress(
   )[0].toBase58();
 }
 
+export function deriveAssetAddress(
+  mint: Address,
+  programId: Address = DEFAULT_PROGRAM_ID,
+): Address {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(ASSET_SEED), publicKey(mint).toBytes()],
+    publicKey(programId),
+  )[0].toBase58();
+}
