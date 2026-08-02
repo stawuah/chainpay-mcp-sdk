@@ -73,10 +73,11 @@ export function renderDocsHtml(): string {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b1020" />
+    <meta name="theme-color" content="#0a0b0d" />
     <meta name="description" content="ChainPay MCP documentation for policy-controlled agent payments on Solana." />
     <title>ChainPay MCP · Solana payment infrastructure</title>
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
       :root {
         color-scheme: light;
         --ink: #0b1020;
@@ -219,6 +220,156 @@ export function renderDocsHtml(): string {
         .endpoint-card span:last-child { grid-column: 2; }
         .footer { display: block; }
         .footer span { display: block; margin-top: 7px; }
+      }
+      /* Coinbase-inspired editorial layer: white canvas, one blue, quiet depth. */
+      :root {
+        --ink: #0a0b0d;
+        --ink-soft: #30343a;
+        --muted: #5b616e;
+        --subtle: #7c828a;
+        --line: #dee1e6;
+        --line-soft: #eef0f3;
+        --surface: #ffffff;
+        --canvas: #ffffff;
+        --soft: #f7f7f7;
+        --strong: #eef0f3;
+        --blue: #0052ff;
+        --blue-active: #003ecc;
+        --blue-soft: #eaf0ff;
+        --green: #05b169;
+        --dark: #0a0b0d;
+        --dark-elevated: #16181c;
+        --sidebar: 256px;
+        --shadow: 0 4px 12px rgba(0, 0, 0, .04);
+        --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      }
+      body { color: var(--ink); background: var(--canvas); font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      code, pre { font-family: var(--mono); }
+      .layout { grid-template-columns: var(--sidebar) minmax(0, 1fr); }
+      .sidebar { padding: 28px 18px 24px; border-right: 1px solid var(--line); background: #fff; }
+      .brand-link { padding: 0 12px 31px; }
+      .brand-logo { width: 178px; }
+      .version { margin: 0 12px 28px; padding: 7px 11px; border-color: var(--line); border-radius: 100px; color: var(--ink); background: var(--soft); font-family: var(--mono); }
+      .version i { background: var(--green); box-shadow: 0 0 0 3px rgba(5, 177, 105, .14); }
+      .nav-group { margin-top: 27px; }
+      .nav-label { padding-inline: 12px; color: var(--subtle); font-family: var(--mono); letter-spacing: .08em; }
+      .nav-link { padding: 10px 12px; border-radius: 14px; color: var(--muted); font-size: 13px; }
+      .nav-link:hover, .nav-link.active { color: var(--ink); background: var(--soft); }
+      .nav-link.active { color: var(--blue); }
+      .nav-link span { color: var(--blue); }
+      .sidebar-foot { margin: 42px 12px 0; border-color: var(--line); color: var(--subtle); }
+      .sidebar-foot a { color: var(--blue); }
+      .topbar { min-height: 64px; padding: 0 48px; border-bottom-color: var(--line); background: #fff; }
+      .breadcrumbs { color: var(--muted); font-size: 13px; }
+      .breadcrumbs strong { color: var(--ink); }
+      .top-links { gap: 20px; color: var(--muted); font-size: 13px; }
+      .top-links a:hover { color: var(--blue); }
+      .network { padding: 9px 13px; border-color: var(--line); border-radius: 100px; color: var(--ink); background: #fff; font-family: var(--mono); }
+      .network i { background: var(--green); }
+      .content { width: 100%; margin: 0; padding: 0 0 112px; }
+      .hero { padding: 96px max(48px, calc((100% - 1100px) / 2)); color: #fff; background: var(--dark); }
+      .eyebrow { color: #fff; font-family: var(--mono); }
+      .eyebrow i { background: var(--green); box-shadow: 0 0 0 4px rgba(5, 177, 105, .14); }
+      h1, h2, h3 { letter-spacing: -1px; }
+      h1 { max-width: 850px; margin-top: 22px; color: #fff; font-size: clamp(48px, 6vw, 80px); font-weight: 400; line-height: 1; }
+      h1 em { color: var(--blue); }
+      .hero-copy { max-width: 680px; margin-top: 24px; color: #a8acb3; font-size: 17px; line-height: 1.65; }
+      .hero-actions { gap: 17px; margin-top: 32px; }
+      .button { min-height: 44px; padding: 12px 20px; border-radius: 100px; font-size: 15px; font-weight: 600; }
+      .button-primary { color: #fff; background: var(--blue); box-shadow: none; }
+      .button-primary:hover { background: var(--blue-active); }
+      .button-quiet { border-color: #42464c; color: #fff; background: transparent; }
+      .button-quiet:hover { border-color: #fff; background: var(--dark-elevated); }
+      .endpoint-pill { margin-top: 21px; padding: 9px 13px; border-color: #42464c; border-radius: 100px; color: #a8acb3; background: transparent; }
+      .endpoint-pill code { color: #fff; }
+      .hero-grid { width: min(1100px, calc(100% - 96px)); margin: 0 auto; grid-template-columns: minmax(0, 1.3fr) minmax(260px, .7fr); gap: 24px; padding-top: 40px; }
+      .hero-panel, .info-card, .tool-card, .endpoint-card { border-color: var(--line); border-radius: 24px; background: #fff; box-shadow: var(--shadow); }
+      .hero-panel { padding: 32px; }
+      .panel-kicker, .code-label, .section-index, .tool-number, .method { font-family: var(--mono); }
+      .panel-kicker { color: var(--subtle); }
+      .hero-panel h2 { margin-top: 13px; font-size: 26px; font-weight: 400; }
+      .hero-panel p { margin-top: 11px; color: var(--muted); }
+      .code-block { margin-top: 20px; padding: 20px; border: 1px solid #2c3035; border-radius: 16px; color: #e8ebef; background: var(--dark); }
+      .code-block code { font-size: 11px; }
+      .code-label { margin-top: 24px; color: var(--subtle); }
+      .copyable { color: var(--blue); }
+      .stats-panel { gap: 16px; }
+      .stat { padding: 24px; border-color: var(--line); border-radius: 24px; background: #fff; }
+      .stat strong { color: var(--ink); font: 500 28px var(--mono); }
+      .stat span { color: var(--muted); font-size: 12px; }
+      .section { width: min(1100px, calc(100% - 96px)); margin-inline: auto; padding-top: 112px; }
+      .section-heading { margin-bottom: 28px; }
+      .section-heading h2 { margin-top: 12px; font-size: clamp(34px, 4vw, 48px); font-weight: 400; line-height: 1.05; }
+      .section-heading p { max-width: 620px; margin-top: 13px; color: var(--muted); font-size: 16px; line-height: 1.65; }
+      .section-index { color: var(--blue); font-size: 11px; }
+      .cards { gap: 20px; }
+      .info-card { padding: 32px; box-shadow: none; }
+      .card-icon { width: 40px; height: 40px; border-radius: 50%; color: var(--blue); background: var(--blue-soft); }
+      .info-card h3 { margin-top: 20px; font-size: 19px; font-weight: 600; }
+      .info-card p { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+      .info-card a { margin-top: 19px; color: var(--blue); font-size: 12px; }
+      .flow { margin-top: 28px; border-color: var(--line); border-radius: 24px; box-shadow: var(--shadow); }
+      .flow-step { min-height: 160px; padding: 24px; border-color: var(--line); }
+      .flow-step strong { color: var(--blue); font-family: var(--mono); }
+      .flow-step h3 { margin-top: 25px; font-size: 16px; font-weight: 600; }
+      .flow-step p { color: var(--muted); font-size: 12px; }
+      .flow-step:not(:last-child)::after { color: var(--blue); }
+      .split { gap: 20px; }
+      .callout { padding: 22px; border-left: 3px solid var(--green); border-radius: 0 16px 16px 0; color: var(--ink-soft); background: #effaf5; }
+      .callout strong { color: #08784f; }
+      .check-list { gap: 12px; margin-top: 22px; }
+      .check-list li { color: var(--muted); }
+      .check-list li::before { color: var(--green); }
+      .table-wrap { border-color: var(--line); border-radius: 24px; box-shadow: var(--shadow); }
+      .endpoint-card { padding: 19px 24px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; box-shadow: none; }
+      .method { padding: 5px 8px; border-radius: 100px; color: var(--green); background: #e8f8f0; }
+      .endpoint-card code { font-weight: 500; }
+      .tool-grid { gap: 16px; }
+      .tool-card { padding: 22px; box-shadow: none; }
+      .tool-name { color: var(--blue); font-family: var(--mono); }
+      .tool-badge { padding: 5px 8px; border-radius: 100px; color: var(--muted); background: var(--strong); font-family: var(--mono); }
+      .tool-card p { color: var(--muted); }
+      .tool-fields { border-color: var(--line-soft); }
+      .tool-fields code { border-radius: 100px; color: var(--ink-soft); background: var(--strong); }
+      .footer { width: min(1100px, calc(100% - 96px)); margin: 112px auto 0; border-color: var(--line); color: var(--subtle); }
+      .footer a { color: var(--blue); }
+      @media (max-width: 1050px) {
+        :root { --sidebar: 228px; }
+        .hero-grid { grid-template-columns: 1fr; }
+        .stats-panel { grid-template-columns: repeat(3, 1fr); }
+      }
+      @media (max-width: 800px) {
+        .layout { display: block; }
+        .sidebar { position: static; height: auto; padding: 18px; border-right: 0; border-bottom: 1px solid var(--line); }
+        .brand-link { display: inline-block; padding: 0 0 14px; }
+        .brand-logo { width: 170px; }
+        .version, .nav-group, .sidebar-foot { display: none; }
+        .sidebar::after { content: "ChainPay MCP docs · Devnet"; float: right; margin-top: 14px; color: var(--subtle); font: 10px var(--mono); }
+        .topbar { padding: 0 18px; }
+        .top-links a { display: none; }
+        .content { padding-bottom: 72px; }
+        .hero { padding: 72px 18px 78px; }
+        .hero-grid, .section, .footer { width: min(100% - 36px, 660px); }
+        .hero-grid { padding-top: 24px; }
+        .hero h1 { font-size: 50px; }
+        .cards, .split, .tool-grid { grid-template-columns: 1fr; }
+        .flow { grid-template-columns: 1fr; }
+        .flow-step { min-height: 0; border-right: 0; border-bottom: 1px solid var(--line); }
+        .flow-step:last-child { border-bottom: 0; }
+        .flow-step:not(:last-child)::after { content: "↓"; top: auto; right: 24px; bottom: -11px; }
+        .section-heading { display: block; }
+        .section-index { display: block; margin-bottom: 10px; }
+        .stats-panel { grid-template-columns: 1fr; }
+        .footer { display: block; }
+        .footer span { display: block; margin-top: 7px; }
+      }
+      @media (max-width: 480px) {
+        .hero h1 { font-size: 43px; }
+        .hero-panel, .info-card, .tool-card { padding: 24px; }
+        .section { padding-top: 78px; }
+        .section-heading h2 { font-size: 36px; }
+        .endpoint-card { grid-template-columns: 60px 1fr; gap: 12px; }
+        .endpoint-card span:last-child { grid-column: 2; }
       }
     </style>
   </head>

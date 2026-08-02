@@ -5,8 +5,7 @@
   "workspaces": [
     "sdk",
     "mcp-server",
-    "app",
-    "frontend"
+    "app"
   ],
   "scripts": {
     "check:sdk": "npm --prefix sdk run typecheck",
