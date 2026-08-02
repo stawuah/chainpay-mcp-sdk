@@ -1,0 +1,11 @@
+  {
+  "mcpServers": {
+    "ChainPay": {
+      "url": "https://chainpay-mcp.onrender.com/mcp"
+    },
+    "lovable": {
+      "type": "http",
+      "url": "https://mcp.lovable.dev/?src=settings"
+    }
+  }
+}

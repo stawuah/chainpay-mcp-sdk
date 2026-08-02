@@ -47,10 +47,12 @@ export function renderDocsHtml(): string {
   const connectionConfig = `{
   "mcpServers": {
     "chainpay": {
-      "url": "https://YOUR_RENDER_HOST/mcp"
+      "url": "https://chainpay-mcp.onrender.com/mcp"
     }
   }
 }`;
+
+  const demoPrompt = "Use ChainPay to inspect the protocol config, then quote a payment for this demo invoice without executing it.";
 
   const quoteExample = `{
   "mandate": "MANDATE_PDA",
@@ -275,6 +277,7 @@ export function renderDocsHtml(): string {
               <p>Point any MCP-compatible agent at the hosted endpoint. Tool discovery is automatic, and the HTTP transport never receives a seed phrase or private key.</p>
               ${renderCode(connectionConfig)}
               <div class="code-label"><span>Use /mcp in your client config</span><span class="copyable" data-copy="config">Copy</span></div>
+              <div class="prompt-example"><span class="code-label"><span>Try this read-only prompt</span><span class="copyable" data-copy="prompt">Copy</span></span>${renderCode(demoPrompt)}</div>
             </div>
             <div class="stats-panel">
               <div class="stat"><strong>${TOOL_DEFINITIONS.length}</strong><span>payment and policy tools exposed</span></div>
@@ -322,7 +325,7 @@ export function renderDocsHtml(): string {
           </section>
 
           <section class="section" id="tool-reference" aria-labelledby="tools-title">
-            <div class="section-heading"><div><span class="section-index">05 · Tool reference</span><h2 id="tools-title">Tools your agent can discover.</h2><p>The catalog below is generated from the same definitions returned by MCP <code>tools/list</code>. Required fields are shown to make orchestration easier.</p></div><a class="button button-quiet" href="/tools">Open JSON catalog ↗</a></div>
+            <div class="section-heading"><div><span class="section-index">05 · Tool reference</span><h2 id="tools-title">Tools any agent can discover.</h2><p>The catalog below is generated from the same definitions returned by MCP <code>tools/list</code>. Required fields are shown to make orchestration easier.</p></div><a class="button button-quiet" href="/tools">Open JSON catalog ↗</a></div>
             <div class="tool-grid">${renderToolReference()}</div>
           </section>
 
@@ -346,8 +349,10 @@ export function renderDocsHtml(): string {
       document.querySelectorAll("[data-endpoint]").forEach((element) => { element.textContent = endpoint; });
       document.querySelectorAll("[data-copy]").forEach((element) => {
         element.addEventListener("click", async () => {
-          const config = ${JSON.stringify(connectionConfig)}.replace("YOUR_RENDER_HOST", window.location.host);
-          await navigator.clipboard?.writeText(config);
+          const value = element.dataset.copy === "prompt"
+            ? ${JSON.stringify(demoPrompt)}
+            : ${JSON.stringify(connectionConfig)}.replace("YOUR_RENDER_HOST", window.location.host);
+          await navigator.clipboard?.writeText(value);
           element.textContent = "Copied";
           window.setTimeout(() => { element.textContent = "Copy"; }, 1400);
         });

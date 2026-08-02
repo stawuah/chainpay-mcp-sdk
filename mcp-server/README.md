@@ -136,11 +136,27 @@ An MCP client can launch the development command with:
 }
 ```
 
-The repository includes [mcp.json.example](../mcp.json.example) as a template.
-It is not automatically loaded by every client: paste its contents into the
-MCP settings for your client. The config location belongs to the client, not
-to this repository. For example, Claude Desktop and Cursor each have their own
-MCP settings; use the client’s “Add MCP server” UI when available.
+For a hosted MCP client, use the deployed ChainPay endpoint directly:
+
+```json
+{
+  "mcpServers": {
+    "chainpay": {
+      "url": "https://chainpay-mcp.onrender.com/mcp"
+    }
+  }
+}
+```
+
+Read-only demo prompt:
+
+```text
+Use ChainPay to inspect the protocol config, then quote a payment for this demo invoice without executing it.
+```
+
+Paste the configuration into your MCP client settings. The config location
+belongs to the client, not to this repository; Claude Desktop and Cursor each
+have their own MCP settings.
 
 After deployment, replace `YOUR-HOST.example.com` with the HTTPS hostname and
 keep the `/mcp` suffix. The health check is the same hostname with `/healthz`.

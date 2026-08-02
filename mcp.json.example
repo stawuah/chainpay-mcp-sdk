@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "ChainPay": {
-      "url": "https://YOUR-HOST.example.com/mcp"
-    }
-  }
-}
