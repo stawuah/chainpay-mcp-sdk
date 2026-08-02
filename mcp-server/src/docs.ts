@@ -383,6 +383,10 @@ export function renderDocsHtml(): string {
       .usecase-card h3 { margin-top: 24px; font-size: 20px; font-weight: 600; }
       .usecase-card p { min-height: 88px; margin-top: 11px; color: var(--muted); font-size: 13px; line-height: 1.7; }
       .usecase-tool { display: inline-flex; padding: 7px 10px; margin-top: 22px; border-radius: 100px; color: var(--blue); background: var(--blue-soft); font: 500 10px var(--mono); }
+      .connector-callout { display: grid; align-content: start; gap: 8px; min-height: 100%; }
+      .connector-callout strong { display: block; margin-bottom: 4px; }
+      .connector-callout span, .connector-callout code { display: block; }
+      .connector-callout code { width: fit-content; padding: 6px 9px; border-radius: 8px; color: var(--ink); background: #fff; font-size: 11px; }
       .rail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-top: 20px; }
       .rail-card { display: grid; grid-template-columns: 42px 1fr auto; align-items: start; gap: 15px; padding: 24px; border: 1px solid var(--line); border-radius: 24px; background: #fff; }
       .rail-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; color: var(--blue); background: var(--blue-soft); font-weight: 600; }
@@ -507,8 +511,8 @@ export function renderDocsHtml(): string {
         <div class="content">
           <section class="hero" aria-labelledby="hero-title">
             <span class="eyebrow"><i></i> Policy-controlled payments for agents</span>
-            <h1 id="hero-title">Move money with <em>guardrails.</em></h1>
-            <p class="hero-copy">ChainPay gives AI agents a safe payment rail on Solana. Agents can inspect mandates, quote and prepare payments, and relay approved transactions—while owners keep the signing authority.</p>
+            <h1 id="hero-title">The universal payment interface for <em>AI agents.</em></h1>
+            <p class="hero-copy">One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. Solana is the first settlement layer; connectors keep the agent interface consistent.</p>
             <div class="hero-actions">
               <a class="button button-primary" href="#quickstart">Start building <span>↗</span></a>
               <a class="button button-quiet" href="#tool-reference">Browse tools <span>↓</span></a>
@@ -558,7 +562,7 @@ export function renderDocsHtml(): string {
             </div>
             <div class="split connector-detail" style="margin-top: 20px">
               <div class="info-card"><div class="card-icon">↔</div><h3>How agents use it</h3><p>When an API responds with an x402 challenge, the agent passes that challenge, the approved mandate PDA, and its public key to <code>prepare_x402_payment</code>. After a signer approves the returned transaction, the agent calls the same tool again with <code>signedTransaction</code>, then uses <code>wait_for_payment</code> or <code>get_payment</code>.</p></div>
-              <div class="callout connector-callout"><strong>Connector boundary:</strong> x402 does not bypass ChainPay policy. The adapter validates the challenge, binds it to a deterministic invoice hash, and sends only a wallet-signed transaction to <code>/v1/payments</code>. It is not a key custodian or hosted facilitator.</div>
+              <div class="callout connector-callout"><strong>Connector boundary</strong><span>x402 does not bypass ChainPay policy.</span><span>The adapter validates the challenge.</span><span>It binds the challenge to a deterministic invoice hash.</span><span>It sends only a wallet-signed transaction to:</span><code>/v1/payments</code><span>It is not a key custodian or hosted facilitator.</span></div>
             </div>
           </section>
 

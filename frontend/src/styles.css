@@ -288,8 +288,6 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .tool-count { color: var(--muted); font: 500 10px var(--mono); }
 .tool-empty { margin-top: 18px; color: var(--muted); font-size: 12px; }
 .assistant-visual { display: flex; align-items: center; gap: 13px; }
-.assistant-orb { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--blue); font-size: 22px; }
-.assistant-orb.thinking { animation: pulse 1.4s ease-in-out infinite; }
 .assistant-caption { color: var(--body); font-size: 12px; font-weight: 600; }
 .assistant-log { min-height: 155px; padding: 22px 0; }
 .assistant-log p { margin-top: 12px; color: var(--body); font-size: 14px; line-height: 1.65; }
@@ -344,8 +342,6 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .receipt-address { display: block; max-width: 100%; overflow: hidden; padding: 0; margin-top: 7px; border: 0; color: var(--green); background: none; font: 9px var(--mono); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .success-box { display: flex; align-items: flex-start; gap: 10px; padding: 13px; margin-top: 14px; border-radius: 12px; color: var(--green); background: #effaf4; }
 .success-box > span { font-size: 16px; } .success-box b, .success-box a { display: block; font-size: 11px; } .success-box a { margin-top: 5px; color: var(--green); font-family: var(--mono); }
-@keyframes pulse { 50% { transform: scale(1.06); opacity: .75; } }
-
 @media (max-width: 1024px) {
   .hero { grid-template-columns: 1fr; gap: 35px; }
   .hero-copy { max-width: 760px; }
@@ -464,4 +460,29 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
   .assistant-input input { flex: 1 1 calc(100% - 48px); }
   .assistant-input .ask-button { width: 100%; }
   .table-row { grid-template-columns: 26px minmax(0, 1fr) auto; }
+}
+
+/* Product surfaces stay quiet: structure, type, and policy status carry the interface. */
+.orbit, .cta-orb, .agent-orb, .assistant-orb { display: none; }
+.large-chart svg path[fill^="url"] { display: none; }
+.agent-summary { display: grid; gap: 8px; padding: 20px 0; margin-top: 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.agent-summary strong { color: var(--ink); font-size: 16px; font-weight: 600; }
+.use-cases-section { padding-top: 96px; }
+.use-case-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.use-case-card { min-height: 248px; padding: 28px; border: 1px solid var(--line); border-radius: var(--radius-card); background: #fff; }
+.use-case-number { display: block; color: var(--blue); font: 500 11px var(--mono); }
+.use-case-card h3 { margin-top: 24px; font-size: 18px; font-weight: 600; letter-spacing: -.3px; }
+.use-case-card p { margin-top: 10px; color: var(--body); font-size: 13px; line-height: 1.6; }
+.use-case-card .use-case-quote { color: var(--ink); font-size: 15px; }
+
+@media (min-width: 640px) and (max-width: 1024px) {
+  .use-case-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .use-case-card { min-height: 230px; }
+}
+
+@media (max-width: 639px) {
+  .use-cases-section { padding-top: 64px; }
+  .use-case-grid { grid-template-columns: 1fr; gap: 12px; }
+  .use-case-card { min-height: 0; padding: 24px; }
+  .use-case-card h3 { margin-top: 20px; }
 }
