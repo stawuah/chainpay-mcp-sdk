@@ -43,6 +43,164 @@ function renderToolReference(): string {
   return TOOL_DEFINITIONS.map(renderTool).join("\n");
 }
 
+type UseCaseStep = {
+  from: string;
+  to: string;
+  message: string;
+};
+
+type UseCase = {
+  title: string;
+  scenario: string;
+  summary: string;
+  outcome: string;
+  steps: UseCaseStep[];
+};
+
+const USE_CASES: UseCase[] = [
+  {
+    title: "AI accounting assistant",
+    scenario: "Pay invoice #123 from the USDC treasury.",
+    summary: "The assistant retrieves the invoice, asks ChainPay for a policy quote, requests wallet approval, settles the approved amount, and returns a receipt.",
+    outcome: "A reconciled USDC payment and receipt PDA for the accounting system.",
+    steps: [
+      { from: "Agent", to: "ChainPay MCP", message: "Submit invoice #123, treasury mandate, and amount." },
+      { from: "ChainPay MCP", to: "Merchant", message: "Validate invoice identity and payment request." },
+      { from: "ChainPay MCP", to: "Wallet", message: "Return policy checks and a transaction for approval." },
+      { from: "Wallet", to: "Solana", message: "Sign and settle the USDC transfer." },
+      { from: "Solana", to: "Agent", message: "Return receipt PDA and settlement status." },
+    ],
+  },
+  {
+    title: "AI payroll agent",
+    scenario: "It is Friday. Pay 120 employees.",
+    summary: "The payroll agent creates the payment batch, while ChainPay enforces the payroll wallet, approved recipient list, batch limits, and required approval workflow.",
+    outcome: "A controlled batch settlement with receipts that payroll can reconcile per employee.",
+    steps: [
+      { from: "Agent", to: "ChainPay MCP", message: "Send payroll batch and payroll mandate." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check recipients, daily cap, batch cap, and approvals." },
+      { from: "Policy", to: "Wallet", message: "Request owner approval for the valid batch." },
+      { from: "Wallet", to: "Solana", message: "Sign transfers through the selected token program." },
+      { from: "Solana", to: "Agent", message: "Return per-payment receipts and finality." },
+    ],
+  },
+  {
+    title: "Robots and machines",
+    scenario: "A delivery robot pays a charging station or a taxi pays a toll.",
+    summary: "The machine does not implement wallet, token-account, or settlement logic. Its application calls the same ChainPay MCP interface used by every other agent.",
+    outcome: "A machine-service payment that remains inside a bounded mandate.",
+    steps: [
+      { from: "Machine", to: "ChainPay MCP", message: "Request payment for charging, parking, toll, or access." },
+      { from: "ChainPay MCP", to: "Service", message: "Resolve the destination and payment demand." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check mandate, asset, amount, and recipient." },
+      { from: "Wallet", to: "Solana", message: "Approve and settle the machine-service payment." },
+      { from: "Solana", to: "Machine", message: "Return receipt and service confirmation." },
+    ],
+  },
+  {
+    title: "Customer support AI",
+    scenario: "Refund this customer 45 USDC.",
+    summary: "The support agent routes the refund through ChainPay instead of integrating directly with Stripe or custom blockchain code, keeping the refund inside an approved policy.",
+    outcome: "A verified refund receipt linked to the support case.",
+    steps: [
+      { from: "Support AI", to: "ChainPay MCP", message: "Submit case, customer destination, and refund amount." },
+      { from: "ChainPay MCP", to: "Connector", message: "Resolve merchant demand and refund metadata." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check refund cap, destination, and approval rule." },
+      { from: "Wallet", to: "Solana", message: "Sign and settle the USDC refund." },
+      { from: "Solana", to: "Support AI", message: "Return receipt for the customer record." },
+    ],
+  },
+  {
+    title: "Treasury AI",
+    scenario: "Move 50,000 USDC from operations to payroll.",
+    summary: "Treasury rules decide which wallets can move funds, how much can move per day, which approvals are required, and whether the request is inside business hours.",
+    outcome: "An approved treasury transfer with policy evidence and durable proof.",
+    steps: [
+      { from: "Treasury AI", to: "ChainPay MCP", message: "Request an inter-wallet transfer." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check daily limit, business hours, and approval quorum." },
+      { from: "Policy", to: "Wallet", message: "Present the transfer only after all checks pass." },
+      { from: "Wallet", to: "Solana", message: "Sign the treasury settlement." },
+      { from: "Solana", to: "Treasury AI", message: "Return receipt and reconciliation references." },
+    ],
+  },
+  {
+    title: "AI shopping assistant",
+    scenario: "Buy this software subscription.",
+    summary: "The shopping agent retrieves the invoice and calls ChainPay. The connector resolves the merchant payment path while ChainPay handles policy, approval, settlement, and proof.",
+    outcome: "A subscription payment routed through the merchant’s supported connector.",
+    steps: [
+      { from: "Shopping AI", to: "ChainPay MCP", message: "Submit the subscription invoice and mandate." },
+      { from: "ChainPay MCP", to: "Connector", message: "Resolve Stripe, Pay.sh, x402, or direct settlement." },
+      { from: "ChainPay MCP", to: "Wallet", message: "Return the policy-approved payment transaction." },
+      { from: "Wallet", to: "Solana", message: "Sign the stablecoin settlement." },
+      { from: "Solana", to: "Shopping AI", message: "Return receipt and merchant reference." },
+    ],
+  },
+  {
+    title: "Subscription manager",
+    scenario: "Renew Copilot and cancel unused subscriptions.",
+    summary: "The manager finds invoices and presents only renewals covered by the approved policy. Cancellation is a separate merchant action; ChainPay executes only the payments that pass policy.",
+    outcome: "Approved renewals with receipts and no unapproved recurring spend.",
+    steps: [
+      { from: "Manager AI", to: "ChainPay MCP", message: "Submit renewal invoices selected by the user." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check merchant, amount, cadence, and expiry." },
+      { from: "ChainPay MCP", to: "Connector", message: "Route each approved invoice to its merchant rail." },
+      { from: "Wallet", to: "Solana", message: "Approve the selected subscription payments." },
+      { from: "Solana", to: "Manager AI", message: "Return receipts for the subscription ledger." },
+    ],
+  },
+  {
+    title: "Crypto commerce agent",
+    scenario: "A merchant accepts USDC at checkout.",
+    summary: "Checkout calls ChainPay MCP instead of embedding custom Solana payment logic. The merchant receives a consistent request, settlement, and receipt path.",
+    outcome: "A merchant checkout completed in USDC with a verifiable receipt.",
+    steps: [
+      { from: "Checkout", to: "ChainPay MCP", message: "Create a payment request for the order." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check buyer mandate, mint, recipient, and amount." },
+      { from: "ChainPay MCP", to: "Wallet", message: "Prepare the approved checkout transaction." },
+      { from: "Wallet", to: "Solana", message: "Sign and settle USDC to the merchant account." },
+      { from: "Solana", to: "Checkout", message: "Return receipt and order confirmation." },
+    ],
+  },
+  {
+    title: "Cross-border freelancer platform",
+    scenario: "A client approves a worldwide freelancer payout.",
+    summary: "The platform’s agent prepares payouts worldwide through ChainPay, keeping limits, recipient rules, token choice, and receipts consistent across the platform.",
+    outcome: "A payout record with recipient-level settlement proof.",
+    steps: [
+      { from: "Platform AI", to: "ChainPay MCP", message: "Submit approved freelancer payout instructions." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check recipient, corridor, asset, and payout limits." },
+      { from: "ChainPay MCP", to: "Connector", message: "Resolve payout routing and merchant metadata." },
+      { from: "Wallet", to: "Solana", message: "Sign the stablecoin payout settlement." },
+      { from: "Solana", to: "Platform AI", message: "Return receipts for the payout ledger." },
+    ],
+  },
+  {
+    title: "DAO operations AI",
+    scenario: "Pay contributors after proposal #56 passed.",
+    summary: "The DAO agent checks governance state first. ChainPay settles only when the proposal condition, contributor list, treasury mandate, and spending policy are satisfied.",
+    outcome: "Contributor payments tied to a governance decision and receipt trail.",
+    steps: [
+      { from: "DAO AI", to: "Governance", message: "Read proposal #56 and approved contributor list." },
+      { from: "DAO AI", to: "ChainPay MCP", message: "Submit the payout batch and treasury mandate." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check governance condition, recipients, and limits." },
+      { from: "Wallet", to: "Solana", message: "Sign and settle contributor payments." },
+      { from: "Solana", to: "DAO AI", message: "Return receipts linked to proposal #56." },
+    ],
+  },
+];
+
+function renderUseCaseReference(): string {
+  return USE_CASES.map((useCase, index) => {
+    const slug = useCase.title.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const steps = useCase.steps.map((step, stepIndex) => `<div class="uml-message"><span class="uml-number">${String(stepIndex + 1).padStart(2, "0")}</span><strong>${escapeHtml(step.from)}</strong><span class="uml-arrow" aria-hidden="true">→</span><strong>${escapeHtml(step.to)}</strong><p>${escapeHtml(step.message)}</p></div>`).join("\n");
+    return `<details class="use-case-detail" id="use-case-${slug}">
+      <summary><span class="usecase-index">${String(index + 1).padStart(2, "0")}</span><span class="use-case-summary"><strong>${escapeHtml(useCase.title)}</strong><small>${escapeHtml(useCase.scenario)}</small></span><span class="use-case-open">Open flow <span aria-hidden="true">↓</span></span></summary>
+      <div class="use-case-body"><p class="use-case-description">${escapeHtml(useCase.summary)}</p><div class="uml-diagram" role="img" aria-label="${escapeHtml(useCase.title)} payment sequence diagram"><div class="uml-title"><span>AGENT SEQUENCE</span><span>CHAINPAY MCP · CONNECTOR · SOLANA</span></div>${steps}</div><div class="use-case-outcome"><strong>Result</strong><span>${escapeHtml(useCase.outcome)}</span></div></div>
+    </details>`;
+  }).join("\n");
+}
+
 export function renderDocsHtml(): string {
   const connectionConfig = `{
   "mcpServers": {
@@ -74,8 +232,17 @@ export function renderDocsHtml(): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0a0b0d" />
-    <meta name="description" content="ChainPay MCP documentation for policy-controlled agent payments on Solana." />
-    <title>ChainPay MCP · Solana payment infrastructure</title>
+    <meta name="description" content="The universal payment interface for AI agents. ChainPay connects policy, wallet authorization, x402, stablecoin settlement, and receipts." />
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://chainpay-mcp.onrender.com/docs" />
+    <meta property="og:title" content="The universal payment interface for AI agents." />
+    <meta property="og:description" content="One MCP endpoint for policy enforcement, routing, stablecoin settlement, x402, and receipts." />
+    <meta property="og:image" content="https://chainpay-mcp.onrender.com/logo.svg" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="The universal payment interface for AI agents." />
+    <meta name="twitter:description" content="One MCP endpoint for policy enforcement, routing, stablecoin settlement, x402, and receipts." />
+    <title>The universal payment interface for AI agents. · ChainPay</title>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
       :root {
@@ -393,6 +560,31 @@ export function renderDocsHtml(): string {
       .rail-card h3 { font-size: 17px; font-weight: 600; }
       .rail-card p { margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.6; }
       .rail-card > code { align-self: center; padding: 6px 9px; border-radius: 100px; color: var(--ink-soft); background: var(--strong); font-size: 10px; }
+      .use-case-reference { display: grid; gap: 12px; }
+      .use-case-detail { overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: #fff; }
+      .use-case-detail summary { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 22px 24px; cursor: pointer; list-style: none; }
+      .use-case-detail summary::-webkit-details-marker { display: none; }
+      .use-case-detail summary:hover { background: var(--soft); }
+      .use-case-detail summary:focus-visible { outline: 3px solid rgba(0, 82, 255, .22); outline-offset: -3px; }
+      .use-case-detail[open] summary { border-bottom: 1px solid var(--line); background: var(--soft); }
+      .use-case-detail[open] .use-case-open span { display: inline-block; transform: rotate(180deg); }
+      .use-case-summary { display: grid; gap: 5px; min-width: 0; }
+      .use-case-summary strong { color: var(--ink); font-size: 17px; font-weight: 600; }
+      .use-case-summary small { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .use-case-open { color: var(--blue); font: 500 11px var(--mono); white-space: nowrap; }
+      .use-case-open span { display: inline-block; margin-left: 4px; transition: transform .18s ease; }
+      .use-case-body { padding: 26px 28px 28px; }
+      .use-case-description { max-width: 760px; color: var(--muted); font-size: 14px; line-height: 1.7; }
+      .uml-diagram { overflow: hidden; margin-top: 22px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
+      .uml-title { display: flex; justify-content: space-between; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--subtle); background: var(--soft); font: 600 9px var(--mono); letter-spacing: .07em; }
+      .uml-message { display: grid; grid-template-columns: 32px 128px 28px 150px minmax(0, 1fr); align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--line-soft); font-size: 11px; }
+      .uml-message:last-child { border-bottom: 0; }
+      .uml-number { color: var(--blue); font: 500 10px var(--mono); }
+      .uml-message strong { color: var(--ink); font-size: 11px; font-weight: 600; }
+      .uml-arrow { color: var(--blue); font-size: 16px; text-align: center; }
+      .uml-message p { min-width: 0; margin: 0; color: var(--muted); line-height: 1.5; }
+      .use-case-outcome { display: flex; align-items: baseline; gap: 10px; padding: 14px 16px; margin-top: 16px; border-left: 3px solid var(--green); border-radius: 0 10px 10px 0; color: var(--muted); background: #effaf5; font-size: 12px; line-height: 1.5; }
+      .use-case-outcome strong { color: #08784f; }
       @media (max-width: 800px) {
         .usecase-grid, .rail-grid { grid-template-columns: 1fr; }
         .rail-card { grid-template-columns: 42px 1fr; }
@@ -418,6 +610,7 @@ export function renderDocsHtml(): string {
         .flow-step:not(:last-child)::after { right: -7px; }
         .usecase-card { min-height: 300px; padding: 24px; }
         .usecase-card p { min-height: 112px; }
+        .uml-message { grid-template-columns: 28px 92px 20px 105px minmax(0, 1fr); gap: 7px; padding-inline: 12px; }
       }
       @media (max-width: 639px) {
         .layout { display: block; }
@@ -460,6 +653,14 @@ export function renderDocsHtml(): string {
         .usecase-card p { min-height: 0; }
         .rail-card { grid-template-columns: 42px 1fr; padding: 20px; }
         .rail-card > code { grid-column: 2; justify-self: start; }
+        .use-case-detail summary { grid-template-columns: 34px minmax(0, 1fr); gap: 12px; padding: 18px; }
+        .use-case-open { grid-column: 2; }
+        .use-case-body { padding: 22px 18px 20px; }
+        .uml-title { display: block; line-height: 1.6; }
+        .uml-title span { display: block; }
+        .uml-message { grid-template-columns: 28px minmax(0, max-content) 20px minmax(0, max-content); gap: 7px; padding: 12px; }
+        .uml-message p { grid-column: 2 / -1; margin-top: 4px; }
+        .use-case-outcome { align-items: flex-start; flex-direction: column; gap: 4px; }
         .endpoint-card { grid-template-columns: 58px 1fr; gap: 10px; padding: 17px; }
         .endpoint-card span:last-child { grid-column: 2; }
         .footer { margin-top: 72px; }
@@ -485,7 +686,7 @@ export function renderDocsHtml(): string {
           </div>
           <div class="nav-group">
             <div class="nav-label">Use cases</div>
-            <a class="nav-link" href="#use-cases"><span>◇</span>Owner controls</a>
+            <a class="nav-link" href="#use-cases"><span>◇</span>Payment scenarios</a>
             <a class="nav-link" href="#policy-firewall"><span>⌁</span>Policy firewall</a>
             <a class="nav-link" href="#assets"><span>◈</span>SPL &amp; Token-2022</a>
           </div>
@@ -552,7 +753,7 @@ export function renderDocsHtml(): string {
           </section>
 
           <section class="section" id="x402" aria-labelledby="x402-title">
-            <div class="section-heading"><div><span class="section-index">03 · x402 connector</span><h2 id="x402-title">Turn paid API access into a governed settlement.</h2><p>x402 is the demand signal. ChainPay is the policy and settlement connector that turns an exact payment challenge into a mandate-checked Solana transaction.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">03 · x402 connector</span><h2 id="x402-title">One connector. x402 connected.</h2><p>ChainPay exposes one connector boundary for agents. x402 is connected to the same payment interface, so a paid API challenge becomes a mandate-checked Solana transaction without a second agent integration.</p></div></div>
             <div class="flow connector-flow">
               <div class="flow-step"><strong>01</strong><h3>Challenge</h3><p>A paid resource returns an x402 exact challenge with asset, recipient, amount, nonce, resource, and optional expiry.</p></div>
               <div class="flow-step"><strong>02</strong><h3>Normalize</h3><p><code>prepare_x402_payment</code> accepts Solana Devnet and the exact scheme, then derives deterministic payment references.</p></div>
@@ -582,12 +783,8 @@ export function renderDocsHtml(): string {
           </section>
 
           <section class="section" id="use-cases" aria-labelledby="use-cases-title">
-            <div class="section-heading"><div><span class="section-index">05 · Use cases</span><h2 id="use-cases-title">Controls for the moments that matter.</h2><p>These are owner and merchant controls, separated from the payment flow so agents can discover the right action without confusing preparation with authority.</p></div></div>
-            <div class="usecase-grid">
-              <article class="usecase-card"><div class="usecase-card-top"><span class="usecase-index">01</span><span class="card-icon">Ⅱ</span></div><h3>Pause a mandate</h3><p>Stop new payments immediately through an owner-controlled, wallet-signed pause transaction. Use this for an incident, a suspicious agent, or a temporary hold.</p><code class="usecase-tool">pause_mandate</code></article>
-              <article class="usecase-card"><div class="usecase-card-top"><span class="usecase-index">02</span><span class="card-icon">×</span></div><h3>Revoke permanently</h3><p>Shut down a policy for good when an agent, recipient, or operating relationship should never spend through the mandate again.</p><code class="usecase-tool">revoke_mandate</code></article>
-              <article class="usecase-card"><div class="usecase-card-top"><span class="usecase-index">03</span><span class="card-icon">✓</span></div><h3>Verify merchant demand</h3><p>Validate the merchant’s Ed25519 signature, canonical payment payload, token program, amount, cluster, and expiry before settlement.</p><code class="usecase-tool">verify_payment_request</code></article>
-            </div>
+            <div class="section-heading"><div><span class="section-index">05 · Use cases</span><h2 id="use-cases-title">Every agent payment, one interface.</h2><p>Select a scenario to open its complete flow. Each sequence keeps the agent, ChainPay MCP, connector, wallet, Solana settlement, and receipt boundary visible.</p></div></div>
+            <div class="use-case-reference">${renderUseCaseReference()}</div>
           </section>
 
           <section class="section" id="policy-firewall" aria-labelledby="firewall-title">
