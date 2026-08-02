@@ -371,6 +371,95 @@ export function renderDocsHtml(): string {
         .endpoint-card { grid-template-columns: 60px 1fr; gap: 12px; }
         .endpoint-card span:last-child { grid-column: 2; }
       }
+      .connector-flow, .settlement-flow { margin-top: 30px; }
+      .connector-detail { align-items: stretch; }
+      .connector-detail .info-card { height: 100%; }
+      .connector-callout { display: flex; align-items: flex-start; min-height: 100%; }
+      .usecase-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+      .usecase-card { min-height: 278px; padding: 28px; border: 1px solid var(--line); border-radius: 24px; background: #fff; box-shadow: none; }
+      .usecase-card-top { display: flex; align-items: center; justify-content: space-between; }
+      .usecase-index { color: var(--blue); font: 500 11px var(--mono); }
+      .usecase-card .card-icon { flex: 0 0 auto; }
+      .usecase-card h3 { margin-top: 24px; font-size: 20px; font-weight: 600; }
+      .usecase-card p { min-height: 88px; margin-top: 11px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+      .usecase-tool { display: inline-flex; padding: 7px 10px; margin-top: 22px; border-radius: 100px; color: var(--blue); background: var(--blue-soft); font: 500 10px var(--mono); }
+      .rail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-top: 20px; }
+      .rail-card { display: grid; grid-template-columns: 42px 1fr auto; align-items: start; gap: 15px; padding: 24px; border: 1px solid var(--line); border-radius: 24px; background: #fff; }
+      .rail-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; color: var(--blue); background: var(--blue-soft); font-weight: 600; }
+      .rail-card h3 { font-size: 17px; font-weight: 600; }
+      .rail-card p { margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+      .rail-card > code { align-self: center; padding: 6px 9px; border-radius: 100px; color: var(--ink-soft); background: var(--strong); font-size: 10px; }
+      @media (max-width: 800px) {
+        .usecase-grid, .rail-grid { grid-template-columns: 1fr; }
+        .rail-card { grid-template-columns: 42px 1fr; }
+        .rail-card > code { grid-column: 2; justify-self: start; }
+      }
+      /* Device response follows the Coinbase editorial breakpoints. */
+      @media (min-width: 1025px) and (max-width: 1279px) {
+        .hero { padding-inline: 64px; }
+        .hero-grid, .section, .footer { width: min(1100px, calc(100% - 80px)); }
+      }
+      @media (min-width: 640px) and (max-width: 1024px) {
+        :root { --sidebar: 220px; }
+        .topbar { padding-inline: 32px; }
+        .hero { padding: 80px 32px 88px; }
+        .hero h1 { font-size: 64px; letter-spacing: -2px; }
+        .hero-grid, .section, .footer { width: min(100% - 64px, 760px); }
+        .cards, .usecase-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .rail-grid { grid-template-columns: 1fr; }
+        .flow { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        .flow-step { min-height: 178px; padding: 16px; }
+        .flow-step h3 { margin-top: 20px; font-size: 14px; }
+        .flow-step p { font-size: 11px; }
+        .flow-step:not(:last-child)::after { right: -7px; }
+        .usecase-card { min-height: 300px; padding: 24px; }
+        .usecase-card p { min-height: 112px; }
+      }
+      @media (max-width: 639px) {
+        .layout { display: block; }
+        .sidebar { position: static; height: auto; padding: 16px; border-right: 0; border-bottom: 1px solid var(--line); }
+        .brand-link { display: inline-block; padding: 0 0 14px; }
+        .brand-logo { width: 166px; }
+        .version { display: inline-flex; margin: 0 0 18px; }
+        .sidebar::after { display: none; }
+        .sidebar nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 8px; }
+        .nav-group { display: block; min-width: 0; margin-top: 0; }
+        .nav-label { padding: 0 8px 7px; font-size: 9px; }
+        .nav-link { min-height: 36px; padding: 8px; font-size: 11px; white-space: nowrap; }
+        .sidebar-foot { display: none; }
+        .topbar { min-height: 64px; padding: 0 16px; }
+        .breadcrumbs { font-size: 12px; }
+        .breadcrumbs span { display: none; }
+        .top-links { gap: 8px; }
+        .top-links a { display: none; }
+        .network { padding: 8px 10px; font-size: 9px; }
+        .content { padding-bottom: 72px; }
+        .hero { padding: 56px 16px 64px; }
+        .hero h1 { font-size: 40px; line-height: 1.02; letter-spacing: -1.2px; }
+        .hero-copy { font-size: 15px; }
+        .hero-actions { align-items: stretch; flex-direction: column; }
+        .hero-actions .button { width: 100%; }
+        .endpoint-pill { overflow: hidden; max-width: 100%; }
+        .endpoint-pill code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .hero-grid, .section, .footer { width: calc(100% - 32px); }
+        .hero-grid { padding-top: 20px; }
+        .hero-panel, .info-card, .tool-card { padding: 24px; }
+        .hero-panel h2 { font-size: 23px; }
+        .section { padding-top: 72px; }
+        .section-heading h2 { font-size: 35px; }
+        .cards, .split, .tool-grid, .usecase-grid, .rail-grid { grid-template-columns: 1fr; }
+        .flow { grid-template-columns: 1fr; }
+        .flow-step { min-height: 0; padding: 20px; border-right: 0; border-bottom: 1px solid var(--line); }
+        .flow-step:last-child { border-bottom: 0; }
+        .flow-step:not(:last-child)::after { content: "↓"; top: auto; right: 20px; bottom: -11px; }
+        .usecase-card { min-height: 0; padding: 24px; }
+        .usecase-card p { min-height: 0; }
+        .rail-card { grid-template-columns: 42px 1fr; padding: 20px; }
+        .rail-card > code { grid-column: 2; justify-self: start; }
+        .endpoint-card { grid-template-columns: 58px 1fr; gap: 10px; padding: 17px; }
+        .endpoint-card span:last-child { grid-column: 2; }
+        .footer { margin-top: 72px; }
+      }
     </style>
   </head>
   <body>
@@ -387,8 +476,14 @@ export function renderDocsHtml(): string {
           <div class="nav-group">
             <div class="nav-label">Build with ChainPay</div>
             <a class="nav-link" href="#agent-payments"><span>↗</span>Agent payments</a>
-            <a class="nav-link" href="#policy-firewall"><span>◇</span>Policy firewall</a>
-            <a class="nav-link" href="#assets"><span>◎</span>SPL &amp; Token-2022</a>
+            <a class="nav-link" href="#x402"><span>↔</span>x402 connector</a>
+            <a class="nav-link" href="#stablecoin-flow"><span>◎</span>Stablecoin flow</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-label">Use cases</div>
+            <a class="nav-link" href="#use-cases"><span>◇</span>Owner controls</a>
+            <a class="nav-link" href="#policy-firewall"><span>⌁</span>Policy firewall</a>
+            <a class="nav-link" href="#assets"><span>◈</span>SPL &amp; Token-2022</a>
           </div>
           <div class="nav-group">
             <div class="nav-label">Reference</div>
@@ -452,22 +547,56 @@ export function renderDocsHtml(): string {
             </div>
           </section>
 
+          <section class="section" id="x402" aria-labelledby="x402-title">
+            <div class="section-heading"><div><span class="section-index">03 · x402 connector</span><h2 id="x402-title">Turn paid API access into a governed settlement.</h2><p>x402 is the demand signal. ChainPay is the policy and settlement connector that turns an exact payment challenge into a mandate-checked Solana transaction.</p></div></div>
+            <div class="flow connector-flow">
+              <div class="flow-step"><strong>01</strong><h3>Challenge</h3><p>A paid resource returns an x402 exact challenge with asset, recipient, amount, nonce, resource, and optional expiry.</p></div>
+              <div class="flow-step"><strong>02</strong><h3>Normalize</h3><p><code>prepare_x402_payment</code> accepts Solana Devnet and the exact scheme, then derives deterministic payment references.</p></div>
+              <div class="flow-step"><strong>03</strong><h3>Preflight</h3><p>ChainPay checks the mandate, mint, token program, recipient, limits, expiry, and available policy authority.</p></div>
+              <div class="flow-step"><strong>04</strong><h3>Sign</h3><p>An external wallet or signer reviews the prepared transaction. MCP never receives a seed phrase or private key.</p></div>
+              <div class="flow-step"><strong>05</strong><h3>Relay</h3><p>Pass the wallet-signed transaction back to the connector for idempotent Rust backend relay and receipt tracking.</p></div>
+            </div>
+            <div class="split connector-detail" style="margin-top: 20px">
+              <div class="info-card"><div class="card-icon">↔</div><h3>How agents use it</h3><p>When an API responds with an x402 challenge, the agent passes that challenge, the approved mandate PDA, and its public key to <code>prepare_x402_payment</code>. After a signer approves the returned transaction, the agent calls the same tool again with <code>signedTransaction</code>, then uses <code>wait_for_payment</code> or <code>get_payment</code>.</p></div>
+              <div class="callout connector-callout"><strong>Connector boundary:</strong> x402 does not bypass ChainPay policy. The adapter validates the challenge, binds it to a deterministic invoice hash, and sends only a wallet-signed transaction to <code>/v1/payments</code>. It is not a key custodian or hosted facilitator.</div>
+            </div>
+          </section>
+
+          <section class="section" id="stablecoin-flow" aria-labelledby="stablecoin-title">
+            <div class="section-heading"><div><span class="section-index">04 · Stablecoin settlement</span><h2 id="stablecoin-title">One policy surface for every supported token rail.</h2><p>Stablecoin payments use the same mandate and receipt model whether the asset is classic SPL Token or Token-2022. The token program is explicit at every boundary.</p></div></div>
+            <div class="flow settlement-flow">
+              <div class="flow-step"><strong>01</strong><h3>Choose the rail</h3><p>Set the stablecoin mint and choose <code>spl-token</code> or <code>token-2022</code>.</p></div>
+              <div class="flow-step"><strong>02</strong><h3>Set the boundary</h3><p>Bind source and recipient token accounts, approved agent, per-payment and total limits.</p></div>
+              <div class="flow-step"><strong>03</strong><h3>Quote in base units</h3><p>Use <code>quote_payment</code> or <code>prepare_payment</code> before any signature is requested.</p></div>
+              <div class="flow-step"><strong>04</strong><h3>Transfer on Solana</h3><p>The program enforces the mandate and transfers through the selected token program.</p></div>
+              <div class="flow-step"><strong>05</strong><h3>Reconcile</h3><p>Read the receipt PDA and backend status to give the agent and merchant durable proof.</p></div>
+            </div>
+            <div class="rail-grid">
+              <div class="rail-card"><span class="rail-icon">$</span><div><h3>Classic SPL Token</h3><p>For standard SPL stablecoins and tokens. Every mint and token account must belong to the classic Token program.</p></div><code>spl-token</code></div>
+              <div class="rail-card"><span class="rail-icon">◈</span><div><h3>Token-2022</h3><p>For Token-2022 mints and accounts. The program identity remains explicit so accounts cannot be mixed accidentally.</p></div><code>token-2022</code></div>
+            </div>
+          </section>
+
+          <section class="section" id="use-cases" aria-labelledby="use-cases-title">
+            <div class="section-heading"><div><span class="section-index">05 · Use cases</span><h2 id="use-cases-title">Controls for the moments that matter.</h2><p>These are owner and merchant controls, separated from the payment flow so agents can discover the right action without confusing preparation with authority.</p></div></div>
+            <div class="usecase-grid">
+              <article class="usecase-card"><div class="usecase-card-top"><span class="usecase-index">01</span><span class="card-icon">Ⅱ</span></div><h3>Pause a mandate</h3><p>Stop new payments immediately through an owner-controlled, wallet-signed pause transaction. Use this for an incident, a suspicious agent, or a temporary hold.</p><code class="usecase-tool">pause_mandate</code></article>
+              <article class="usecase-card"><div class="usecase-card-top"><span class="usecase-index">02</span><span class="card-icon">×</span></div><h3>Revoke permanently</h3><p>Shut down a policy for good when an agent, recipient, or operating relationship should never spend through the mandate again.</p><code class="usecase-tool">revoke_mandate</code></article>
+              <article class="usecase-card"><div class="usecase-card-top"><span class="usecase-index">03</span><span class="card-icon">✓</span></div><h3>Verify merchant demand</h3><p>Validate the merchant’s Ed25519 signature, canonical payment payload, token program, amount, cluster, and expiry before settlement.</p><code class="usecase-tool">verify_payment_request</code></article>
+            </div>
+          </section>
+
           <section class="section" id="policy-firewall" aria-labelledby="firewall-title">
-            <div class="section-heading"><div><span class="section-index">03 · Policy firewall</span><h2 id="firewall-title">Make the mandate the firewall.</h2><p>ChainPay turns an owner-approved mandate into a narrow spending boundary enforced by the on-chain program.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">06 · Policy firewall</span><h2 id="firewall-title">Make the mandate the firewall.</h2><p>ChainPay turns an owner-approved mandate into a narrow spending boundary enforced by the on-chain program.</p></div></div>
             <div class="cards">
               <article class="info-card"><div class="card-icon">◇</div><h3>Who can spend</h3><p>Bind the mandate to one approved agent public key. Owner updates, pauses, and revocation remain wallet-signed actions.</p><a href="#tool-create-mandate">create_mandate →</a></article>
               <article class="info-card"><div class="card-icon">⌁</div><h3>Where funds can go</h3><p>Lock the allowed mint and recipient token account. A request outside the configured destination is rejected during preflight and on-chain execution.</p><a href="#tool-prepare-payment">prepare_payment →</a></article>
               <article class="info-card"><div class="card-icon">↗</div><h3>How much, how often</h3><p>Set per-payment and total limits, expiry, payment count, and cooldown slots to make agent spending predictable.</p><a href="#tool-update-mandate">update_mandate →</a></article>
             </div>
-            <ul class="check-list">
-              <li>Use <code>pause_mandate</code> for an immediate owner-controlled stop.</li>
-              <li>Use <code>revoke_mandate</code> for permanent shutdown of a policy.</li>
-              <li>Use <code>verify_payment_request</code> to validate a merchant-signed request before settlement.</li>
-            </ul>
           </section>
 
           <section class="section" id="assets" aria-labelledby="assets-title">
-            <div class="section-heading"><div><span class="section-index">04 · Assets and token programs</span><h2 id="assets-title">SPL-compatible by design.</h2><p>ChainPay supports classic SPL Token and Token-2022 settlement, with explicit program selection so an agent cannot accidentally mix account types.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">07 · Assets and token programs</span><h2 id="assets-title">SPL-compatible by design.</h2><p>ChainPay supports classic SPL Token and Token-2022 settlement, with explicit program selection so an agent cannot accidentally mix account types.</p></div></div>
             <div class="split">
               <div class="info-card"><div class="card-icon">◎</div><h3>Classic SPL Token</h3><p>Set <code>tokenProgram</code> to <code>spl-token</code>. The mint, source account, and destination account must belong to the classic Token program.</p><a href="#tool-get-asset">Inspect an asset →</a></div>
               <div class="info-card"><div class="card-icon">✦</div><h3>Token-2022</h3><p>Set <code>tokenProgram</code> to <code>token-2022</code>. Keep the same program identity across the mint and every token account in the payment.</p><a href="#tool-get-protocol-config">Read protocol config →</a></div>
@@ -476,12 +605,12 @@ export function renderDocsHtml(): string {
           </section>
 
           <section class="section" id="tool-reference" aria-labelledby="tools-title">
-            <div class="section-heading"><div><span class="section-index">05 · Tool reference</span><h2 id="tools-title">Tools any agent can discover.</h2><p>The catalog below is generated from the same definitions returned by MCP <code>tools/list</code>. Required fields are shown to make orchestration easier.</p></div><a class="button button-quiet" href="/tools">Open JSON catalog ↗</a></div>
+            <div class="section-heading"><div><span class="section-index">08 · Tool reference</span><h2 id="tools-title">Tools any agent can discover.</h2><p>The catalog below is generated from the same definitions returned by MCP <code>tools/list</code>. Required fields are shown to make orchestration easier.</p></div><a class="button button-quiet" href="/tools">Open JSON catalog ↗</a></div>
             <div class="tool-grid">${renderToolReference()}</div>
           </section>
 
           <section class="section" id="endpoints" aria-labelledby="endpoints-title">
-            <div class="section-heading"><div><span class="section-index">06 · HTTP reference</span><h2 id="endpoints-title">A small surface area.</h2><p>Use the MCP transport for agents and the read-only routes for humans, health checks, and integration discovery.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">09 · HTTP reference</span><h2 id="endpoints-title">A small surface area.</h2><p>Use the MCP transport for agents and the read-only routes for humans, health checks, and integration discovery.</p></div></div>
             <div class="table-wrap">
               <a class="endpoint-card" href="/"><span class="method">GET</span><code>/</code><span>Developer documentation preview</span></a>
               <a class="endpoint-card" href="/mcp"><span class="method">POST</span><code>/mcp</code><span>Streamable HTTP JSON-RPC MCP transport</span></a>

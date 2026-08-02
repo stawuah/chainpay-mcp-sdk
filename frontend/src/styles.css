@@ -421,3 +421,47 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
   .proof-stat { padding: 24px 20px; }
   .footer-links { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Device response follows the Coinbase editorial breakpoints. */
+@media (min-width: 1280px) {
+  .hero { padding-top: 112px; padding-bottom: 112px; }
+  .hero h1 { font-size: 80px; }
+}
+
+@media (min-width: 640px) and (max-width: 1024px) {
+  .hero { grid-template-columns: minmax(0, 1fr); padding: 80px 32px 88px; }
+  .hero h1 { max-width: 760px; font-size: 64px; letter-spacing: -2px; }
+  .hero-visual { min-height: 410px; max-width: 680px; transform: none; }
+  .asset-grid, .steps-grid { grid-template-columns: repeat(2, 1fr); }
+  .proof-section { grid-template-columns: 1fr; gap: 34px; }
+  .dashboard-layout { grid-template-columns: 220px minmax(0, 1fr); }
+  .dashboard-content-grid { width: min(100% - 48px, 920px); }
+  .dashboard-stat-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 639px) {
+  .page-width { width: calc(100% - 32px); }
+  .topbar { min-height: 64px; }
+  .hero { grid-template-columns: 1fr; padding: 56px 16px 64px; }
+  .hero h1 { max-width: 100%; font-size: 40px; line-height: 1.02; letter-spacing: -1.2px; }
+  .hero-text { font-size: 15px; }
+  .hero-visual { min-height: 310px; margin-inline: -38px; transform: scale(.76); }
+  .hero .button-primary { min-height: 52px; }
+  .command-section, .assets-section, .market-section, .proof-section, .steps-section { padding-top: 64px; }
+  .section-heading h2 { font-size: 34px; }
+  .asset-grid, .steps-grid, .proof-stats { grid-template-columns: 1fr; }
+  .proof-stat, .proof-stat:nth-child(odd), .proof-stat:nth-child(n+3) { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .proof-stat:last-child { border-bottom: 0; }
+  .dashboard-content-grid { width: calc(100% - 32px); padding-top: 24px; }
+  .dashboard-topbar { min-height: 64px; }
+  .dashboard-heading { font-size: 16px; }
+  .dashboard-top-actions .wallet-chip { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dashboard-stat-grid { grid-template-columns: 1fr; }
+  .dashboard-card-heading h2 { font-size: 22px; }
+  .builder-actions { align-items: stretch; flex-direction: column; }
+  .builder-actions .button { width: 100%; }
+  .assistant-input { flex-wrap: wrap; }
+  .assistant-input input { flex: 1 1 calc(100% - 48px); }
+  .assistant-input .ask-button { width: 100%; }
+  .table-row { grid-template-columns: 26px minmax(0, 1fr) auto; }
+}
