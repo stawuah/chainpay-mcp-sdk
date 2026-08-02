@@ -17,7 +17,7 @@ import {
   publicKey,
   tokenProgramAddress,
 } from "./encoding.js";
-import { deriveConfigAddress, deriveReceiptAddress } from "./pda.js";
+import { deriveAssetAddress, deriveConfigAddress, deriveReceiptAddress } from "./pda.js";
 
 export type PreparePaymentInput = {
   mandate: Address;
@@ -78,6 +78,7 @@ export function buildExecutePaymentInstruction(
     programId,
     [
       meta(deriveConfigAddress(programId)),
+      meta(deriveAssetAddress(mandate.allowedMint, programId)),
       meta(mandate.address, true),
       meta(deriveReceiptAddress(mandate.address, request.invoiceHash, programId), true),
       meta(agent, true, true),

@@ -67,7 +67,7 @@ test("builds Anchor-compatible mandate and payment instruction shapes", () => {
   };
   const payment = buildExecutePaymentInstruction(request, agent, loadedMandate);
   assert.equal(payment.name, "execute_payment");
-  assert.equal(payment.keys.length, 9);
+  assert.equal(payment.keys.length, 10);
   assert.equal(payment.data.length, 112);
   assert.equal(deriveReceiptAddress(mandateAddress, request.invoiceHash).length, 44);
 });
