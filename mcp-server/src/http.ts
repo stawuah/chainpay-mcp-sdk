@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { createDefaultContext, TOOL_DEFINITIONS } from "./index.js";
 import { renderDocsHtml } from "./docs.js";
 import { CHAINPAY_LOGO_SVG } from "./logo.js";
+import { createChainPayOgImage } from "./og-image.js";
 import {
   createMcpServer,
   type JsonRpcRequest,
@@ -11,6 +12,7 @@ import {
 import type { ChainPayMcpContext } from "./tools/context.js";
 
 const MAX_BODY_BYTES = 1_048_576;
+const CHAINPAY_OG_IMAGE = createChainPayOgImage();
 
 type HttpOptions = {
   host?: string;
@@ -53,6 +55,16 @@ function writeSvg(res: ServerResponse, svg: string, headers: Record<string, stri
     ...headers,
   });
   res.end(svg);
+}
+
+function writePng(res: ServerResponse, image: Buffer, headers: Record<string, string> = {}) {
+  res.writeHead(200, {
+    "Content-Type": "image/png",
+    "Cache-Control": "public, max-age=86400",
+    "Content-Length": image.length.toString(),
+    ...headers,
+  });
+  res.end(image);
 }
 
 function writeHtml(res: ServerResponse, html: string, headers: Record<string, string> = {}) {
@@ -214,6 +226,11 @@ export function createHttpServer(
 
     if (url.pathname === "/logo.svg" && req.method === "GET") {
       writeSvg(res, CHAINPAY_LOGO_SVG, headers);
+      return;
+    }
+
+    if (url.pathname === "/og-image.png" && req.method === "GET") {
+      writePng(res, CHAINPAY_OG_IMAGE, headers);
       return;
     }
 

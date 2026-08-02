@@ -234,12 +234,18 @@ export function renderDocsHtml(): string {
     <meta name="theme-color" content="#0a0b0d" />
     <meta name="description" content="The universal payment interface for AI agents. ChainPay connects policy, wallet authorization, x402, stablecoin settlement, and receipts." />
     <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="canonical" href="https://chainpay-mcp.onrender.com/docs" />
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ChainPay" />
     <meta property="og:url" content="https://chainpay-mcp.onrender.com/docs" />
     <meta property="og:title" content="The universal payment interface for AI agents." />
     <meta property="og:description" content="One MCP endpoint for policy enforcement, routing, stablecoin settlement, x402, and receipts." />
-    <meta property="og:image" content="https://chainpay-mcp.onrender.com/logo.svg" />
-    <meta name="twitter:card" content="summary" />
+    <meta property="og:image" content="https://chainpay-mcp.onrender.com/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://chainpay-mcp.onrender.com/og-image.png" />
     <meta name="twitter:title" content="The universal payment interface for AI agents." />
     <meta name="twitter:description" content="One MCP endpoint for policy enforcement, routing, stablecoin settlement, x402, and receipts." />
     <title>The universal payment interface for AI agents. · ChainPay</title>
@@ -818,6 +824,7 @@ export function renderDocsHtml(): string {
               <a class="endpoint-card" href="/tools"><span class="method">GET</span><code>/tools</code><span>Read-only tool definitions and input schemas</span></a>
               <a class="endpoint-card" href="/healthz"><span class="method">GET</span><code>/healthz</code><span>Render health check and service status</span></a>
               <a class="endpoint-card" href="/logo.svg"><span class="method">GET</span><code>/logo.svg</code><span>ChainPay brand mark used by this documentation</span></a>
+              <a class="endpoint-card" href="/og-image.png"><span class="method">GET</span><code>/og-image.png</code><span>Raster social preview image for link unfurlers</span></a>
             </div>
           </section>
 
