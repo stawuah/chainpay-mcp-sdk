@@ -153,7 +153,7 @@ fn run_settlement(kind: TokenKind) {
         .unwrap();
 
     let owner = Keypair::new();
-    let agent = Keypair::new();
+    let agent = Keypair::new();// agent  should not have an account if and agent should have an account/address it should be newly created for the purpose of sendfing or something 
     let source = Keypair::new();
     let recipient = Keypair::new();
     let mint = Keypair::new();

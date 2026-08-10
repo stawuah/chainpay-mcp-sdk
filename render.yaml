@@ -32,7 +32,7 @@ services:
       - key: CHAINPAY_PROGRAM_ID
         value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
       - key: CHAINPAY_BACKEND_URL
-        value: https://chainpay-backend.onrender.com
+        value: https://chainpay-backend.onrender.com 
       - key: CHAINPAY_BACKEND_AUTH_TOKEN
         sync: false
       - key: CHAINPAY_HTTP_AUTH_TOKEN
