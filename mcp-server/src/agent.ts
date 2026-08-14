@@ -1,9 +1,9 @@
 import OpenAI from "openai";
 import type {
-  FunctionTool,
-  ResponseFunctionToolCall,
-  ResponseInput,
-} from "openai/resources/responses/responses.js";
+  ChatCompletionMessageFunctionToolCall,
+  ChatCompletionMessageParam,
+  ChatCompletionTool,
+} from "openai/resources/chat/completions/completions.js";
 import { callTool, TOOL_DEFINITIONS } from "./index.js";
 import type { ChainPayMcpContext } from "./tools/context.js";
 
@@ -83,17 +83,19 @@ function historyItems(value: unknown): AgentHistoryItem[] {
     .slice(-MAX_HISTORY_ITEMS);
 }
 
-function readOnlyAgentTools(): FunctionTool[] {
+function readOnlyAgentTools(): ChatCompletionTool[] {
   return TOOL_DEFINITIONS
     .filter((tool) => READ_ONLY_TOOL_NAMES.has(tool.name))
     .map((tool) => ({
       type: "function",
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema,
-      // Read-only schemas include optional receipt lookup fields. Non-strict
-      // validation lets the model omit fields that are not relevant to a query.
-      strict: false,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema,
+        // Read-only schemas include optional receipt lookup fields. Non-strict
+        // validation lets the model omit fields that are not relevant to a query.
+        strict: false,
+      },
     }));
 }
 
@@ -114,27 +116,54 @@ function toolOutput(result: unknown): string {
   return JSON.stringify(result);
 }
 
-function functionCalls(response: { output: Array<{ type: string }> }): ResponseFunctionToolCall[] {
-  return response.output.filter(
-    (item): item is ResponseFunctionToolCall => item.type === "function_call",
+function functionCalls(response: { tool_calls?: Array<{ type: string }> }): ChatCompletionMessageFunctionToolCall[] {
+  return (response.tool_calls ?? []).filter(
+    (item): item is ChatCompletionMessageFunctionToolCall => item.type === "function",
   );
+}
+
+function aiProvider(): "openrouter" | "openai" {
+  const configured = process.env.CHAINPAY_AI_PROVIDER?.trim().toLowerCase();
+  if (configured === "openrouter" || configured === "openai") return configured;
+  return process.env.OPENROUTER_API_KEY ? "openrouter" : "openai";
+}
+
+function aiClient(provider: "openrouter" | "openai", apiKey: string): OpenAI {
+  if (provider === "openrouter") {
+    return new OpenAI({
+      apiKey,
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": process.env.CHAINPAY_APP_URL ?? "http://localhost:5173",
+        "X-Title": "ChainPay",
+      },
+    });
+  }
+  return new OpenAI({ apiKey });
 }
 
 export async function runChainPayAgent(
   context: ChainPayMcpContext,
   request: ChainPayAgentRequest,
 ): Promise<ChainPayAgentResponse> {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("The ChainPay AI agent is not configured. Set OPENAI_API_KEY on the MCP server.");
+  const provider = aiProvider();
+  const apiKey = provider === "openrouter"
+    ? process.env.OPENROUTER_API_KEY
+    : process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      `The ChainPay AI agent is not configured. Set ${provider === "openrouter" ? "OPENROUTER_API_KEY" : "OPENAI_API_KEY"} on the MCP server.`,
+    );
   }
 
   const message = requiredMessage(request.message);
   const wallet = publicContext(request.wallet, "wallet");
   const mandateAddress = publicContext(request.mandateAddress, "mandateAddress");
   const history = historyItems(request.history);
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const client = aiClient(provider, apiKey);
   const tools = readOnlyAgentTools();
-  const input: ResponseInput = [
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: agentInstructions },
     ...history.map((item) => ({
       role: item.role,
       content: item.content,
@@ -145,61 +174,61 @@ export async function runChainPayAgent(
     },
   ];
   const toolCalls: string[] = [];
+  const model = process.env.CHAINPAY_AGENT_MODEL ?? (
+    provider === "openrouter" ? "openrouter/free" : "gpt-5-mini"
+  );
 
-  let response = await client.responses.create({
-    model: process.env.CHAINPAY_AGENT_MODEL ?? "gpt-5-mini",
-    instructions: agentInstructions,
-    input,
+  let response = await client.chat.completions.create({
+    model,
+    messages,
     tools,
+    tool_choice: "auto",
     parallel_tool_calls: false,
-    max_output_tokens: 700,
-    store: false,
+    max_tokens: 700,
   });
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-    const calls = functionCalls(response);
+    const assistantMessage = response.choices[0]?.message;
+    if (!assistantMessage) break;
+    const calls = functionCalls(assistantMessage);
     if (calls.length === 0) break;
 
-    const outputs = await Promise.all(calls.map(async (call) => {
-      if (!READ_ONLY_TOOL_NAMES.has(call.name)) {
-        return {
-          type: "function_call_output" as const,
-          call_id: call.call_id,
-          output: JSON.stringify({ error: "This assistant can only use read-only tools." }),
-        };
+    messages.push(assistantMessage);
+    for (const call of calls) {
+      let output: string;
+      if (!READ_ONLY_TOOL_NAMES.has(call.function.name)) {
+        output = JSON.stringify({ error: "This assistant can only use read-only tools." });
+      } else {
+        let result: unknown;
+        try {
+          result = await callTool(context, call.function.name, JSON.parse(call.function.arguments) as Record<string, unknown>);
+        } catch (error) {
+          result = { error: error instanceof Error ? error.message : String(error) };
+        }
+        toolCalls.push(call.function.name);
+        output = toolOutput(result);
       }
 
-      let result: unknown;
-      try {
-        result = await callTool(context, call.name, JSON.parse(call.arguments) as Record<string, unknown>);
-      } catch (error) {
-        result = { error: error instanceof Error ? error.message : String(error) };
-      }
-      toolCalls.push(call.name);
-      return {
-        type: "function_call_output" as const,
-        call_id: call.call_id,
-        output: toolOutput(result),
-      };
-    }));
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: output,
+      });
+    }
 
-    const continuation: ResponseInput = [
-      ...(response.output as ResponseInput),
-      ...outputs,
-    ];
-    response = await client.responses.create({
-      model: process.env.CHAINPAY_AGENT_MODEL ?? "gpt-5-mini",
-      instructions: agentInstructions,
-      input: continuation,
+    response = await client.chat.completions.create({
+      model,
+      messages,
       tools,
+      tool_choice: "auto",
       parallel_tool_calls: false,
-      max_output_tokens: 700,
-      store: false,
+      max_tokens: 700,
     });
   }
 
+  const responseText = response.choices[0]?.message.content?.trim();
   return {
-    message: response.output_text.trim() || "I could not find a text response for that request.",
+    message: responseText || "I could not find a text response for that request.",
     toolCalls,
   };
 }

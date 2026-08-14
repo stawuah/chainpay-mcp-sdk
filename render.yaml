@@ -14,7 +14,7 @@ services:
       - key: CHAINPAY_PROGRAM_ID
         value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
       - key: CHAINPAY_HTTP_AUTH_TOKEN
-        sync: false
+        value: ""
       - key: CHAINPAY_ALLOWED_ORIGINS
         value: "*"
   - type: web
@@ -34,15 +34,14 @@ services:
       - key: CHAINPAY_BACKEND_URL
         value: https://chainpay-backend.onrender.com 
       - key: CHAINPAY_BACKEND_AUTH_TOKEN
-        fromService:
-          type: web
-          name: chainpay-backend
-          envVarKey: CHAINPAY_HTTP_AUTH_TOKEN
+        value: ""
       - key: CHAINPAY_HTTP_AUTH_TOKEN
         value: ""
       - key: CHAINPAY_ALLOWED_ORIGINS
         value: "*"
-      - key: OPENAI_API_KEY
+      - key: OPENROUTER_API_KEY
         sync: false
+      - key: CHAINPAY_AI_PROVIDER
+        value: openrouter
       - key: CHAINPAY_AGENT_MODEL
-        value: gpt-5-mini
+        value: openrouter/free
