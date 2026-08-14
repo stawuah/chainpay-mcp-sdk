@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Buffer } from "buffer";
 import { ChainPayClient, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, toWeb3Transaction } from "@chainpay/sdk";
 import type { ChainPayInstruction, Mandate, PreparedMandate, PreparedPayment, PreparedTransaction, SimulationResult, TokenProgram } from "@chainpay/sdk";
@@ -11,6 +11,7 @@ type Action = "Send" | "Receive" | "Approve mandate" | "Receipts";
 type Range = "1H" | "1D" | "1W" | "1M" | "1Y" | "All";
 
 type SolanaProvider = {
+  isPhantom?: boolean;
   publicKey?: { toString(): string };
   connect?: () => Promise<{ publicKey: { toString(): string } }>;
   signTransaction?: (transaction: Transaction) => Promise<Transaction>;
@@ -22,6 +23,7 @@ type SpeechRecognitionLike = {
   interimResults: boolean;
   onresult: ((event: { results: { 0: SpeechRecognitionResult } }) => void) | null;
   onend: (() => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
   start: () => void;
   stop: () => void;
 };
@@ -29,6 +31,7 @@ type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
 declare global {
   interface Window {
+    phantom?: { solana?: SolanaProvider };
     solana?: SolanaProvider;
     SpeechRecognition?: SpeechRecognitionConstructor;
     webkitSpeechRecognition?: SpeechRecognitionConstructor;
@@ -41,9 +44,14 @@ const DEVNET_PYUSD_TOKEN_2022_MINT = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUy
 const TOKEN_2022_MINT_OVERRIDE = import.meta.env.VITE_CHAINPAY_TOKEN_2022_MINT ?? import.meta.env.VITE_CHAINPAY_PYUSD_MINT ?? "";
 const HOSTED_BACKEND_URL = "https://chainpay-backend.onrender.com";
 const BACKEND_URL = import.meta.env.VITE_CHAINPAY_BACKEND_URL ?? HOSTED_BACKEND_URL;
-const RPC_URL = import.meta.env.VITE_CHAINPAY_RPC_URL
-  ?? `${BACKEND_URL.replace(/\/$/, "")}/rpc`;
+const HOSTED_RPC_URL = `${BACKEND_URL.replace(/\/$/, "")}/rpc`;
+const configuredRpcUrl = (import.meta.env.VITE_CHAINPAY_RPC_URL ?? "").replace(/\/$/, "");
+const RPC_URL = configuredRpcUrl && configuredRpcUrl !== "https://api.devnet.solana.com"
+  ? configuredRpcUrl
+  : HOSTED_RPC_URL;
 const MCP_URL = import.meta.env.VITE_CHAINPAY_MCP_URL ?? "https://chainpay-mcp.onrender.com/mcp";
+const AGENT_URL = import.meta.env.VITE_CHAINPAY_AGENT_URL
+  ?? `${MCP_URL.replace(/\/mcp\/?$/, "")}/agent/chat`;
 const chainpayClient = new ChainPayClient({ rpcUrl: RPC_URL, programId: PROGRAM_ID });
 type StablecoinOption = {
   value: "usdc" | "token-2022";
@@ -62,6 +70,8 @@ function buildStablecoinOptions(token2022Mint: string): StablecoinOption[] {
 
 type McpTool = { name: string; description?: string; inputSchema?: unknown };
 type McpToolResponse = { content?: { type: string; text?: string }[]; isError?: boolean; structuredContent?: unknown };
+type AgentHistoryItem = { role: "user" | "assistant"; content: string };
+type AgentResponse = { message: string; toolCalls?: string[]; error?: string };
 type ProtocolConfig = {
   address?: string;
   authority: string;
@@ -157,6 +167,20 @@ async function callMcpTool(name: string, args: Record<string, unknown>) {
   return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
 }
 
+async function callChainPayAgent(
+  message: string,
+  context: { wallet: string; mandateAddress: string; history: AgentHistoryItem[] },
+): Promise<AgentResponse> {
+  const response = await fetch(AGENT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ message, ...context }),
+  });
+  const payload = await response.json() as AgentResponse;
+  if (!response.ok) throw new Error(payload.error ?? `AI agent request failed (${response.status})`);
+  return payload;
+}
+
 async function submitSignedTransaction(idempotencyKey: string, signedTransaction: Uint8Array) {
   if (!BACKEND_URL) throw new Error("VITE_CHAINPAY_BACKEND_URL is not configured.");
   const response = await fetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/transactions/submit`, {
@@ -219,6 +243,35 @@ async function getAccountInfoOrNull(address: PublicKey) {
     if (cause instanceof Error && /accountnotfound/i.test(cause.message)) return null;
     throw cause;
   }
+}
+
+function tokenAccountValidationError(
+  account: { owner: PublicKey; data: Uint8Array } | null,
+  expectedMint: string,
+  expectedOwner: string,
+  tokenProgram: TokenProgram,
+): string | null {
+  if (!account) return "Token account is not prepared yet.";
+
+  const expectedProgram = tokenProgram === "token-2022" ? TOKEN_2022_PROGRAM_ID : SPL_TOKEN_PROGRAM_ID;
+  if (account.owner.toBase58() !== expectedProgram) {
+    return "The wallet account does not match the selected token type.";
+  }
+  if (account.data.length < 165) {
+    return "The wallet account is not a valid token account.";
+  }
+
+  const accountMint = new PublicKey(account.data.slice(0, 32)).toBase58();
+  if (accountMint !== expectedMint) {
+    return "The wallet account belongs to a different token.";
+  }
+
+  const accountOwner = new PublicKey(account.data.slice(32, 64)).toBase58();
+  if (accountOwner !== expectedOwner) {
+    return "The wallet account is not owned by the connected wallet.";
+  }
+
+  return null;
 }
 
 async function resolvePaymentDestination(
@@ -408,7 +461,7 @@ function App() {
     if (wallet || connecting) return;
     setConnecting(true);
     try {
-      const connection = await connectChainPayWallet(window.solana);
+      const connection = await connectChainPayWallet(window.solana, window.phantom?.solana);
       setWalletConnection(connection);
       void loadWalletState(connection.address);
     } catch (cause) {
@@ -419,7 +472,7 @@ function App() {
   }
 
   useEffect(() => {
-    const restored = restoreChainPayWallet(window.solana);
+    const restored = restoreChainPayWallet(window.solana, window.phantom?.solana);
     if (restored) {
       setWalletConnection(restored);
       void loadWalletState(restored.address);
@@ -598,6 +651,9 @@ function Dashboard({
   const [reply, setReply] = useState("Ask ChainPay about your active mandate, receipt, or agent permissions.");
   const [thinking, setThinking] = useState(false);
   const [listening, setListening] = useState(false);
+  const [assistantHistory, setAssistantHistory] = useState<AgentHistoryItem[]>([]);
+  const [agentToolsUsed, setAgentToolsUsed] = useState<string[]>([]);
+  const voiceRecognition = useRef<SpeechRecognitionLike | null>(null);
   const [mandateDecimals, setMandateDecimals] = useState<number | null>(null);
   const [connections, setConnections] = useState<AgentConnection[]>([]);
   const [dangerStatus, setDangerStatus] = useState("");
@@ -639,23 +695,49 @@ function Dashboard({
   }, [wallet]);
 
   async function askChainPay(input = prompt) {
-    if (!mandateAddress) return;
     const query = input.trim();
+    if (!query) return;
     setThinking(true);
-    setReply("Searching your mandate…");
+    setReply("Thinking with ChainPay…");
     try {
-      const address = query.length >= 32 ? query : mandateAddress;
-      const result = await onCallMcp("get_mandate", { address });
-      setReply(toolText(result));
+      const result = await callChainPayAgent(query, {
+        wallet,
+        mandateAddress,
+        history: assistantHistory,
+      });
+      const nextReply = result.message.trim() || "ChainPay did not return a response.";
+      setReply(nextReply);
+      setAgentToolsUsed(result.toolCalls ?? []);
+      setAssistantHistory((current) => [
+        ...current,
+        { role: "user" as const, content: query },
+        { role: "assistant" as const, content: nextReply },
+      ].slice(-8));
     } catch (error) {
-      setReply(error instanceof Error ? error.message : "The MCP request failed.");
+      // Keep the assistant useful while the server-side model is being configured.
+      // This fallback is still read-only and makes the missing AI configuration visible.
+      if (mandateAddress && /mandate|permission|policy/i.test(query)) try {
+        const result = await onCallMcp("get_mandate", { address: mandateAddress });
+        const fallback = toolText(result);
+        setAgentToolsUsed(["get_mandate"]);
+        setReply(`AI agent unavailable: ${error instanceof Error ? error.message : "request failed"}\n\nDirect read-only MCP response:\n${fallback}`);
+      } catch (fallbackError) {
+        setReply(`AI agent unavailable: ${error instanceof Error ? error.message : "request failed"}\n\n${fallbackError instanceof Error ? fallbackError.message : "The read-only MCP request failed."}`);
+        setAgentToolsUsed([]);
+      } else {
+        setReply(error instanceof Error ? error.message : "The ChainPay assistant request failed.");
+        setAgentToolsUsed([]);
+      }
     } finally {
       setThinking(false);
     }
-    void input;
   }
 
   function startVoice() {
+    if (listening) {
+      voiceRecognition.current?.stop();
+      return;
+    }
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!Recognition) {
       setReply("Voice capture is not available in this browser. Type a request below instead.");
@@ -669,9 +751,24 @@ function Dashboard({
       setPrompt(transcript);
       void askChainPay(transcript);
     };
-    recognition.onend = () => setListening(false);
+    recognition.onend = () => {
+      setListening(false);
+      voiceRecognition.current = null;
+    };
+    recognition.onerror = (event) => {
+      setListening(false);
+      voiceRecognition.current = null;
+      if (event.error !== "aborted") setReply("I could not hear that. Try again or type your request.");
+    };
+    voiceRecognition.current = recognition;
     setListening(true);
-    recognition.start();
+    try {
+      recognition.start();
+    } catch (error) {
+      voiceRecognition.current = null;
+      setListening(false);
+      setReply(error instanceof Error ? error.message : "Voice capture could not start.");
+    }
   }
 
   async function revokeAllMandates() {
@@ -728,6 +825,7 @@ function Dashboard({
     { id: "payments", label: "Payments", icon: "↗" },
     { id: "agents", label: "Agents", icon: "⌁" },
     { id: "receipts", label: "Receipts", icon: "▤" },
+    { id: "assistant", label: "Talk to ChainPay", icon: "◉" },
   ];
 
   function selectTab(nextTab: DashboardTab) {
@@ -794,11 +892,11 @@ function Dashboard({
 
           <div className="integration-strip"><span className={`connection-dot ${integrationStatus}`} /> <b>{integrationStatus === "loading" ? "Syncing" : integrationStatus === "error" ? "Needs attention" : "Connected"}</b><span>SDK · {RPC_URL.replace("https://", "")}</span><span className="integration-divider" /><b>MCP</b><span>{mcpTools.length ? `${mcpTools.length} tools discovered` : "Discovering tools"}</span><span className="integration-divider" /><b>AGENTS</b><span>{connections.length ? `${connections.length} connected` : "None connected"}</span>{integrationError && <small title={integrationError}>Check connection</small>}</div>
 
-          <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} onAsk={() => void askChainPay()} onVoice={startVoice} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} createOpen={mandateCreateOpen} onCreateOpenChange={setMandateCreateOpen} onMandateAction={runMandateAction} onRefresh={onRefresh} /> : tab === "payments" ? <PaymentPanel wallet={wallet} walletSigner={walletSigner} mandate={mandate} stablecoinOptions={stablecoinOptions} onCallMcp={onCallMcp} onRefresh={onRefresh} /> : tab === "agents" ? <AgentsPanel connections={connections} onConnect={() => setTab("connect-mcp")} onOpenAssistant={() => setTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "connect-mcp" ? <ConnectMcpPanel serverUrl={MCP_URL} wallet={wallet} connections={connections} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} /> : tab === "settings" ? <SettingsPanel wallet={wallet} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} /> : (
+          <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} onAsk={() => void askChainPay()} onVoice={startVoice} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} createOpen={mandateCreateOpen} onCreateOpenChange={setMandateCreateOpen} onMandateAction={runMandateAction} onRefresh={onRefresh} /> : tab === "payments" ? <PaymentPanel wallet={wallet} walletSigner={walletSigner} mandate={mandate} stablecoinOptions={stablecoinOptions} onCallMcp={onCallMcp} onRefresh={onRefresh} /> : tab === "agents" ? <AgentsPanel connections={connections} onConnect={() => setTab("connect-mcp")} onOpenAssistant={() => setTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "connect-mcp" ? <ConnectMcpPanel serverUrl={MCP_URL} wallet={wallet} connections={connections} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} /> : tab === "settings" ? <SettingsPanel wallet={wallet} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} /> : (
             <>
               <section className="dashboard-stat-grid"><div className="dashboard-stat"><span className="soft-label">ACTIVE MANDATES</span><strong>{mandate?.status === "active" ? "1" : "0"}</strong><small>{mandate ? "Policy account found on-chain" : "No mandate found for this wallet"}</small></div><div className="dashboard-stat"><span className="soft-label">SPENT THIS MONTH</span><strong>{spent}</strong><small>{mandateDecimals === null ? "Reading token decimals" : "Human-readable token amount · Devnet"}</small></div><div className="dashboard-stat"><span className="soft-label">PENDING PAYMENTS</span><strong>0</strong><small>Nothing waiting for approval</small></div><div className="dashboard-stat"><span className="soft-label">AGENTS CONNECTED</span><strong>{connections.length}</strong><small>{connections.length ? "Scoped MCP access" : "Connect an agent to begin"}</small></div></section>
 
-              <section className="dashboard-overview overview-agent-section"><OverviewAssistant prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} onAsk={() => void askChainPay()} /></section>
+              <section className="dashboard-overview overview-agent-section"><OverviewAssistant prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} onAsk={() => void askChainPay()} onVoice={startVoice} /></section>
 
               <section className="dashboard-card activity-feed-card"><div className="dashboard-card-heading"><div><span className="section-kicker">ACTIVITY</span><h2>Recent activity</h2></div><span className="chip chip-muted">Devnet demo</span></div><div className="dashboard-feed">{activity.map((item) => <div className="dashboard-feed-row" key={`${item[1]}-${item[4]}`}><span className={`activity-avatar ${item[5]}`}>{item[5] === "settled" ? "↗" : item[5] === "verified" ? "✓" : item[5] === "policy" ? "✦" : "◆"}</span><span><strong>{item[0]}</strong><small>{item[1]} · {item[4]}</small></span><b>{item[2]}</b><span className={`table-status ${item[5]}`}><i />{item[3]}</span></div>)}</div></section>
             </>
@@ -893,7 +991,7 @@ function MandatesPanel({
           </div>
           <button className="button button-secondary-light" onClick={() => onCreateOpenChange(false)}>← Back to mandates</button>
         </div>
-        <MandateBuilder wallet={wallet} walletSigner={walletSigner} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} onCreated={async () => { await onRefresh(); onCreateOpenChange(false); }} />
+        <MandateBuilder wallet={wallet} walletSigner={walletSigner} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} onCreated={onRefresh} />
       </section>
     );
   }
@@ -1023,6 +1121,24 @@ function PaymentPanel({ wallet, walletSigner, mandate, stablecoinOptions, onCall
       if (mintDecimals === null) throw new Error("Token decimals are not available yet. Refresh the mandate and try again.");
       const rawAmount = parseTokenAmount(amount, mintDecimals);
       const tokenProgram = mandate.tokenProgram ?? await chainpayClient.getTokenProgram(mandate.sourceTokenAccount);
+      let sourceBalance: string;
+      try {
+        const balance = await chainpayClient.connection.getTokenAccountBalance(
+          new PublicKey(mandate.sourceTokenAccount),
+          "confirmed",
+        );
+        sourceBalance = balance.value.amount;
+        if (BigInt(sourceBalance) < rawAmount) {
+          throw new Error(
+            `Payment wallet is ready, but it has ${balance.value.uiAmountString} tokens available. ` +
+            `Fund the payment wallet with at least ${formatTokenAmount(rawAmount, mintDecimals)} ` +
+            `before settling this payment.`,
+          );
+        }
+      } catch (cause) {
+        if (cause instanceof Error && /Payment wallet is ready/.test(cause.message)) throw cause;
+        throw new Error("The payment wallet could not be read. Refresh the mandate and try again.");
+      }
       const destination = await resolvePaymentDestination(recipient, mandate.allowedMint, tokenProgram, wallet);
       const mcpArgs: Record<string, unknown> = {
         mandate: mandate.address,
@@ -1155,7 +1271,7 @@ function ReceiptPanel({ onCallMcp }: { onCallMcp: (name: string, args: Record<st
   return <section className="dashboard-card receipt-lookup"><div className="dashboard-card-heading"><div><span className="section-kicker">MCP RECEIPT LOOKUP</span><h2>Verify a settlement</h2></div><span className="mcp-badge"><span /> get_payment</span></div><p className="builder-intro">Paste a receipt PDA from a confirmed payment. The lookup is read-only and comes directly from the ChainPay MCP server.</p><div className="receipt-search"><input value={receiptAddress} onChange={(event) => setReceiptAddress(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void lookup(); }} placeholder="Receipt PDA address" /><button className="button button-primary" onClick={() => void lookup()} disabled={loading}>{loading ? "Looking up…" : "Verify"} <Arrow /></button></div>{result && <div className="simulation-box receipt-result"><span className="soft-label">LIVE MCP RESPONSE</span><pre>{result}</pre></div>}</section>;
 }
 
-function OverviewAssistant({ prompt, setPrompt, reply, thinking, onAsk }: { prompt: string; setPrompt: (value: string) => void; reply: string; thinking: boolean; onAsk: () => void }) {
+function OverviewAssistant({ prompt, setPrompt, reply, thinking, listening, onAsk, onVoice }: { prompt: string; setPrompt: (value: string) => void; reply: string; thinking: boolean; listening: boolean; onAsk: () => void; onVoice: () => void }) {
   const hasReply = reply && !reply.startsWith("Ask ChainPay");
   return <div className="dashboard-card overview-agent-card">
     <div className="overview-agent-heading">
@@ -1166,14 +1282,15 @@ function OverviewAssistant({ prompt, setPrompt, reply, thinking, onAsk }: { prom
     <form className="overview-search" onSubmit={(event) => { event.preventDefault(); onAsk(); }}>
       <span className="overview-search-icon" aria-hidden="true">⌕</span>
       <input value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Search your mandate…" aria-label="Search your mandate" />
+      <button type="button" className={listening ? "voice-button listening" : "voice-button"} onClick={onVoice} aria-label={listening ? "Stop voice input" : "Use voice input"}>{listening ? "■" : "●"}</button>
       <button type="submit" className="overview-search-submit" disabled={thinking} aria-label="Search mandate">{thinking ? "…" : "→"}</button>
     </form>
     {hasReply && <div className="overview-search-result"><span>{thinking ? "Searching…" : "Mandate result"}</span><pre>{reply}</pre></div>}
   </div>;
 }
 
-function AssistantPanel({ prompt, setPrompt, reply, thinking, listening, onAsk, onVoice }: { prompt: string; setPrompt: (value: string) => void; reply: string; thinking: boolean; listening: boolean; onAsk: () => void; onVoice: () => void }) {
-  return <section className="assistant-layout"><div className="assistant-card dashboard-card"><div className="assistant-visual"><span className="assistant-caption">{listening ? "Listening…" : thinking ? "Reading ChainPay…" : "Read-only MCP assistant"}</span></div><div className="assistant-log"><span className="soft-label">LIVE RESPONSE</span><p>{reply}</p>{!reply.startsWith("Ask") && <pre>{reply}</pre>}</div><div className="assistant-input"><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onAsk(); }} aria-label="Ask ChainPay" /><button className={listening ? "voice-button listening" : "voice-button"} onClick={onVoice} aria-label="Use voice">{listening ? "■" : "●"}</button><button className="button button-primary ask-button" onClick={onAsk} disabled={thinking}>Ask <Arrow /></button></div><small className="assistant-note">Read-only MCP test: this assistant currently calls <b>get_mandate</b> and never signs or sends funds.</small></div><div className="assistant-side"><div className="dashboard-card"><span className="section-kicker">VOICE INPUT</span><h2>Give your agent a voice.</h2><p>Speak naturally. ChainPay translates the request into an MCP tool call, then shows the on-chain response before any action.</p><button className="button button-dark full-button" onClick={onVoice}>{listening ? "Listening…" : "Start voice command"}</button></div><div className="dashboard-card safety-card"><Shield /><div><b>Safe by default</b><p>Payment execution stays behind wallet signing and explicit approval.</p></div></div></div></section>;
+function AssistantPanel({ prompt, setPrompt, reply, thinking, listening, agentToolsUsed, onAsk, onVoice }: { prompt: string; setPrompt: (value: string) => void; reply: string; thinking: boolean; listening: boolean; agentToolsUsed: string[]; onAsk: () => void; onVoice: () => void }) {
+  return <section className="assistant-layout"><div className="assistant-card dashboard-card"><div className="assistant-visual"><span className="assistant-caption">{listening ? "Listening…" : thinking ? "ChainPay agent is thinking…" : "Read-only AI agent"}</span><span className="overview-agent-state"><i /> Online</span></div><div className="assistant-log"><span className="soft-label">LIVE RESPONSE</span><p className="assistant-response">{reply}</p>{agentToolsUsed.length > 0 && <div className="assistant-tools-used"><span className="soft-label">TOOLS USED</span>{agentToolsUsed.map((tool, index) => <span className="tool-call-chip" key={`${tool}-${index}`}>{tool}</span>)}</div>}</div><div className="assistant-input"><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onAsk(); }} aria-label="Ask ChainPay" placeholder="Ask about your mandate, receipt, or agent permissions" /><button className={listening ? "voice-button listening" : "voice-button"} onClick={onVoice} aria-label={listening ? "Stop voice input" : "Use voice input"}>{listening ? "■" : "●"}</button><button className="button button-primary ask-button" onClick={onAsk} disabled={thinking}>Ask <Arrow /></button></div><small className="assistant-note">Voice is transcribed in your browser, then the AI agent calls only read-only ChainPay tools. It never signs or sends funds.</small></div><div className="assistant-side"><div className="dashboard-card"><span className="section-kicker">VOICE INPUT</span><h2>Give your agent a voice.</h2><p>Speak naturally. ChainPay sends the transcript to the read-only AI agent, which queries live MCP tools and explains the on-chain response before any action.</p><button className="button button-dark full-button" onClick={onVoice}>{listening ? "Stop listening" : "Start voice command"}</button></div><div className="dashboard-card safety-card"><Shield /><div><b>Safe by default</b><p>Payment execution stays behind wallet signing and explicit approval.</p></div></div></div></section>;
 }
 
 function AgentsPanel({ connections, onConnect, onOpenAssistant }: { connections: AgentConnection[]; onConnect: () => void; onOpenAssistant: () => void }) {
@@ -1387,7 +1504,7 @@ function ProtocolPanel({ wallet, walletSigner, config, onCreated }: ProtocolPane
 
       <div className="dashboard-card protocol-review-card">
         <div className="dashboard-card-heading"><div><span className="section-kicker">SUPPORTED ASSETS</span><h2>{config ? `${assets.length} configured mint${assets.length === 1 ? "" : "s"}` : "Review transaction"}</h2></div>{config && <span className="network-chip"><i /> Devnet</span>}</div>
-        {config ? <div className="asset-status-list">{assets.length ? assets.map((asset) => <div className="asset-status-row" key={asset.mint}><span className="asset-status-icon">{asset.enabled ? "✓" : "!"}</span><span><strong>{shortAddress(asset.mint)}</strong><small>{asset.tokenProgram ? (asset.tokenProgram === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" ? "Token-2022" : "Classic SPL Token") : "Not registered"}{asset.decimals === undefined ? "" : ` · ${asset.decimals} decimals`}</small></span><em className={asset.enabled ? "asset-enabled" : "asset-disabled"}>{asset.enabled ? "Enabled" : asset.registered ? "Disabled" : "Not registered"}</em></div>) : <div className="review-empty"><div className="empty-icon">◌</div><p>Reading asset registry…</p></div>}</div> : prepared ? <><div className="review-list"><div><span>Config PDA</span><strong className="mono">{shortAddress(deriveConfigAddress(PROGRAM_ID))}</strong></div><div><span>Instructions</span><strong>{prepared.instructions.map((instruction) => instruction.name).join(" + ")}</strong></div><div><span>Authority</span><strong className="mono">{shortAddress(wallet)}</strong></div></div><div className="simulation-box"><span className="soft-label">SIMULATION LOG</span><pre>{simulation?.logs.length ? simulation.logs.join("\n") : simulation?.error ?? "No simulation logs returned."}</pre></div><button className="button button-dark full-button" onClick={() => void signAndInitialize()} disabled={!simulation?.ok || status === "signing" || !walletSigner}>{status === "signing" ? "Waiting for wallet…" : "Sign & initialize"} <Arrow /></button>{signature && <div className="success-box"><span>✓</span><div><b>Protocol initialized</b><a href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`} target="_blank" rel="noreferrer">View transaction <Arrow /></a></div></div>}</> : <div className="review-empty"><div className="empty-icon">◌</div><p>Preview the initializer to inspect the mint list and simulation before signing.</p></div>}
+        {config ? <div className="asset-status-list">{assets.length ? assets.map((asset) => <div className="asset-status-row" key={asset.mint}><span className="asset-status-icon">{asset.enabled ? "✓" : "!"}</span><span><strong>{shortAddress(asset.mint)}</strong><small>{asset.tokenProgram ? (asset.tokenProgram === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" ? "Token-2022" : "Classic SPL Token") : "Not registered"}{asset.decimals === undefined ? "" : ` · ${asset.decimals} decimals`}</small></span><em className={asset.enabled ? "asset-enabled" : "asset-disabled"}>{asset.enabled ? "Enabled" : asset.registered ? "Disabled" : "Not registered"}</em></div>) : <div className="review-empty"><div className="empty-icon">◌</div><p>Reading asset registry…</p></div>}</div> : prepared ? <><div className="review-list"><div><span>Config PDA</span><strong className="mono">{shortAddress(deriveConfigAddress(PROGRAM_ID))}</strong></div><div><span>Instructions</span><strong>{prepared.instructions.map((instruction) => instruction.name).join(" + ")}</strong></div><div><span>Authority</span><strong className="mono">{shortAddress(wallet)}</strong></div></div><div className="simulation-box"><pre>{simulation?.logs.length ? simulation.logs.join("\n") : simulation?.error ?? "No simulation logs returned."}</pre></div><button className="button button-dark full-button" onClick={() => void signAndInitialize()} disabled={!simulation?.ok || status === "signing" || !walletSigner}>{status === "signing" ? "Waiting for wallet…" : "Sign & initialize"} <Arrow /></button>{signature && <div className="success-box"><span>✓</span><div><b>Protocol initialized</b><a href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`} target="_blank" rel="noreferrer">View transaction <Arrow /></a></div></div>}</> : <div className="review-empty"><div className="empty-icon">◌</div><p>Preview the initializer to inspect the mint list and simulation before signing.</p></div>}
       </div>
     </section>
   );
@@ -1407,9 +1524,12 @@ type MandateForm = {
 
 function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfig, onCreated }: { wallet: string; walletSigner?: (transaction: Transaction) => Promise<Transaction>; stablecoinOptions: StablecoinOption[]; protocolConfig: ProtocolConfig | null; onCreated: () => Promise<void> }) {
   const defaultStablecoin = stablecoinOptions.find((option) => option.value === "token-2022" && option.mint) ?? stablecoinOptions[0];
+  const defaultSourceTokenAccount = defaultStablecoin?.mint
+    ? deriveAssociatedTokenAddress(wallet, defaultStablecoin.mint, defaultStablecoin.tokenProgram)
+    : "";
   const [form, setForm] = useState<MandateForm>({
     approvedAgent: wallet,
-    sourceTokenAccount: "",
+    sourceTokenAccount: defaultSourceTokenAccount,
     allowedMint: defaultStablecoin.mint,
     maxPerPayment: "10",
     totalLimit: "11",
@@ -1424,8 +1544,45 @@ function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfi
   const [status, setStatus] = useState<"idle" | "building" | "ready" | "signing" | "success" | "error">("idle");
   const [error, setError] = useState("");
   const [signature, setSignature] = useState("");
+  const [accountSignature, setAccountSignature] = useState("");
   const [accountSetup, setAccountSetup] = useState<"idle" | "working" | "ready" | "error">("idle");
   const [mintDecimals, setMintDecimals] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (!wallet || !form.allowedMint.trim()) {
+      setAccountSetup("idle");
+      return () => { active = false; };
+    }
+
+    let tokenAccount: string;
+    try {
+      tokenAccount = deriveAssociatedTokenAddress(wallet, form.allowedMint.trim(), form.tokenProgram);
+    } catch (cause) {
+      setAccountSetup("error");
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return () => { active = false; };
+    }
+
+    setForm((current) => current.sourceTokenAccount === tokenAccount ? current : { ...current, sourceTokenAccount: tokenAccount });
+    setAccountSetup("working");
+    void getAccountInfoOrNull(new PublicKey(tokenAccount)).then((account) => {
+      if (!active) return;
+      const issue = tokenAccountValidationError(account, form.allowedMint.trim(), wallet, form.tokenProgram);
+      if (issue && account) {
+        setAccountSetup("error");
+        setError(issue);
+      } else {
+        setAccountSetup(issue ? "idle" : "ready");
+      }
+    }).catch((cause) => {
+      if (!active) return;
+      setAccountSetup("error");
+      setError(cause instanceof Error ? cause.message : String(cause));
+    });
+
+    return () => { active = false; };
+  }, [wallet, form.allowedMint, form.tokenProgram]);
 
   useEffect(() => {
     if (stablecoin !== "usdc" || defaultStablecoin.value !== "token-2022" || form.allowedMint !== DEVNET_USDC_MINT) return;
@@ -1461,10 +1618,13 @@ function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfi
       return;
     }
     setStablecoin(option.value);
-    setForm((current) => ({ ...current, allowedMint: option.mint, tokenProgram: option.tokenProgram }));
+    const sourceTokenAccount = deriveAssociatedTokenAddress(wallet, option.mint, option.tokenProgram);
+    setForm((current) => ({ ...current, allowedMint: option.mint, tokenProgram: option.tokenProgram, sourceTokenAccount }));
+    setAccountSetup("idle");
     setPrepared(null);
     setSimulation(null);
     setSignature("");
+    setAccountSignature("");
     setStatus("idle");
     setError("");
   }
@@ -1488,8 +1648,15 @@ function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfi
       setForm((current) => ({ ...current, sourceTokenAccount: tokenAccount }));
       const existing = await getAccountInfoOrNull(new PublicKey(tokenAccount));
       if (existing) {
+        const issue = tokenAccountValidationError(existing, mint, wallet, form.tokenProgram);
+        if (issue) throw new Error(issue);
+        setAccountSignature("");
         setAccountSetup("ready");
         return;
+      }
+      const balance = await chainpayClient.connection.getBalance(new PublicKey(wallet), "confirmed");
+      if (balance === 0) {
+        throw new Error("Add Devnet SOL to this wallet before preparing it for payments.");
       }
       if (!walletSigner) throw new Error("The connected wallet does not expose transaction signing.");
       const instruction = buildCreateAssociatedTokenAccountInstruction({
@@ -1508,7 +1675,8 @@ function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfi
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
       const transaction = toWeb3Transaction(prepared, latest.blockhash);
       const signed = await walletSigner(transaction);
-      await submitSignedTransaction(`ata:${wallet}:${tokenAccount}:${latest.blockhash}`, signed.serialize());
+      const result = await submitSignedTransaction(`ata:${wallet}:${tokenAccount}:${latest.blockhash}`, signed.serialize());
+      setAccountSignature(result.signature ?? "");
       setAccountSetup("ready");
     } catch (cause) {
       setAccountSetup("error");
@@ -1524,7 +1692,7 @@ function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfi
     setSignature("");
     try {
       if (mintDecimals === null) throw new Error("Token decimals are not available yet. Check the selected mint.");
-      if (!form.sourceTokenAccount.trim()) throw new Error("Create the wallet token account before continuing.");
+      if (accountSetup !== "ready" || !form.sourceTokenAccount.trim()) throw new Error("Prepare the payment wallet before continuing.");
       const days = Number(form.expiresInDays);
       if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("Choose an expiry between 1 and 365 days.");
       const currentSlot = await chainpayClient.getCurrentSlot();
@@ -1604,7 +1772,8 @@ function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfi
           <label className="field"><span>Total spend limit</span><input inputMode="decimal" value={form.totalLimit} onChange={(event) => updateField("totalLimit", event.target.value)} placeholder="11" /></label>
           <label className="field field-wide"><span>Expires in</span><select value={form.expiresInDays} onChange={(event) => updateField("expiresInDays", event.target.value)}><option value="1">1 day</option><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></label>
         </div>
-        <div className="account-setup-row"><div><span>Payment wallet</span><small>{form.sourceTokenAccount ? `Ready · ${shortAddress(form.sourceTokenAccount)}` : "Preparing this wallet for payments"}</small></div><button className="inline-action" type="button" onClick={() => void setupWalletTokenAccount()} disabled={accountSetup === "working"}>{accountSetup === "working" ? "Preparing…" : accountSetup === "ready" ? "Ready" : "Prepare wallet"}</button></div>
+        <div className="account-setup-row"><div><span>Payment wallet</span><small>{accountSetup === "ready" ? "Ready" : accountSetup === "working" ? "Checking wallet" : "Needs setup"}</small></div><button className="inline-action" type="button" onClick={() => void setupWalletTokenAccount()} disabled={accountSetup === "working"}>{accountSetup === "working" ? "Checking…" : accountSetup === "ready" ? "Ready" : "Prepare wallet"}</button></div>
+        {accountSetup === "ready" && <div className="success-box"><span>✓</span><div><b>{accountSignature ? "Payment wallet prepared" : "Payment wallet ready"}</b><a href={accountSignature ? `https://explorer.solana.com/tx/${accountSignature}?cluster=devnet` : `https://explorer.solana.com/address/${form.sourceTokenAccount}?cluster=devnet`} target="_blank" rel="noreferrer">{accountSignature ? "View account transaction" : "View wallet activity"} <Arrow /></a></div></div>}
         <div className="builder-actions"><button className="button button-primary" onClick={() => void buildPreview()} disabled={status === "building" || status === "signing"}>{status === "building" ? "Reviewing…" : "Review mandate"} <Arrow /></button><span className="builder-safety"><Shield /> Wallet approval required</span></div>
         {error && <div className="builder-error"><b>Needs attention</b><span>{error}</span></div>}
       </div>
@@ -1613,8 +1782,8 @@ function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfi
         <div className="dashboard-card-heading"><div><span className="section-kicker">REVIEW</span><h2>{prepared ? "Ready to sign" : "Your mandate"}</h2></div><span className={`simulation-pill ${simulation?.ok ? "ok" : simulation ? "failed" : ""}`}><i /> {simulation ? (simulation.ok ? "Simulated" : "Rejected") : "Waiting"}</span></div>
         {prepared ? <>
           <div className="mandate-summary"><div><span>Agent</span><strong className="mono">{shortAddress(form.approvedAgent)}</strong></div><div><span>Stablecoin</span><strong>{selectedStablecoin.label} <small>{selectedStablecoin.detail}</small></strong></div><div><span>Recipient</span><strong>Chosen per payment</strong></div><div><span>Max per payment</span><strong>{form.maxPerPayment}</strong></div><div><span>Total spend limit</span><strong>{form.totalLimit}</strong></div><div><span>Expires in</span><strong>{form.expiresInDays} days</strong></div></div>
-          <details className="technical-details"><summary>Transaction details</summary><div className="review-list"><div><span>Mandate PDA</span><strong className="mono">{shortAddress(prepared.mandateAddress)}</strong></div><div><span>Instructions</span><strong>{prepared.transaction.instructions.map((instruction) => instruction.name).join(" + ")}</strong></div><div><span>Fee payer</span><strong className="mono">{shortAddress(wallet)}</strong></div></div><div className="simulation-box"><span className="soft-label">SIMULATION LOG</span><pre>{simulation?.logs.length ? simulation.logs.join("\n") : simulation?.error ?? "No simulation logs returned."}</pre></div></details>
-          <button className="button button-dark full-button" onClick={() => void signAndCreate()} disabled={!simulation?.ok || status === "signing"}>{status === "signing" ? "Waiting for wallet…" : "Sign & create mandate"} <Arrow /></button>
+          <details className="technical-details"><summary>Transaction details</summary><div className="review-list"><div><span>Mandate PDA</span><strong className="mono">{shortAddress(prepared.mandateAddress)}</strong></div><div><span>Instructions</span><strong>{prepared.transaction.instructions.map((instruction) => instruction.name).join(" + ")}</strong></div><div><span>Fee payer</span><strong className="mono">{shortAddress(wallet)}</strong></div></div><div className="simulation-box"><pre>{simulation?.logs.length ? simulation.logs.join("\n") : simulation?.error ?? "No simulation logs returned."}</pre></div></details>
+          <button className="button button-dark full-button" onClick={() => void signAndCreate()} disabled={!simulation?.ok || status === "signing" || status === "success"}>{status === "signing" ? "Waiting for wallet…" : status === "success" ? "Mandate created" : "Sign & create mandate"} <Arrow /></button>
           {signature && <div className="success-box"><span>✓</span><div><b>Mandate created</b><a href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`} target="_blank" rel="noreferrer">View transaction <Arrow /></a></div></div>}
         </> : <div className="review-empty"><div className="empty-icon">◇</div><p>Review the mandate before signing.</p></div>}
       </div>

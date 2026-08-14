@@ -9,7 +9,7 @@ export const SPL_TOKEN_PROGRAM_ID: Address =
 export const TOKEN_2022_PROGRAM_ID: Address =
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 export const ASSOCIATED_TOKEN_PROGRAM_ID: Address =
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efT7p7f7b8Q";
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 
 export const DISCRIMINATORS = {
   initializeConfig: Uint8Array.from([208, 127, 21, 1, 194, 190, 196, 70]),

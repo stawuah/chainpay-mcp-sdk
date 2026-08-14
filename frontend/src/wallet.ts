@@ -74,6 +74,7 @@ function walletAdapter(wallet: StandardSolanaWallet, account: WalletAccount): Ch
 }
 
 type LegacyProvider = {
+  isPhantom?: boolean;
   publicKey?: { toString(): string };
   connect?: () => Promise<{ publicKey: { toString(): string } }>;
   signTransaction?: (transaction: Transaction) => Promise<Transaction>;
@@ -86,26 +87,44 @@ async function connectLegacyWallet(provider: LegacyProvider): Promise<ChainPayWa
   const result = await provider.connect();
   return {
     address: result.publicKey.toString(),
-    name: "Injected Solana wallet",
+    name: provider.isPhantom ? "Phantom" : "Injected Solana wallet",
     signTransaction: provider.signTransaction.bind(provider),
   };
 }
 
 export async function connectChainPayWallet(
   legacyProvider?: LegacyProvider,
+  phantomProvider?: LegacyProvider,
 ): Promise<ChainPayWallet> {
+  const phantom = phantomProvider?.isPhantom
+    ? phantomProvider
+    : legacyProvider?.isPhantom
+      ? legacyProvider
+      : undefined;
+  if (phantom) return connectLegacyWallet(phantom);
+
   const [wallet] = standardWallets();
   if (wallet) return connectStandardWallet(wallet);
   if (legacyProvider) return connectLegacyWallet(legacyProvider);
   throw new Error("No Wallet Standard Solana wallet was found. Install Phantom, Backpack, or Solflare.");
 }
 
-export function restoreChainPayWallet(legacyProvider?: LegacyProvider): ChainPayWallet | null {
-  const wallet = standardWallets().find((candidate) => candidate.accounts.length > 0);
-  const account = wallet?.accounts.find((candidate) =>
-    candidate.chains.includes(DEVNET_CHAIN) || candidate.chains.some((chain) => chain.startsWith("solana:")),
-  );
-  if (wallet && account) return walletAdapter(wallet, account);
+export function restoreChainPayWallet(
+  legacyProvider?: LegacyProvider,
+  phantomProvider?: LegacyProvider,
+): ChainPayWallet | null {
+  const phantom = phantomProvider?.isPhantom
+    ? phantomProvider
+    : legacyProvider?.isPhantom
+      ? legacyProvider
+      : undefined;
+  if (phantom?.publicKey && phantom.signTransaction) {
+    return {
+      address: phantom.publicKey.toString(),
+      name: "Phantom",
+      signTransaction: phantom.signTransaction.bind(phantom),
+    };
+  }
 
   if (legacyProvider?.publicKey && legacyProvider.signTransaction) {
     return {
@@ -114,6 +133,9 @@ export function restoreChainPayWallet(legacyProvider?: LegacyProvider): ChainPay
       signTransaction: legacyProvider.signTransaction.bind(legacyProvider),
     };
   }
+
+  // Do not silently restore the first Wallet Standard wallet. If a user has
+  // multiple browser wallets installed, they must explicitly connect one.
   return null;
 }
 

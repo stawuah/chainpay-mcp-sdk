@@ -5,6 +5,7 @@ import {
   buildCreateMandateInstruction,
   buildExecutePaymentInstruction,
   buildInitializeConfigInstruction,
+  deriveAssociatedTokenAddress,
   deriveMandateAddress,
   deriveReceiptAddress,
   preflightPayment,
@@ -79,6 +80,15 @@ test("builds the one-time protocol config initializer", () => {
   assert.equal(initialize.keys[0].isWritable, true);
   assert.equal(initialize.keys[1].isSigner, true);
   assert.equal(initialize.data.length, 104);
+});
+
+test("derives the canonical Token-2022 associated token account", () => {
+  const wallet = "FmFHfuMx1U6sjKKsuD9SrFedspnAuTUki1KPKjWbehkU";
+  const pyusd = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM";
+  assert.equal(
+    deriveAssociatedTokenAddress(wallet, pyusd, "token-2022"),
+    "HC7kZ6CXs5JQS2CDmGh9ADjkyNdibX5HDe3pcspvs65g",
+  );
 });
 
 test("carries Token-2022 extension accounts through settlement", () => {

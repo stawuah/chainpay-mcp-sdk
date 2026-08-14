@@ -60,8 +60,11 @@ npm run test:sdk
 
 The server also exposes a developer documentation preview at `/` (and `/docs`),
 the ChainPay logo at `/logo.svg`, MCP Streamable HTTP at `/mcp`, a health
-endpoint at `/healthz`, and a browser-friendly read-only tool catalog at
-`/tools`. The HTTP process is stateless and supports POST JSON-RPC requests plus
+endpoint at `/healthz`, a browser-friendly read-only tool catalog at `/tools`,
+and the dashboard's read-only AI assistant at `/agent/chat`. The assistant uses
+the server-side `OPENAI_API_KEY` and can call only `get_mandate`,
+`get_protocol_config`, `get_asset`, and `get_payment`; it cannot sign, submit,
+pause, revoke, create, or update anything. The HTTP process is stateless and supports POST JSON-RPC requests plus
 GET event streams, so a remote MCP client can use a URL such as:
 
 ```json
@@ -101,8 +104,9 @@ Health check: /healthz
 
 Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, `CHAINPAY_BACKEND_URL`,
 `CHAINPAY_BACKEND_AUTH_TOKEN`, and `CHAINPAY_HTTP_AUTH_TOKEN` in the host's
-environment settings. Put HTTPS and authentication in front of both endpoints
-before using them for real payment traffic.
+environment settings. Set `OPENAI_API_KEY` to enable the dashboard assistant
+and optionally set `CHAINPAY_AGENT_MODEL`. Put HTTPS and authentication in front
+of both endpoints before using them for real payment traffic.
 
 Render is also supported through the root [render.yaml](../render.yaml)
 Blueprint. In Render, choose **New → Blueprint**, connect this repository, and

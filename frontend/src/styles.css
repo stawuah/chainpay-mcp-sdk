@@ -286,10 +286,13 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .tool-ready { margin-left: auto; color: var(--green); font: 500 10px var(--mono); }
 .tool-count { color: var(--muted); font: 500 10px var(--mono); }
 .tool-empty { margin-top: 18px; color: var(--muted); font-size: 12px; }
-.assistant-visual { display: flex; align-items: center; gap: 13px; }
+.assistant-visual { display: flex; align-items: center; justify-content: space-between; gap: 13px; }
 .assistant-caption { color: var(--body); font-size: 12px; font-weight: 600; }
 .assistant-log { min-height: 155px; padding: 22px 0; }
 .assistant-log p { margin-top: 12px; color: var(--body); font-size: 14px; line-height: 1.65; }
+.assistant-response { white-space: pre-wrap; }
+.assistant-tools-used { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.assistant-tools-used .soft-label { width: 100%; }
 .assistant-log pre, .simulation-box pre { max-height: 310px; overflow: auto; margin: 12px 0 0; padding: 15px; border-radius: 12px; color: #d5d9e0; background: var(--dark); font: 11px/1.6 var(--mono); white-space: pre-wrap; }
 .assistant-input { display: flex; align-items: center; gap: 8px; padding-top: 17px; border-top: 1px solid var(--line); }
 .assistant-input input, .field input, .field select, .field textarea, .receipt-search input { width: 100%; min-width: 0; height: 48px; padding: 12px 15px; border: 1px solid var(--line); border-radius: 12px; outline: 0; color: var(--ink); background: #fff; font-size: 13px; }
@@ -517,6 +520,7 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .overview-search-icon { color: var(--muted); font-size: 20px; line-height: 1; transform: translateY(-1px); }
 .overview-search input { width: 100%; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 13px; }
 .overview-search input::placeholder { color: var(--muted); }
+.overview-search .voice-button { width: 36px; height: 36px; flex: 0 0 36px; }
 .overview-search-submit { display: grid; place-items: center; width: 36px; height: 36px; flex: 0 0 36px; border: 0; border-radius: 10px; color: #fff; background: var(--blue); font-size: 17px; line-height: 1; }
 .overview-search-submit:hover { background: var(--blue-active); }
 .overview-search-submit:disabled { cursor: wait; opacity: .65; }

@@ -34,8 +34,15 @@ services:
       - key: CHAINPAY_BACKEND_URL
         value: https://chainpay-backend.onrender.com 
       - key: CHAINPAY_BACKEND_AUTH_TOKEN
-        sync: false
+        fromService:
+          type: web
+          name: chainpay-backend
+          envVarKey: CHAINPAY_HTTP_AUTH_TOKEN
       - key: CHAINPAY_HTTP_AUTH_TOKEN
-        sync: false
+        value: ""
       - key: CHAINPAY_ALLOWED_ORIGINS
         value: "*"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CHAINPAY_AGENT_MODEL
+        value: gpt-5-mini

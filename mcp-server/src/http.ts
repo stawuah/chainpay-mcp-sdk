@@ -4,6 +4,7 @@ import { createDefaultContext, TOOL_DEFINITIONS } from "./index.js";
 import { renderDocsHtml } from "./docs.js";
 import { CHAINPAY_LOGO_SVG } from "./logo.js";
 import { createChainPayOgImage } from "./og-image.js";
+import { runChainPayAgent, type ChainPayAgentRequest } from "./agent.js";
 import {
   createMcpServer,
   type JsonRpcRequest,
@@ -14,6 +15,9 @@ import type { ChainPayMcpContext } from "./tools/context.js";
 
 const MAX_BODY_BYTES = 1_048_576;
 const CHAINPAY_OG_IMAGE = createChainPayOgImage();
+const AGENT_RATE_WINDOW_MS = 60_000;
+const AGENT_RATE_LIMIT = 20;
+const agentRateRecords = new Map<string, { startedAt: number; count: number }>();
 
 type HttpOptions = {
   host?: string;
@@ -92,6 +96,22 @@ function corsHeaders(origin: string | undefined, allowedOrigins: string[]): Reco
 function authAllowed(req: IncomingMessage, authToken: string): boolean {
   if (!authToken) return true;
   return req.headers.authorization === `Bearer ${authToken}`;
+}
+
+function agentRequestAllowed(req: IncomingMessage): boolean {
+  const forwarded = req.headers["x-forwarded-for"];
+  const address = typeof forwarded === "string"
+    ? forwarded.split(",")[0].trim()
+    : req.socket.remoteAddress ?? "unknown";
+  const now = Date.now();
+  const current = agentRateRecords.get(address);
+  if (!current || now - current.startedAt >= AGENT_RATE_WINDOW_MS) {
+    agentRateRecords.set(address, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (current.count >= AGENT_RATE_LIMIT) return false;
+  current.count += 1;
+  return true;
 }
 
 function requestHeadersValid(req: IncomingMessage, request: JsonRpcRequest): string | undefined {
@@ -283,6 +303,28 @@ export function createHttpServer(
         writeJson(res, 201, registered, headers);
       } catch (error) {
         writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) }, headers);
+      }
+      return;
+    }
+
+    if (url.pathname === "/agent/chat" && req.method === "POST") {
+      if (!agentRequestAllowed(req)) {
+        writeJson(res, 429, { error: "Too many assistant requests. Try again in a minute." }, headers);
+        return;
+      }
+      try {
+        const body = await readJsonValue(req) as Partial<ChainPayAgentRequest>;
+        const result = await runChainPayAgent(context, {
+          message: body.message ?? "",
+          wallet: body.wallet,
+          mandateAddress: body.mandateAddress,
+          history: body.history,
+        });
+        writeJson(res, 200, result, headers);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const status = message.includes("not configured") ? 503 : 400;
+        writeJson(res, status, { error: message }, headers);
       }
       return;
     }

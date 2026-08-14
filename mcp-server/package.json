@@ -20,7 +20,8 @@
     "test:sdk": "npm --prefix ../sdk run test"
   },
   "dependencies": {
-    "@chainpay/sdk": "0.1.0"
+    "@chainpay/sdk": "0.1.0",
+    "openai": "^7.4.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
