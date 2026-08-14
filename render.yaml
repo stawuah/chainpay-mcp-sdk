@@ -28,7 +28,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: CHAINPAY_RPC_URL
-        sync: false
+        value: https://chainpay-backend.onrender.com/rpc
       - key: CHAINPAY_PROGRAM_ID
         value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
       - key: CHAINPAY_BACKEND_URL

@@ -286,18 +286,35 @@ impl RpcClient {
     }
 
     async fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T, RpcError> {
-        let response = self
-            .http
-            .post(&self.config.url)
-            .json(&json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": method,
-                "params": params,
-            }))
-            .send()
-            .await?
-            .error_for_status()?;
+        const MAX_ATTEMPTS: usize = 4;
+
+        let response = {
+            let mut attempt = 0;
+            loop {
+                let response = self
+                    .http
+                    .post(&self.config.url)
+                    .json(&json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": method,
+                        "params": params,
+                    }))
+                    .send()
+                    .await?;
+
+                let status = response.status();
+                let retryable =
+                    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+                if status.is_success() || !retryable || attempt + 1 >= MAX_ATTEMPTS {
+                    break response.error_for_status()?;
+                }
+
+                let delay = retry_delay(&response, attempt);
+                attempt += 1;
+                tokio::time::sleep(delay).await;
+            }
+        };
         let envelope: RpcEnvelope<T> = response.json().await?;
         if let Some(error) = envelope.error {
             let data = error
@@ -311,6 +328,20 @@ impl RpcClient {
         }
         envelope.result.ok_or(RpcError::MissingField("result"))
     }
+}
+
+fn retry_delay(response: &reqwest::Response, attempt: usize) -> Duration {
+    if let Some(seconds) = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        return Duration::from_secs(seconds.min(15));
+    }
+
+    let multiplier = 1u64 << attempt.min(4);
+    Duration::from_millis(500 * multiplier)
 }
 
 #[cfg(test)]
