@@ -10,7 +10,6 @@ pub struct MandateParams {
     pub approved_agent: Pubkey,
     pub source_token_account: Pubkey,
     pub allowed_mint: Pubkey,
-    pub allowed_recipient: Pubkey,
     pub max_per_payment: u64,
     pub total_limit: u64,
     pub expires_at_slot: u64,
@@ -57,12 +56,6 @@ pub struct CreateMandate<'info> {
         constraint = *source_token_account.to_account_info().owner == token_program.key() @ ChainPayError::InvalidTokenProgram,
     )]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
-    #[account(
-        constraint = recipient_token_account.key() == params.allowed_recipient @ ChainPayError::InvalidRecipient,
-        constraint = recipient_token_account.mint == params.allowed_mint @ ChainPayError::InvalidRecipientMint,
-        constraint = *recipient_token_account.to_account_info().owner == token_program.key() @ ChainPayError::InvalidTokenProgram,
-    )]
-    pub recipient_token_account: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }

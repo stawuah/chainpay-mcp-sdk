@@ -64,7 +64,9 @@ pub struct ExecutePayment<'info> {
     pub source_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
-        address = mandate.allowed_recipient,
+        constraint = mandate.legacy_allowed_recipient == Pubkey::default()
+            || recipient_token_account.key() == mandate.legacy_allowed_recipient
+            @ ChainPayError::InvalidRecipient,
         constraint = recipient_token_account.mint == mandate.allowed_mint @ ChainPayError::InvalidRecipientMint,
         constraint = *recipient_token_account.to_account_info().owner == token_program.key() @ ChainPayError::InvalidTokenProgram,
     )]

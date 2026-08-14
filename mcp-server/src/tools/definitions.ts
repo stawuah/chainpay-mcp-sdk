@@ -26,7 +26,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "create_mandate",
-    description: "Prepare a wallet-signed mandate creation and limited delegate approval transaction.",
+    description: "Prepare a wallet-signed spending mandate. Each payment supplies its own recipient.",
     inputSchema: {
       type: "object",
       properties: {
@@ -34,7 +34,6 @@ export const TOOL_DEFINITIONS = [
         approvedAgent: { type: "string" },
         sourceTokenAccount: { type: "string" },
         allowedMint: { type: "string" },
-        allowedRecipient: { type: "string" },
         maxPerPayment: { type: "string", description: "Unsigned token amount in base units" },
         totalLimit: { type: "string", description: "Unsigned token amount in base units" },
         delegateAmount: { type: "string", description: "Optional delegate amount in base units" },
@@ -48,7 +47,6 @@ export const TOOL_DEFINITIONS = [
         "approvedAgent",
         "sourceTokenAccount",
         "allowedMint",
-        "allowedRecipient",
         "maxPerPayment",
         "totalLimit",
         "expiresAtSlot",
@@ -59,24 +57,22 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "update_mandate",
-    description: "Prepare an owner-signed update to a mandate's agent, recipient, limits, expiry, and cooldown policy.",
+    description: "Prepare an owner-signed update to a mandate's agent, limits, expiry, and cooldown policy.",
     inputSchema: {
       type: "object",
       properties: {
         owner: { type: "string" },
         approvedAgent: { type: "string" },
-        allowedRecipient: { type: "string" },
         maxPerPayment: { type: "string" },
         totalLimit: { type: "string" },
         expiresAtSlot: { type: "string" },
         maxPaymentCount: { type: "string" },
         cooldownSlots: { type: "string" },
         paused: { type: "boolean" },
-        tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
       },
       required: [
-        "owner", "approvedAgent", "allowedRecipient", "maxPerPayment", "totalLimit",
-        "expiresAtSlot", "maxPaymentCount", "cooldownSlots", "tokenProgram",
+        "owner", "approvedAgent", "maxPerPayment", "totalLimit",
+        "expiresAtSlot", "maxPaymentCount", "cooldownSlots",
       ],
       additionalProperties: false,
     },
@@ -96,6 +92,20 @@ export const TOOL_DEFINITIONS = [
         recipient: { type: "string" },
         amount: { type: "string", description: "Unsigned token amount in base units" },
         tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+        remainingAccounts: {
+          type: "array",
+          description: "Optional Token-2022 extension accounts, for example transfer-hook accounts",
+          items: {
+            type: "object",
+            properties: {
+              address: { type: "string" },
+              isSigner: { type: "boolean" },
+              isWritable: { type: "boolean" },
+            },
+            required: ["address", "isSigner", "isWritable"],
+            additionalProperties: false,
+          },
+        },
       },
       required: [
         "mandate",
@@ -129,6 +139,20 @@ export const TOOL_DEFINITIONS = [
           type: "string",
           description: "Base64 wallet-signed transaction for relay through the Rust backend",
         },
+        remainingAccounts: {
+          type: "array",
+          description: "Optional Token-2022 extension accounts, for example transfer-hook accounts",
+          items: {
+            type: "object",
+            properties: {
+              address: { type: "string" },
+              isSigner: { type: "boolean" },
+              isWritable: { type: "boolean" },
+            },
+            required: ["address", "isSigner", "isWritable"],
+            additionalProperties: false,
+          },
+        },
       },
       required: [
         "mandate",
@@ -153,6 +177,20 @@ export const TOOL_DEFINITIONS = [
         paymentId: { type: "string" }, signatureReference: { type: "string" }, mint: { type: "string" },
         recipient: { type: "string" }, amount: { type: "string" },
         tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+        remainingAccounts: {
+          type: "array",
+          description: "Optional Token-2022 extension accounts, for example transfer-hook accounts",
+          items: {
+            type: "object",
+            properties: {
+              address: { type: "string" },
+              isSigner: { type: "boolean" },
+              isWritable: { type: "boolean" },
+            },
+            required: ["address", "isSigner", "isWritable"],
+            additionalProperties: false,
+          },
+        },
       },
       required: ["mandate", "agent", "invoiceHash", "paymentId", "signatureReference", "mint", "recipient", "amount"],
       additionalProperties: false,
@@ -176,7 +214,23 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: "object",
       properties: {
-        challenge: { type: "object", description: "x402 exact payment challenge" },
+        challenge: {
+          type: "object",
+          description: "x402 exact payment challenge",
+          properties: {
+            network: { type: "string" },
+            scheme: { type: "string", enum: ["exact"] },
+            asset: { type: "string" },
+            payTo: { type: "string" },
+            amount: { type: "string" },
+            resource: { type: "string" },
+            nonce: { type: "string" },
+            tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+            remainingAccounts: { type: "array" },
+          },
+          required: ["asset", "payTo", "amount", "nonce"],
+          additionalProperties: true,
+        },
         mandate: { type: "string" },
         agent: { type: "string" },
         signedTransaction: {

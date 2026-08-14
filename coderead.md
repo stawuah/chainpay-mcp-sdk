@@ -202,9 +202,10 @@ kill switch for a registered asset.
 
 #### `MandateCreated`
 
-Contains the mandate address, owner, approved agent, allowed mint and recipient,
-expiry, payment-count cap, and cooldown. It intentionally does not contain the
-secret key or the token delegate amount.
+Contains the mandate address, owner, approved agent, allowed mint, expiry,
+payment-count cap, and cooldown. It intentionally does not contain a new
+recipient because each payment supplies its own destination. It also does not
+contain the secret key or the token delegate amount.
 
 #### `ConfigInitialized` and `ConfigUpdated`
 
@@ -213,8 +214,8 @@ public key is used for an unused slot.
 
 #### `MandateUpdated`
 
-Contains the updated agent, recipient, limits, expiry, payment-count cap, and
-cooldown. It does not report the `paused` field even though the handler updates
+Contains the updated agent, limits, expiry, payment-count cap, and cooldown. It
+does not report the `paused` field even though the handler updates
 it; the account state remains authoritative.
 
 #### `MandateStatusChanged`
@@ -267,7 +268,7 @@ Fields in serialized order:
 | `approved_agent` | Only this signer may execute payments. |
 | `source_token_account` | The one token account from which funds may be spent. |
 | `allowed_mint` | The one mint allowed by this mandate. |
-| `allowed_recipient` | The one recipient token account allowed. |
+| `legacy_allowed_recipient` | Reserved compatibility field. New mandates leave it empty; each payment supplies its own destination. |
 | `max_per_payment` | Maximum base units in one settlement. |
 | `total_limit` | Lifetime maximum base units for this mandate. |
 | `amount_spent` | Cumulative amount settled so far. |
@@ -371,8 +372,8 @@ The handler flips only `asset.enabled` and emits `AssetStatusChanged`.
 #### `MandateParams`
 
 This is the serialized instruction input. It contains the approved agent, source
-token account, allowed mint and recipient, five policy numbers, and no wallet
-secret. The five numbers are:
+token account, allowed mint, five policy numbers, and no wallet secret. The five
+numbers are:
 
 - maximum amount per payment;
 - total amount;
@@ -395,9 +396,7 @@ The account checks run in this order conceptually:
    token program;
 9. `source_token_account` must be the parameter source account, owned by the
    wallet owner, for the allowed mint, and owned by the same token program;
-10. `recipient_token_account` must be the parameter recipient, use the allowed
-    mint, and use the same token program;
-11. the token interface and system program are supplied for later compatibility
+10. the token interface and system program are supplied for later compatibility
     and account creation.
 
 The handler then validates the numeric and public-key parameters, writes the
@@ -412,29 +411,25 @@ the create instruction. The owner wallet signs that approval.
 
 #### `MandateUpdate`
 
-This input can change the approved agent, recipient, limits, expiry, count cap,
-cooldown, and paused flag. It cannot change the mandate owner, mint, or source
-token account.
+This input can change the approved agent, limits, expiry, count cap, cooldown,
+and paused flag. It cannot change the mandate owner, mint, source token account,
+or per-payment destination.
 
 #### `UpdateMandate`
 
 Accounts:
 
 1. mutable mandate PDA derived from its owner;
-2. owner signer checked by `has_one`;
-3. recipient token account must be the new requested recipient and must use the
-   existing mandate mint and supplied token program;
-4. token interface account.
+2. owner signer checked by `has_one`.
 
 The handler obtains the current slot and then checks:
 
 1. revoked mandates cannot be updated;
 2. the new agent is not the default public key;
-3. the new recipient is not the default public key;
-4. the new per-payment limit is positive;
-5. the new total limit covers both the per-payment limit and money already spent;
-6. the new expiry is in the future;
-7. the new payment-count cap is zero or is not below the count already used.
+3. the new per-payment limit is positive;
+4. the new total limit covers both the per-payment limit and money already spent;
+5. the new expiry is in the future;
+6. the new payment-count cap is zero or is not below the count already used.
 
 It writes the new fields and emits `MandateUpdated`. Because `paused` is part of
 the update input, an owner can temporarily pause and later unpause through an
@@ -486,7 +481,7 @@ The account order is important because the SDK and backend both mirror it:
 | 4 | agent | Mutable signer and must equal `mandate.approved_agent`. |
 | 5 | allowed mint | Mint account for checked transfer and decimals. |
 | 6 | source token account | Delegate-controlled source account. |
-| 7 | recipient token account | Destination and mandate allowlist target. |
+| 7 | recipient token account | Destination supplied by this payment. Legacy mandates may constrain it to their stored compatibility destination. |
 | 8 | token program | Classic SPL Token or Token-2022. |
 | 9 | system program | Pays for receipt PDA initialization. |
 
@@ -507,7 +502,8 @@ Anchor checks the following before the function body:
 13. source's delegate is exactly the mandate PDA;
 14. source's remaining delegated amount is at least the requested amount;
 15. source uses the supplied token program;
-16. recipient equals `mandate.allowed_recipient`;
+16. recipient is the token account supplied by this payment; legacy mandates
+    additionally require it to equal their stored compatibility destination;
 17. recipient uses the mandate mint and token program.
 
 #### `execute_payment` handler, one step at a time
@@ -586,11 +582,10 @@ It checks, in order:
 1. approved agent is non-default;
 2. source token account is non-default;
 3. allowed mint is non-default;
-4. recipient is non-default;
-5. per-payment limit is greater than zero;
-6. total limit is at least the per-payment limit;
-7. expiry is after the current slot;
-8. payment count is zero or at least one.
+4. per-payment limit is greater than zero;
+5. total limit is at least the per-payment limit;
+6. expiry is after the current slot;
+7. payment count is zero or at least one.
 
 The last check is effectively always true for a `u64`: the only value below one
 is zero, which the left side explicitly accepts. It documents the intended
@@ -735,7 +730,7 @@ constraint already listed above.
 
 1. Read the current slot.
 2. Validate the requested policy fields.
-3. Write owner, agent, source, mint, recipient, and limits.
+3. Write owner, agent, source, mint, clear the legacy recipient field, and write the limits.
 4. Initialize spent amount, payment count, and last slot to zero.
 5. Initialize pause/revoke to false.
 6. Store the bump.
@@ -839,7 +834,7 @@ The offsets below include the eight-byte Anchor account discriminator.
 40..72     approved_agent
 72..104    source_token_account
 104..136   allowed_mint
-136..168   allowed_recipient
+136..168   legacy_allowed_recipient (reserved compatibility field)
 168..176   max_per_payment
 176..184   total_limit
 184..192   amount_spent
@@ -1120,8 +1115,8 @@ Wraps one payment instruction and marks the agent as signer and fee payer.
 - `getPayment` accepts either a receipt address or mandate plus invoice hash;
 - `getTokenProgram` inspects an account owner and rejects unsupported programs;
 - `getMintDecimals` reads the mint owner and decimals byte;
-- `buildCreateMandate` verifies mint/source/recipient all use the requested token
-  program before preparing the owner transaction;
+- `buildCreateMandate` verifies mint/source use the requested token program before
+  preparing the owner transaction;
 - `buildUpdateMandate`, `buildRegisterAsset`, `buildSetAssetStatus`,
   `buildPauseMandate`, `buildRevokeMandate`, and `buildRevokeDelegate` wrap the
   lower-level builders and declare required signers;
@@ -1524,7 +1519,7 @@ Here is the order to follow while debugging a direct payment:
 | --- | :---: | :---: | :---: |
 | approved agent | yes | optional metadata match | yes, signer + address |
 | allowed mint | yes | optional metadata match | yes |
-| allowed recipient | yes | optional metadata match | yes |
+| per-payment recipient | yes | exact signed-transaction match | yes |
 | token program | yes | optional metadata match | yes |
 | amount positive/limits | yes | optional amount match | yes |
 | pause/revoke/expiry | yes | simulation observes it | yes |
@@ -1607,9 +1602,10 @@ These are not guesses; they follow from reading the current files.
    layout calculates a 137-byte full account. It reads the bump at the correct
    136 offset, but the minimum-length check is stricter than the account layout
    and should be reviewed.
-8. Backend payment metadata fields such as agent, mint, recipient, token program,
-   and amount are optional; when present, they are bound to the signed
-   instruction. The program remains the final check even when they are absent.
+8. Backend payment metadata fields such as agent, mint, token program, and amount
+   are optional; when present, they are bound to the signed instruction. The
+   recipient is required and is always bound to account position 7. The program
+   remains the final check for all account relationships.
 9. The generic `/v1/transactions/submit` route is broader than the payment route;
    it validates a signed transaction but does not require an execute-payment
    instruction.

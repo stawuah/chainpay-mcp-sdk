@@ -9,6 +9,7 @@ import {
   type JsonRpcRequest,
   type JsonRpcResponse,
 } from "./server.js";
+import { McpConnectionRegistry, type RegisterConnectionInput } from "./connections.js";
 import type { ChainPayMcpContext } from "./tools/context.js";
 
 const MAX_BODY_BYTES = 1_048_576;
@@ -110,15 +111,7 @@ function requestHeadersValid(req: IncomingMessage, request: JsonRpcRequest): str
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<JsonRpcRequest> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buffer.length;
-    if (size > MAX_BODY_BYTES) throw new Error("MCP request body is too large");
-    chunks.push(buffer);
-  }
-  const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const parsed = await readJsonValue(req);
   if (
     !parsed ||
     typeof parsed !== "object" ||
@@ -129,6 +122,18 @@ async function readJsonBody(req: IncomingMessage): Promise<JsonRpcRequest> {
     throw new Error("MCP HTTP requests must contain one JSON-RPC object");
   }
   return parsed as JsonRpcRequest;
+}
+
+async function readJsonValue(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > MAX_BODY_BYTES) throw new Error("MCP request body is too large");
+    chunks.push(buffer);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
 function jsonRpcError(id: string | number | null, message: string): JsonRpcResponse {
@@ -144,10 +149,11 @@ async function handleMcpPost(
   res: ServerResponse,
   context: ChainPayMcpContext,
   mcpServer: ReturnType<typeof createMcpServer>,
+  registry: McpConnectionRegistry,
   options: Required<HttpOptions>,
   headers: Record<string, string>,
 ): Promise<void> {
-  if (!authAllowed(req, options.authToken)) {
+  if (!authAllowed(req, options.authToken) && !registry.identify(req)) {
     writeJson(res, 401, { error: "Unauthorized" }, { ...headers, "WWW-Authenticate": "Bearer" });
     return;
   }
@@ -166,6 +172,7 @@ async function handleMcpPost(
     return;
   }
 
+  registry.observe(req, request.method === "tools/call" && typeof request.params?.name === "string" ? request.params.name : undefined);
   const response = await mcpServer.handle(request);
   if (!response) {
     res.writeHead(202, headers);
@@ -205,6 +212,7 @@ export function createHttpServer(
   }
 
   const mcpServer = createMcpServer(context);
+  const registry = new McpConnectionRegistry();
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const cors = corsHeaders(req.headers.origin, resolved.allowedOrigins);
@@ -254,29 +262,63 @@ export function createHttpServer(
       return;
     }
 
+    if (url.pathname === "/connections" && req.method === "GET") {
+      const wallet = url.searchParams.get("wallet")?.trim();
+      if (!wallet) {
+        writeJson(res, 400, { error: "wallet query parameter is required" }, headers);
+        return;
+      }
+      writeJson(res, 200, { connections: registry.list(wallet) }, headers);
+      return;
+    }
+
+    if (url.pathname === "/connections" && req.method === "POST") {
+      try {
+        const body = await readJsonValue(req) as Partial<RegisterConnectionInput>;
+        const registered = registry.register({
+          wallet: typeof body.wallet === "string" ? body.wallet : "",
+          agentName: typeof body.agentName === "string" ? body.agentName : "",
+          scope: typeof body.scope === "string" ? body.scope : undefined,
+        });
+        writeJson(res, 201, registered, headers);
+      } catch (error) {
+        writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) }, headers);
+      }
+      return;
+    }
+
+    const revokeMatch = url.pathname.match(/^\/connections\/([^/]+)$/);
+    if (revokeMatch && req.method === "DELETE") {
+      const wallet = url.searchParams.get("wallet")?.trim();
+      const revoked = wallet ? registry.revoke(wallet, decodeURIComponent(revokeMatch[1])) : false;
+      writeJson(res, revoked ? 200 : 404, revoked ? { ok: true } : { error: "Connection not found" }, headers);
+      return;
+    }
+
     if (url.pathname !== resolved.path) {
       writeJson(res, 404, { error: "Not found" }, headers);
       return;
     }
 
     if (req.method === "GET") {
-      if (!authAllowed(req, resolved.authToken)) {
+      if (!authAllowed(req, resolved.authToken) && !registry.identify(req)) {
         writeJson(res, 401, { error: "Unauthorized" }, { ...headers, "WWW-Authenticate": "Bearer" });
         return;
       }
+      registry.observe(req);
       openEventStream(req, res, headers);
       return;
     }
 
     if (req.method === "POST") {
-      await handleMcpPost(req, res, context, mcpServer, resolved, headers);
+      await handleMcpPost(req, res, context, mcpServer, registry, resolved, headers);
       return;
     }
 
     writeJson(res, 405, { error: "Method not allowed" }, { ...headers, Allow: "GET, POST, OPTIONS" });
   });
 
-  return { server, options: resolved, mcpServer, tools: TOOL_DEFINITIONS };
+  return { server, options: resolved, mcpServer, registry, tools: TOOL_DEFINITIONS };
 }
 
 export async function runHttpServer(context: ChainPayMcpContext = createDefaultContext()): Promise<void> {

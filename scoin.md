@@ -3,8 +3,8 @@
 ## Short answer
 
 Yes: ChainPay has a real on-chain settlement path for fungible SPL assets.
-The program can move tokens from a user-owned source token account to an
-allowlisted recipient token account through either:
+The program can move tokens from a user-owned source token account to the
+recipient token account supplied by each payment through either:
 
 - the classic SPL Token program; or
 - the Token-2022 program.
@@ -82,7 +82,7 @@ replace an approved stablecoin mint with a different token.
 | [`programs/chainpay/src/instructions/execute_payment.rs`](programs/chainpay/src/instructions/execute_payment.rs) | Defines the exact mint, source, recipient, agent, token-program, and receipt accounts. |
 | [`programs/chainpay/src/policy.rs`](programs/chainpay/src/policy.rs) | Checks amount, limits, expiry, pause/revoke state, cooldown, count, and identifiers. |
 | [`programs/chainpay/src/state.rs`](programs/chainpay/src/state.rs) | Stores the mandate and durable receipt. |
-| [`programs/chainpay/src/instructions/create_mandate.rs`](programs/chainpay/src/instructions/create_mandate.rs) | Verifies the source/mint/recipient relationship when the policy is created. |
+| [`programs/chainpay/src/instructions/create_mandate.rs`](programs/chainpay/src/instructions/create_mandate.rs) | Verifies the source/mint relationship when the policy is created. |
 | [`programs/chainpay/src/instructions/assets.rs`](programs/chainpay/src/instructions/assets.rs) | Registers a mint with its token-program identity and enabled status. |
 | [`programs/chainpay/tests/settlement.rs`](programs/chainpay/tests/settlement.rs) | Runs the same program flow against classic SPL Token and Token-2022 in LiteSVM. |
 | [`sdk/src/payment.ts`](sdk/src/payment.ts) | Builds the payment instruction and performs local preflight. |
@@ -128,6 +128,7 @@ bump
 The account constraints require that:
 
 1. the mint account address matches the requested mint;
+
 2. the mint account is owned by the supplied token program;
 3. the token program is the classic SPL Token program or Token-2022 interface;
 4. the signer is the protocol authority.
@@ -149,7 +150,6 @@ The owner chooses:
 approved_agent
 source_token_account
 allowed_mint
-allowed_recipient
 max_per_payment
 total_limit
 expires_at_slot
@@ -164,10 +164,11 @@ At creation, the program checks that:
 3. the registry token program equals the supplied token program;
 4. the source account belongs to the owner;
 5. the source account uses the allowed mint;
-6. the recipient account uses the allowed mint;
-7. the mint, source, recipient, and token program all belong to the same token
-   program;
-8. the limits and expiry are valid.
+6. the source, mint, and token program all belong to the same token program;
+7. the limits and expiry are valid.
+
+The destination is intentionally not part of the mandate. Each payment supplies
+one recipient token account, and settlement is constrained to that account.
 
 The program records zero spent amount, zero payment count, and false pause and
 revoke state.
@@ -273,7 +274,7 @@ required.
 | 4 | Agent | Must sign and equal `mandate.approved_agent`. |
 | 5 | Mint | Must equal `mandate.allowed_mint` and use the token program. |
 | 6 | Source token account | Must be the mandate source, owner-owned, correctly minted, and delegated to the mandate PDA. |
-| 7 | Recipient token account | Must equal `mandate.allowed_recipient` and use the same mint/program. |
+| 7 | Recipient token account | Supplied by this payment; must use the same mint/program. Legacy mandates may still constrain it to their stored destination. |
 | 8 | Token program | Must match the mint, source, recipient, and asset registry. |
 | 9 | System program | Pays for the receipt PDA. |
 
@@ -502,7 +503,8 @@ read final status and receipt PDA
 ```
 
 The agent does not receive unrestricted wallet authority. The owner has already
-limited the mint, source, recipient, amount, expiry, count, and cooldown.
+limited the mint, source, amount, expiry, count, and cooldown. The payment
+request supplies the one destination for that settlement.
 
 ## x402 settlement
 
@@ -528,7 +530,7 @@ preflight path. It does not bypass policy and does not become a hosted
 facilitator or key custodian.
 
 The x402 payment still has to use an approved mandate, the approved mint and
-token program, the approved recipient, the mandate limits, and an external
+token program, the supplied recipient, the mandate limits, and an external
 signature. It then executes through `execute_payment` and produces the same
 receipt PDA. x402 is a connector, not a second settlement engine.
 

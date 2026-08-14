@@ -22,7 +22,7 @@ pub enum ChainPayError {
     InvalidSourceMint,
     #[msg("The recipient token account does not use the mandate mint.")]
     InvalidRecipientMint,
-    #[msg("The allowed recipient must be a non-default public key.")]
+    #[msg("The recipient token account is invalid for this payment.")]
     InvalidRecipient,
     #[msg("The allowed mint must be a non-default public key.")]
     InvalidMint,

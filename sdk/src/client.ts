@@ -25,6 +25,7 @@ import {
 import {
   type CreateMandateInput,
   buildCreateMandateTransaction,
+  buildInitializeConfigInstruction,
   buildPauseMandateInstruction,
   buildRevokeDelegateInstruction,
   buildRevokeMandateInstruction,
@@ -135,12 +136,19 @@ export class ChainPayClient {
     if (sourceProgram !== input.tokenProgram) {
       throw new Error(`Source token account uses ${sourceProgram}, but mandate requested ${input.tokenProgram}`);
     }
-    const recipientProgram = await this.getTokenProgram(input.allowedRecipient);
-    if (recipientProgram !== input.tokenProgram) {
-      throw new Error(`Recipient token account uses ${recipientProgram}, but mandate requested ${input.tokenProgram}`);
-    }
     const decimals = await this.getMintDecimals(input.allowedMint);
     return buildCreateMandateTransaction(input, owner, this.programId, decimals);
+  }
+
+  buildInitializeConfig(
+    supportedMints: readonly Address[],
+    authority: Address,
+  ): PreparedTransaction {
+    return {
+      instructions: [buildInitializeConfigInstruction(supportedMints, authority, this.programId)],
+      requiredSigners: [authority],
+      feePayer: authority,
+    };
   }
 
   buildUpdateMandate(input: Parameters<typeof buildUpdateMandateInstruction>[0], owner: Address): PreparedTransaction {

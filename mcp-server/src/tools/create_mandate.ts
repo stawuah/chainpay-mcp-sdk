@@ -17,7 +17,6 @@ export async function createMandate(
     approvedAgent: solanaAddress(args.approvedAgent, "approvedAgent"),
     sourceTokenAccount: solanaAddress(args.sourceTokenAccount, "sourceTokenAccount"),
     allowedMint: solanaAddress(args.allowedMint, "allowedMint"),
-    allowedRecipient: solanaAddress(args.allowedRecipient, "allowedRecipient"),
     maxPerPayment: unsignedInteger(args.maxPerPayment, "maxPerPayment"),
     totalLimit: unsignedInteger(args.totalLimit, "totalLimit"),
     expiresAtSlot: unsignedInteger(args.expiresAtSlot, "expiresAtSlot"),

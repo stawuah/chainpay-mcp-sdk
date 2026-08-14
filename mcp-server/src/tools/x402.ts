@@ -1,6 +1,6 @@
 import type { ChainPayMcpContext } from "./context.js";
 import { serializeTransaction, solanaAddress, tokenProgram as parseTokenProgram, toolResult, unsignedInteger } from "./common.js";
-import { requireObject } from "./payment-input.js";
+import { parseRemainingAccounts, requireObject } from "./payment-input.js";
 
 type X402Challenge = {
   network?: unknown;
@@ -14,6 +14,7 @@ type X402Challenge = {
   nonce?: unknown;
   expiresAtSlot?: unknown;
   tokenProgram?: unknown;
+  remainingAccounts?: unknown;
 };
 
 function requiredChallengeString(challenge: X402Challenge, key: "amount" | "nonce"): string {
@@ -46,10 +47,21 @@ async function normalizeChallenge(challenge: X402Challenge) {
   const tokenProgram: "spl-token" | "token-2022" = challenge.tokenProgram === undefined
     ? "spl-token"
     : parseTokenProgram(challenge.tokenProgram);
+  const remainingAccounts = parseRemainingAccounts(challenge.remainingAccounts);
   const expiresAtSlot = challenge.expiresAtSlot === undefined
     ? undefined
     : unsignedInteger(challenge.expiresAtSlot, "expiresAtSlot").toString();
-  const canonical = JSON.stringify({ network, scheme, asset, recipient, amount, resource, nonce, ...(expiresAtSlot ? { expiresAtSlot } : {}) });
+  const canonical = JSON.stringify({
+    network,
+    scheme,
+    asset,
+    recipient,
+    amount,
+    resource,
+    nonce,
+    ...(expiresAtSlot ? { expiresAtSlot } : {}),
+    ...(remainingAccounts ? { remainingAccounts } : {}),
+  });
   const invoiceHash = await sha256Hex(canonical);
   return {
     network,
@@ -58,6 +70,7 @@ async function normalizeChallenge(challenge: X402Challenge) {
     recipient,
     amount,
     tokenProgram,
+    ...(remainingAccounts ? { remainingAccounts } : {}),
     resource,
     nonce,
     invoiceHash,
@@ -83,6 +96,7 @@ export async function prepareX402Payment(context: ChainPayMcpContext, args: Reco
     recipient: challenge.recipient,
     amount: BigInt(challenge.amount),
     tokenProgram: challenge.tokenProgram,
+    remainingAccounts: challenge.remainingAccounts,
   }, agent);
 
   const signedTransaction = typeof args.signedTransaction === "string"

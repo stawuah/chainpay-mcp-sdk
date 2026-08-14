@@ -7,11 +7,12 @@ export const SYSTEM_PROGRAM_ID: Address = "11111111111111111111111111111111";
 export const SPL_TOKEN_PROGRAM_ID: Address =
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 export const TOKEN_2022_PROGRAM_ID: Address =
-  "TokenzQdBNbLqP5VEhdkAS6EPFjMs2U4u7H5R9XRQY";
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 export const ASSOCIATED_TOKEN_PROGRAM_ID: Address =
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efT7p7f7b8Q";
 
 export const DISCRIMINATORS = {
+  initializeConfig: Uint8Array.from([208, 127, 21, 1, 194, 190, 196, 70]),
   createMandate: Uint8Array.from([230, 170, 158, 68, 33, 169, 16, 158]),
   executePayment: Uint8Array.from([86, 4, 7, 7, 120, 139, 232, 139]),
   pauseMandate: Uint8Array.from([192, 108, 97, 124, 56, 229, 236, 3]),

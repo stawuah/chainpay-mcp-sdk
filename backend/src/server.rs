@@ -39,7 +39,7 @@ const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 8080;
 const MAX_TRANSACTION_BYTES: usize = 1_048_576;
 const SPL_TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFjMs2U4u7H5R9XRQY";
+const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 
 #[derive(Debug, Clone)]
 pub struct BackendConfig {
@@ -484,7 +484,7 @@ async fn submit_payment(
         receipt_address: request.receipt_address,
         agent: request.agent,
         mint: request.mint,
-        recipient: request.recipient,
+        recipient: Some(request.recipient.clone()),
         amount: request.amount,
         token_program: request.token_program,
         signature: None,
@@ -645,6 +645,7 @@ fn validate_payment_request(
     validate_string(&request.idempotency_key, "idempotency_key")?;
     validate_string(&request.mandate, "mandate")?;
     validate_string(&request.invoice_hash, "invoice_hash")?;
+    validate_string(&request.recipient, "recipient")?;
     validate_string(&request.signed_transaction, "signed_transaction")?;
     let invoice_hash = request.invoice_hash.trim().trim_start_matches("0x");
     if invoice_hash.len() != 64 || !invoice_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -741,12 +742,10 @@ fn validate_chainpay_transaction(
                 ));
             }
         }
-        if let Some(recipient) = &request.recipient {
-            if account(7)? != *recipient {
-                return Err(ApiError::BadRequest(
-                    "signed transaction recipient does not match the request".to_owned(),
-                ));
-            }
+        if account(7)? != request.recipient {
+            return Err(ApiError::BadRequest(
+                "signed transaction recipient does not match the request".to_owned(),
+            ));
         }
         if let Some(token_program) = &request.token_program {
             let expected = match token_program.as_str() {

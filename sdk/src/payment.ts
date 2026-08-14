@@ -1,4 +1,5 @@
 import type {
+  AccountMeta,
   Address,
   ChainPayInstruction,
   Mandate,
@@ -28,12 +29,20 @@ export type PreparePaymentInput = {
   recipient: Address;
   amount: bigint;
   tokenProgram?: TokenProgram;
+  /** Extra accounts required by a Token-2022 extension such as transfer-hook. */
+  remainingAccounts?: AccountMeta[];
 };
 
 export function preparePayment(input: PreparePaymentInput): PaymentRequest {
   publicKey(input.mandate);
   publicKey(input.mint);
   publicKey(input.recipient);
+  input.remainingAccounts?.forEach((account, index) => {
+    publicKey(account.address);
+    if (typeof account.isSigner !== "boolean" || typeof account.isWritable !== "boolean") {
+      throw new Error(`remainingAccounts[${index}] must declare boolean isSigner and isWritable fields`);
+    }
+  });
   bytes32(input.invoiceHash, "invoiceHash");
   bytes32(input.paymentId, "paymentId");
   bytes32(input.signatureReference, "signatureReference");
@@ -54,6 +63,7 @@ export function preparePayment(input: PreparePaymentInput): PaymentRequest {
     invoiceHash: new Uint8Array(input.invoiceHash),
     paymentId: new Uint8Array(input.paymentId),
     signatureReference: new Uint8Array(input.signatureReference),
+    remainingAccounts: input.remainingAccounts?.map((account) => ({ ...account })),
   };
 }
 
@@ -87,6 +97,7 @@ export function buildExecutePaymentInstruction(
       meta(request.recipient, true),
       meta(tokenProgramAddress(tokenProgram)),
       meta(SYSTEM_PROGRAM_ID),
+      ...(request.remainingAccounts ?? []),
     ],
     encodePayment(request),
   );
@@ -127,10 +138,10 @@ export function preflightPayment(
     ),
     check(
       "recipient",
-      address(request.recipient) === mandate.allowedRecipient,
-      address(request.recipient) === mandate.allowedRecipient
-        ? "Payment recipient matches the mandate"
-        : "Payment recipient does not match the mandate",
+      address(request.recipient) !== SYSTEM_PROGRAM_ID,
+      address(request.recipient) !== SYSTEM_PROGRAM_ID
+        ? "Payment recipient is specified for this request"
+        : "Payment recipient must be specified",
     ),
     check(
       "amount_positive",

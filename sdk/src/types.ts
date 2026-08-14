@@ -54,7 +54,8 @@ export type Mandate = {
   approvedAgent: Address;
   sourceTokenAccount: Address;
   allowedMint: Address;
-  allowedRecipient: Address;
+  /** Populated only when decoding a legacy fixed-recipient mandate. */
+  legacyAllowedRecipient?: Address;
   maxPerPayment: bigint;
   totalLimit: bigint;
   amountSpent: bigint;
@@ -114,6 +115,8 @@ export type PaymentRequest = {
   recipient: Address;
   amount: bigint;
   tokenProgram?: TokenProgram;
+  /** Extra accounts required by a Token-2022 extension such as transfer-hook. */
+  remainingAccounts?: AccountMeta[];
 };
 
 export type PaymentReceipt = {

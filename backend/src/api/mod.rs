@@ -47,7 +47,7 @@ pub struct PaymentSubmissionRequest {
     pub signed_transaction: String,
     pub agent: Option<String>,
     pub mint: Option<String>,
-    pub recipient: Option<String>,
+    pub recipient: String,
     #[serde(default, deserialize_with = "deserialize_optional_u64")]
     pub amount: Option<u64>,
     pub token_program: Option<String>,

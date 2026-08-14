@@ -221,7 +221,7 @@ owner
 approved_agent
 source_token_account
 allowed_mint
-allowed_recipient
+legacy_allowed_recipient (reserved for old fixed-recipient mandates)
 max_per_payment
 total_limit
 amount_spent
@@ -237,7 +237,7 @@ For the MVP, keep the mandate narrow while making the policy deterministic:
 - one approved agent;
 - one stablecoin mint;
 - one source token account;
-- one recipient or merchant;
+- one destination supplied with each payment request;
 - per-payment and total spend limits;
 - optional payment-count cap;
 - optional slot cooldown between payments;
@@ -363,7 +363,6 @@ Required visible fields:
 - stablecoin mint;
 - source token account;
 - approved agent;
-- recipient or merchant;
 - max per payment;
 - total spend limit;
 - amount already spent;
@@ -426,7 +425,7 @@ The MVP must verify:
 - expired mandates cannot execute;
 - paused or revoked mandates cannot execute;
 - unsupported mints are rejected;
-- unsupported recipients are rejected;
+- invalid supplied recipient token accounts are rejected;
 - duplicate invoice hashes are rejected;
 - successful payments move tokens through the token program;
 - successful payments create exactly one receipt;
@@ -439,7 +438,7 @@ Required checks:
 - wallet signature for mandate creation;
 - explicit token delegate approval;
 - agent signer verification;
-- recipient allowlist check;
+- per-payment recipient account check;
 - mint allowlist check;
 - per-payment limit check;
 - total-limit check;
@@ -490,7 +489,7 @@ Mitigation:
 
 Mitigation:
 
-- store allowed mint and recipient in the mandate;
+- store the allowed mint in the mandate and require one destination on every payment;
 - validate token accounts against mint and owner;
 - show recipient and mint clearly before user signs.
 

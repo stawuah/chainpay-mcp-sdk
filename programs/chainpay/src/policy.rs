@@ -42,10 +42,6 @@ pub fn validate_mandate_params(params: &MandateParams, current_slot: u64) -> Res
         ChainPayError::InvalidMint
     );
     require!(
-        params.allowed_recipient != Pubkey::default(),
-        ChainPayError::InvalidRecipient
-    );
-    require!(
         params.max_per_payment > 0,
         ChainPayError::InvalidPerPaymentLimit
     );
@@ -133,7 +129,6 @@ mod tests {
             approved_agent: Pubkey::new_unique(),
             source_token_account: Pubkey::new_unique(),
             allowed_mint: Pubkey::new_unique(),
-            allowed_recipient: Pubkey::new_unique(),
             max_per_payment: 25,
             total_limit: 100,
             expires_at_slot: 101,
@@ -149,7 +144,7 @@ mod tests {
             approved_agent: params.approved_agent,
             source_token_account: params.source_token_account,
             allowed_mint: params.allowed_mint,
-            allowed_recipient: params.allowed_recipient,
+            legacy_allowed_recipient: Pubkey::default(),
             max_per_payment: params.max_per_payment,
             total_limit: params.total_limit,
             amount_spent: 0,

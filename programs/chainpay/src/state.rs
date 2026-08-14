@@ -31,7 +31,9 @@ pub struct PaymentMandate {
     pub approved_agent: Pubkey,
     pub source_token_account: Pubkey,
     pub allowed_mint: Pubkey,
-    pub allowed_recipient: Pubkey,
+    /// Reserved for compatibility with mandates created before dynamic
+    /// recipients. New mandates leave this as Pubkey::default().
+    pub legacy_allowed_recipient: Pubkey,
     pub max_per_payment: u64,
     pub total_limit: u64,
     pub amount_spent: u64,

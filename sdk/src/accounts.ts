@@ -43,7 +43,7 @@ function mandateStatus(
 export function decodeProtocolConfig(data: Uint8Array | Buffer, configAddress?: Address) {
   const bytes = accountBytes(data);
   assertDiscriminator(bytes, ACCOUNT_DISCRIMINATORS.protocolConfig, "ProtocolConfig");
-  requireLength(bytes, 145, "ProtocolConfig");
+  requireLength(bytes, 137, "ProtocolConfig");
   const supportedMints = [
     readPublicKey(bytes, 40),
     readPublicKey(bytes, 72),
@@ -90,6 +90,7 @@ export function decodeMandate(
   const lastPaymentSlot = readU64(bytes, 224);
   const paused = readU8(bytes, 232) !== 0;
   const revoked = readU8(bytes, 233) !== 0;
+  const legacyAllowedRecipient = readPublicKey(bytes, 136);
 
   return {
     address: address(mandateAddress),
@@ -97,7 +98,7 @@ export function decodeMandate(
     approvedAgent: readPublicKey(bytes, 40),
     sourceTokenAccount: readPublicKey(bytes, 72),
     allowedMint: readPublicKey(bytes, 104),
-    allowedRecipient: readPublicKey(bytes, 136),
+    legacyAllowedRecipient: legacyAllowedRecipient === DEFAULT_ADDRESS ? undefined : legacyAllowedRecipient,
     maxPerPayment: readU64(bytes, 168),
     totalLimit: readU64(bytes, 176),
     amountSpent: readU64(bytes, 184),

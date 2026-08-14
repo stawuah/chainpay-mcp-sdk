@@ -34,7 +34,6 @@ pub struct MandateCreated {
     pub owner: Pubkey,
     pub approved_agent: Pubkey,
     pub allowed_mint: Pubkey,
-    pub allowed_recipient: Pubkey,
     pub expires_at_slot: u64,
     pub max_payment_count: u64,
     pub cooldown_slots: u64,
@@ -59,7 +58,6 @@ pub struct MandateUpdated {
     pub mandate: Pubkey,
     pub owner: Pubkey,
     pub approved_agent: Pubkey,
-    pub allowed_recipient: Pubkey,
     pub max_per_payment: u64,
     pub total_limit: u64,
     pub expires_at_slot: u64,
@@ -162,7 +160,7 @@ pub mod chainpay {
         mandate.approved_agent = params.approved_agent;
         mandate.source_token_account = params.source_token_account;
         mandate.allowed_mint = params.allowed_mint;
-        mandate.allowed_recipient = params.allowed_recipient;
+        mandate.legacy_allowed_recipient = Pubkey::default();
         mandate.max_per_payment = params.max_per_payment;
         mandate.total_limit = params.total_limit;
         mandate.amount_spent = 0;
@@ -180,7 +178,6 @@ pub mod chainpay {
             owner: mandate.owner,
             approved_agent: mandate.approved_agent,
             allowed_mint: mandate.allowed_mint,
-            allowed_recipient: mandate.allowed_recipient,
             expires_at_slot: mandate.expires_at_slot,
             max_payment_count: mandate.max_payment_count,
             cooldown_slots: mandate.cooldown_slots,
@@ -197,10 +194,6 @@ pub mod chainpay {
         require!(
             params.approved_agent != Pubkey::default(),
             errors::ChainPayError::InvalidAgent
-        );
-        require!(
-            params.allowed_recipient != Pubkey::default(),
-            errors::ChainPayError::InvalidRecipient
         );
         require!(
             params.max_per_payment > 0,
@@ -221,7 +214,6 @@ pub mod chainpay {
         );
 
         mandate.approved_agent = params.approved_agent;
-        mandate.allowed_recipient = params.allowed_recipient;
         mandate.max_per_payment = params.max_per_payment;
         mandate.total_limit = params.total_limit;
         mandate.expires_at_slot = params.expires_at_slot;
@@ -233,7 +225,6 @@ pub mod chainpay {
             mandate: mandate.key(),
             owner: mandate.owner,
             approved_agent: mandate.approved_agent,
-            allowed_recipient: mandate.allowed_recipient,
             max_per_payment: mandate.max_per_payment,
             total_limit: mandate.total_limit,
             expires_at_slot: mandate.expires_at_slot,
@@ -274,7 +265,10 @@ pub mod chainpay {
         Ok(())
     }
 
-    pub fn execute_payment(ctx: Context<ExecutePayment>, params: PaymentParams) -> Result<()> {
+    pub fn execute_payment<'info>(
+        ctx: Context<'info, ExecutePayment<'info>>,
+        params: PaymentParams,
+    ) -> Result<()> {
         let current_slot = Clock::get()?.slot;
         validate_payment(&ctx.accounts.mandate, &params, current_slot)?;
 
@@ -306,7 +300,8 @@ pub mod chainpay {
             ctx.accounts.token_program.key(),
             transfer_accounts,
             &signer_seed_set,
-        );
+        )
+        .with_remaining_accounts(ctx.remaining_accounts.to_vec());
         token_interface::transfer_checked(
             transfer_context,
             params.amount,
@@ -324,7 +319,7 @@ pub mod chainpay {
         receipt.payment_id = params.payment_id;
         receipt.mint = mandate.allowed_mint;
         receipt.source_token_account = mandate.source_token_account;
-        receipt.recipient_token_account = mandate.allowed_recipient;
+        receipt.recipient_token_account = ctx.accounts.recipient_token_account.key();
         receipt.amount = params.amount;
         receipt.agent = ctx.accounts.agent.key();
         receipt.executed_at_slot = current_slot;

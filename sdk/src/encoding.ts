@@ -86,7 +86,7 @@ export function meta(value: Address, isWritable = false, isSigner = false): Acco
 
 export function tokenProgramAddress(tokenProgram: TokenProgram): Address {
   return tokenProgram === "token-2022"
-    ? "TokenzQdBNbLqP5VEhdkAS6EPFjMs2U4u7H5R9XRQY"
+    ? "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
     : "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 }
 
@@ -110,7 +110,6 @@ export function encodeCreateMandate(params: {
   approvedAgent: Address;
   sourceTokenAccount: Address;
   allowedMint: Address;
-  allowedRecipient: Address;
   maxPerPayment: bigint;
   totalLimit: bigint;
   expiresAtSlot: bigint;
@@ -122,12 +121,21 @@ export function encodeCreateMandate(params: {
     publicKey(params.approvedAgent).toBytes(),
     publicKey(params.sourceTokenAccount).toBytes(),
     publicKey(params.allowedMint).toBytes(),
-    publicKey(params.allowedRecipient).toBytes(),
     writeU64(params.maxPerPayment, "maxPerPayment"),
     writeU64(params.totalLimit, "totalLimit"),
     writeU64(params.expiresAtSlot, "expiresAtSlot"),
     writeU64(params.maxPaymentCount, "maxPaymentCount"),
     writeU64(params.cooldownSlots, "cooldownSlots"),
+  );
+}
+
+export function encodeInitializeConfig(supportedMints: readonly Address[]): Uint8Array {
+  if (supportedMints.length !== 3) {
+    throw new Error("initialize_config requires exactly three mint slots");
+  }
+  return concat(
+    DISCRIMINATORS.initializeConfig,
+    ...supportedMints.map((mint) => publicKey(mint).toBytes()),
   );
 }
 
@@ -141,7 +149,6 @@ export function encodeSetAssetStatus(enabled: boolean): Uint8Array {
 
 export function encodeUpdateMandate(params: {
   approvedAgent: Address;
-  allowedRecipient: Address;
   maxPerPayment: bigint;
   totalLimit: bigint;
   expiresAtSlot: bigint;
@@ -152,7 +159,6 @@ export function encodeUpdateMandate(params: {
   return concat(
     DISCRIMINATORS.updateMandate,
     publicKey(params.approvedAgent).toBytes(),
-    publicKey(params.allowedRecipient).toBytes(),
     writeU64(params.maxPerPayment, "maxPerPayment"),
     writeU64(params.totalLimit, "totalLimit"),
     writeU64(params.expiresAtSlot, "expiresAtSlot"),

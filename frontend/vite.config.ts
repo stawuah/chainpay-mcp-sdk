@@ -6,13 +6,15 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // Local development fallback. Deployed builds use the Render URLs from
+      // frontend/.env.example or the production defaults in App.tsx.
       "/api": {
-        target: "http://127.0.0.1:8080",
+        target: "https://chainpay-backend.onrender.com",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
       "/rpc": {
-        target: "http://127.0.0.1:8080",
+        target: "https://chainpay-backend.onrender.com",
         changeOrigin: true,
       },
     },

@@ -74,11 +74,11 @@ const USE_CASES: UseCase[] = [
   {
     title: "AI payroll agent",
     scenario: "It is Friday. Pay 120 employees.",
-    summary: "The payroll agent creates the payment batch, while ChainPay enforces the payroll wallet, approved recipient list, batch limits, and required approval workflow.",
+    summary: "The payroll agent creates the payment batch, while ChainPay enforces the payroll wallet, supplied destinations, batch limits, and required approval workflow.",
     outcome: "A controlled batch settlement with receipts that payroll can reconcile per employee.",
     steps: [
       { from: "Agent", to: "ChainPay MCP", message: "Send payroll batch and payroll mandate." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check recipients, daily cap, batch cap, and approvals." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check supplied destinations, daily cap, batch cap, and approvals." },
       { from: "Policy", to: "Wallet", message: "Request owner approval for the valid batch." },
       { from: "Wallet", to: "Solana", message: "Sign transfers through the selected token program." },
       { from: "Solana", to: "Agent", message: "Return per-payment receipts and finality." },
@@ -92,7 +92,7 @@ const USE_CASES: UseCase[] = [
     steps: [
       { from: "Machine", to: "ChainPay MCP", message: "Request payment for charging, parking, toll, or access." },
       { from: "ChainPay MCP", to: "Service", message: "Resolve the destination and payment demand." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check mandate, asset, amount, and recipient." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check mandate, asset, amount, and supplied destination." },
       { from: "Wallet", to: "Solana", message: "Approve and settle the machine-service payment." },
       { from: "Solana", to: "Machine", message: "Return receipt and service confirmation." },
     ],
@@ -165,11 +165,11 @@ const USE_CASES: UseCase[] = [
   {
     title: "Cross-border freelancer platform",
     scenario: "A client approves a worldwide freelancer payout.",
-    summary: "The platform’s agent prepares payouts worldwide through ChainPay, keeping limits, recipient rules, token choice, and receipts consistent across the platform.",
+    summary: "The platform’s agent prepares payouts worldwide through ChainPay, keeping limits, supplied destinations, token choice, and receipts consistent across the platform.",
     outcome: "A payout record with recipient-level settlement proof.",
     steps: [
       { from: "Platform AI", to: "ChainPay MCP", message: "Submit approved freelancer payout instructions." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check recipient, corridor, asset, and payout limits." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check supplied destination, corridor, asset, and payout limits." },
       { from: "ChainPay MCP", to: "Connector", message: "Resolve payout routing and merchant metadata." },
       { from: "Wallet", to: "Solana", message: "Sign the stablecoin payout settlement." },
       { from: "Solana", to: "Platform AI", message: "Return receipts for the payout ledger." },
@@ -763,7 +763,7 @@ export function renderDocsHtml(): string {
             <div class="flow connector-flow">
               <div class="flow-step"><strong>01</strong><h3>Challenge</h3><p>A paid resource returns an x402 exact challenge with asset, recipient, amount, nonce, resource, and optional expiry.</p></div>
               <div class="flow-step"><strong>02</strong><h3>Normalize</h3><p><code>prepare_x402_payment</code> accepts Solana Devnet and the exact scheme, then derives deterministic payment references.</p></div>
-              <div class="flow-step"><strong>03</strong><h3>Preflight</h3><p>ChainPay checks the mandate, mint, token program, recipient, limits, expiry, and available policy authority.</p></div>
+              <div class="flow-step"><strong>03</strong><h3>Preflight</h3><p>ChainPay checks the mandate, mint, token program, supplied recipient, limits, expiry, and available policy authority.</p></div>
               <div class="flow-step"><strong>04</strong><h3>Sign</h3><p>An external wallet or signer reviews the prepared transaction. MCP never receives a seed phrase or private key.</p></div>
               <div class="flow-step"><strong>05</strong><h3>Relay</h3><p>Pass the wallet-signed transaction back to the connector for idempotent Rust backend relay and receipt tracking.</p></div>
             </div>
@@ -774,17 +774,17 @@ export function renderDocsHtml(): string {
           </section>
 
           <section class="section" id="stablecoin-flow" aria-labelledby="stablecoin-title">
-            <div class="section-heading"><div><span class="section-index">04 · Stablecoin settlement</span><h2 id="stablecoin-title">One policy surface for every supported token rail.</h2><p>Stablecoin payments use the same mandate and receipt model whether the asset is classic SPL Token or Token-2022. The token program is explicit at every boundary.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">04 · Stablecoin settlement</span><h2 id="stablecoin-title">One policy surface for every supported token rail.</h2><p>Stablecoin payments use the same mandate and receipt model whether the asset is classic SPL Token or Token-2022. A mandate limits the agent, mint, amount, and time; each payment supplies one recipient and settles only to that destination.</p></div></div>
             <div class="flow settlement-flow">
               <div class="flow-step"><strong>01</strong><h3>Choose the rail</h3><p>Set the stablecoin mint and choose <code>spl-token</code> or <code>token-2022</code>.</p></div>
-              <div class="flow-step"><strong>02</strong><h3>Set the boundary</h3><p>Bind source and recipient token accounts, approved agent, per-payment and total limits.</p></div>
+              <div class="flow-step"><strong>02</strong><h3>Set the boundary</h3><p>Bind the source account, approved agent, per-payment and total limits. The recipient is supplied with each payment request.</p></div>
               <div class="flow-step"><strong>03</strong><h3>Quote in base units</h3><p>Use <code>quote_payment</code> or <code>prepare_payment</code> before any signature is requested.</p></div>
-              <div class="flow-step"><strong>04</strong><h3>Transfer on Solana</h3><p>The program enforces the mandate and transfers through the selected token program.</p></div>
+              <div class="flow-step"><strong>04</strong><h3>Transfer on Solana</h3><p>The program enforces the mandate and transfers through the selected token program. Token-2022 extension accounts can be forwarded when the mint requires them.</p></div>
               <div class="flow-step"><strong>05</strong><h3>Reconcile</h3><p>Read the receipt PDA and backend status to give the agent and merchant durable proof.</p></div>
             </div>
             <div class="rail-grid">
               <div class="rail-card"><span class="rail-icon">$</span><div><h3>Classic SPL Token</h3><p>For standard SPL stablecoins and tokens. Every mint and token account must belong to the classic Token program.</p></div><code>spl-token</code></div>
-              <div class="rail-card"><span class="rail-icon">◈</span><div><h3>Token-2022</h3><p>For Token-2022 mints and accounts. The program identity remains explicit so accounts cannot be mixed accidentally.</p></div><code>token-2022</code></div>
+              <div class="rail-card"><span class="rail-icon">◈</span><div><h3>Token-2022</h3><p>For any registered Token-2022 mint and its accounts. Transfer-hook accounts can be supplied as <code>remainingAccounts</code>; confidential transfers need a separate flow.</p></div><code>token-2022</code></div>
             </div>
           </section>
 
@@ -797,7 +797,7 @@ export function renderDocsHtml(): string {
             <div class="section-heading"><div><span class="section-index">06 · Policy firewall</span><h2 id="firewall-title">Make the mandate the firewall.</h2><p>ChainPay turns an owner-approved mandate into a narrow spending boundary enforced by the on-chain program.</p></div></div>
             <div class="cards">
               <article class="info-card"><div class="card-icon">◇</div><h3>Who can spend</h3><p>Bind the mandate to one approved agent public key. Owner updates, pauses, and revocation remain wallet-signed actions.</p><a href="#tool-create-mandate">create_mandate →</a></article>
-              <article class="info-card"><div class="card-icon">⌁</div><h3>Where funds can go</h3><p>Lock the allowed mint and recipient token account. A request outside the configured destination is rejected during preflight and on-chain execution.</p><a href="#tool-prepare-payment">prepare_payment →</a></article>
+              <article class="info-card"><div class="card-icon">⌁</div><h3>Where funds can go</h3><p>Lock the allowed mint and require every payment request to provide one destination. The transfer settles only to the supplied recipient.</p><a href="#tool-prepare-payment">prepare_payment →</a></article>
               <article class="info-card"><div class="card-icon">↗</div><h3>How much, how often</h3><p>Set per-payment and total limits, expiry, payment count, and cooldown slots to make agent spending predictable.</p><a href="#tool-update-mandate">update_mandate →</a></article>
             </div>
           </section>
@@ -806,7 +806,7 @@ export function renderDocsHtml(): string {
             <div class="section-heading"><div><span class="section-index">07 · Assets and token programs</span><h2 id="assets-title">SPL-compatible by design.</h2><p>ChainPay supports classic SPL Token and Token-2022 settlement, with explicit program selection so an agent cannot accidentally mix account types.</p></div></div>
             <div class="split">
               <div class="info-card"><div class="card-icon">◎</div><h3>Classic SPL Token</h3><p>Set <code>tokenProgram</code> to <code>spl-token</code>. The mint, source account, and destination account must belong to the classic Token program.</p><a href="#tool-get-asset">Inspect an asset →</a></div>
-              <div class="info-card"><div class="card-icon">✦</div><h3>Token-2022</h3><p>Set <code>tokenProgram</code> to <code>token-2022</code>. Keep the same program identity across the mint and every token account in the payment.</p><a href="#tool-get-protocol-config">Read protocol config →</a></div>
+              <div class="info-card"><div class="card-icon">✦</div><h3>Token-2022</h3><p>Register any Token-2022 mint, then keep its program identity across the mint and every token account. Supply extension accounts through <code>remainingAccounts</code> when required.</p><a href="#tool-get-protocol-config">Read protocol config →</a></div>
             </div>
             <div class="callout" style="margin-top: 16px"><strong>Important:</strong> token amounts are passed as unsigned base units. The protocol validates the configured mint and token program before a payment can settle.</div>
           </section>

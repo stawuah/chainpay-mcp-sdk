@@ -9,6 +9,7 @@ import { DEFAULT_PROGRAM_ID } from "./constants.js";
 import {
   encodeApproveChecked,
   encodeCreateMandate,
+  encodeInitializeConfig,
   encodePauseMandate,
   encodeRevokeDelegate,
   encodeRevokeMandate,
@@ -28,7 +29,6 @@ export type CreateMandateInput = {
   approvedAgent: Address;
   sourceTokenAccount: Address;
   allowedMint: Address;
-  allowedRecipient: Address;
   maxPerPayment: bigint;
   totalLimit: bigint;
   expiresAtSlot: bigint;
@@ -40,14 +40,12 @@ export type CreateMandateInput = {
 
 export type UpdateMandateInput = {
   approvedAgent: Address;
-  allowedRecipient: Address;
   maxPerPayment: bigint;
   totalLimit: bigint;
   expiresAtSlot: bigint;
   maxPaymentCount: bigint;
   cooldownSlots: bigint;
   paused: boolean;
-  tokenProgram: TokenProgram;
 };
 
 export type RegisterAssetInput = {
@@ -55,11 +53,32 @@ export type RegisterAssetInput = {
   tokenProgram: TokenProgram;
 };
 
+export function buildInitializeConfigInstruction(
+  supportedMints: readonly Address[],
+  authority: Address,
+  programId: Address = DEFAULT_PROGRAM_ID,
+): ChainPayInstruction {
+  if (supportedMints.length !== 3) {
+    throw new Error("initialize_config requires exactly three mint slots");
+  }
+  publicKey(authority);
+  supportedMints.forEach((mint) => publicKey(mint));
+  return instruction(
+    "initialize_config",
+    programId,
+    [
+      meta(deriveConfigAddress(programId), true),
+      meta(authority, true, true),
+      systemProgramMeta(),
+    ],
+    encodeInitializeConfig(supportedMints),
+  );
+}
+
 export function validateMandateInput(input: CreateMandateInput): void {
   publicKey(input.approvedAgent);
   publicKey(input.sourceTokenAccount);
   publicKey(input.allowedMint);
-  publicKey(input.allowedRecipient);
   writeU64(input.maxPerPayment, "maxPerPayment");
   writeU64(input.totalLimit, "totalLimit");
   writeU64(input.expiresAtSlot, "expiresAtSlot");
@@ -101,7 +120,6 @@ export function buildCreateMandateInstruction(
       meta(owner, true, true),
       meta(input.allowedMint),
       meta(input.sourceTokenAccount),
-      meta(input.allowedRecipient),
       meta(tokenProgram),
       systemProgramMeta(),
     ],
@@ -227,7 +245,6 @@ export function buildUpdateMandateInstruction(
 ): ChainPayInstruction {
   publicKey(owner);
   publicKey(input.approvedAgent);
-  publicKey(input.allowedRecipient);
   writeU64(input.maxPerPayment, "maxPerPayment");
   writeU64(input.totalLimit, "totalLimit");
   writeU64(input.expiresAtSlot, "expiresAtSlot");
@@ -242,8 +259,6 @@ export function buildUpdateMandateInstruction(
     [
       meta(deriveMandateAddress(owner, programId), true),
       meta(owner, false, true),
-      meta(input.allowedRecipient),
-      meta(tokenProgramAddress(input.tokenProgram)),
     ],
     encodeUpdateMandate(input),
   );

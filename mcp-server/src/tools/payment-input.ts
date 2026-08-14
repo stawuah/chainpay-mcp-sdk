@@ -1,4 +1,4 @@
-import type { PreparePaymentInput } from "@chainpay/sdk";
+import type { AccountMeta, PreparePaymentInput } from "@chainpay/sdk";
 import {
   hex32,
   requiredString,
@@ -22,6 +22,7 @@ export function parsePaymentInput(args: Record<string, unknown>): {
     tokenProgram: args.tokenProgram === undefined
       ? undefined
       : tokenProgram(args.tokenProgram),
+    remainingAccounts: parseRemainingAccounts(args.remainingAccounts),
   };
 
   return {
@@ -30,10 +31,28 @@ export function parsePaymentInput(args: Record<string, unknown>): {
   };
 }
 
+export function parseRemainingAccounts(value: unknown): AccountMeta[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error("remainingAccounts must be an array");
+  return value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`remainingAccounts[${index}] must be an object`);
+    }
+    const account = item as Record<string, unknown>;
+    if (typeof account.isSigner !== "boolean" || typeof account.isWritable !== "boolean") {
+      throw new Error(`remainingAccounts[${index}] must declare boolean isSigner and isWritable fields`);
+    }
+    return {
+      address: solanaAddress(account.address, `remainingAccounts[${index}].address`),
+      isSigner: account.isSigner,
+      isWritable: account.isWritable,
+    };
+  });
+}
+
 export function requireObject(args: unknown): Record<string, unknown> {
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     throw new Error("Tool arguments must be an object");
   }
   return args as Record<string, unknown>;
 }
-

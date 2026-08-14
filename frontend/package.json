@@ -10,6 +10,10 @@
   },
   "dependencies": {
     "@chainpay/sdk": "file:../sdk",
+    "@solana/wallet-standard-features": "^1.4.0",
+    "@wallet-standard/app": "^1.1.1",
+    "@wallet-standard/base": "^1.1.1",
+    "@wallet-standard/features": "^1.1.1",
     "buffer": "^6.0.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

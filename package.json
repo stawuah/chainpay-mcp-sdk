@@ -15,6 +15,7 @@
     "dev:app": "npm --prefix app run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "build:frontend": "npm --prefix frontend run build",
+    "bootstrap:devnet": "npm --prefix sdk run build && node scripts/bootstrap-devnet.mjs",
     "check": "npm run check:sdk && npm run check:mcp && npm run check:app && npm run check:frontend"
   },
   "dependencies": {
