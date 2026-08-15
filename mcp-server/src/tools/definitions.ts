@@ -1,5 +1,31 @@
 export const TOOL_DEFINITIONS = [
   {
+    name: "list_mandates",
+    description: "Discover all ChainPay mandates owned by a wallet and report their live status, limits, and token-account delegation.",
+    inputSchema: {
+      type: "object",
+      properties: { owner: { type: "string", description: "Connected wallet or mandate owner public key" } },
+      required: ["owner"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "find_compatible_mandate",
+    description: "Find an active mandate compatible with an invoice mint, amount, token program, and optional approved agent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: { type: "string" },
+        mint: { type: "string" },
+        amount: { type: "string", description: "Unsigned token amount in base units" },
+        tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+        agent: { type: "string" },
+      },
+      required: ["owner", "mint", "amount"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_mandate",
     description: "Read an on-chain ChainPay payment mandate and its current status.",
     inputSchema: {
@@ -21,6 +47,37 @@ export const TOOL_DEFINITIONS = [
       type: "object",
       properties: { mint: { type: "string" } },
       required: ["mint"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "quote_payment_request",
+    description: "Verify a merchant-signed request, derive deterministic payment references, and quote it against a mandate without signing or submitting.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request: { type: "object", description: "Signed payment request with payload and base64 Ed25519 signature" },
+        mandate: { type: "string", description: "Mandate PDA to check" },
+        agent: { type: "string", description: "Approved agent public key" },
+      },
+      required: ["request", "mandate", "agent"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_demo_payment_request",
+    description: "Create a valid, merchant-signed Devnet demo payment request using a real token account.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invoice: { type: "string", description: "Optional invoice reference" },
+        description: { type: "string", description: "Optional human-readable purchase description" },
+        mint: { type: "string", description: "Optional Devnet token mint" },
+        recipient: { type: "string", description: "Optional recipient token account" },
+        amount: { type: "string", description: "Optional amount in base units" },
+        tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+        resource: { type: "string", description: "Optional merchant resource reference" },
+      },
       additionalProperties: false,
     },
   },

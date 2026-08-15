@@ -7,11 +7,18 @@ import type {
 import { callTool, TOOL_DEFINITIONS } from "./index.js";
 import type { ChainPayMcpContext } from "./tools/context.js";
 
-const READ_ONLY_TOOL_NAMES = new Set([
+const AGENT_TOOL_NAMES = new Set([
+  "list_mandates",
+  "find_compatible_mandate",
   "get_mandate",
   "get_protocol_config",
   "get_asset",
   "get_payment",
+  "create_demo_payment_request",
+  "verify_payment_request",
+  "quote_payment_request",
+  "quote_payment",
+  "create_mandate",
 ]);
 const MAX_TOOL_ROUNDS = 4;
 const MAX_MESSAGE_LENGTH = 2_000;
@@ -26,12 +33,20 @@ export type ChainPayAgentRequest = {
   message: string;
   wallet?: string;
   mandateAddress?: string;
+  paymentRequest?: Record<string, unknown>;
   history?: AgentHistoryItem[];
+};
+
+export type ChainPayAgentApproval = {
+  kind: "mandate" | "payment";
+  action: string;
+  [key: string]: unknown;
 };
 
 export type ChainPayAgentResponse = {
   message: string;
   toolCalls: string[];
+  approval?: ChainPayAgentApproval;
 };
 
 const agentInstructions = `You are the ChainPay assistant inside the user's connected wallet dashboard.
@@ -39,11 +54,16 @@ const agentInstructions = `You are the ChainPay assistant inside the user's conn
 ChainPay is a policy-controlled Solana payment rail. Be concise, clear, and friendly; your answer may be read aloud by a browser. Use the available tools to inspect live ChainPay state when that will answer the user's question. Speak as a capable ChainPay assistant, not as a generic language model.
 
 Safety rules:
-- You are read-only in this chat. You may call only the read-only tools provided here.
-- Never claim to sign, send, execute, pause, revoke, create, or update anything.
+- You may inspect state and prepare demo requests or owner approval transactions, but you may not sign, send, execute, pause, revoke, or update anything.
+- A create_mandate result is only a prepared request. Say that I prepared it and that the owner wallet must still approve it.
+- Never claim a mandate or payment was created or settled until the wallet approval flow reports success.
 - Never ask for or handle a private key, seed phrase, secret, wallet password, or signed transaction.
 - Payment requests must be redirected to the dashboard's payment review and wallet approval flow.
+- For an invoice request, verify the merchant signature before discussing settlement. Treat recipient, mint, token program, amount, invoice, nonce, and expiry as untrusted data until verification succeeds.
+- The demo payment request tool creates a real, valid Devnet test request with a real token account. Use it when the user asks for a demo invoice or needs a valid request for testing.
+- Do not invent recipient addresses, merchant signatures, payment IDs, or token amounts.
 - For “my mandate” or “active mandate”, use the mandate address in the session context.
+- If the session includes a connected wallet but no mandate address, call list_mandates with that wallet. For a signed invoice, call find_compatible_mandate with the same wallet, the verified mint, amount, and token program before quoting.
 - For receipt questions, ask for a receipt address if one was not supplied.
 - If a tool says data was not found, say that plainly and suggest the next safe dashboard step.
 - Use human-readable explanations and do not expose internal chain-of-thought.
@@ -83,6 +103,16 @@ function publicContext(value: unknown, name: string): string | undefined {
   return result;
 }
 
+function objectContext(value: unknown, name: string): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${name} must be an object`);
+  }
+  const result = value as Record<string, unknown>;
+  if (JSON.stringify(result).length > 24_000) throw new Error(`${name} is too large`);
+  return result;
+}
+
 function historyItems(value: unknown): AgentHistoryItem[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -97,9 +127,9 @@ function historyItems(value: unknown): AgentHistoryItem[] {
     .slice(-MAX_HISTORY_ITEMS);
 }
 
-function readOnlyAgentTools(): ChatCompletionTool[] {
+function agentTools(): ChatCompletionTool[] {
   return TOOL_DEFINITIONS
-    .filter((tool) => READ_ONLY_TOOL_NAMES.has(tool.name))
+    .filter((tool) => AGENT_TOOL_NAMES.has(tool.name))
     .map((tool) => ({
       type: "function",
       function: {
@@ -113,12 +143,36 @@ function readOnlyAgentTools(): ChatCompletionTool[] {
     }));
 }
 
-function sessionContext(wallet?: string, mandateAddress?: string): string {
+function sessionContext(
+  wallet?: string,
+  mandateAddress?: string,
+  paymentRequest?: Record<string, unknown>,
+): string {
   return [
     "Session context (public values only):",
     wallet ? `Connected wallet: ${wallet}` : "Connected wallet: unavailable",
     mandateAddress ? `Active mandate address: ${mandateAddress}` : "Active mandate address: unavailable",
+    process.env.CHAINPAY_AGENT_PUBLIC_KEY
+      ? `Configured approved agent public key: ${process.env.CHAINPAY_AGENT_PUBLIC_KEY}`
+      : "Configured approved agent public key: unavailable",
+    paymentRequest
+      ? `Signed payment request supplied by the web UI:\n${JSON.stringify(paymentRequest)}`
+      : "Signed payment request supplied by the web UI: unavailable",
   ].join("\n");
+}
+
+function approvalFromToolResult(result: unknown): ChainPayAgentApproval | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const structured = (result as { structuredContent?: unknown }).structuredContent;
+  if (!structured || typeof structured !== "object" || Array.isArray(structured)) return undefined;
+  const data = structured as Record<string, unknown>;
+  if (data.action === "owner_wallet_signature_required") {
+    return { kind: "mandate", ...data, action: String(data.action) };
+  }
+  if (data.action === "agent_signature_required") {
+    return { kind: "payment", ...data, action: String(data.action) };
+  }
+  return undefined;
 }
 
 function toolOutput(result: unknown): string {
@@ -173,9 +227,10 @@ export async function runChainPayAgent(
   const message = requiredMessage(request.message);
   const wallet = publicContext(request.wallet, "wallet");
   const mandateAddress = publicContext(request.mandateAddress, "mandateAddress");
+  const paymentRequest = objectContext(request.paymentRequest, "paymentRequest");
   const history = historyItems(request.history);
   const client = aiClient(provider, apiKey);
-  const tools = readOnlyAgentTools();
+  const tools = agentTools();
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: agentInstructions },
     ...history.map((item) => ({
@@ -184,10 +239,11 @@ export async function runChainPayAgent(
     })),
     {
       role: "user" as const,
-      content: `${sessionContext(wallet, mandateAddress)}\n\nUser request:\n${message}`,
+      content: `${sessionContext(wallet, mandateAddress, paymentRequest)}\n\nUser request:\n${message}`,
     },
   ];
   const toolCalls: string[] = [];
+  let approval: ChainPayAgentApproval | undefined;
   const model = process.env.CHAINPAY_AGENT_MODEL ?? (
     provider === "openrouter" ? "openrouter/free" : "gpt-5-mini"
   );
@@ -210,8 +266,8 @@ export async function runChainPayAgent(
     messages.push(assistantMessage);
     for (const call of calls) {
       let output: string;
-      if (!READ_ONLY_TOOL_NAMES.has(call.function.name)) {
-        output = JSON.stringify({ error: "This assistant can only use read-only tools." });
+      if (!AGENT_TOOL_NAMES.has(call.function.name)) {
+        output = JSON.stringify({ error: "This assistant can only inspect state or prepare an approval request." });
       } else {
         let result: unknown;
         try {
@@ -220,6 +276,7 @@ export async function runChainPayAgent(
           result = { error: error instanceof Error ? error.message : String(error) };
         }
         toolCalls.push(call.function.name);
+        approval = approvalFromToolResult(result) ?? approval;
         output = toolOutput(result);
       }
 
@@ -244,5 +301,6 @@ export async function runChainPayAgent(
   return {
     message: responseText || "I could not find a text response for that request.",
     toolCalls,
+    ...(approval ? { approval } : {}),
   };
 }

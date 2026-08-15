@@ -318,6 +318,7 @@ export function createHttpServer(
           message: body.message ?? "",
           wallet: body.wallet,
           mandateAddress: body.mandateAddress,
+          paymentRequest: body.paymentRequest,
           history: body.history,
         });
         writeJson(res, 200, result, headers);
