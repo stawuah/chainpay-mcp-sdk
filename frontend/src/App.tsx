@@ -53,6 +53,8 @@ const MCP_URL = import.meta.env.VITE_CHAINPAY_MCP_URL ?? "https://chainpay-mcp.o
 const AGENT_URL = import.meta.env.VITE_CHAINPAY_AGENT_URL
   ?? `${MCP_URL.replace(/\/mcp\/?$/, "")}/agent/chat`;
 const chainpayClient = new ChainPayClient({ rpcUrl: RPC_URL, programId: PROGRAM_ID });
+const MAX_MANDATES_VISIBLE = 50;
+const MAX_PAYMENT_MANDATES = 5;
 type StablecoinOption = {
   value: "usdc" | "token-2022";
   label: string;
@@ -381,6 +383,7 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedAction, setSelectedAction] = useState<Action>("Send");
   const [range, setRange] = useState<Range>("1D");
+  const [heroMessage, setHeroMessage] = useState<"rail" | "sign">("rail");
   const [mandateAddress, setMandateAddress] = useState("");
   const [mandate, setMandate] = useState<Mandate | null>(null);
   const [mandates, setMandates] = useState<Mandate[]>([]);
@@ -391,6 +394,14 @@ function App() {
   const [integrationStatus, setIntegrationStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [integrationError, setIntegrationError] = useState("");
   const wallet = walletConnection?.address ?? "";
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const interval = window.setInterval(() => {
+      setHeroMessage((current) => current === "rail" ? "sign" : "rail");
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   async function loadWalletState(owner: string, preferredMandateAddress?: string) {
     const legacyAddress = deriveMandateAddress(owner, PROGRAM_ID);
@@ -587,7 +598,7 @@ function App() {
         <section className="hero page-width">
           <div className="hero-copy">
             <div className="eyebrow"><span className="pulse-dot" /> Solana Devnet · MCP connected</div>
-            <h1>The universal payment rail for <em>AI agents.</em></h1>
+            <h1 className="hero-headline" aria-live="polite"><span key={heroMessage} className="hero-headline-transition">{heroMessage === "rail" ? <>The universal payment rail for <em>AI agents.</em></> : <>Sign once, <em>AI signs all.</em></>}</span></h1>
             <p className="hero-text">One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. Solana is the first settlement layer.</p>
             <div className="hero-actions">
               <button className="button button-primary" onClick={connectWallet}>
@@ -758,7 +769,7 @@ function Dashboard({
         ...current,
         { role: "user" as const, content: query },
         { role: "assistant" as const, content: nextReply },
-      ].slice(-8));
+      ].slice(-12));
     } catch (error) {
       // Keep the assistant useful while the server-side model is being configured.
       // This fallback is still read-only and makes the missing AI configuration visible.
@@ -1008,7 +1019,8 @@ function MandatesPanel({
   const [actionError, setActionError] = useState("");
   const [currentSlot, setCurrentSlot] = useState<bigint | null>(null);
   const [decimalsByMint, setDecimalsByMint] = useState<Record<string, number>>({});
-  const visibleMandates = mandates.filter((value) => filter === "all" || mandateTableStatus(value.status) === filter);
+  const filteredMandates = mandates.filter((value) => filter === "all" || mandateTableStatus(value.status) === filter);
+  const visibleMandates = filteredMandates.slice(0, MAX_MANDATES_VISIBLE);
 
   useEffect(() => {
     let active = true;
@@ -1076,6 +1088,10 @@ function MandatesPanel({
             {value[0].toUpperCase() + value.slice(1)}
           </button>
         ))}
+      </div>
+      <div className="mandate-list-meta" aria-live="polite">
+        <span>Showing {visibleMandates.length} of {filteredMandates.length} {filter === "all" ? "mandates" : `${filter} mandates`}</span>
+        {filteredMandates.length > visibleMandates.length && <span>Showing the first {MAX_MANDATES_VISIBLE}. Use the filters to narrow the list.</span>}
       </div>
 
       <div className="mandate-table-shell dashboard-card">
@@ -1159,10 +1175,20 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
   const [error, setError] = useState("");
   const [signature, setSignature] = useState("");
   const [receipt, setReceipt] = useState<PaymentReceipt | null>(null);
+  const allPaymentMandates = mandates.filter((candidate) => candidate.status === "active");
+  const paymentMandates = allPaymentMandates.slice(0, MAX_PAYMENT_MANDATES);
+  const selectedPaymentMandate = paymentMandates.find((candidate) => candidate.address === mandate?.address) ?? paymentMandates[0] ?? null;
+  const representedMints = new Set(allPaymentMandates.map((candidate) => candidate.allowedMint));
 
   useEffect(() => {
-    if (mandate) setAmount((current) => current || mandate.maxPerPayment.toString());
-  }, [mandate]);
+    if (selectedPaymentMandate && mandate?.address !== selectedPaymentMandate.address) {
+      onSelectMandate(selectedPaymentMandate);
+    }
+  }, [mandate?.address, onSelectMandate, selectedPaymentMandate?.address]);
+
+  useEffect(() => {
+    if (selectedPaymentMandate) setAmount((current) => current || selectedPaymentMandate.maxPerPayment.toString());
+  }, [selectedPaymentMandate]);
 
   useEffect(() => {
     setPrepared(null);
@@ -1171,22 +1197,22 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
     setSignature("");
     setReceipt(null);
     setError("");
-  }, [mandate?.address]);
+  }, [selectedPaymentMandate?.address]);
 
   useEffect(() => {
     let active = true;
     setMintDecimals(null);
-    if (!mandate) return () => { active = false; };
-    void chainpayClient.getMintDecimals(mandate.allowedMint).then((decimals) => {
+    if (!selectedPaymentMandate) return () => { active = false; };
+    void chainpayClient.getMintDecimals(selectedPaymentMandate.allowedMint).then((decimals) => {
       if (active) setMintDecimals(decimals);
     }).catch(() => {
       if (active) setMintDecimals(null);
     });
     return () => { active = false; };
-  }, [mandate?.allowedMint]);
+  }, [selectedPaymentMandate?.allowedMint]);
 
   async function prepare() {
-    if (!mandate) {
+    if (!selectedPaymentMandate) {
       setError("Create an active mandate before preparing a payment.");
       setStatus("error");
       return;
@@ -1206,11 +1232,11 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
       ]);
       if (mintDecimals === null) throw new Error("Token decimals are not available yet. Refresh the mandate and try again.");
       const rawAmount = parseTokenAmount(amount, mintDecimals);
-      const tokenProgram = mandate.tokenProgram ?? await chainpayClient.getTokenProgram(mandate.sourceTokenAccount);
+      const tokenProgram = selectedPaymentMandate.tokenProgram ?? await chainpayClient.getTokenProgram(selectedPaymentMandate.sourceTokenAccount);
       let sourceBalance: string;
       try {
         const balance = await chainpayClient.connection.getTokenAccountBalance(
-          new PublicKey(mandate.sourceTokenAccount),
+          new PublicKey(selectedPaymentMandate.sourceTokenAccount),
           "confirmed",
         );
         sourceBalance = balance.value.amount;
@@ -1225,14 +1251,14 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
         if (cause instanceof Error && /Payment wallet is ready/.test(cause.message)) throw cause;
         throw new Error("The payment wallet could not be read. Refresh the mandate and try again.");
       }
-      const destination = await resolvePaymentDestination(recipient, mandate.allowedMint, tokenProgram, wallet);
+      const destination = await resolvePaymentDestination(recipient, selectedPaymentMandate.allowedMint, tokenProgram, wallet);
       const mcpArgs: Record<string, unknown> = {
-        mandate: mandate.address,
+        mandate: selectedPaymentMandate.address,
         agent: wallet,
         invoiceHash,
         paymentId,
         signatureReference,
-        mint: mandate.allowedMint,
+        mint: selectedPaymentMandate.allowedMint,
         recipient: destination.address,
         amount: rawAmount.toString(),
         tokenProgram,
@@ -1241,11 +1267,11 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
       setMcpPreflight(toolText(mcpResult));
 
       const nextPrepared = await chainpayClient.preparePayment({
-        mandate: mandate.address,
+        mandate: selectedPaymentMandate.address,
         invoiceHash: hexToBytes(invoiceHash),
         paymentId: hexToBytes(paymentId),
         signatureReference: hexToBytes(signatureReference),
-        mint: mandate.allowedMint,
+        mint: selectedPaymentMandate.allowedMint,
         recipient: destination.address,
         amount: rawAmount,
         tokenProgram,
@@ -1318,14 +1344,11 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
   }
 
   function selectPaymentMandate(address: string) {
-    const nextMandate = mandates.find((candidate) => candidate.address === address);
+    const nextMandate = paymentMandates.find((candidate) => candidate.address === address);
     if (nextMandate?.status === "active") onSelectMandate(nextMandate);
   }
 
-  const paymentMandates = mandates.filter((candidate) => candidate.status !== "revoked");
-  const representedMints = new Set(paymentMandates.filter((candidate) => candidate.status === "active").map((candidate) => candidate.allowedMint));
-
-  if (!mandate) {
+  if (!selectedPaymentMandate) {
     return <div className="dashboard-card flow-empty"><div className="empty-icon">↗</div><h2>No active mandate yet</h2><p>Create a mandate first. Payments can only be prepared after ChainPay has an on-chain policy to check.</p></div>;
   }
 
@@ -1335,12 +1358,13 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
         <div className="dashboard-card-heading"><div><span className="section-kicker">MCP PAYMENT REQUEST</span><h2>Prepare a policy-checked payment</h2></div><span className="mcp-badge"><span /> MCP + SDK</span></div>
         <p className="builder-intro">The invoice text becomes three deterministic SHA-256 references. MCP checks the mandate first; the SDK then prepares and simulates the transaction your connected wallet can sign.</p>
         <div className="payment-mandate-picker">
-          <div className="payment-mandate-picker-heading"><div><span className="soft-label">AVAILABLE MANDATES</span><strong>Choose the policy the agent will use</strong></div><span className="payment-mandate-count">{paymentMandates.filter((candidate) => candidate.status === "active").length} active</span></div>
+          <div className="payment-mandate-picker-heading"><div><span className="soft-label">AVAILABLE MANDATES</span><strong>Choose the active policy the agent will use</strong></div><span className="payment-mandate-count">{paymentMandates.length}{allPaymentMandates.length > MAX_PAYMENT_MANDATES ? ` of ${allPaymentMandates.length}` : ""} active</span></div>
+          {allPaymentMandates.length > MAX_PAYMENT_MANDATES && <p className="payment-mandate-limit">Payments show the first {MAX_PAYMENT_MANDATES} active mandates. Manage all mandates from the Mandates page.</p>}
           <div className="payment-mandate-options">
             {paymentMandates.map((candidate) => {
               const option = stablecoinOptions.find((item) => item.mint === candidate.allowedMint);
-              const selected = candidate.address === mandate.address;
-              return <button type="button" className={`payment-mandate-option ${selected ? "is-selected" : ""}`} key={candidate.address} onClick={() => selectPaymentMandate(candidate.address)} disabled={candidate.status !== "active"}>
+              const selected = candidate.address === selectedPaymentMandate.address;
+              return <button type="button" className={`payment-mandate-option ${selected ? "is-selected" : ""}`} key={candidate.address} onClick={() => selectPaymentMandate(candidate.address)}>
                 <span className="payment-mandate-token">{option?.label ?? shortAddress(candidate.allowedMint)}<small>{option?.detail ?? (candidate.tokenProgram === "token-2022" ? "Token-2022" : "Classic SPL Token")}</small></span>
                 <span className="payment-mandate-details"><strong>{selected ? "Selected policy" : "Mandate policy"}</strong><small>Agent {shortAddress(candidate.approvedAgent)} · ID {shortAddress(candidate.address)}</small><small>{formatTokenAmount(candidate.maxPerPayment, mintDecimals)} per payment · {formatTokenAmount(candidate.totalLimit, mintDecimals)} total</small></span>
                 <span className={`payment-mandate-status ${candidate.status}`}><i />{candidate.status}</span>
@@ -1350,7 +1374,7 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
           </div>
         </div>
         <div className="builder-grid"><label className="field field-wide"><span>Invoice or payment reference</span><input value={invoice} onChange={(event) => { setInvoice(event.target.value); setPrepared(null); setSignature(""); }} placeholder="invoice-001" /></label><label className="field"><span>Amount <small>{mintDecimals === null ? "reading mint" : `${mintDecimals} decimals`}</small></span><input inputMode="decimal" value={amount} onChange={(event) => { setAmount(event.target.value); setPrepared(null); setSignature(""); }} placeholder="1.00" /></label><label className="field"><span>Agent signer</span><input value={wallet} readOnly /></label><label className="field field-wide"><span>Destination</span><input value={recipient} onChange={(event) => { setRecipient(event.target.value); setPrepared(null); setSignature(""); }} placeholder="Wallet or merchant address" /></label></div>
-        <div className="payment-policy-note"><Shield /><span>Policy limit: <b>{formatTokenAmount(mandate.maxPerPayment, mintDecimals)}</b> per payment · <b>{formatTokenAmount(mandate.totalLimit, mintDecimals)}</b> total · {mandate.status}</span></div>
+        <div className="payment-policy-note"><Shield /><span>Policy limit: <b>{formatTokenAmount(selectedPaymentMandate.maxPerPayment, mintDecimals)}</b> per payment · <b>{formatTokenAmount(selectedPaymentMandate.totalLimit, mintDecimals)}</b> total · {selectedPaymentMandate.status}</span></div>
         <div className="builder-actions"><button className="button button-primary" onClick={() => void prepare()} disabled={status === "preparing" || status === "signing"}>{status === "preparing" ? "Calling MCP & simulating…" : "Prepare payment"} <Arrow /></button><span className="builder-safety"><Shield /> Wallet approval required to settle</span></div>
         {error && <div className="builder-error"><b>Payment blocked</b><span>{error}</span></div>}
         {signature && prepared && <>
