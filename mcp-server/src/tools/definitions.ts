@@ -40,6 +40,7 @@ export const TOOL_DEFINITIONS = [
         expiresAtSlot: { type: "string" },
         maxPaymentCount: { type: "string", description: "Optional maximum number of payments; 0 means unlimited" },
         cooldownSlots: { type: "string", description: "Optional minimum slot gap between payments" },
+        mandateNonce: { type: "string", description: "Optional ChainPay-generated nonce; omit to create a fresh mandate identity" },
         tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
       },
       required: [

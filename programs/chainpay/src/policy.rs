@@ -1,7 +1,7 @@
 use crate::{
     errors::ChainPayError,
     instructions::{MandateParams, PaymentParams},
-    state::{PaymentMandate, ProtocolConfig},
+    state::{is_mandate_nonce, PaymentMandate, ProtocolConfig},
 };
 use anchor_lang::prelude::*;
 
@@ -32,6 +32,10 @@ pub fn validate_mandate_params(params: &MandateParams, current_slot: u64) -> Res
     require!(
         params.approved_agent != Pubkey::default(),
         ChainPayError::InvalidAgent
+    );
+    require!(
+        params.mandate_nonce != Pubkey::default() && is_mandate_nonce(&params.mandate_nonce),
+        ChainPayError::InvalidMandateNonce
     );
     require!(
         params.source_token_account != Pubkey::default(),
@@ -125,6 +129,9 @@ mod tests {
     use super::*;
 
     fn valid_mandate_params() -> MandateParams {
+        let mut mandate_nonce = [0u8; 32];
+        mandate_nonce[..8].copy_from_slice(b"CPNONCE!");
+        mandate_nonce[8] = 1;
         MandateParams {
             approved_agent: Pubkey::new_unique(),
             source_token_account: Pubkey::new_unique(),
@@ -134,6 +141,7 @@ mod tests {
             expires_at_slot: 101,
             max_payment_count: 0,
             cooldown_slots: 0,
+            mandate_nonce: Pubkey::new_from_array(mandate_nonce),
         }
     }
 

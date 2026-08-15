@@ -10,6 +10,7 @@ pub mod state;
 
 use instructions::*;
 use policy::{validate_mandate_params, validate_payment, validate_supported_mints};
+use state::is_mandate_nonce;
 
 pub const RECEIPT_STATUS_SETTLED: u8 = 1;
 
@@ -160,7 +161,9 @@ pub mod chainpay {
         mandate.approved_agent = params.approved_agent;
         mandate.source_token_account = params.source_token_account;
         mandate.allowed_mint = params.allowed_mint;
-        mandate.legacy_allowed_recipient = Pubkey::default();
+        // This field was reserved for legacy fixed recipients. New mandates
+        // use it to persist their nonce without changing account size.
+        mandate.legacy_allowed_recipient = params.mandate_nonce;
         mandate.max_per_payment = params.max_per_payment;
         mandate.total_limit = params.total_limit;
         mandate.amount_spent = 0;
@@ -275,6 +278,7 @@ pub mod chainpay {
         let mandate_key = ctx.accounts.mandate.key();
         let mandate_owner = ctx.accounts.mandate.owner;
         let mandate_mint = ctx.accounts.mandate.allowed_mint;
+        let mandate_nonce = ctx.accounts.mandate.legacy_allowed_recipient;
         let mandate_bump = ctx.accounts.mandate.bump;
         let new_amount_spent = ctx
             .accounts
@@ -290,20 +294,29 @@ pub mod chainpay {
             .ok_or(error!(errors::ChainPayError::TotalLimitExceeded))?;
 
         let bump_seed = [mandate_bump];
-        let legacy_signer_seeds: &[&[u8]] =
-            &[b"mandate", mandate_owner.as_ref(), &bump_seed];
+        let legacy_signer_seeds: &[&[u8]] = &[b"mandate", mandate_owner.as_ref(), &bump_seed];
         let mint_scoped_signer_seeds: &[&[u8]] = &[
             b"mandate",
             mandate_owner.as_ref(),
             mandate_mint.as_ref(),
             &bump_seed,
         ];
-        let signer_seeds = if Pubkey::create_program_address(
-            mint_scoped_signer_seeds,
-            &crate::ID,
-        )
-        .ok()
-        .is_some_and(|address| address == mandate_key)
+        let nonce_scoped_signer_seeds: &[&[u8]] = &[
+            b"mandate",
+            mandate_owner.as_ref(),
+            mandate_mint.as_ref(),
+            mandate_nonce.as_ref(),
+            &bump_seed,
+        ];
+        let signer_seeds = if is_mandate_nonce(&mandate_nonce)
+            && Pubkey::create_program_address(nonce_scoped_signer_seeds, &crate::ID)
+                .ok()
+                .is_some_and(|address| address == mandate_key)
+        {
+            nonce_scoped_signer_seeds
+        } else if Pubkey::create_program_address(mint_scoped_signer_seeds, &crate::ID)
+            .ok()
+            .is_some_and(|address| address == mandate_key)
         {
             mint_scoped_signer_seeds
         } else {

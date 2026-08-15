@@ -32,6 +32,7 @@ export const ACCOUNT_DISCRIMINATORS = {
 } as const;
 
 export const MANDATE_SEED = "mandate";
+export const MANDATE_NONCE_PREFIX = Uint8Array.from([67, 80, 78, 79, 78, 67, 69, 33]);
 export const CONFIG_SEED = "config";
 export const RECEIPT_SEED = "receipt";
 export const ASSET_SEED = "asset";

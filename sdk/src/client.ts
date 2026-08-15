@@ -91,6 +91,28 @@ export class ChainPayClient {
     return { ...decoded, tokenProgram };
   }
 
+  async getMandatesByOwner(owner: Address): Promise<Mandate[]> {
+    const currentSlot = await this.getCurrentSlot();
+    const accounts = await this.connection.getProgramAccounts(publicKey(this.programId), {
+      commitment: this.commitment,
+      filters: [
+        { dataSize: 235 },
+        { memcmp: { offset: 8, bytes: owner } },
+      ],
+    });
+
+    return Promise.all(accounts.map(async (account) => {
+      const address = account.pubkey.toBase58();
+      const decoded = decodeMandate(new Uint8Array(account.account.data), address, currentSlot);
+      const source = await this.connection.getAccountInfo(
+        publicKey(decoded.sourceTokenAccount),
+        this.commitment,
+      );
+      const tokenProgram = source ? tokenProgramFromAddress(source.owner.toBase58()) : undefined;
+      return { ...decoded, tokenProgram };
+    }));
+  }
+
   async getSupportedAsset(mint: Address): Promise<SupportedAsset | null> {
     const assetAddress = deriveAssetAddress(mint, this.programId);
     const account = await this.getProgramAccount(assetAddress);

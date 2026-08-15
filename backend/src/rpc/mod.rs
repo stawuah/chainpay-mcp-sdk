@@ -263,6 +263,7 @@ impl RpcClient {
             "getAccountInfo",
             "getBalance",
             "getEpochInfo",
+            "getProgramAccounts",
             "getLatestBlockhash",
             "getMultipleAccounts",
             "getSignatureStatuses",

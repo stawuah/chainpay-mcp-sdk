@@ -23,6 +23,9 @@ export async function createMandate(
     maxPaymentCount: args.maxPaymentCount === undefined ? 0n : unsignedInteger(args.maxPaymentCount, "maxPaymentCount"),
     cooldownSlots: args.cooldownSlots === undefined ? 0n : unsignedInteger(args.cooldownSlots, "cooldownSlots"),
     tokenProgram: tokenProgram(args.tokenProgram),
+    mandateNonce: args.mandateNonce === undefined
+      ? undefined
+      : solanaAddress(args.mandateNonce, "mandateNonce"),
     delegateAmount: args.delegateAmount === undefined
       ? undefined
       : unsignedInteger(args.delegateAmount, "delegateAmount"),

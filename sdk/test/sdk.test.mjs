@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import {
   buildCreateMandateInstruction,
   buildExecutePaymentInstruction,
@@ -9,6 +9,7 @@ import {
   deriveLegacyMandateAddress,
   deriveMandateAddress,
   deriveMintMandateAddress,
+  deriveVersionedMandateAddress,
   deriveReceiptAddress,
   preflightPayment,
   preparePayment,
@@ -19,7 +20,11 @@ const agent = Keypair.generate().publicKey.toBase58();
 const mint = Keypair.generate().publicKey.toBase58();
 const source = Keypair.generate().publicKey.toBase58();
 const recipient = Keypair.generate().publicKey.toBase58();
-const mandateAddress = deriveMandateAddress(owner);
+const nonceBytes = new Uint8Array(32);
+nonceBytes.set([67, 80, 78, 79, 78, 67, 69, 33]);
+nonceBytes[8] = 1;
+const versionedNonce = new PublicKey(nonceBytes).toBase58();
+const mandateAddress = deriveVersionedMandateAddress(owner, mint, versionedNonce);
 
 test("builds Anchor-compatible mandate and payment instruction shapes", () => {
   const mandate = buildCreateMandateInstruction({
@@ -32,11 +37,12 @@ test("builds Anchor-compatible mandate and payment instruction shapes", () => {
     maxPaymentCount: 0n,
     cooldownSlots: 0n,
     tokenProgram: "spl-token",
+    mandateNonce: versionedNonce,
   }, owner);
   assert.equal(mandate.name, "create_mandate");
   assert.equal(mandate.keys.length, 8);
-  assert.equal(mandate.data.length, 144);
-  assert.equal(mandate.keys[2].address, deriveMintMandateAddress(owner, mint));
+  assert.equal(mandate.data.length, 176);
+  assert.equal(mandate.keys[2].address, mandateAddress);
   assert.equal(mandate.keys[3].isSigner, true);
 
   const request = preparePayment({
@@ -79,6 +85,7 @@ test("keeps legacy mandate derivation available while scoping new mandates by mi
   assert.equal(deriveMandateAddress(owner), deriveLegacyMandateAddress(owner));
   assert.equal(deriveMandateAddress(owner, undefined, mint), deriveMintMandateAddress(owner, mint));
   assert.notEqual(deriveLegacyMandateAddress(owner), deriveMintMandateAddress(owner, mint));
+  assert.notEqual(deriveVersionedMandateAddress(owner, mint, versionedNonce), deriveMintMandateAddress(owner, mint));
 });
 
 test("builds the one-time protocol config initializer", () => {

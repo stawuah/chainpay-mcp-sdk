@@ -11,6 +11,7 @@ import { ACCOUNT_DISCRIMINATORS, RECEIPT_STATUS_SETTLED } from "./constants.js";
 import {
   address,
   assertDiscriminator,
+  isMandateNonce,
   readBytes32,
   readPublicKey,
   readU8,
@@ -91,6 +92,7 @@ export function decodeMandate(
   const paused = readU8(bytes, 232) !== 0;
   const revoked = readU8(bytes, 233) !== 0;
   const legacyAllowedRecipient = readPublicKey(bytes, 136);
+  const mandateNonce = isMandateNonce(legacyAllowedRecipient) ? legacyAllowedRecipient : undefined;
 
   return {
     address: address(mandateAddress),
@@ -98,7 +100,7 @@ export function decodeMandate(
     approvedAgent: readPublicKey(bytes, 40),
     sourceTokenAccount: readPublicKey(bytes, 72),
     allowedMint: readPublicKey(bytes, 104),
-    legacyAllowedRecipient: legacyAllowedRecipient === DEFAULT_ADDRESS ? undefined : legacyAllowedRecipient,
+    legacyAllowedRecipient: mandateNonce || legacyAllowedRecipient === DEFAULT_ADDRESS ? undefined : legacyAllowedRecipient,
     maxPerPayment: readU64(bytes, 168),
     totalLimit: readU64(bytes, 176),
     amountSpent: readU64(bytes, 184),
@@ -111,6 +113,7 @@ export function decodeMandate(
     revoked,
     status: mandateStatus(paused, revoked, expiresAtSlot, currentSlot),
     tokenProgram,
+    mandateNonce,
   };
 }
 

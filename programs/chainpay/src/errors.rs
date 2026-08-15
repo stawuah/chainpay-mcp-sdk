@@ -16,6 +16,8 @@ pub enum ChainPayError {
     InvalidTokenProgram,
     #[msg("The approved agent must be a non-default public key.")]
     InvalidAgent,
+    #[msg("The mandate nonce is invalid or missing its ChainPay prefix.")]
+    InvalidMandateNonce,
     #[msg("The source token account must be the owner's token account.")]
     InvalidSourceTokenAccount,
     #[msg("The source token account does not use the mandate mint.")]

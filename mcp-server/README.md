@@ -107,8 +107,9 @@ Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, `CHAINPAY_BACKEND_URL`,
 `CHAINPAY_BACKEND_AUTH_TOKEN`, and `CHAINPAY_HTTP_AUTH_TOKEN` in the host's
 environment settings. Set `OPENROUTER_API_KEY` and `CHAINPAY_AI_PROVIDER=openrouter`
 to enable the dashboard assistant. The default model is `openrouter/free`; you can
-override it with `CHAINPAY_AGENT_MODEL`. Put HTTPS and authentication in front
-of both endpoints before using them for real payment traffic.
+override it with `CHAINPAY_AGENT_MODEL`. For public Devnet testing, leave
+`CHAINPAY_HTTP_AUTH_TOKEN` empty; MCP clients can connect with only the server URL.
+For real payment traffic, put HTTPS and authentication in front of both endpoints.
 
 Render is also supported through the root [render.yaml](../render.yaml)
 Blueprint. In Render, choose **New → Blueprint**, connect this repository, and

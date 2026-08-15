@@ -68,6 +68,8 @@ export type Mandate = {
   revoked: boolean;
   status: MandateStatus;
   tokenProgram?: TokenProgram;
+  /** Present for nonce-scoped mandates; absent for legacy accounts. */
+  mandateNonce?: Address;
 };
 
 export type SupportedAsset = {

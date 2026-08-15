@@ -5,7 +5,7 @@ import type {
   ChainPayInstruction,
   TokenProgram,
 } from "./types.js";
-import { DISCRIMINATORS, SYSTEM_PROGRAM_ID } from "./constants.js";
+import { DISCRIMINATORS, MANDATE_NONCE_PREFIX, SYSTEM_PROGRAM_ID } from "./constants.js";
 
 export function publicKey(value: Address): PublicKey {
   try {
@@ -70,6 +70,11 @@ export function readPublicKey(data: Uint8Array, offset: number): Address {
   return new PublicKey(data.slice(offset, offset + 32)).toBase58();
 }
 
+export function isMandateNonce(value: Address): boolean {
+  const bytes = publicKey(value).toBytes();
+  return MANDATE_NONCE_PREFIX.every((byte, index) => bytes[index] === byte);
+}
+
 export function concat(...parts: Uint8Array[]): Uint8Array {
   const result = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
   let offset = 0;
@@ -115,6 +120,7 @@ export function encodeCreateMandate(params: {
   expiresAtSlot: bigint;
   maxPaymentCount: bigint;
   cooldownSlots: bigint;
+  mandateNonce: Address;
 }): Uint8Array {
   return concat(
     DISCRIMINATORS.createMandate,
@@ -126,6 +132,7 @@ export function encodeCreateMandate(params: {
     writeU64(params.expiresAtSlot, "expiresAtSlot"),
     writeU64(params.maxPaymentCount, "maxPaymentCount"),
     writeU64(params.cooldownSlots, "cooldownSlots"),
+    publicKey(params.mandateNonce).toBytes(),
   );
 }
 

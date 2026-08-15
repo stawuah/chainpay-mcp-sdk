@@ -1,6 +1,6 @@
 use crate::{
     errors::ChainPayError,
-    state::{PaymentMandate, PaymentReceipt, ProtocolConfig, SupportedAsset},
+    state::{is_mandate_nonce, PaymentMandate, PaymentReceipt, ProtocolConfig, SupportedAsset},
 };
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_option::COption;
@@ -63,7 +63,8 @@ pub struct ExecutePayment<'info> {
     pub source_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
-        constraint = mandate.legacy_allowed_recipient == Pubkey::default()
+        constraint = is_mandate_nonce(&mandate.legacy_allowed_recipient)
+            || mandate.legacy_allowed_recipient == Pubkey::default()
             || recipient_token_account.key() == mandate.legacy_allowed_recipient
             @ ChainPayError::InvalidRecipient,
         constraint = recipient_token_account.mint == mandate.allowed_mint @ ChainPayError::InvalidRecipientMint,

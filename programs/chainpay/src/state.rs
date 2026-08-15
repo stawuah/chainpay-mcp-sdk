@@ -1,5 +1,14 @@
 use anchor_lang::prelude::*;
 
+/// Marks the reserved compatibility field when it stores a mandate nonce
+/// rather than a legacy fixed recipient. The prefix lets the program keep
+/// reading older accounts without changing their serialized size.
+pub const MANDATE_NONCE_PREFIX: [u8; 8] = *b"CPNONCE!";
+
+pub fn is_mandate_nonce(value: &Pubkey) -> bool {
+    value.to_bytes()[..MANDATE_NONCE_PREFIX.len()] == MANDATE_NONCE_PREFIX
+}
+
 #[account]
 pub struct ProtocolConfig {
     pub authority: Pubkey,

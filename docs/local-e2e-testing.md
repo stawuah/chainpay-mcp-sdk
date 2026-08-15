@@ -224,6 +224,10 @@ Before starting, have:
 - enough token balance for the payment;
 - Devnet SOL for the wallet fee payer.
 
+Each new mandate receives a fresh on-chain identity. This means a wallet can
+create another USDC mandate after pausing or revoking an older one; the frontend
+discovers all mandate accounts and shows their individual IDs for selection.
+
 In `Payments`:
 
 1. Enter the invoice/reference, amount, and recipient wallet.

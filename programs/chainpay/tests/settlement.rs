@@ -147,18 +147,26 @@ fn program_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/deploy/chainpay.so")
 }
 
+fn mandate_nonce() -> Pubkey {
+    let mut bytes = [0u8; 32];
+    bytes[..8].copy_from_slice(b"CPNONCE!");
+    bytes[8] = 1;
+    Pubkey::new_from_array(bytes)
+}
+
 fn run_settlement(kind: TokenKind) {
     let mut svm = LiteSVM::new();
     svm.add_program_from_file(chainpay::ID, program_path())
         .unwrap();
 
     let owner = Keypair::new();
-    let agent = Keypair::new();// agent  should not have an account if and agent should have an account/address it should be newly created for the purpose of sendfing or something 
+    let agent = Keypair::new(); // agent  should not have an account if and agent should have an account/address it should be newly created for the purpose of sendfing or something
     let source = Keypair::new();
     let recipient = Keypair::new();
     let mint = Keypair::new();
     let merchant_owner = Pubkey::new_unique();
     let token_program = kind.program_id();
+    let mandate_nonce = mandate_nonce();
     let (config, _) = Pubkey::find_program_address(&[b"config"], &chainpay::ID);
     let (asset, _) =
         Pubkey::find_program_address(&[b"asset", mint.pubkey().as_ref()], &chainpay::ID);
@@ -167,6 +175,7 @@ fn run_settlement(kind: TokenKind) {
             b"mandate",
             owner.pubkey().as_ref(),
             mint.pubkey().as_ref(),
+            mandate_nonce.as_ref(),
         ],
         &chainpay::ID,
     );
@@ -284,6 +293,7 @@ fn run_settlement(kind: TokenKind) {
                     expires_at_slot: expiration,
                     max_payment_count: 0,
                     cooldown_slots: 0,
+                    mandate_nonce,
                 },
             },
         )],
@@ -390,6 +400,62 @@ fn run_settlement(kind: TokenKind) {
     assert!(svm.send_transaction(invalid_transaction).is_err());
     assert!(svm.get_account(&invalid_receipt).is_none());
     assert_eq!(token_balance(&svm, &recipient.pubkey()), PAYMENT_AMOUNT);
+
+    // A second policy for the same owner and mint must get its own PDA.
+    let mut second_nonce_bytes = [0u8; 32];
+    second_nonce_bytes[..8].copy_from_slice(b"CPNONCE!");
+    second_nonce_bytes[8] = 2;
+    let second_nonce = Pubkey::new_from_array(second_nonce_bytes);
+    let (second_mandate, _) = Pubkey::find_program_address(
+        &[
+            b"mandate",
+            owner.pubkey().as_ref(),
+            mint.pubkey().as_ref(),
+            second_nonce.as_ref(),
+        ],
+        &chainpay::ID,
+    );
+    assert_ne!(mandate, second_mandate);
+    submit(
+        &mut svm,
+        vec![chainpay_instruction(
+            accounts::CreateMandate {
+                config,
+                asset_registry: asset,
+                mandate: second_mandate,
+                owner: owner.pubkey(),
+                allowed_mint: mint.pubkey(),
+                source_token_account: source.pubkey(),
+                token_program,
+                system_program: system_program::ID,
+            },
+            instruction::CreateMandate {
+                params: MandateParams {
+                    approved_agent: agent.pubkey(),
+                    source_token_account: source.pubkey(),
+                    allowed_mint: mint.pubkey(),
+                    max_per_payment: PAYMENT_AMOUNT,
+                    total_limit: INITIAL_BALANCE,
+                    expires_at_slot: expiration,
+                    max_payment_count: 0,
+                    cooldown_slots: 0,
+                    mandate_nonce: second_nonce,
+                },
+            },
+        )],
+        &[&owner],
+    );
+    submit(
+        &mut svm,
+        vec![kind.approve(
+            &source.pubkey(),
+            &second_mandate,
+            &owner.pubkey(),
+            INITIAL_BALANCE,
+        )],
+        &[&owner],
+    );
+    assert!(svm.get_account(&second_mandate).is_some());
 }
 
 #[test]

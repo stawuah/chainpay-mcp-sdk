@@ -1,5 +1,6 @@
 import type { ChainPayMcpContext } from "./context.js";
 import { hex32, solanaAddress, toolResult } from "./common.js";
+import { displayTokenAmounts } from "./token-amount.js";
 
 export async function getPayment(
   context: ChainPayMcpContext,
@@ -17,7 +18,10 @@ export async function getPayment(
   const receipt = await context.client.getPayment(
     receiptAddress ?? { mandate: mandate as string, invoiceHash: invoiceHash as Uint8Array },
   );
-  return receipt
-    ? toolResult({ found: true, receipt })
-    : toolResult({ found: false, receiptAddress }, true);
+  if (!receipt) return toolResult({ found: false, receiptAddress }, true);
+
+  const display = await displayTokenAmounts(context.client, receipt.mint, {
+    amount: receipt.amount,
+  });
+  return toolResult({ found: true, receipt, display });
 }

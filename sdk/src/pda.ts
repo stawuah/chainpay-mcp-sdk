@@ -34,6 +34,23 @@ export function deriveMintMandateAddress(
   )[0].toBase58();
 }
 
+export function deriveVersionedMandateAddress(
+  owner: Address,
+  allowedMint: Address,
+  mandateNonce: Address,
+  programId: Address = DEFAULT_PROGRAM_ID,
+): Address {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from(MANDATE_SEED),
+      publicKey(owner).toBytes(),
+      publicKey(allowedMint).toBytes(),
+      publicKey(mandateNonce).toBytes(),
+    ],
+    publicKey(programId),
+  )[0].toBase58();
+}
+
 /**
  * Derive a mandate address. Without a mint this returns the legacy
  * owner-scoped address; with a mint it returns the production mint-scoped

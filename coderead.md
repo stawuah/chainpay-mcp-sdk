@@ -268,7 +268,7 @@ Fields in serialized order:
 | `approved_agent` | Only this signer may execute payments. |
 | `source_token_account` | The one token account from which funds may be spent. |
 | `allowed_mint` | The one mint allowed by this mandate. |
-| `legacy_allowed_recipient` | Reserved compatibility field. New mandates leave it empty; each payment supplies its own destination. |
+| `legacy_allowed_recipient` | Legacy fixed recipient, or the nonce marker used by new nonce-scoped mandates. New nonce-scoped mandates still accept a destination supplied by each payment. |
 | `max_per_payment` | Maximum base units in one settlement. |
 | `total_limit` | Lifetime maximum base units for this mandate. |
 | `amount_spent` | Cumulative amount settled so far. |
@@ -283,9 +283,16 @@ Fields in serialized order:
 
 `LEN = 32 * 5 + 8 * 8 + 3 = 227`; full account size is 235 bytes.
 
-The mandate PDA is derived only from the owner. That means the current design
-supports one mandate per owner per program ID. Creating another one for the same
-owner collides with the existing PDA.
+New mandate PDAs are derived from the owner, mint, and SDK-generated nonce:
+
+```text
+[b"mandate", owner, allowed_mint, mandate_nonce]
+```
+
+That allows multiple independent mandates for the same token. The program also
+keeps compatibility with the older owner-scoped and owner-plus-mint accounts
+already deployed on Devnet. The nonce is stored in the existing reserved
+32-byte compatibility field, so the serialized account size does not change.
 
 ### `PaymentReceipt`
 
@@ -372,7 +379,7 @@ The handler flips only `asset.enabled` and emits `AssetStatusChanged`.
 #### `MandateParams`
 
 This is the serialized instruction input. It contains the approved agent, source
-token account, allowed mint, five policy numbers, and no wallet secret. The five
+token account, allowed mint, five policy numbers, a generated mandate nonce, and no wallet secret. The five
 numbers are:
 
 - maximum amount per payment;
@@ -380,6 +387,9 @@ numbers are:
 - expiry slot;
 - maximum payment count, where zero is unlimited;
 - cooldown slots.
+
+The nonce carries the `CPNONCE!` prefix, is included in the PDA seeds, and is
+stored in the existing reserved compatibility field.
 
 #### `CreateMandate`
 
@@ -390,7 +400,8 @@ The account checks run in this order conceptually:
 3. the registry entry must be enabled;
 4. the registry mint must equal `params.allowed_mint`;
 5. the registry token program must equal the supplied token program;
-6. `mandate` is initialized at `[b"mandate", owner]`;
+6. `mandate` is initialized at
+   `[b"mandate", owner, params.allowed_mint, params.mandate_nonce]`;
 7. `owner` signs and pays rent;
 8. `allowed_mint` must be the parameter mint and must belong to the supplied
    token program;
@@ -419,7 +430,8 @@ or per-payment destination.
 
 Accounts:
 
-1. mutable mandate PDA derived from its owner;
+1. mutable mandate PDA supplied by the caller (new and legacy mandate PDAs are
+   both supported);
 2. owner signer checked by `has_one`.
 
 The handler obtains the current slot and then checks:
@@ -730,7 +742,7 @@ constraint already listed above.
 
 1. Read the current slot.
 2. Validate the requested policy fields.
-3. Write owner, agent, source, mint, clear the legacy recipient field, and write the limits.
+3. Write owner, agent, source, mint, store the nonce marker, and write the limits.
 4. Initialize spent amount, payment count, and last slot to zero.
 5. Initialize pause/revoke to false.
 6. Store the bump.
@@ -766,7 +778,8 @@ constraint already listed above.
 1. Read current slot.
 2. Run policy checks.
 3. Compute new totals with overflow protection.
-4. Create mandate PDA signer seeds.
+4. Create mandate PDA signer seeds. New accounts use the stored nonce; old
+   accounts fall back to the mint-scoped or legacy seed layout.
 5. Invoke `transfer_checked` through the selected token program.
 6. Update counters only after the transfer returns successfully.
 7. Create the receipt data.
@@ -1038,10 +1051,11 @@ positive expiry, and optional delegate amount.
 #### `buildCreateMandateInstruction`
 
 1. Validate input.
-2. Derive config, asset, and mandate PDAs.
+2. Generate or validate the mandate nonce, then derive config, asset, and the
+   nonce-scoped mandate PDA.
 3. Map the token label to a token program address.
 4. Build the nine account metas in Rust's `CreateMandate` order.
-5. Encode `MandateParams`.
+5. Encode `MandateParams`, including the nonce used in the PDA seeds.
 
 #### `buildRegisterAssetInstruction` and `buildSetAssetStatusInstruction`
 

@@ -919,6 +919,10 @@ mod tests {
                     "context": { "slot": 43 },
                     "value": [{ "slot": 43, "err": null, "confirmationStatus": "finalized" }]
                 }),
+                "getProgramAccounts" => json!([{
+                    "pubkey": "mandate-pda",
+                    "account": { "data": ["account-data", "base64"], "executable": false, "lamports": 1, "owner": "program-id", "space": 235 }
+                }]),
                 _ => json!({}),
             };
             Json(json!({ "jsonrpc": "2.0", "id": 1, "result": result }))
@@ -967,6 +971,21 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(stored.status(), StatusCode::OK);
+
+        let discovered = reqwest::Client::new()
+            .post(format!("http://{api_address}/rpc"))
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "getProgramAccounts",
+                "params": ["program-id", { "filters": [{ "dataSize": 235 }] }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(discovered.status(), StatusCode::OK);
+        let discovered_json: Value = discovered.json().await.unwrap();
+        assert_eq!(discovered_json["result"][0]["pubkey"], "mandate-pda");
 
         api_task.abort();
         rpc_task.abort();

@@ -598,7 +598,7 @@ function App() {
         <section className="hero page-width">
           <div className="hero-copy">
             <div className="eyebrow"><span className="pulse-dot" /> Solana Devnet · MCP connected</div>
-            <h1 className="hero-headline" aria-live="polite"><span key={heroMessage} className="hero-headline-transition">{heroMessage === "rail" ? <>The universal payment rail for <em>AI agents.</em></> : <>Sign once, <em>AI signs all.</em></>}</span></h1>
+            <h1 className="hero-headline" aria-live="polite"><span key={heroMessage} className="hero-headline-transition">{heroMessage === "rail" ? <>The universal payment rail for <em>AI agents.</em></> : <>Sign once,<br /><em>AI signs all.</em></>}</span></h1>
             <p className="hero-text">One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. Solana is the first settlement layer.</p>
             <div className="hero-actions">
               <button className="button button-primary" onClick={connectWallet}>

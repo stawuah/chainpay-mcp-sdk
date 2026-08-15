@@ -7,11 +7,12 @@ This Anchor program implements the ChainPay Devnet payment rail described in
 
 1. The protocol authority initializes the `config` PDA, then registers each
    explicitly supported settlement mint in its own `asset` PDA.
-2. A wallet owner creates one mint-scoped `mandate` PDA per agent and supported
+2. A wallet owner creates a nonce-scoped `mandate` PDA per policy and supported
    mint, with a source token account, per-payment limit, total limit, expiry
    slot, optional payment-count cap, and optional cooldown. The same owner can
-   therefore maintain independent USDC, PYUSD, and other token policies. Each
-   payment supplies its own destination token account.
+   maintain multiple independent policies for USDC, PYUSD, or any other
+   registered token. Each payment supplies its own destination token account.
+   Existing legacy and mint-scoped accounts remain readable and executable.
 3. The wallet owner explicitly approves the mandate PDA as the source token
    account's SPL Token delegate. The program never receives or stores the
    wallet private key.
@@ -27,6 +28,15 @@ This Anchor program implements the ChainPay Devnet payment rail described in
 
    A second attempt using the same invoice hash fails because the receipt PDA
    already exists.
+
+New mandate identities use:
+
+```text
+["mandate", owner, allowed_mint, mandate_nonce]
+```
+
+The SDK creates the nonce automatically. The program stores it in the existing
+reserved compatibility field, keeping old mandate account sizes compatible.
 
 ## Instructions
 

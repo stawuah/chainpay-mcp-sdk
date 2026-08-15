@@ -138,11 +138,16 @@ The asset starts with `enabled = true`. The authority can call
 
 ### 3. Create the owner's mandate
 
-The owner creates one mandate PDA:
+The owner creates a nonce-scoped mandate PDA. The SDK generates the nonce, so
+the user never has to enter it:
 
 ```text
-["mandate", owner]
+["mandate", owner, allowed_mint, mandate_nonce]
 ```
+
+This lets one wallet maintain multiple independent USDC, PYUSD, SPL, or
+Token-2022 policies. Existing legacy owner-scoped and old mint-scoped mandate
+accounts remain compatible.
 
 The owner chooses:
 

@@ -15,6 +15,10 @@ pub struct MandateParams {
     pub expires_at_slot: u64,
     pub max_payment_count: u64,
     pub cooldown_slots: u64,
+    /// Unique per policy. It is also stored in the reserved compatibility
+    /// field so execute_payment can reproduce the PDA signer seeds without
+    /// changing the account size of existing mandates.
+    pub mandate_nonce: Pubkey,
 }
 
 #[derive(Accounts)]
@@ -38,10 +42,15 @@ pub struct CreateMandate<'info> {
         init,
         payer = owner,
         space = 8 + PaymentMandate::LEN,
-        // New mandates are scoped to both the wallet and the asset. This
-        // allows one owner to maintain independent USDC, PYUSD, and other
-        // token policies while preserving the old account layout.
-        seeds = [b"mandate", owner.key().as_ref(), params.allowed_mint.as_ref()],
+        // New mandates are scoped to the wallet, asset, and a unique nonce.
+        // This allows multiple independent policies for the same token while
+        // preserving the legacy and mint-scoped accounts already on Devnet.
+        seeds = [
+            b"mandate",
+            owner.key().as_ref(),
+            params.allowed_mint.as_ref(),
+            params.mandate_nonce.as_ref(),
+        ],
         bump
     )]
     pub mandate: Box<Account<'info, PaymentMandate>>,
