@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Buffer } from "buffer";
 import { ChainPayClient, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, toWeb3Transaction } from "@chainpay/sdk";
 import type { ChainPayInstruction, Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, SimulationResult, TokenProgram } from "@chainpay/sdk";
@@ -174,7 +174,7 @@ async function callChainPayAgent(
   const response = await fetch(AGENT_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ message, ...context }),
+    body: JSON.stringify({ message, wallet: context.wallet, mandateAddress: context.mandateAddress, history: context.history }),
   });
   const payload = await response.json() as AgentResponse;
   if (!response.ok) throw new Error(payload.error ?? `AI agent request failed (${response.status})`);
@@ -416,15 +416,24 @@ function App() {
       legacyAddress,
       ...candidateMints.map((mint) => deriveMandateAddress(owner, PROGRAM_ID, mint)),
     ];
+    const discoveredState = await Promise.allSettled([
+      chainpayClient.getMandatesByOwner(owner),
+    ]);
     const mandateStates = await Promise.allSettled(
       [...new Set(candidateAddresses)].map((address) => chainpayClient.getMandate(address)),
     );
-    const nextMandates = mandateStates
+    const discoveredMandates = discoveredState[0]?.status === "fulfilled" ? discoveredState[0].value : [];
+    const fallbackMandates = mandateStates
       .filter((state): state is PromiseFulfilledResult<Mandate | null> => state.status === "fulfilled")
       .map((state) => state.value)
       .filter((value): value is Mandate => value !== null);
-    const selectedMandate = nextMandates.find((value) => value.address === preferredMandateAddress)
+    const nextMandates = Array.from(new Map(
+      [...discoveredMandates, ...fallbackMandates].map((value) => [value.address, value]),
+    ).values());
+    const selectedMandate = nextMandates.find((value) => value.address === preferredMandateAddress && value.status === "active")
       ?? nextMandates.find((value) => value.status === "active")
+      ?? nextMandates.find((value) => value.address === preferredMandateAddress && value.status !== "revoked")
+      ?? nextMandates.find((value) => value.status !== "revoked")
       ?? nextMandates[0]
       ?? null;
     setMandates(nextMandates);
@@ -640,7 +649,7 @@ function App() {
         <section className="cta-section page-width" id="support"><span className="section-kicker">READY WHEN YOU ARE</span><h2>Give agents one payment interface.<br /><em>Keep the control.</em></h2><p>Create your first policy and connect a settlement rail on Solana Devnet.</p><button className="button button-light" onClick={connectWallet}>{wallet ? "Open mandate dashboard" : "Get started"} <Arrow /></button></section>
       </main>
 
-      <footer className="footer page-width"><div className="footer-main"><div className="footer-brand"><a className="brand" href="#top"><span className="brand-mark"><span /></span><span>chain<span>pay</span></span></a><p>The universal payment rail for AI agents.</p><div className="footer-status"><i /> Program active · Devnet</div></div><div className="footer-links"><div><b>PRODUCTS</b><a href="#products">Mandates</a><a href="#products">Payments</a><a href="#use-cases">Use cases</a><a href="#activity">Receipts</a></div><div><b>BUILD</b><a href="#how-it-works">How it works</a><a href="#support">MCP tools</a><a href="#support">Connectors</a><a href="#support">Status</a></div><div><b>LEGAL</b><a href="#support">Privacy Policy</a><a href="#support">Terms of Service</a><a href="#support">Risk disclosure</a></div></div><div className="newsletter"><b>Stay in the loop</b><p>Product updates, protocol news, and Devnet drops.</p><div className="email-box"><input placeholder="Your email" aria-label="Your email" /><button aria-label="Subscribe">→</button></div></div></div><div className="footer-bottom"><span>© 2026 ChainPay. Built on Solana.</span><span>Program <button className="copy-id" onClick={() => navigator.clipboard?.writeText(PROGRAM_ID)}><span className="mono">{shortAddress(PROGRAM_ID)}</span> ⧉</button></span></div></footer>
+      <footer className="footer page-width"><div className="footer-main"><div className="footer-brand"><a className="brand" href="#top"><span className="brand-mark"><span /></span><span>chain<span>pay</span></span></a><p>Solana Summer School bootcamp project building a policy-controlled payment rail for AI agents.</p><div className="footer-status"><i /> Solana Devnet · Bootcamp build</div></div><div className="footer-links"><div><b>PRODUCTS</b><a href="#products">Mandates</a><a href="#products">Payments</a><a href="#use-cases">Use cases</a><a href="#activity">Receipts</a></div><div><b>BUILD</b><a href="#how-it-works">How it works</a><a href="https://chainpay-mcp.onrender.com/docs" target="_blank" rel="noreferrer">MCP docs</a><a href="https://chainpay-mcp.onrender.com/tools" target="_blank" rel="noreferrer">MCP tools</a><a href="https://github.com/stawuah/chainpay-mcp-sdk" target="_blank" rel="noreferrer">GitHub repository</a></div><div><b>SOLANA</b><a href={`https://explorer.solana.com/address/${PROGRAM_ID}?cluster=devnet`} target="_blank" rel="noreferrer">Program on Explorer</a><a href="https://api.devnet.solana.com" target="_blank" rel="noreferrer">Devnet RPC</a><a href="https://chainpay-mcp.onrender.com/healthz" target="_blank" rel="noreferrer">MCP status</a></div></div><div className="newsletter"><b>Stay in the loop</b><p>Product updates, protocol news, and Devnet drops.</p><div className="email-box"><input placeholder="Your email" aria-label="Your email" /><button aria-label="Subscribe">→</button></div></div></div><div className="footer-bottom"><span>© 2026 ChainPay. Built on Solana.</span><span>Program <button className="copy-id" onClick={() => navigator.clipboard?.writeText(PROGRAM_ID)}><span className="mono">{shortAddress(PROGRAM_ID)}</span> ⧉</button></span></div></footer>
     </div>
   );
 }
@@ -1048,7 +1057,7 @@ function MandatesPanel({
           </div>
           <button className="button button-secondary-light" onClick={() => onCreateOpenChange(false)}>← Back to mandates</button>
         </div>
-        <MandateBuilder wallet={wallet} walletSigner={walletSigner} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} onCreated={onRefresh} />
+        <MandateBuilder wallet={wallet} walletSigner={walletSigner} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} onCreated={(address) => onRefresh(address)} />
       </section>
     );
   }
@@ -1370,6 +1379,84 @@ function hexToBytes(value: string) {
   return bytes;
 }
 
+function inlineAssistantText(value: string): ReactNode[] {
+  return value.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
+    return <span key={index}>{part}</span>;
+  });
+}
+
+function assistantTableCells(line: string) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function assistantMessageBlocks(value: string): ReactNode[] {
+  const lines = value.split(/\r?\n/);
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) {
+      index += 1;
+      continue;
+    }
+
+    const nextLine = lines[index + 1]?.trim() ?? "";
+    if (line.includes("|") && /^[\s|:-]+$/.test(nextLine) && nextLine.includes("|")) {
+      const header = assistantTableCells(line);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].includes("|")) {
+        rows.push(assistantTableCells(lines[index]));
+        index += 1;
+      }
+      blocks.push(<div className="assistant-table" key={`table-${index}`}>
+        <div className="assistant-table-row assistant-table-header">{header.map((cell, cellIndex) => <span key={cellIndex}>{inlineAssistantText(cell)}</span>)}</div>
+        {rows.map((row, rowIndex) => <div className="assistant-table-row" key={rowIndex}>{row.map((cell, cellIndex) => <span key={cellIndex}>{inlineAssistantText(cell)}</span>)}</div>)}
+      </div>);
+      continue;
+    }
+
+    if (/^(?:[-*])\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^(?:[-*])\s+/.test(lines[index].trim())) {
+        items.push(lines[index].trim().replace(/^(?:[-*])\s+/, ""));
+        index += 1;
+      }
+      blocks.push(<ul key={`list-${index}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{inlineAssistantText(item)}</li>)}</ul>);
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\d+\.\s+/.test(lines[index].trim())) {
+        items.push(lines[index].trim().replace(/^\d+\.\s+/, ""));
+        index += 1;
+      }
+      blocks.push(<ol key={`ordered-${index}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{inlineAssistantText(item)}</li>)}</ol>);
+      continue;
+    }
+
+    const heading = line.match(/^#{1,3}\s+(.+)$/) ?? line.match(/^\*\*(.+)\*\*$/);
+    if (heading) {
+      blocks.push(<h3 key={`heading-${index}`}>{inlineAssistantText(heading[1])}</h3>);
+      index += 1;
+      continue;
+    }
+
+    blocks.push(<p key={`paragraph-${index}`}>{inlineAssistantText(line)}</p>);
+    index += 1;
+  }
+
+  return blocks;
+}
+
+function AssistantMessage({ value, className = "" }: { value: string; className?: string }) {
+  return <div className={`assistant-message ${className}`}>{assistantMessageBlocks(value)}</div>;
+}
+
 type VerifiedReceiptDetails = {
   address: string;
   mandate: string;
@@ -1582,12 +1669,12 @@ function OverviewAssistant({ prompt, setPrompt, reply, thinking, listening, onAs
       <button type="button" className={listening ? "voice-button listening" : "voice-button"} onClick={onVoice} aria-label={listening ? "Stop voice input" : "Use voice input"}>{listening ? "■" : "●"}</button>
       <button type="submit" className="overview-search-submit" disabled={thinking} aria-label="Search mandate">{thinking ? "…" : "→"}</button>
     </form>
-    {hasReply && <div className="overview-search-result"><span>{thinking ? "Searching…" : "Mandate result"}</span><pre>{reply}</pre></div>}
+    {hasReply && <div className="overview-search-result"><span>{thinking ? "Searching…" : "Mandate result"}</span><AssistantMessage value={reply} className="overview-assistant-message" /></div>}
   </div>;
 }
 
 function AssistantPanel({ prompt, setPrompt, reply, thinking, listening, agentToolsUsed, onAsk, onVoice }: { prompt: string; setPrompt: (value: string) => void; reply: string; thinking: boolean; listening: boolean; agentToolsUsed: string[]; onAsk: () => void; onVoice: () => void }) {
-  return <section className="assistant-layout"><div className="assistant-card dashboard-card"><div className="assistant-visual"><span className="assistant-caption">{listening ? "Listening…" : thinking ? "ChainPay agent is thinking…" : "Read-only AI agent"}</span><span className="overview-agent-state"><i /> Online</span></div><div className="assistant-log"><span className="soft-label">LIVE RESPONSE</span><p className="assistant-response">{reply}</p>{agentToolsUsed.length > 0 && <div className="assistant-tools-used"><span className="soft-label">TOOLS USED</span>{agentToolsUsed.map((tool, index) => <span className="tool-call-chip" key={`${tool}-${index}`}>{tool}</span>)}</div>}</div><div className="assistant-input"><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onAsk(); }} aria-label="Ask ChainPay" placeholder="Ask about your mandate, receipt, or agent permissions" /><button className={listening ? "voice-button listening" : "voice-button"} onClick={onVoice} aria-label={listening ? "Stop voice input" : "Use voice input"}>{listening ? "■" : "●"}</button><button className="button button-primary ask-button" onClick={onAsk} disabled={thinking}>Ask <Arrow /></button></div><small className="assistant-note">Voice is transcribed in your browser, then the AI agent calls only read-only ChainPay tools. It never signs or sends funds.</small></div><div className="assistant-side"><div className="dashboard-card"><span className="section-kicker">VOICE INPUT</span><h2>Give your agent a voice.</h2><p>Speak naturally. ChainPay sends the transcript to the read-only AI agent, which queries live MCP tools and explains the on-chain response before any action.</p><button className="button button-dark full-button" onClick={onVoice}>{listening ? "Stop listening" : "Start voice command"}</button></div><div className="dashboard-card safety-card"><Shield /><div><b>Safe by default</b><p>Payment execution stays behind wallet signing and explicit approval.</p></div></div></div></section>;
+  return <section className="assistant-layout"><div className="assistant-card dashboard-card"><div className="assistant-visual"><span className="assistant-caption">{listening ? "Listening…" : thinking ? "ChainPay agent is thinking…" : "Read-only AI agent"}</span><span className="overview-agent-state"><i /> Online</span></div><div className="assistant-log"><span className="soft-label">LIVE RESPONSE</span><AssistantMessage value={reply} className="assistant-response" />{agentToolsUsed.length > 0 && <div className="assistant-tools-used"><span className="soft-label">TOOLS USED</span>{agentToolsUsed.map((tool, index) => <span className="tool-call-chip" key={`${tool}-${index}`}>{tool}</span>)}</div>}</div><div className="assistant-input"><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onAsk(); }} aria-label="Ask ChainPay" placeholder="Ask about your mandate, receipt, or agent permissions" /><button className={listening ? "voice-button listening" : "voice-button"} onClick={onVoice} aria-label={listening ? "Stop voice input" : "Use voice input"}>{listening ? "■" : "●"}</button><button className="button button-primary ask-button" onClick={onAsk} disabled={thinking}>Ask <Arrow /></button></div><small className="assistant-note">Voice is transcribed in your browser, then the AI agent calls only read-only ChainPay tools. It never signs or sends funds.</small></div><div className="assistant-side"><div className="dashboard-card"><span className="section-kicker">VOICE INPUT</span><h2>Give your agent a voice.</h2><p>Speak naturally. ChainPay sends the transcript to the read-only AI agent, which queries live MCP tools and explains the on-chain response before any action.</p><button className="button button-dark full-button" onClick={onVoice}>{listening ? "Stop listening" : "Start voice command"}</button></div><div className="dashboard-card safety-card"><Shield /><div><b>Safe by default</b><p>Payment execution stays behind wallet signing and explicit approval.</p></div></div></div></section>;
 }
 
 function AgentsPanel({ connections, onConnect, onOpenAssistant }: { connections: AgentConnection[]; onConnect: () => void; onOpenAssistant: () => void }) {
@@ -1625,10 +1712,9 @@ function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoke
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [agentName, setAgentName] = useState("");
   const [scope, setScope] = useState("Unscoped");
-  const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
-  const config = JSON.stringify({ mcpServers: { chainpay: { url: serverUrl, ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}) } } }, null, 2);
+  const config = JSON.stringify({ mcpServers: { chainpay: { url: serverUrl } } }, null, 2);
 
   async function createConnection() {
     if (!agentName.trim()) return;
@@ -1637,7 +1723,6 @@ function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoke
     try {
       const result = await registerMcpConnection(wallet, agentName.trim(), scope);
       onConnected({ ...result.connection, mandates: result.connection.scope === "Current mandate" ? 1 : 0 });
-      setToken(result.token);
       setDialogOpen(false);
       setAgentName("");
       setScope("Unscoped");
@@ -1649,9 +1734,8 @@ function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoke
   }
 
   return <section className="page-panel connect-panel">
-    <div className="dashboard-card connection-config-card"><div className="dashboard-card-heading"><div><span className="section-kicker">CONNECTION CONFIG</span><h2>Server config</h2></div><span className="mcp-badge"><span /> Streamable HTTP</span></div><div className="copy-row"><span className="mono">{serverUrl}</span><button className="btn-icon" onClick={() => copyValue(serverUrl)} aria-label="Copy server URL">⧉</button></div><div className="config-code-wrap"><button className="button button-secondary-light copy-config" onClick={() => copyValue(config)}>Copy config</button><pre className="schema-block">{config}</pre></div></div>
+    <div className="dashboard-card connection-config-card"><div className="dashboard-card-heading"><div><span className="section-kicker">CONNECTION CONFIG</span><h2>Server config</h2></div><span className="mcp-badge"><span /> Public MCP · no auth</span></div><p className="builder-intro">Copy this URL or config into any MCP-compatible AI. Public Devnet access does not require an Authorization header.</p><div className="copy-row"><span className="mono">{serverUrl}</span><button className="btn-icon" onClick={() => copyValue(serverUrl)} aria-label="Copy server URL">⧉</button></div><div className="config-code-wrap"><button className="button button-secondary-light copy-config" onClick={() => copyValue(config)}>Copy config</button><pre className="schema-block">{config}</pre></div></div>
     <div className="dashboard-card connected-clients-card"><div className="dashboard-card-heading"><div><span className="section-kicker">CONNECTED CLIENTS</span><h2>Agent connections</h2></div><button className="button button-primary" onClick={() => setDialogOpen(true)}>New connection <Arrow /></button></div>{connections.length ? <div className="connection-list">{connections.map((connection) => <div className="connection-row" key={connection.id}><div><strong>{connection.agentName}</strong><small className="mono">Owner · {shortAddress(connection.wallet)}</small></div><span className="chip chip-muted">{connection.scope}</span><span className="t-body-sm">{connectionSeenLabel(connection.lastSeenAt)}</span><button className="btn-icon" onClick={() => setRevokeId(connection.id)} aria-label={`Revoke ${connection.agentName}`}>×</button><div className="connection-tools">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span>No tools called yet.</span>}</div></div>)}</div> : <div className="page-empty compact-empty"><p>No agents connected yet.</p><button className="button button-primary" onClick={() => setDialogOpen(true)}>New connection <Arrow /></button></div>}</div>
-    {token && <div className="token-once"><span className="section-kicker">NEW CONNECTION TOKEN</span><div className="copy-row"><span className="mono">{token}</span><button className="btn-icon" onClick={() => copyValue(token)} aria-label="Copy connection token">⧉</button></div><p>Shown once. Store it securely.</p></div>}
     {dialogOpen && <div className="app-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDialogOpen(false); }}><div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby="connection-dialog-title"><div className="app-dialog-heading"><span className="section-kicker">NEW CONNECTION</span><h2 id="connection-dialog-title">Pair an agent</h2></div><label className="field"><span>Agent name</span><input autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="Invoice agent" /></label><label className="field"><span>Scope</span><select value={scope} onChange={(event) => setScope(event.target.value)}><option>Unscoped</option><option disabled={!connections.length}>Current mandate{connections.length ? "" : " · create a connection first"}</option></select></label>{error && <p className="builder-error"><b>Connection failed</b><span>{error}</span></p>}<div className="app-dialog-actions"><button className="button button-secondary-light" onClick={() => setDialogOpen(false)}>Cancel</button><button className="button button-primary" onClick={() => void createConnection()} disabled={!agentName.trim() || creating}>{creating ? "Creating…" : "Create connection"} <Arrow /></button></div></div></div>}
     <ConfirmDialog open={Boolean(revokeId)} title="Revoke this connection?" description="This agent will no longer be able to call ChainPay tools with this connection." confirmLabel="Revoke connection" onClose={() => setRevokeId(null)} onConfirm={() => { if (revokeId) void onRevoked(revokeId); setRevokeId(null); }} />
   </section>;
