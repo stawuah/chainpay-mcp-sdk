@@ -23,7 +23,11 @@ import {
   tokenProgramAddress,
   writeU64,
 } from "./encoding.js";
-import { deriveAssetAddress, deriveConfigAddress, deriveMandateAddress } from "./pda.js";
+import {
+  deriveAssetAddress,
+  deriveConfigAddress,
+  deriveMandateAddress,
+} from "./pda.js";
 
 export type CreateMandateInput = {
   approvedAgent: Address;
@@ -107,7 +111,7 @@ export function buildCreateMandateInstruction(
   validateMandateInput(input);
   const config = deriveConfigAddress(programId);
   const asset = deriveAssetAddress(input.allowedMint, programId);
-  const mandate = deriveMandateAddress(owner, programId);
+  const mandate = deriveMandateAddress(owner, programId, input.allowedMint);
   const tokenProgram = tokenProgramAddress(input.tokenProgram);
 
   return instruction(
@@ -214,7 +218,7 @@ export function buildCreateMandateTransaction(
   decimals?: number,
 ): PreparedMandate {
   validateMandateInput(input);
-  const mandateAddress = deriveMandateAddress(owner, programId);
+  const mandateAddress = deriveMandateAddress(owner, programId, input.allowedMint);
   if (decimals === undefined) {
     throw new Error("Token decimals are required to prepare delegate approval");
   }
@@ -242,6 +246,7 @@ export function buildUpdateMandateInstruction(
   input: UpdateMandateInput,
   owner: Address,
   programId: Address = DEFAULT_PROGRAM_ID,
+  mandateAddress?: Address,
 ): ChainPayInstruction {
   publicKey(owner);
   publicKey(input.approvedAgent);
@@ -257,7 +262,7 @@ export function buildUpdateMandateInstruction(
     "update_mandate",
     programId,
     [
-      meta(deriveMandateAddress(owner, programId), true),
+      meta(mandateAddress ?? deriveMandateAddress(owner, programId), true),
       meta(owner, false, true),
     ],
     encodeUpdateMandate(input),
@@ -267,11 +272,12 @@ export function buildUpdateMandateInstruction(
 export function buildPauseMandateInstruction(
   owner: Address,
   programId: Address = DEFAULT_PROGRAM_ID,
+  mandateAddress?: Address,
 ): ChainPayInstruction {
   return instruction(
     "pause_mandate",
     programId,
-    [meta(deriveMandateAddress(owner, programId), true), meta(owner, false, true)],
+    [meta(mandateAddress ?? deriveMandateAddress(owner, programId), true), meta(owner, false, true)],
     encodePauseMandate(),
   );
 }
@@ -279,11 +285,12 @@ export function buildPauseMandateInstruction(
 export function buildRevokeMandateInstruction(
   owner: Address,
   programId: Address = DEFAULT_PROGRAM_ID,
+  mandateAddress?: Address,
 ): ChainPayInstruction {
   return instruction(
     "revoke_mandate",
     programId,
-    [meta(deriveMandateAddress(owner, programId), true), meta(owner, false, true)],
+    [meta(mandateAddress ?? deriveMandateAddress(owner, programId), true), meta(owner, false, true)],
     encodeRevokeMandate(),
   );
 }

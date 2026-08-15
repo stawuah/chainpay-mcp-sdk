@@ -7,10 +7,11 @@ This Anchor program implements the ChainPay Devnet payment rail described in
 
 1. The protocol authority initializes the `config` PDA, then registers each
    explicitly supported settlement mint in its own `asset` PDA.
-2. A wallet owner creates one `mandate` PDA for one agent, source token
-   account, supported mint, per-payment limit, total limit, expiry slot,
-   optional payment-count cap, and optional cooldown. Each payment supplies its
-   own destination token account.
+2. A wallet owner creates one mint-scoped `mandate` PDA per agent and supported
+   mint, with a source token account, per-payment limit, total limit, expiry
+   slot, optional payment-count cap, and optional cooldown. The same owner can
+   therefore maintain independent USDC, PYUSD, and other token policies. Each
+   payment supplies its own destination token account.
 3. The wallet owner explicitly approves the mandate PDA as the source token
    account's SPL Token delegate. The program never receives or stores the
    wallet private key.

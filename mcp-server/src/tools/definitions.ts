@@ -62,6 +62,7 @@ export const TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         owner: { type: "string" },
+        mandate: { type: "string", description: "Specific mandate PDA; omit only for the legacy owner-scoped mandate" },
         approvedAgent: { type: "string" },
         maxPerPayment: { type: "string" },
         totalLimit: { type: "string" },
@@ -274,7 +275,10 @@ export const TOOL_DEFINITIONS = [
     description: "Prepare an owner-signed transaction that pauses a ChainPay mandate.",
     inputSchema: {
       type: "object",
-      properties: { owner: { type: "string" } },
+      properties: {
+        owner: { type: "string" },
+        mandate: { type: "string", description: "Specific mandate PDA; omit only for the legacy owner-scoped mandate" },
+      },
       required: ["owner"],
       additionalProperties: false,
     },
@@ -284,7 +288,10 @@ export const TOOL_DEFINITIONS = [
     description: "Prepare an owner-signed transaction that permanently revokes a ChainPay mandate.",
     inputSchema: {
       type: "object",
-      properties: { owner: { type: "string" } },
+      properties: {
+        owner: { type: "string" },
+        mandate: { type: "string", description: "Specific mandate PDA; omit only for the legacy owner-scoped mandate" },
+      },
       required: ["owner"],
       additionalProperties: false,
     },

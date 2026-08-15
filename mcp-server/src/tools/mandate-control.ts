@@ -6,7 +6,8 @@ export async function pauseMandate(
   args: Record<string, unknown>,
 ) {
   const owner = solanaAddress(args.owner, "owner");
-  const transaction = context.client.buildPauseMandate(owner);
+  const mandate = args.mandate === undefined ? undefined : solanaAddress(args.mandate, "mandate");
+  const transaction = context.client.buildPauseMandate(owner, mandate);
   return toolResult({
     action: "owner_wallet_signature_required",
     transaction: serializeTransaction(transaction),
@@ -19,11 +20,11 @@ export async function revokeMandate(
   args: Record<string, unknown>,
 ) {
   const owner = solanaAddress(args.owner, "owner");
-  const transaction = context.client.buildRevokeMandate(owner);
+  const mandate = args.mandate === undefined ? undefined : solanaAddress(args.mandate, "mandate");
+  const transaction = context.client.buildRevokeMandate(owner, mandate);
   return toolResult({
     action: "owner_wallet_signature_required",
     transaction: serializeTransaction(transaction),
     message: "The owner wallet must sign this revocation transaction.",
   });
 }
-

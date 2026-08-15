@@ -383,6 +383,7 @@ function App() {
   const [range, setRange] = useState<Range>("1D");
   const [mandateAddress, setMandateAddress] = useState("");
   const [mandate, setMandate] = useState<Mandate | null>(null);
+  const [mandates, setMandates] = useState<Mandate[]>([]);
   const [protocolConfig, setProtocolConfig] = useState<ProtocolConfig | null>(null);
   const [token2022Mint, setToken2022Mint] = useState(TOKEN_2022_MINT_OVERRIDE);
   const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
@@ -391,29 +392,53 @@ function App() {
   const [integrationError, setIntegrationError] = useState("");
   const wallet = walletConnection?.address ?? "";
 
-  async function loadWalletState(owner: string) {
-    const address = deriveMandateAddress(owner, PROGRAM_ID);
-    setMandateAddress(address);
+  async function loadWalletState(owner: string, preferredMandateAddress?: string) {
+    const legacyAddress = deriveMandateAddress(owner, PROGRAM_ID);
+    setMandateAddress(preferredMandateAddress ?? legacyAddress);
     setIntegrationStatus("loading");
     setIntegrationError("");
 
-    const [sdkState, configState, mcpState] = await Promise.allSettled([
-      chainpayClient.getMandate(address),
+    const [configState, toolsState] = await Promise.allSettled([
       chainpayClient.getConfig(),
-      Promise.all([
-        mcpRequest<{ tools: McpTool[] }>("tools/list"),
-        callMcpTool("get_mandate", { address }),
-      ]),
+      mcpRequest<{ tools: McpTool[] }>("tools/list"),
     ]);
 
-    if (sdkState.status === "fulfilled") setMandate(sdkState.value);
-    if (configState.status === "fulfilled") setProtocolConfig(configState.value);
-    if (mcpState.status === "fulfilled") {
-      setMcpTools(mcpState.value[0].tools ?? []);
-      setMcpResult(mcpState.value[1]);
+    const nextConfig = configState.status === "fulfilled" ? configState.value : null;
+    if (configState.status === "fulfilled") setProtocolConfig(nextConfig);
+    if (toolsState.status === "fulfilled") setMcpTools(toolsState.value.tools ?? []);
+
+    const candidateMints = [...new Set([
+      DEVNET_USDC_MINT,
+      DEVNET_PYUSD_TOKEN_2022_MINT,
+      ...(nextConfig?.supportedMints ?? []),
+    ])];
+    const candidateAddresses = [
+      legacyAddress,
+      ...candidateMints.map((mint) => deriveMandateAddress(owner, PROGRAM_ID, mint)),
+    ];
+    const mandateStates = await Promise.allSettled(
+      [...new Set(candidateAddresses)].map((address) => chainpayClient.getMandate(address)),
+    );
+    const nextMandates = mandateStates
+      .filter((state): state is PromiseFulfilledResult<Mandate | null> => state.status === "fulfilled")
+      .map((state) => state.value)
+      .filter((value): value is Mandate => value !== null);
+    const selectedMandate = nextMandates.find((value) => value.address === preferredMandateAddress)
+      ?? nextMandates.find((value) => value.status === "active")
+      ?? nextMandates[0]
+      ?? null;
+    setMandates(nextMandates);
+    setMandate(selectedMandate);
+    setMandateAddress(selectedMandate?.address ?? legacyAddress);
+
+    const mcpState = await Promise.allSettled([
+      callMcpTool("get_mandate", { address: selectedMandate?.address ?? legacyAddress }),
+    ]);
+    if (mcpState[0]?.status === "fulfilled") {
+      setMcpResult(mcpState[0].value);
     }
 
-    const errors = [sdkState, configState, mcpState]
+    const errors = [configState, toolsState, ...mandateStates]
       .filter((state): state is PromiseRejectedResult => state.status === "rejected")
       .map((state) => state.reason instanceof Error ? state.reason.message : String(state.reason));
     if (errors.length > 0) {
@@ -425,7 +450,12 @@ function App() {
   }
 
   async function refreshMandate() {
-    if (wallet) await loadWalletState(wallet);
+    if (wallet) await loadWalletState(wallet, mandate?.address);
+  }
+
+  function selectMandate(nextMandate: Mandate) {
+    setMandate(nextMandate);
+    setMandateAddress(nextMandate.address);
   }
 
   useEffect(() => {
@@ -492,6 +522,7 @@ function App() {
         walletSigner={walletConnection?.signTransaction}
         mandateAddress={mandateAddress}
         mandate={mandate}
+        mandates={mandates}
         protocolConfig={protocolConfig}
         stablecoinOptions={buildStablecoinOptions(token2022Mint)}
         mcpTools={mcpTools}
@@ -499,9 +530,11 @@ function App() {
         integrationStatus={integrationStatus}
         integrationError={integrationError}
         onRefresh={refreshMandate}
+        onSelectMandate={selectMandate}
         onDisconnect={() => {
           setWalletConnection(null);
           setMandate(null);
+          setMandates([]);
           setProtocolConfig(null);
           setToken2022Mint(TOKEN_2022_MINT_OVERRIDE);
           setMcpTools([]);
@@ -618,13 +651,15 @@ type DashboardProps = {
   walletSigner?: (transaction: Transaction) => Promise<Transaction>;
   mandateAddress: string;
   mandate: Mandate | null;
+  mandates: Mandate[];
   protocolConfig: ProtocolConfig | null;
   stablecoinOptions: StablecoinOption[];
   mcpTools: McpTool[];
   mcpResult: McpToolResponse | null;
   integrationStatus: "idle" | "loading" | "ready" | "error";
   integrationError: string;
-  onRefresh: () => Promise<void>;
+  onRefresh: (preferredMandateAddress?: string) => Promise<void>;
+  onSelectMandate: (mandate: Mandate) => void;
   onDisconnect: () => void;
   onCallMcp: (name: string, args: Record<string, unknown>) => Promise<McpToolResponse>;
 };
@@ -635,6 +670,7 @@ function Dashboard({
   walletSigner,
   mandateAddress,
   mandate,
+  mandates,
   protocolConfig,
   stablecoinOptions,
   mcpTools,
@@ -642,6 +678,7 @@ function Dashboard({
   integrationStatus,
   integrationError,
   onRefresh,
+  onSelectMandate,
   onDisconnect,
   onCallMcp,
 }: DashboardProps) {
@@ -773,7 +810,8 @@ function Dashboard({
 
   async function revokeAllMandates() {
     setDangerStatus("");
-    if (!mandate) {
+    const activeMandates = mandates.filter((value) => value.status === "active" || value.status === "paused");
+    if (!activeMandates.length) {
       setDangerStatus("There are no mandates for this wallet.");
       return;
     }
@@ -782,41 +820,45 @@ function Dashboard({
       return;
     }
     try {
-      const prepared = chainpayClient.buildRevokeMandate(wallet);
+      const prepared: PreparedTransaction = {
+        instructions: activeMandates.flatMap((value) => chainpayClient.buildRevokeMandate(wallet, value.address).instructions),
+        requiredSigners: [wallet],
+        feePayer: wallet,
+      };
       const simulation = await chainpayClient.simulate(prepared);
       if (!simulation.ok) throw new Error(simulation.error ?? "Mandate revocation simulation failed.");
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
       const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
-      await submitSignedTransaction(`revoke-all:${mandate.address}:${latest.blockhash}`, signed.serialize());
+      await submitSignedTransaction(`revoke-all:${wallet}:${latest.blockhash}`, signed.serialize());
       await onRefresh();
-      setDangerStatus("Active mandate revoked.");
+      setDangerStatus("Active mandates revoked.");
     } catch (cause) {
       setDangerStatus(cause instanceof Error ? cause.message : String(cause));
     }
   }
 
-  async function runMandateAction(action: MandateAction) {
-    if (!mandate) throw new Error("There is no mandate to update.");
+  async function runMandateAction(action: MandateAction, targetMandate: Mandate = mandate ?? mandates[0]) {
+    if (!targetMandate) throw new Error("There is no mandate to update.");
     if (!walletSigner) throw new Error("The connected wallet does not expose transaction signing.");
     const prepared = action === "pause"
-      ? chainpayClient.buildPauseMandate(wallet)
+      ? chainpayClient.buildPauseMandate(wallet, targetMandate.address)
       : action === "revoke"
-        ? chainpayClient.buildRevokeMandate(wallet)
+        ? chainpayClient.buildRevokeMandate(wallet, targetMandate.address)
         : chainpayClient.buildUpdateMandate({
-          approvedAgent: mandate.approvedAgent,
-          maxPerPayment: mandate.maxPerPayment,
-          totalLimit: mandate.totalLimit,
-          expiresAtSlot: mandate.expiresAtSlot,
-          maxPaymentCount: mandate.maxPaymentCount,
-          cooldownSlots: mandate.cooldownSlots,
+          approvedAgent: targetMandate.approvedAgent,
+          maxPerPayment: targetMandate.maxPerPayment,
+          totalLimit: targetMandate.totalLimit,
+          expiresAtSlot: targetMandate.expiresAtSlot,
+          maxPaymentCount: targetMandate.maxPaymentCount,
+          cooldownSlots: targetMandate.cooldownSlots,
           paused: false,
-        }, wallet);
+        }, wallet, targetMandate.address);
     const simulation = await chainpayClient.simulate(prepared);
     if (!simulation.ok) throw new Error(simulation.error ?? `Mandate ${action} simulation failed.`);
     const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
     const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
-    await submitSignedTransaction(`${action}-mandate:${mandate.address}:${latest.blockhash}`, signed.serialize());
-    await onRefresh();
+    await submitSignedTransaction(`${action}-mandate:${targetMandate.address}:${latest.blockhash}`, signed.serialize());
+    await onRefresh(targetMandate.address);
   }
 
   const navItems: { id: DashboardTab; label: string; icon: string }[] = [
@@ -892,9 +934,9 @@ function Dashboard({
 
           <div className="integration-strip"><span className={`connection-dot ${integrationStatus}`} /> <b>{integrationStatus === "loading" ? "Syncing" : integrationStatus === "error" ? "Needs attention" : "Connected"}</b><span>SDK · {RPC_URL.replace("https://", "")}</span><span className="integration-divider" /><b>MCP</b><span>{mcpTools.length ? `${mcpTools.length} tools discovered` : "Discovering tools"}</span><span className="integration-divider" /><b>AGENTS</b><span>{connections.length ? `${connections.length} connected` : "None connected"}</span>{integrationError && <small title={integrationError}>Check connection</small>}</div>
 
-          <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} onAsk={() => void askChainPay()} onVoice={startVoice} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} createOpen={mandateCreateOpen} onCreateOpenChange={setMandateCreateOpen} onMandateAction={runMandateAction} onRefresh={onRefresh} /> : tab === "payments" ? <PaymentPanel wallet={wallet} walletSigner={walletSigner} mandate={mandate} stablecoinOptions={stablecoinOptions} onCallMcp={onCallMcp} onRefresh={onRefresh} /> : tab === "agents" ? <AgentsPanel connections={connections} onConnect={() => setTab("connect-mcp")} onOpenAssistant={() => setTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "connect-mcp" ? <ConnectMcpPanel serverUrl={MCP_URL} wallet={wallet} connections={connections} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} /> : tab === "settings" ? <SettingsPanel wallet={wallet} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} /> : (
+          <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} onAsk={() => void askChainPay()} onVoice={startVoice} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} createOpen={mandateCreateOpen} onCreateOpenChange={setMandateCreateOpen} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onRefresh={onRefresh} /> : tab === "payments" ? <PaymentPanel wallet={wallet} walletSigner={walletSigner} mandate={mandate} stablecoinOptions={stablecoinOptions} onCallMcp={onCallMcp} onRefresh={onRefresh} /> : tab === "agents" ? <AgentsPanel connections={connections} onConnect={() => setTab("connect-mcp")} onOpenAssistant={() => setTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "connect-mcp" ? <ConnectMcpPanel serverUrl={MCP_URL} wallet={wallet} connections={connections} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} /> : tab === "settings" ? <SettingsPanel wallet={wallet} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} /> : (
             <>
-              <section className="dashboard-stat-grid"><div className="dashboard-stat"><span className="soft-label">ACTIVE MANDATES</span><strong>{mandate?.status === "active" ? "1" : "0"}</strong><small>{mandate ? "Policy account found on-chain" : "No mandate found for this wallet"}</small></div><div className="dashboard-stat"><span className="soft-label">SPENT THIS MONTH</span><strong>{spent}</strong><small>{mandateDecimals === null ? "Reading token decimals" : "Human-readable token amount · Devnet"}</small></div><div className="dashboard-stat"><span className="soft-label">PENDING PAYMENTS</span><strong>0</strong><small>Nothing waiting for approval</small></div><div className="dashboard-stat"><span className="soft-label">AGENTS CONNECTED</span><strong>{connections.length}</strong><small>{connections.length ? "Scoped MCP access" : "Connect an agent to begin"}</small></div></section>
+              <section className="dashboard-stat-grid"><div className="dashboard-stat"><span className="soft-label">ACTIVE MANDATES</span><strong>{mandates.filter((value) => value.status === "active").length}</strong><small>{mandates.length ? `${mandates.length} policy account${mandates.length === 1 ? "" : "s"} found on-chain` : "No mandates found for this wallet"}</small></div><div className="dashboard-stat"><span className="soft-label">SELECTED SPEND</span><strong>{spent}</strong><small>{mandateDecimals === null ? "Reading token decimals" : "Selected mandate · Devnet"}</small></div><div className="dashboard-stat"><span className="soft-label">PENDING PAYMENTS</span><strong>0</strong><small>Nothing waiting for approval</small></div><div className="dashboard-stat"><span className="soft-label">AGENTS CONNECTED</span><strong>{connections.length}</strong><small>{connections.length ? "Scoped MCP access" : "Connect an agent to begin"}</small></div></section>
 
               <section className="dashboard-overview overview-agent-section"><OverviewAssistant prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} onAsk={() => void askChainPay()} onVoice={startVoice} /></section>
 
@@ -928,6 +970,7 @@ function mandateExpiryDate(expiresAtSlot: bigint, currentSlot: bigint | null) {
 function MandatesPanel({
   wallet,
   walletSigner,
+  mandates,
   mandate,
   mandateDecimals,
   stablecoinOptions,
@@ -935,29 +978,28 @@ function MandatesPanel({
   createOpen,
   onCreateOpenChange,
   onMandateAction,
+  onSelectMandate,
   onRefresh,
 }: {
   wallet: string;
   walletSigner?: (transaction: Transaction) => Promise<Transaction>;
+  mandates: Mandate[];
   mandate: Mandate | null;
   mandateDecimals: number | null;
   stablecoinOptions: StablecoinOption[];
   protocolConfig: ProtocolConfig | null;
   createOpen: boolean;
   onCreateOpenChange: (open: boolean) => void;
-  onMandateAction: (action: MandateAction) => Promise<void>;
-  onRefresh: () => Promise<void>;
+  onMandateAction: (action: MandateAction, mandate: Mandate) => Promise<void>;
+  onSelectMandate: (mandate: Mandate) => void;
+  onRefresh: (preferredMandateAddress?: string) => Promise<void>;
 }) {
   const [filter, setFilter] = useState<"all" | MandateTableStatus>("all");
   const [actionInFlight, setActionInFlight] = useState<MandateAction | null>(null);
   const [actionError, setActionError] = useState("");
   const [currentSlot, setCurrentSlot] = useState<bigint | null>(null);
-  const status = mandate ? mandateTableStatus(mandate.status) : null;
-  const selectedAsset = stablecoinOptions.find((option) => option.mint === mandate?.allowedMint);
-  const progress = mandate && mandate.totalLimit > 0n
-    ? Math.min(100, Number((mandate.amountSpent * 100n) / mandate.totalLimit))
-    : 0;
-  const filteredOut = Boolean(mandate && filter !== "all" && status !== filter);
+  const [decimalsByMint, setDecimalsByMint] = useState<Record<string, number>>({});
+  const visibleMandates = mandates.filter((value) => filter === "all" || mandateTableStatus(value.status) === filter);
 
   useEffect(() => {
     let active = true;
@@ -969,11 +1011,26 @@ function MandatesPanel({
     return () => { active = false; };
   }, [mandate?.address, createOpen]);
 
-  async function handleMandateAction(action: MandateAction) {
+  useEffect(() => {
+    let active = true;
+    void Promise.all(mandates.map(async (value) => {
+      try {
+        return [value.allowedMint, await chainpayClient.getMintDecimals(value.allowedMint)] as const;
+      } catch {
+        return null;
+      }
+    })).then((entries) => {
+      if (!active) return;
+      setDecimalsByMint(Object.fromEntries(entries.filter((entry): entry is readonly [string, number] => entry !== null)));
+    });
+    return () => { active = false; };
+  }, [mandates.map((value) => value.allowedMint).join(",")]);
+
+  async function handleMandateAction(action: MandateAction, targetMandate: Mandate) {
     setActionError("");
     setActionInFlight(action);
     try {
-      await onMandateAction(action);
+      await onMandateAction(action, targetMandate);
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -1027,32 +1084,39 @@ function MandatesPanel({
               </tr>
             </thead>
             <tbody>
-              {mandate && !filteredOut && status ? (
-                <tr>
-                  <td data-label="Agent">
-                    <div className="mandate-agent-cell">
-                      <span className="mandate-agent-avatar">{mandate.approvedAgent.slice(0, 2)}</span>
-                      <span><strong>Approved agent</strong><small className="mono">{shortAddress(mandate.approvedAgent)}</small></span>
-                    </div>
-                  </td>
-                  <td data-label="Date"><div className="mandate-date-cell"><strong>{mandateExpiryDate(mandate.expiresAtSlot, currentSlot) ?? "On-chain"}</strong><small className="mono">Slot {mandate.expiresAtSlot.toString()}</small></div></td>
-                  <td data-label="Token type">
-                    <div className="mandate-token-cell"><strong>{selectedAsset?.label ?? shortAddress(mandate.allowedMint)}</strong><small>{selectedAsset?.detail ?? (mandate.tokenProgram === "token-2022" ? "Token-2022" : "Classic SPL Token")}</small></div>
-                  </td>
-                  <td data-label="Amount" className="mandate-amount-cell">
-                    <div className="mandate-amount-line"><strong>{mandateDecimals === null ? "—" : `$${formatTokenAmount(mandate.amountSpent, mandateDecimals)}`}</strong><span>/ {mandateDecimals === null ? "—" : `$${formatTokenAmount(mandate.totalLimit, mandateDecimals)}`}</span></div>
-                    <div className="mandate-spend-bar" aria-label={`${progress}% of mandate spend used`}><span style={{ width: `${progress}%` }} /></div>
-                  </td>
-                  <td data-label="Status"><span className={`mandate-table-status ${status}`}><span className="mandate-status-check">✓</span>{mandateStatusLabel(status)}</span></td>
-                  <td data-label="Actions" className="mandate-table-actions">
-                    {status !== "revoked" ? <>
-                      <button className="mandate-icon-button" onClick={() => void handleMandateAction(status === "paused" ? "resume" : "pause")} disabled={actionInFlight !== null} aria-label={status === "paused" ? "Resume mandate" : "Pause mandate"} title={status === "paused" ? "Resume mandate" : "Pause mandate"}>{actionInFlight === (status === "paused" ? "resume" : "pause") ? "…" : status === "paused" ? "▶" : "Ⅱ"}</button>
-                      <button className="mandate-icon-button danger" onClick={() => void handleMandateAction("revoke")} disabled={actionInFlight !== null} aria-label="Revoke mandate" title="Revoke mandate">⌫</button>
-                    </> : <span className="mandate-no-actions">—</span>}
-                  </td>
-                </tr>
-              ) : (
-                <tr className="mandate-empty-row"><td colSpan={6}><div className="mandate-empty-state"><span className="empty-icon">◇</span><strong>{mandate ? `No ${filter} mandates` : "No mandates yet"}</strong><p>{mandate ? "Try another status filter." : "Create a mandate to give an agent bounded spending authority."}</p><button className="button button-primary" onClick={() => onCreateOpenChange(true)}>＋ New mandate</button></div></td></tr>
+              {visibleMandates.length ? visibleMandates.map((value) => {
+                const status = mandateTableStatus(value.status);
+                const selectedAsset = stablecoinOptions.find((option) => option.mint === value.allowedMint);
+                const decimals = decimalsByMint[value.allowedMint];
+                const progress = value.totalLimit > 0n ? Math.min(100, Number((value.amountSpent * 100n) / value.totalLimit)) : 0;
+                const selected = mandate?.address === value.address;
+                return (
+                  <tr key={value.address} className={selected ? "is-selected" : undefined} onClick={() => onSelectMandate(value)}>
+                    <td data-label="Agent">
+                      <div className="mandate-agent-cell">
+                        <span className="mandate-agent-avatar">{value.approvedAgent.slice(0, 2)}</span>
+                        <span><strong>{selected ? "Selected agent" : "Approved agent"}</strong><small className="mono">{shortAddress(value.approvedAgent)}</small></span>
+                      </div>
+                    </td>
+                    <td data-label="Date"><div className="mandate-date-cell"><strong>{mandateExpiryDate(value.expiresAtSlot, currentSlot) ?? "On-chain"}</strong><small className="mono">Slot {value.expiresAtSlot.toString()}</small></div></td>
+                    <td data-label="Token type">
+                      <div className="mandate-token-cell"><strong>{selectedAsset?.label ?? shortAddress(value.allowedMint)}</strong><small>{selectedAsset?.detail ?? (value.tokenProgram === "token-2022" ? "Token-2022" : "Classic SPL Token")}</small></div>
+                    </td>
+                    <td data-label="Amount" className="mandate-amount-cell">
+                      <div className="mandate-amount-line"><strong>{decimals === undefined ? "—" : `$${formatTokenAmount(value.amountSpent, decimals)}`}</strong><span>/ {decimals === undefined ? "—" : `$${formatTokenAmount(value.totalLimit, decimals)}`}</span></div>
+                      <div className="mandate-spend-bar" aria-label={`${progress}% of mandate spend used`}><span style={{ width: `${progress}%` }} /></div>
+                    </td>
+                    <td data-label="Status"><span className={`mandate-table-status ${status}`}><span className="mandate-status-check">✓</span>{mandateStatusLabel(status)}</span></td>
+                    <td data-label="Actions" className="mandate-table-actions">
+                      {status !== "revoked" ? <>
+                        <button className="mandate-icon-button" onClick={(event) => { event.stopPropagation(); void handleMandateAction(status === "paused" ? "resume" : "pause", value); }} disabled={actionInFlight !== null} aria-label={status === "paused" ? "Resume mandate" : "Pause mandate"} title={status === "paused" ? "Resume mandate" : "Pause mandate"}>{actionInFlight === (status === "paused" ? "resume" : "pause") ? "…" : status === "paused" ? "▶" : "Ⅱ"}</button>
+                        <button className="mandate-icon-button danger" onClick={(event) => { event.stopPropagation(); void handleMandateAction("revoke", value); }} disabled={actionInFlight !== null} aria-label="Revoke mandate" title="Revoke mandate">⌫</button>
+                      </> : <span className="mandate-no-actions">—</span>}
+                    </td>
+                  </tr>
+                );
+              }) : (
+                <tr className="mandate-empty-row"><td colSpan={6}><div className="mandate-empty-state"><span className="empty-icon">◇</span><strong>{mandates.length ? `No ${filter} mandates` : "No mandates yet"}</strong><p>{mandates.length ? "Try another status filter." : "Create a mandate to give an agent bounded spending authority."}</p><button className="button button-primary" onClick={() => onCreateOpenChange(true)}>＋ New mandate</button></div></td></tr>
               )}
             </tbody>
           </table>
@@ -1522,7 +1586,7 @@ type MandateForm = {
   tokenProgram: TokenProgram;
 };
 
-function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfig, onCreated }: { wallet: string; walletSigner?: (transaction: Transaction) => Promise<Transaction>; stablecoinOptions: StablecoinOption[]; protocolConfig: ProtocolConfig | null; onCreated: () => Promise<void> }) {
+function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfig, onCreated }: { wallet: string; walletSigner?: (transaction: Transaction) => Promise<Transaction>; stablecoinOptions: StablecoinOption[]; protocolConfig: ProtocolConfig | null; onCreated: (mandateAddress: string) => Promise<void> }) {
   const defaultStablecoin = stablecoinOptions.find((option) => option.value === "token-2022" && option.mint) ?? stablecoinOptions[0];
   const defaultSourceTokenAccount = defaultStablecoin?.mint
     ? deriveAssociatedTokenAddress(wallet, defaultStablecoin.mint, defaultStablecoin.tokenProgram)
@@ -1748,7 +1812,7 @@ function MandateBuilder({ wallet, walletSigner, stablecoinOptions, protocolConfi
       const result = await submitSignedTransaction(`mandate:${prepared.mandateAddress}:${latest.blockhash}`, signed.serialize());
       setSignature(result.signature ?? "");
       setStatus("success");
-      await onCreated();
+      await onCreated(prepared.mandateAddress);
     } catch (cause) {
       setStatus("error");
       setError(cause instanceof Error ? cause.message : String(cause));

@@ -31,11 +31,10 @@ pub struct ExecutePayment<'info> {
             @ ChainPayError::InvalidTokenProgram,
     )]
     pub asset_registry: Box<Account<'info, SupportedAsset>>,
-    #[account(
-        mut,
-        seeds = [b"mandate", mandate.owner.as_ref()],
-        bump = mandate.bump,
-    )]
+    // The account may be a legacy owner-scoped mandate or a new
+    // owner+mint-scoped mandate. Its typed account data and the token
+    // constraints below bind the payment to the selected policy.
+    #[account(mut)]
     pub mandate: Box<Account<'info, PaymentMandate>>,
     #[account(
         init,

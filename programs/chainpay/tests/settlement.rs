@@ -162,8 +162,14 @@ fn run_settlement(kind: TokenKind) {
     let (config, _) = Pubkey::find_program_address(&[b"config"], &chainpay::ID);
     let (asset, _) =
         Pubkey::find_program_address(&[b"asset", mint.pubkey().as_ref()], &chainpay::ID);
-    let (mandate, _) =
-        Pubkey::find_program_address(&[b"mandate", owner.pubkey().as_ref()], &chainpay::ID);
+    let (mandate, _) = Pubkey::find_program_address(
+        &[
+            b"mandate",
+            owner.pubkey().as_ref(),
+            mint.pubkey().as_ref(),
+        ],
+        &chainpay::ID,
+    );
     let invoice_hash = [11u8; 32];
     let payment_id = [12u8; 32];
     let signature_reference = [13u8; 32];

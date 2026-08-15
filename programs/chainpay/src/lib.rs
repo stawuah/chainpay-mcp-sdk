@@ -274,6 +274,7 @@ pub mod chainpay {
 
         let mandate_key = ctx.accounts.mandate.key();
         let mandate_owner = ctx.accounts.mandate.owner;
+        let mandate_mint = ctx.accounts.mandate.allowed_mint;
         let mandate_bump = ctx.accounts.mandate.bump;
         let new_amount_spent = ctx
             .accounts
@@ -288,7 +289,26 @@ pub mod chainpay {
             .checked_add(1)
             .ok_or(error!(errors::ChainPayError::TotalLimitExceeded))?;
 
-        let signer_seeds: &[&[u8]] = &[b"mandate", mandate_owner.as_ref(), &[mandate_bump]];
+        let bump_seed = [mandate_bump];
+        let legacy_signer_seeds: &[&[u8]] =
+            &[b"mandate", mandate_owner.as_ref(), &bump_seed];
+        let mint_scoped_signer_seeds: &[&[u8]] = &[
+            b"mandate",
+            mandate_owner.as_ref(),
+            mandate_mint.as_ref(),
+            &bump_seed,
+        ];
+        let signer_seeds = if Pubkey::create_program_address(
+            mint_scoped_signer_seeds,
+            &crate::ID,
+        )
+        .ok()
+        .is_some_and(|address| address == mandate_key)
+        {
+            mint_scoped_signer_seeds
+        } else {
+            legacy_signer_seeds
+        };
         let signer_seed_set = [signer_seeds];
         let transfer_accounts = TransferChecked {
             from: ctx.accounts.source_token_account.to_account_info(),

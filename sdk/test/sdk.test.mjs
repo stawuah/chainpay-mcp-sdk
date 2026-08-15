@@ -6,7 +6,9 @@ import {
   buildExecutePaymentInstruction,
   buildInitializeConfigInstruction,
   deriveAssociatedTokenAddress,
+  deriveLegacyMandateAddress,
   deriveMandateAddress,
+  deriveMintMandateAddress,
   deriveReceiptAddress,
   preflightPayment,
   preparePayment,
@@ -34,6 +36,7 @@ test("builds Anchor-compatible mandate and payment instruction shapes", () => {
   assert.equal(mandate.name, "create_mandate");
   assert.equal(mandate.keys.length, 8);
   assert.equal(mandate.data.length, 144);
+  assert.equal(mandate.keys[2].address, deriveMintMandateAddress(owner, mint));
   assert.equal(mandate.keys[3].isSigner, true);
 
   const request = preparePayment({
@@ -70,6 +73,12 @@ test("builds Anchor-compatible mandate and payment instruction shapes", () => {
   assert.equal(payment.keys.length, 10);
   assert.equal(payment.data.length, 112);
   assert.equal(deriveReceiptAddress(mandateAddress, request.invoiceHash).length, 44);
+});
+
+test("keeps legacy mandate derivation available while scoping new mandates by mint", () => {
+  assert.equal(deriveMandateAddress(owner), deriveLegacyMandateAddress(owner));
+  assert.equal(deriveMandateAddress(owner, undefined, mint), deriveMintMandateAddress(owner, mint));
+  assert.notEqual(deriveLegacyMandateAddress(owner), deriveMintMandateAddress(owner, mint));
 });
 
 test("builds the one-time protocol config initializer", () => {

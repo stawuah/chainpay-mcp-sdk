@@ -38,7 +38,10 @@ pub struct CreateMandate<'info> {
         init,
         payer = owner,
         space = 8 + PaymentMandate::LEN,
-        seeds = [b"mandate", owner.key().as_ref()],
+        // New mandates are scoped to both the wallet and the asset. This
+        // allows one owner to maintain independent USDC, PYUSD, and other
+        // token policies while preserving the old account layout.
+        seeds = [b"mandate", owner.key().as_ref(), params.allowed_mint.as_ref()],
         bump
     )]
     pub mandate: Box<Account<'info, PaymentMandate>>,

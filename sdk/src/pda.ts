@@ -13,7 +13,7 @@ export function deriveConfigAddress(programId: Address = DEFAULT_PROGRAM_ID): Ad
   return PublicKey.findProgramAddressSync([Buffer.from(CONFIG_SEED)], publicKey(programId))[0].toBase58();
 }
 
-export function deriveMandateAddress(
+export function deriveLegacyMandateAddress(
   owner: Address,
   programId: Address = DEFAULT_PROGRAM_ID,
 ): Address {
@@ -21,6 +21,32 @@ export function deriveMandateAddress(
     [Buffer.from(MANDATE_SEED), publicKey(owner).toBytes()],
     publicKey(programId),
   )[0].toBase58();
+}
+
+export function deriveMintMandateAddress(
+  owner: Address,
+  allowedMint: Address,
+  programId: Address = DEFAULT_PROGRAM_ID,
+): Address {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(MANDATE_SEED), publicKey(owner).toBytes(), publicKey(allowedMint).toBytes()],
+    publicKey(programId),
+  )[0].toBase58();
+}
+
+/**
+ * Derive a mandate address. Without a mint this returns the legacy
+ * owner-scoped address; with a mint it returns the production mint-scoped
+ * address used by new mandates.
+ */
+export function deriveMandateAddress(
+  owner: Address,
+  programId: Address = DEFAULT_PROGRAM_ID,
+  allowedMint?: Address,
+): Address {
+  return allowedMint === undefined
+    ? deriveLegacyMandateAddress(owner, programId)
+    : deriveMintMandateAddress(owner, allowedMint, programId);
 }
 
 export function deriveReceiptAddress(

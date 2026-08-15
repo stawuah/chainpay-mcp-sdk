@@ -151,9 +151,13 @@ export class ChainPayClient {
     };
   }
 
-  buildUpdateMandate(input: Parameters<typeof buildUpdateMandateInstruction>[0], owner: Address): PreparedTransaction {
+  buildUpdateMandate(
+    input: Parameters<typeof buildUpdateMandateInstruction>[0],
+    owner: Address,
+    mandateAddress?: Address,
+  ): PreparedTransaction {
     return {
-      instructions: [buildUpdateMandateInstruction(input, owner, this.programId)],
+      instructions: [buildUpdateMandateInstruction(input, owner, this.programId, mandateAddress)],
       requiredSigners: [owner],
       feePayer: owner,
     };
@@ -183,17 +187,17 @@ export class ChainPayClient {
     };
   }
 
-  buildPauseMandate(owner: Address): PreparedTransaction {
+  buildPauseMandate(owner: Address, mandateAddress?: Address): PreparedTransaction {
     return {
-      instructions: [buildPauseMandateInstruction(owner, this.programId)],
+      instructions: [buildPauseMandateInstruction(owner, this.programId, mandateAddress)],
       requiredSigners: [owner],
       feePayer: owner,
     };
   }
 
-  buildRevokeMandate(owner: Address): PreparedTransaction {
+  buildRevokeMandate(owner: Address, mandateAddress?: Address): PreparedTransaction {
     return {
-      instructions: [buildRevokeMandateInstruction(owner, this.programId)],
+      instructions: [buildRevokeMandateInstruction(owner, this.programId, mandateAddress)],
       requiredSigners: [owner],
       feePayer: owner,
     };
