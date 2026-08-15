@@ -38,15 +38,44 @@ async function sourceTokenAccountState(
   return { valid: true, delegatedAmount };
 }
 
-async function presentMandate(context: ChainPayMcpContext, mandate: Mandate) {
-  const source = await sourceTokenAccountState(context, mandate);
-  const display = await displayTokenAmounts(context.client, mandate.allowedMint, {
+function cachedPresentMandate(
+  context: ChainPayMcpContext,
+  mandate: Mandate,
+  sourceCache: Map<Address, Promise<TokenAccountState>>,
+  displayCache: Map<Address, Promise<Awaited<ReturnType<typeof displayTokenAmounts>>>>,
+) {
+  const source = sourceCache.get(mandate.sourceTokenAccount) ?? sourceTokenAccountState(context, mandate);
+  sourceCache.set(mandate.sourceTokenAccount, source);
+  const display = displayCache.get(mandate.allowedMint) ?? displayTokenAmounts(context.client, mandate.allowedMint, {
     maxPerPayment: mandate.maxPerPayment,
     totalLimit: mandate.totalLimit,
     amountSpent: mandate.amountSpent,
-    delegatedAmount: source.delegatedAmount,
+    delegatedAmount: 0n,
   });
-  return { mandate, source, display };
+  displayCache.set(mandate.allowedMint, display);
+  return Promise.all([source, display]).then(([sourceState, baseDisplay]) => ({
+    mandate,
+    source: sourceState,
+    display: baseDisplay
+      ? {
+        ...baseDisplay,
+        amounts: {
+          ...baseDisplay.amounts,
+          delegatedAmount: formatDelegatedAmount(sourceState.delegatedAmount, baseDisplay.decimals),
+        },
+      }
+      : undefined,
+  }));
+}
+
+function formatDelegatedAmount(value: bigint, decimals: number): string {
+  if (decimals === 0) return value.toString();
+  const scale = 10n ** BigInt(decimals);
+  const whole = value / scale;
+  const fraction = value % scale;
+  return fraction === 0n
+    ? whole.toString()
+    : `${whole}.${fraction.toString().padStart(decimals, "0").replace(/0+$/, "")}`;
 }
 
 export async function listMandates(
@@ -55,7 +84,9 @@ export async function listMandates(
 ) {
   const owner = solanaAddress(args.owner, "owner");
   const mandates = await context.client.getMandatesByOwner(owner);
-  const presented = await Promise.all(mandates.map((mandate) => presentMandate(context, mandate)));
+  const sourceCache = new Map<Address, Promise<TokenAccountState>>();
+  const displayCache = new Map<Address, Promise<Awaited<ReturnType<typeof displayTokenAmounts>>>>();
+  const presented = await Promise.all(mandates.map((mandate) => cachedPresentMandate(context, mandate, sourceCache, displayCache)));
   return toolResult({ owner, count: presented.length, mandates: presented });
 }
 
@@ -71,8 +102,11 @@ export async function findCompatibleMandate(
     : tokenProgram(args.tokenProgram);
   const agent = args.agent === undefined ? undefined : solanaAddress(args.agent, "agent");
   const mandates = await context.client.getMandatesByOwner(owner);
+  const sourceCache = new Map<Address, Promise<TokenAccountState>>();
+  const displayCache = new Map<Address, Promise<Awaited<ReturnType<typeof displayTokenAmounts>>>>();
   const candidates = await Promise.all(mandates.map(async (mandate) => {
-    const source = await sourceTokenAccountState(context, mandate);
+    const presented = await cachedPresentMandate(context, mandate, sourceCache, displayCache);
+    const source = presented.source;
     const checks = {
       active: mandate.status === "active",
       agent: agent === undefined || mandate.approvedAgent === agent,
@@ -84,7 +118,7 @@ export async function findCompatibleMandate(
       delegatedAllowance: source.delegatedAmount >= amount,
     };
     return {
-      ...(await presentMandate(context, mandate)),
+      ...presented,
       checks,
       compatible: Object.values(checks).every(Boolean),
     };

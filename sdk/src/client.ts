@@ -101,13 +101,19 @@ export class ChainPayClient {
       ],
     });
 
+    const sourceAccounts = new Map<string, ReturnType<Connection["getAccountInfo"]>>();
     return Promise.all(accounts.map(async (account) => {
       const address = account.pubkey.toBase58();
       const decoded = decodeMandate(new Uint8Array(account.account.data), address, currentSlot);
-      const source = await this.connection.getAccountInfo(
-        publicKey(decoded.sourceTokenAccount),
-        this.commitment,
-      );
+      let sourceRequest = sourceAccounts.get(decoded.sourceTokenAccount);
+      if (!sourceRequest) {
+        sourceRequest = this.connection.getAccountInfo(
+          publicKey(decoded.sourceTokenAccount),
+          this.commitment,
+        );
+        sourceAccounts.set(decoded.sourceTokenAccount, sourceRequest);
+      }
+      const source = await sourceRequest;
       const tokenProgram = source ? tokenProgramFromAddress(source.owner.toBase58()) : undefined;
       return { ...decoded, tokenProgram };
     }));

@@ -107,6 +107,26 @@ type ServerAgentConnection = Omit<AgentConnection, "mandates">;
 
 const coreToolReferences = [
   {
+    name: "list_mandates",
+    description: "Discover all ChainPay mandates owned by a wallet and their live delegation status.",
+    inputSchema: { type: "object", properties: { owner: { type: "string" } }, required: ["owner"], additionalProperties: false },
+  },
+  {
+    name: "find_compatible_mandate",
+    description: "Find an active mandate compatible with an invoice mint, amount, token program, and agent.",
+    inputSchema: { type: "object", properties: { owner: { type: "string" }, mint: { type: "string" }, amount: { type: "string" }, tokenProgram: { type: "string" }, agent: { type: "string" } }, required: ["owner", "mint", "amount"], additionalProperties: false },
+  },
+  {
+    name: "create_demo_payment_request",
+    description: "Create a valid, merchant-signed Devnet demo payment request using a real token account.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "quote_payment_request",
+    description: "Verify a merchant-signed request, derive payment references, and quote it against a mandate.",
+    inputSchema: { type: "object", properties: { request: { type: "object" }, mandate: { type: "string" }, agent: { type: "string" } }, required: ["request", "mandate", "agent"], additionalProperties: false },
+  },
+  {
     name: "get_mandate",
     description: "Read an on-chain ChainPay payment mandate and its current status.",
     inputSchema: { type: "object", properties: { address: { type: "string", description: "Mandate PDA address" } }, required: ["address"], additionalProperties: false },
