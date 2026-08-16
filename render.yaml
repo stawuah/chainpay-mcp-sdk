@@ -48,7 +48,6 @@ services:
   - type: web
     name: chainpay-frontend
     runtime: static
-    plan: free
     buildCommand: npm ci --ignore-scripts && npm --prefix sdk run build && npm ci --prefix frontend --ignore-scripts && npm --prefix frontend run build
     staticPublishPath: frontend/dist
     routes:
