@@ -45,6 +45,10 @@ services:
         value: openrouter
       - key: CHAINPAY_AGENT_MODEL
         value: openrouter/free
+      - key: CHAINPAY_AGENT_SECRET_KEY
+        sync: false
+      - key: CHAINPAY_AGENT_PUBLIC_KEY
+        sync: false
   - type: web
     name: chainpay-frontend
     runtime: static

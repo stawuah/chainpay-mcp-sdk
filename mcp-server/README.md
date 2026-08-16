@@ -6,9 +6,14 @@ stdio, so MCP-capable LLM clients can discover and call the same payment tools:
 - `get_mandate`
 - `get_protocol_config`
 - `get_asset`
+- `list_mandates`
+- `find_compatible_mandate`
 - `create_mandate`
+- `create_demo_payment_request`
 - `update_mandate`
+- `check_payment_requirements`
 - `prepare_payment`
+- `quote_payment_request`
 - `quote_payment`
 - `verify_payment_request`
 - `prepare_x402_payment`
@@ -21,7 +26,13 @@ stdio, so MCP-capable LLM clients can discover and call the same payment tools:
 The server accepts only public addresses, payment identifiers, and amounts. It
 never accepts seed phrases or private keys. `create_mandate`, `pause_mandate`,
 and `revoke_mandate` return transactions that must be reviewed and signed by
-the owner wallet. `prepare_payment` returns an agent-signed transaction plan.
+the owner wallet. `check_payment_requirements` is the required requirements
+stage. It checks limits, token and asset-registry support, recipient, expiry,
+and mandate/request policy. If details are missing, the assistant returns the
+exact fields that the user must provide before it can quote, prepare, or settle
+a payment. `prepare_payment` returns a policy-checked transaction plan; the
+connected wallet signs it only after the user reviews the request in the web
+UI.
 `prepare_x402_payment` normalizes an x402 exact challenge into the same
 policy-checked flow and can relay a wallet-signed transaction through the Rust
 backend. The x402 adapter does not custody keys or operate a hosted facilitator.
@@ -29,8 +40,15 @@ backend. The x402 adapter does not custody keys or operate a hosted facilitator.
 `execute_payment` performs SDK preflight first. When a base64 wallet-signed
 transaction is supplied and `CHAINPAY_BACKEND_URL` is configured, MCP relays
 it to the Rust backend for simulation, submission, finality confirmation, and
-status tracking. Without a signed transaction it returns a safe transaction
-plan; MCP never receives private keys.
+status tracking. If `CHAINPAY_AGENT_SECRET_KEY` is configured server-side, the
+MCP process can sign policy-compliant payments with that approved-agent key
+after the owner has approved a mandate once. The key may be a base64-encoded
+Solana 64-byte secret key or a JSON byte array; `CHAINPAY_AGENT_PUBLIC_KEY`,
+when set, must match its derived public key. With `CHAINPAY_BACKEND_URL`
+configured, the signed transaction is relayed through
+`/v1/transactions/submit` for simulation, submission, finality confirmation,
+and status tracking. Never expose the secret key to the browser or an AI
+client.
 
 Build and run it locally:
 
@@ -61,12 +79,15 @@ npm run test:sdk
 The server also exposes a developer documentation preview at `/` (and `/docs`),
 the ChainPay logo at `/logo.svg`, MCP Streamable HTTP at `/mcp`, a health
 endpoint at `/healthz`, a browser-friendly read-only tool catalog at `/tools`,
-and the dashboard's read-only AI assistant at `/agent/chat`. The assistant uses
-the server-side `OPENROUTER_API_KEY` through OpenRouter's OpenAI-compatible
-Chat Completions API and can call only `get_mandate`,
-`get_protocol_config`, `get_asset`, and `get_payment`; it cannot sign, submit,
-pause, revoke, create, or update anything. The HTTP process is stateless and supports POST JSON-RPC requests plus
-GET event streams, so a remote MCP client can use a URL such as:
+and the dashboard's AI assistant at `/agent/chat`. The assistant uses the
+server-side `OPENROUTER_API_KEY` through OpenRouter's OpenAI-compatible Chat
+Completions API and can inspect requests, verify signed demo invoices, find a
+compatible mandate, quote a payment, and prepare an approval transaction. With
+an approved-agent signer configured, it can also execute a policy-compliant
+payment after the mandate approval. The web UI keeps received invoices and
+prepared mandates in a local AI inbox, where owner wallet approval remains
+explicit. The HTTP process supports POST JSON-RPC requests plus GET event
+streams, so a remote MCP client can use a URL such as:
 
 ```json
 {
@@ -155,10 +176,12 @@ For a hosted MCP client, use the deployed ChainPay endpoint directly:
 }
 ```
 
-Read-only demo prompt:
+Safe payment demo prompt:
 
 ```text
-Use ChainPay to inspect the protocol config, then quote a payment for this demo invoice without executing it.
+Create a valid Devnet PYUSD demo invoice, verify its merchant signature, find
+my compatible mandate, quote it, prepare the payment, and stop for my wallet
+approval. Do not sign or submit anything yourself.
 ```
 
 Paste the configuration into your MCP client settings. The config location

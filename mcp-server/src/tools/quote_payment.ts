@@ -1,6 +1,7 @@
 import type { ChainPayMcpContext } from "./context.js";
 import { parsePaymentInput, requireObject } from "./payment-input.js";
 import { toolResult } from "./common.js";
+import { requirementsFromPreflight } from "./check_payment_requirements.js";
 
 export async function quotePayment(
   context: ChainPayMcpContext,
@@ -12,6 +13,7 @@ export async function quotePayment(
     action: "payment_quote",
     receiptAddress: prepared.receiptAddress,
     preflight: prepared.preflight,
+    requirements: requirementsFromPreflight(prepared.preflight),
     amount: prepared.request.amount,
     mint: prepared.request.mint,
     recipient: prepared.request.recipient,

@@ -2,6 +2,7 @@ import type { ChainPayMcpContext } from "./context.js";
 import { bytesToHex } from "@chainpay/sdk";
 import { serializeTransaction, toolResult } from "./common.js";
 import { parsePaymentInput, requireObject } from "./payment-input.js";
+import { requirementsFromPreflight } from "./check_payment_requirements.js";
 
 export async function executePayment(
   context: ChainPayMcpContext,
@@ -16,6 +17,7 @@ export async function executePayment(
         action: "rejected_by_preflight",
         receiptAddress: prepared.receiptAddress,
         preflight: prepared.preflight,
+        requirements: requirementsFromPreflight(prepared.preflight),
         transaction: serializeTransaction(prepared.transaction),
       },
       true,
@@ -33,6 +35,7 @@ export async function executePayment(
           message: "CHAINPAY_BACKEND_URL must be configured to relay a signed transaction.",
           receiptAddress: prepared.receiptAddress,
           preflight: prepared.preflight,
+          requirements: requirementsFromPreflight(prepared.preflight),
           transaction: serializeTransaction(prepared.transaction),
         },
         true,
@@ -69,6 +72,7 @@ export async function executePayment(
       ...payload,
       receiptAddress: prepared.receiptAddress,
       preflight: prepared.preflight,
+      requirements: requirementsFromPreflight(prepared.preflight),
     }, payload.status === "failed");
   }
 
@@ -85,6 +89,21 @@ export async function executePayment(
     );
   }
 
+  if (context.agentAddress && parsed.agent !== context.agentAddress) {
+    return toolResult(
+      {
+        action: "agent_identity_mismatch",
+        message: "The requested agent does not match the configured approved-agent signer.",
+        configuredAgent: context.agentAddress,
+        requestedAgent: parsed.agent,
+        receiptAddress: prepared.receiptAddress,
+        preflight: prepared.preflight,
+        requirements: requirementsFromPreflight(prepared.preflight),
+      },
+      true,
+    );
+  }
+
   const result = await context.client.executePayment(prepared, context.paymentExecutor);
-  return toolResult(result, result.status === "failed");
+  return toolResult({ ...result, requirements: requirementsFromPreflight(prepared.preflight) }, result.status === "failed");
 }

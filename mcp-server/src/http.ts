@@ -13,7 +13,7 @@ import {
 import { McpConnectionRegistry, type RegisterConnectionInput } from "./connections.js";
 import type { ChainPayMcpContext } from "./tools/context.js";
 
-const MAX_BODY_BYTES = 1_048_576;
+const MAX_BODY_BYTES = 4_194_304;
 const CHAINPAY_OG_IMAGE = createChainPayOgImage();
 const AGENT_RATE_WINDOW_MS = 60_000;
 const AGENT_RATE_LIMIT = 20;
@@ -319,6 +319,7 @@ export function createHttpServer(
           wallet: body.wallet,
           mandateAddress: body.mandateAddress,
           paymentRequest: body.paymentRequest,
+          attachments: body.attachments,
           history: body.history,
         });
         writeJson(res, 200, result, headers);

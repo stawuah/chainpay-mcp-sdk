@@ -105,6 +105,15 @@ function mandateCreatedLabel(mandate: Mandate) {
 type McpTool = { name: string; description?: string; inputSchema?: unknown };
 type McpToolResponse = { content?: { type: string; text?: string }[]; isError?: boolean; structuredContent?: unknown };
 type AgentHistoryItem = { role: "user" | "assistant"; content: string };
+type AgentAttachment = {
+  name: string;
+  mimeType: string;
+  kind: "image" | "document";
+  size: number;
+  dataUrl?: string;
+  text?: string;
+};
+type AgentAttachmentPreview = Pick<AgentAttachment, "name" | "mimeType" | "kind" | "size"> & { previewUrl?: string; textPreview?: string };
 type AgentApproval = {
   kind: "mandate" | "payment";
   action: string;
@@ -123,7 +132,41 @@ type AgentApproval = {
   };
   [key: string]: unknown;
 };
-type AgentResponse = { message: string; toolCalls?: string[]; approval?: AgentApproval; error?: string };
+type AgentOutcome = {
+  kind: "mandate_approval_required" | "payment_approval_required" | "payment_settled" | "payment_blocked" | "details_required";
+  receiptAddress?: string;
+  signature?: string;
+  status?: string;
+};
+type AgentCheck = {
+  key: "limits" | "token" | "recipient" | "expiry" | "policy";
+  label: string;
+  status: "pass" | "fail" | "missing" | "pending";
+  detail: string;
+};
+type AgentRequirements = {
+  status: "ready" | "needs_details" | "blocked";
+  missing: string[];
+  checks: AgentCheck[];
+};
+type AgentResponse = { message: string; toolCalls?: string[]; approval?: AgentApproval; outcome?: AgentOutcome; requirements?: AgentRequirements; error?: string };
+type AgentInboxStage = "received" | "understood" | "mandate_prepared" | "policy_checked" | "needs_details" | "waiting_for_approval" | "approved" | "receipt_ready" | "blocked";
+type AgentInboxItem = {
+  id: string;
+  createdAt: string;
+  source: "message" | "invoice" | "mandate";
+  title: string;
+  prompt: string;
+  response: string;
+  stage: AgentInboxStage;
+  toolCalls: string[];
+  attachments: AgentAttachmentPreview[];
+  approval?: AgentApproval;
+  outcome?: AgentOutcome;
+  requirements?: AgentRequirements;
+  error?: string;
+};
+type ApprovalStatus = "idle" | "signing" | "success" | "error";
 type ProtocolConfig = {
   address?: string;
   authority: string;
@@ -163,6 +206,11 @@ const coreToolReferences = [
     name: "get_mandate",
     description: "Read an on-chain ChainPay payment mandate and its current status.",
     inputSchema: { type: "object", properties: { address: { type: "string", description: "Mandate PDA address" } }, required: ["address"], additionalProperties: false },
+  },
+  {
+    name: "check_payment_requirements",
+    description: "Check whether a payment has the token, recipient, amount, expiry, mandate limits, and policy details needed to proceed.",
+    inputSchema: { type: "object", properties: { mandate: { type: "string" }, agent: { type: "string" }, mint: { type: "string" }, recipient: { type: "string" }, amount: { type: "string" }, tokenProgram: { type: "string" }, invoiceHash: { type: "string" }, paymentId: { type: "string" }, signatureReference: { type: "string" } }, additionalProperties: false },
   },
   {
     name: "prepare_payment",
@@ -250,14 +298,137 @@ async function callMcpTool(name: string, args: Record<string, unknown>) {
   return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
 }
 
+const AGENT_INBOX_STORAGE_KEY = "chainpay.ai-inbox.v1";
+const MAX_AGENT_ATTACHMENT_BYTES = 500_000;
+const MAX_AGENT_ATTACHMENT_TEXT = 12_000;
+const agentFlowSteps = ["AI receives", "Understands", "Creates mandate", "Checks policy", "Routes", "You approve", "Settles", "Receipts"] as const;
+
+function agentInboxKey(wallet: string) {
+  return `${AGENT_INBOX_STORAGE_KEY}:${wallet}`;
+}
+
+function loadAgentInbox(wallet: string): AgentInboxItem[] {
+  if (!wallet || typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(agentInboxKey(wallet)) ?? "null") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is AgentInboxItem => Boolean(
+      item && typeof item === "object" &&
+      typeof (item as AgentInboxItem).id === "string" &&
+      typeof (item as AgentInboxItem).prompt === "string" &&
+      typeof (item as AgentInboxItem).response === "string" &&
+      typeof (item as AgentInboxItem).stage === "string",
+    )).slice(0, 30);
+  } catch {
+    return [];
+  }
+}
+
+function persistAgentInbox(wallet: string, items: AgentInboxItem[]) {
+  if (!wallet || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(agentInboxKey(wallet), JSON.stringify(items.slice(0, 30)));
+  } catch {
+    // The inbox remains usable for this session if local storage is unavailable.
+  }
+}
+
+function attachmentKind(file: File): AgentAttachment["kind"] {
+  return file.type.startsWith("image/") ? "image" : "document";
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error(`Could not read ${file.name}.`));
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function readAgentAttachment(file: File): Promise<AgentAttachment> {
+  if (file.size > MAX_AGENT_ATTACHMENT_BYTES) {
+    throw new Error(`${file.name} is larger than 500 KB. Upload a smaller invoice or image.`);
+  }
+  const base = { name: file.name, mimeType: file.type || "application/octet-stream", kind: attachmentKind(file), size: file.size } as const;
+  if (base.kind === "image") return { ...base, dataUrl: await readFileAsDataUrl(file) };
+  if (file.type.startsWith("text/") || /\.(csv|json|md|txt)$/i.test(file.name)) {
+    return { ...base, text: (await file.text()).slice(0, MAX_AGENT_ATTACHMENT_TEXT) };
+  }
+  return base;
+}
+
+function attachmentPreview(attachment: AgentAttachment): AgentAttachmentPreview {
+  return {
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    kind: attachment.kind,
+    size: attachment.size,
+    ...(attachment.dataUrl ? { previewUrl: attachment.dataUrl } : {}),
+    ...(attachment.text ? { textPreview: attachment.text.slice(0, 180) } : {}),
+  };
+}
+
+function inboxSource(prompt: string, attachments: AgentAttachment[]) {
+  if (attachments.length > 0 || /invoice|receipt|bill|image|document|pdf/i.test(prompt)) return "invoice" as const;
+  if (/mandate|policy|allowance|spend limit/i.test(prompt)) return "mandate" as const;
+  return "message" as const;
+}
+
+function inboxTitle(prompt: string, attachments: AgentAttachment[]) {
+  if (attachments.length) return `AI received ${attachments[0].name}${attachments.length > 1 ? ` + ${attachments.length - 1} more` : ""}`;
+  const compact = prompt.replace(/\s+/g, " ").trim();
+  return compact.length > 72 ? `${compact.slice(0, 69)}…` : compact || "AI request";
+}
+
+function paymentRequestFromAttachments(attachments: AgentAttachment[]) {
+  for (const attachment of attachments) {
+    if (!attachment.text || !/\.json$/i.test(attachment.name)) continue;
+    try {
+      const candidate = JSON.parse(attachment.text) as unknown;
+      if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+        const record = candidate as Record<string, unknown>;
+        if (record.payload && typeof record.payload === "object" && typeof record.signature === "string") return record;
+      }
+    } catch {
+      // The agent will ask for a structured signed request when a JSON attachment is incomplete.
+    }
+  }
+  return undefined;
+}
+
+function inboxStageForResult(result: AgentResponse): AgentInboxStage {
+  if (result.outcome?.kind === "payment_settled") return "receipt_ready";
+  if (result.outcome?.kind === "details_required" || result.requirements?.status === "needs_details") return "needs_details";
+  if (result.outcome?.kind === "payment_blocked") return "blocked";
+  if (result.approval) return "waiting_for_approval";
+  if (result.toolCalls?.includes("create_mandate")) return "mandate_prepared";
+  if (result.toolCalls?.some((tool) => ["quote_payment_request", "quote_payment", "find_compatible_mandate", "verify_payment_request"].includes(tool))) return "policy_checked";
+  return result.toolCalls?.length ? "understood" : "received";
+}
+
+function agentStageIndex(stage: AgentInboxStage) {
+  switch (stage) {
+    case "received": return 0;
+    case "understood": return 1;
+    case "mandate_prepared": return 2;
+    case "policy_checked": return 3;
+    case "needs_details": return 3;
+    case "waiting_for_approval": return 5;
+    case "approved": return 5;
+    case "receipt_ready": return 7;
+    case "blocked": return 3;
+  }
+}
+
 async function callChainPayAgent(
   message: string,
-  context: { wallet: string; mandateAddress: string; history: AgentHistoryItem[]; paymentRequest?: Record<string, unknown> },
+  context: { wallet: string; mandateAddress?: string; history: AgentHistoryItem[]; paymentRequest?: Record<string, unknown>; attachments?: AgentAttachment[] },
 ): Promise<AgentResponse> {
   const response = await fetch(AGENT_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ message, wallet: context.wallet, mandateAddress: context.mandateAddress, history: context.history, paymentRequest: context.paymentRequest }),
+    body: JSON.stringify({ message, wallet: context.wallet, mandateAddress: context.mandateAddress, history: context.history, paymentRequest: context.paymentRequest, attachments: context.attachments }),
   });
   const payload = await response.json() as AgentResponse;
   if (!response.ok) throw new Error(payload.error ?? `AI agent request failed (${response.status})`);
@@ -672,7 +843,7 @@ function App() {
         wallet={wallet}
         walletName={walletConnection?.name ?? "Solana wallet"}
         walletSigner={walletConnection?.signTransaction}
-        mandateAddress={mandateAddress}
+        mandateAddress={mandate?.address}
         mandate={mandate}
         mandates={mandates}
         protocolConfig={protocolConfig}
@@ -806,7 +977,7 @@ type DashboardProps = {
   wallet: string;
   walletName: string;
   walletSigner?: (transaction: Transaction) => Promise<Transaction>;
-  mandateAddress: string;
+  mandateAddress?: string;
   mandate: Mandate | null;
   mandates: Mandate[];
   protocolConfig: ProtocolConfig | null;
@@ -853,11 +1024,24 @@ function Dashboard({
   const [dangerStatus, setDangerStatus] = useState("");
   const [mandateCreateOpen, setMandateCreateOpen] = useState(false);
   const [demoPaymentRequest, setDemoPaymentRequest] = useState<Record<string, unknown> | undefined>();
-  const [agentApproval, setAgentApproval] = useState<AgentApproval | undefined>();
-  const [approvalStatus, setApprovalStatus] = useState<"idle" | "signing" | "success" | "error">("idle");
-  const [approvalError, setApprovalError] = useState("");
+  const [agentInbox, setAgentInbox] = useState<AgentInboxItem[]>([]);
+  const [agentAttachments, setAgentAttachments] = useState<AgentAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState("");
+  const [approvalStatuses, setApprovalStatuses] = useState<Record<string, ApprovalStatus>>({});
+  const [approvalErrors, setApprovalErrors] = useState<Record<string, string>>({});
 
   const spent = mandate ? formatTokenAmount(mandate.amountSpent, mandateDecimals) : "—";
+
+  useEffect(() => {
+    setAgentInbox(wallet ? loadAgentInbox(wallet) : []);
+    setAgentAttachments([]);
+    setApprovalStatuses({});
+    setApprovalErrors({});
+  }, [wallet]);
+
+  useEffect(() => {
+    if (wallet) persistAgentInbox(wallet, agentInbox);
+  }, [agentInbox, wallet]);
 
   useEffect(() => {
     let active = true;
@@ -892,24 +1076,66 @@ function Dashboard({
     };
   }, [wallet]);
 
+  function updateAgentInboxItem(id: string, patch: Partial<AgentInboxItem>) {
+    setAgentInbox((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
+  }
+
+  async function addAgentAttachments(files: FileList | File[]) {
+    setAttachmentError("");
+    try {
+      const next = await Promise.all(Array.from(files).slice(0, 4).map(readAgentAttachment));
+      setAgentAttachments((current) => [...current, ...next].slice(0, 4));
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : "The attachment could not be added.");
+    }
+  }
+
+  function removeAgentAttachment(name: string) {
+    setAgentAttachments((current) => current.filter((attachment) => attachment.name !== name));
+  }
+
   async function askChainPay(input = prompt) {
     const query = input.trim();
     if (!query) return;
+    const requestAttachments = [...agentAttachments];
+    const inboxId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const initialItem: AgentInboxItem = {
+      id: inboxId,
+      createdAt: new Date().toISOString(),
+      source: inboxSource(query, requestAttachments),
+      title: inboxTitle(query, requestAttachments),
+      prompt: query,
+      response: "AI is receiving the request…",
+      stage: "received",
+      toolCalls: [],
+      attachments: requestAttachments.map(attachmentPreview),
+    };
+    setAgentInbox((current) => [initialItem, ...current].slice(0, 30));
+    setAgentAttachments([]);
     setThinking(true);
     setReply("Thinking with ChainPay…");
     try {
+      const attachedPaymentRequest = paymentRequestFromAttachments(requestAttachments);
       const result = await callChainPayAgent(query, {
         wallet,
         mandateAddress,
         history: assistantHistory,
-        paymentRequest: demoPaymentRequest,
+        paymentRequest: attachedPaymentRequest ?? demoPaymentRequest,
+        attachments: requestAttachments,
       });
-      const nextReply = result.message.trim() || "ChainPay did not return a response.";
+      const nextReply = result.outcome?.kind === "payment_settled"
+        ? `${result.message.trim() || "The payment settled successfully."}\n\nI'm done with the payment. Kindly go to ChainPay and verify the payment in Receipts.`
+        : result.message.trim() || "ChainPay did not return a response.";
       setReply(nextReply);
       setAgentToolsUsed(result.toolCalls ?? []);
-      setAgentApproval(result.approval);
-      setApprovalStatus(result.approval ? "idle" : "success");
-      setApprovalError("");
+      updateAgentInboxItem(inboxId, {
+        response: nextReply,
+        stage: inboxStageForResult(result),
+        toolCalls: result.toolCalls ?? [],
+        ...(result.approval ? { approval: result.approval } : {}),
+        ...(result.outcome ? { outcome: result.outcome } : {}),
+        ...(result.requirements ? { requirements: result.requirements } : {}),
+      });
       setAssistantHistory((current) => [
         ...current,
         { role: "user" as const, content: query },
@@ -922,13 +1148,19 @@ function Dashboard({
         const result = await onCallMcp("get_mandate", { address: mandateAddress });
         const fallback = toolText(result);
         setAgentToolsUsed(["get_mandate"]);
-        setReply(`AI agent unavailable: ${error instanceof Error ? error.message : "request failed"}\n\nDirect read-only MCP response:\n${fallback}`);
+        const response = `AI agent unavailable: ${error instanceof Error ? error.message : "request failed"}\n\nDirect read-only MCP response:\n${fallback}`;
+        setReply(response);
+        updateAgentInboxItem(inboxId, { response, stage: "understood", toolCalls: ["get_mandate"] });
       } catch (fallbackError) {
-        setReply(`AI agent unavailable: ${error instanceof Error ? error.message : "request failed"}\n\n${fallbackError instanceof Error ? fallbackError.message : "The read-only MCP request failed."}`);
+        const failure = `AI agent unavailable: ${error instanceof Error ? error.message : "request failed"}\n\n${fallbackError instanceof Error ? fallbackError.message : "The read-only MCP request failed."}`;
+        setReply(failure);
         setAgentToolsUsed([]);
+        updateAgentInboxItem(inboxId, { response: failure, stage: "blocked", error: failure });
       } else {
-        setReply(error instanceof Error ? error.message : "The ChainPay assistant request failed.");
+        const failure = error instanceof Error ? error.message : "The ChainPay assistant request failed.";
+        setReply(failure);
         setAgentToolsUsed([]);
+        updateAgentInboxItem(inboxId, { response: failure, stage: "blocked", error: failure });
       }
     } finally {
       setThinking(false);
@@ -936,6 +1168,19 @@ function Dashboard({
   }
 
   async function loadDemoPaymentRequest() {
+    const inboxId = `ai-demo-${Date.now()}`;
+    const demoItem: AgentInboxItem = {
+      id: inboxId,
+      createdAt: new Date().toISOString(),
+      source: "invoice",
+      title: "Signed Devnet demo invoice",
+      prompt: "Load a signed Devnet demo invoice",
+      response: "AI is receiving the invoice…",
+      stage: "received",
+      toolCalls: [],
+      attachments: [],
+    };
+    setAgentInbox((current) => [demoItem, ...current].slice(0, 30));
     setThinking(true);
     setReply("Creating a signed Devnet demo invoice…");
     try {
@@ -945,25 +1190,32 @@ function Dashboard({
       setDemoPaymentRequest(structured.request);
       const display = structured.display;
       setPrompt("Verify and review this signed Devnet demo invoice");
-      setReply(`I loaded a valid signed demo invoice for ${display?.amount && display.decimals !== undefined ? formatTokenAmount(BigInt(display.amount), display.decimals) : "1"} ${display?.token ?? "token"}. I can verify the merchant request next.`);
+      const response = `I loaded a valid signed demo invoice for ${display?.amount && display.decimals !== undefined ? formatTokenAmount(BigInt(display.amount), display.decimals) : "1"} ${display?.token ?? "token"}. I can verify the merchant request next.`;
+      setReply(response);
       setAgentToolsUsed(["create_demo_payment_request"]);
+      updateAgentInboxItem(inboxId, { response, stage: "understood", toolCalls: ["create_demo_payment_request"] });
     } catch (error) {
-      setReply(error instanceof Error ? error.message : "I could not create the demo invoice.");
+      const failure = error instanceof Error ? error.message : "I could not create the demo invoice.";
+      setReply(failure);
       setAgentToolsUsed([]);
+      updateAgentInboxItem(inboxId, { response: failure, stage: "blocked", error: failure });
     } finally {
       setThinking(false);
     }
   }
 
-  async function approveAgentRequest() {
-    if (!agentApproval) return;
+  async function approveAgentRequest(inboxId: string) {
+    const inboxItem = agentInbox.find((item) => item.id === inboxId);
+    const agentApproval = inboxItem?.approval;
+    if (!agentApproval || !inboxItem) return;
     if (!walletSigner) {
-      setApprovalStatus("error");
-      setApprovalError("The connected wallet does not expose transaction signing.");
+      setApprovalStatuses((current) => ({ ...current, [inboxId]: "error" }));
+      setApprovalErrors((current) => ({ ...current, [inboxId]: "The connected wallet does not expose transaction signing." }));
       return;
     }
-    setApprovalStatus("signing");
-    setApprovalError("");
+    setApprovalStatuses((current) => ({ ...current, [inboxId]: "signing" }));
+    setApprovalErrors((current) => ({ ...current, [inboxId]: "" }));
+    updateAgentInboxItem(inboxId, { stage: "waiting_for_approval" });
     try {
       const prepared = preparedTransactionFromAgentApproval(agentApproval);
       const feePayer = prepared.feePayer ?? prepared.requiredSigners[0];
@@ -976,9 +1228,10 @@ function Dashboard({
       const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
       if (agentApproval.kind === "mandate") {
         const result = await submitSignedTransaction(`agent-mandate:${agentApproval.mandateAddress ?? latest.blockhash}:${latest.blockhash}`, signed.serialize());
-        setApprovalStatus("success");
-        setReply(`I created the mandate. The agent can now use this policy within the limits you approved.`);
-        setAgentApproval(undefined);
+        const response = `Mandate approved${result.signature ? ` (${shortAddress(result.signature)})` : ""}. The agent can now use this policy within the limits you approved without another wallet prompt.`;
+        setApprovalStatuses((current) => ({ ...current, [inboxId]: "success" }));
+        setReply(response);
+        updateAgentInboxItem(inboxId, { response, stage: "approved", approval: undefined });
         await onRefresh(agentApproval.mandateAddress);
         if (result.signature) setAgentToolsUsed((current) => [...current, "wallet_approval"]);
       } else {
@@ -994,15 +1247,18 @@ function Dashboard({
           throw new Error(settled?.error ?? toolText(paymentResult));
         }
         if (!settled?.signature) throw new Error("The backend did not return a transaction signature.");
-        setApprovalStatus("success");
-        setReply(`I settled the payment and received a confirmed receipt. The transaction is ${shortAddress(settled.signature)}.`);
-        setAgentApproval(undefined);
+        const response = `I'm done with the payment. The transaction is ${shortAddress(settled.signature)}. Kindly go to ChainPay and verify the payment in Receipts.`;
+        setApprovalStatuses((current) => ({ ...current, [inboxId]: "success" }));
+        setReply(response);
+        updateAgentInboxItem(inboxId, { response, stage: "receipt_ready", approval: undefined, outcome: { kind: "payment_settled", signature: settled.signature, receiptAddress: settled.receiptAddress, status: settled.status } });
         setAgentToolsUsed((current) => [...current, "wallet_approval", "execute_payment"]);
         await onRefresh();
       }
     } catch (error) {
-      setApprovalStatus("error");
-      setApprovalError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setApprovalStatuses((current) => ({ ...current, [inboxId]: "error" }));
+      setApprovalErrors((current) => ({ ...current, [inboxId]: message }));
+      updateAgentInboxItem(inboxId, { stage: "waiting_for_approval", error: message });
     }
   }
 
@@ -1103,7 +1359,7 @@ function Dashboard({
     { id: "payments", label: "Payments", icon: "↗" },
     { id: "agents", label: "Agents", icon: "⌁" },
     { id: "receipts", label: "Receipts", icon: "▤" },
-    { id: "assistant", label: "Talk to ChainPay", icon: "◉" },
+    { id: "assistant", label: "AI inbox", icon: "◉" },
   ];
 
   function selectTab(nextTab: DashboardTab) {
@@ -1131,7 +1387,7 @@ function Dashboard({
           {navItems.map((item) => (
             <button className={tab === item.id ? "side-link active" : "side-link"} key={item.id} onClick={() => selectTab(item.id)} aria-current={tab === item.id ? "page" : undefined}>
               <span className="sidebar-glyph" aria-hidden="true">{item.icon}</span>
-              <span>{item.label}</span>
+              <span>{item.label}</span>{item.id === "assistant" && agentInbox.some((entry) => entry.stage === "waiting_for_approval") && <b className="tool-count">{agentInbox.filter((entry) => entry.stage === "waiting_for_approval").length}</b>}
             </button>
           ))}
         </nav>
@@ -1166,11 +1422,11 @@ function Dashboard({
             <div className="dashboard-top-actions"><span className="dashboard-network"><i /> Solana Devnet</span><span className="wallet-chip" title={walletName}><span className="wallet-avatar">{wallet.slice(0, 2)}</span>{shortAddress(wallet)}</span></div>
           </header>
           <div className="dashboard-page">
-          <div className="dashboard-heading"><div><span className="section-kicker">{tab === "mandates" ? "POLICY CONTROL" : "CONTROL CENTER"}</span><h1 className="t-xl">{tab === "assistant" ? "Talk to ChainPay." : tab === "protocol" ? "Protocol setup." : tab === "mandates" ? "Mandates." : tab === "payments" ? "Route a payment." : tab === "agents" ? "Agents." : tab === "receipts" ? "Verify a receipt." : tab === "tools" ? "Tools." : tab === "connect-mcp" ? "Connect MCP." : tab === "settings" ? "Settings." : "Good to see you."}</h1><p>{tab === "assistant" ? "Query your live ChainPay tools." : tab === "protocol" ? "Initialize the protocol asset list from the authority wallet." : tab === "mandates" ? (mandateCreateOpen ? "Create a policy for an agent to follow before a payment can be signed." : "Review the spending rules an agent must follow before a payment can be signed.") : tab === "payments" ? "Preflight the request, then sign the SDK transaction." : tab === "agents" ? "Agents connected to ChainPay and the scopes they hold." : tab === "receipts" ? "Look up settlement proof from MCP." : tab === "tools" ? "The exact tools agents can call. Nothing else is exposed." : tab === "connect-mcp" ? "One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. It never gets your wallet key." : tab === "settings" ? "Network, wallet, notifications, and account controls." : "Your agent permissions and settlement activity at a glance."}</p></div>{tab === "overview" || tab === "mandates" ? (mandateCreateOpen ? <button className="refresh-button btn btn-secondary-light" onClick={() => setMandateCreateOpen(false)}>← Back to mandates</button> : <button className="button button-primary overview-new-mandate" onClick={openMandateCreate}>＋ New mandate</button>) : <button className="refresh-button btn btn-secondary-light" onClick={() => void onRefresh()} disabled={integrationStatus === "loading"}>↻ Refresh</button>}</div>
+          <div className="dashboard-heading"><div><span className="section-kicker">{tab === "mandates" ? "POLICY CONTROL" : tab === "assistant" ? "AI ORCHESTRATION" : "CONTROL CENTER"}</span><h1 className="t-xl">{tab === "assistant" ? "AI inbox." : tab === "protocol" ? "Protocol setup." : tab === "mandates" ? "Mandates." : tab === "payments" ? "Route a payment." : tab === "agents" ? "Agents." : tab === "receipts" ? "Verify a receipt." : tab === "tools" ? "Tools." : tab === "connect-mcp" ? "Connect MCP." : tab === "settings" ? "Settings." : "Good to see you."}</h1><p>{tab === "assistant" ? "AI receives the request, checks policy, routes the payment, and leaves wallet approval in a separate queue." : tab === "protocol" ? "Initialize the protocol asset list from the authority wallet." : tab === "mandates" ? (mandateCreateOpen ? "Create a policy for an agent to follow before a payment can be signed." : "Review the spending rules an agent must follow before a payment can be signed.") : tab === "payments" ? "Preflight the request, then sign the SDK transaction." : tab === "agents" ? "Agents connected to ChainPay and the scopes they hold." : tab === "receipts" ? "Look up settlement proof from MCP." : tab === "tools" ? "The exact tools agents can call. Nothing else is exposed." : tab === "connect-mcp" ? "One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. It never gets your wallet key." : tab === "settings" ? "Network, wallet, notifications, and account controls." : "Your agent permissions and settlement activity at a glance."}</p></div>{tab === "overview" || tab === "mandates" ? (mandateCreateOpen ? <button className="refresh-button btn btn-secondary-light" onClick={() => setMandateCreateOpen(false)}>← Back to mandates</button> : <button className="button button-primary overview-new-mandate" onClick={openMandateCreate}>＋ New mandate</button>) : <button className="refresh-button btn btn-secondary-light" onClick={() => void onRefresh()} disabled={integrationStatus === "loading"}>↻ Refresh</button>}</div>
 
           <div className="integration-strip"><span className={`connection-dot ${integrationStatus}`} /> <b>{integrationStatus === "loading" ? "Syncing" : integrationStatus === "error" ? "Needs attention" : "Connected"}</b><span>SDK · {RPC_URL.replace("https://", "")}</span><span className="integration-divider" /><b>MCP</b><span>{mcpTools.length ? `${mcpTools.length} tools discovered` : "Discovering tools"}</span><span className="integration-divider" /><b>AGENTS</b><span>{connections.length ? `${connections.length} connected` : "None connected"}</span>{integrationError && <small title={integrationError}>Check connection</small>}</div>
 
-          <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} approval={agentApproval} approvalStatus={approvalStatus} approvalError={approvalError} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} onAsk={() => void askChainPay()} onVoice={startVoice} onLoadDemoInvoice={() => void loadDemoPaymentRequest()} onApprove={approveAgentRequest} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} createOpen={mandateCreateOpen} onCreateOpenChange={setMandateCreateOpen} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onRefresh={onRefresh} /> : tab === "payments" ? <PaymentPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} stablecoinOptions={stablecoinOptions} onSelectMandate={onSelectMandate} onCallMcp={onCallMcp} onRefresh={onRefresh} /> : tab === "agents" ? <AgentsPanel connections={connections} onConnect={() => setTab("connect-mcp")} onOpenAssistant={() => setTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "connect-mcp" ? <ConnectMcpPanel serverUrl={MCP_URL} wallet={wallet} connections={connections} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} /> : tab === "settings" ? <SettingsPanel wallet={wallet} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} /> : (
+          <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} inbox={agentInbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} attachments={agentAttachments} attachmentError={attachmentError} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} onAsk={() => void askChainPay()} onVoice={startVoice} onLoadDemoInvoice={() => void loadDemoPaymentRequest()} onApprove={approveAgentRequest} onAddAttachments={addAgentAttachments} onRemoveAttachment={removeAgentAttachment} onOpenReceipts={() => selectTab("receipts")} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} createOpen={mandateCreateOpen} onCreateOpenChange={setMandateCreateOpen} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onRefresh={onRefresh} /> : tab === "payments" ? <PaymentPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} stablecoinOptions={stablecoinOptions} onSelectMandate={onSelectMandate} onCallMcp={onCallMcp} onRefresh={onRefresh} /> : tab === "agents" ? <AgentsPanel connections={connections} onConnect={() => setTab("connect-mcp")} onOpenAssistant={() => setTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "connect-mcp" ? <ConnectMcpPanel serverUrl={MCP_URL} wallet={wallet} connections={connections} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} /> : tab === "settings" ? <SettingsPanel wallet={wallet} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} /> : (
             <>
               <section className="dashboard-stat-grid"><div className="dashboard-stat"><span className="soft-label">ACTIVE MANDATES</span><strong>{mandates.filter((value) => value.status === "active").length}</strong><small>{mandates.length ? `${mandates.length} policy account${mandates.length === 1 ? "" : "s"} found on-chain` : "No mandates found for this wallet"}</small></div><div className="dashboard-stat"><span className="soft-label">SELECTED SPEND</span><strong>{spent}</strong><small>{mandateDecimals === null ? "Reading token decimals" : "Selected mandate · Devnet"}</small></div><div className="dashboard-stat"><span className="soft-label">PENDING PAYMENTS</span><strong>0</strong><small>Nothing waiting for approval</small></div><div className="dashboard-stat"><span className="soft-label">AGENTS CONNECTED</span><strong>{connections.length}</strong><small>{connections.length ? "Scoped MCP access" : "Connect an agent to begin"}</small></div></section>
 
@@ -1928,11 +2184,41 @@ function OverviewAssistant({ prompt, setPrompt, reply, thinking, listening, onAs
   </div>;
 }
 
-function AssistantPanel({ prompt, setPrompt, reply, thinking, listening, agentToolsUsed, approval, approvalStatus, approvalError, stablecoinOptions, mandateDecimals, onAsk, onVoice, onLoadDemoInvoice, onApprove }: { prompt: string; setPrompt: (value: string) => void; reply: string; thinking: boolean; listening: boolean; agentToolsUsed: string[]; approval?: AgentApproval; approvalStatus: "idle" | "signing" | "success" | "error"; approvalError: string; stablecoinOptions: StablecoinOption[]; mandateDecimals: number | null; onAsk: () => void; onVoice: () => void; onLoadDemoInvoice: () => void; onApprove: () => Promise<void> }) {
-  return <section className="assistant-layout"><div className="assistant-card dashboard-card"><div className="assistant-visual"><span className="assistant-caption">{listening ? "Listening…" : thinking ? "ChainPay agent is thinking…" : "ChainPay agent"}</span><span className="overview-agent-state"><i /> Online</span></div><div className="assistant-log"><span className="soft-label">LIVE RESPONSE</span><AssistantMessage value={reply} className="assistant-response" />{agentToolsUsed.length > 0 && <div className="assistant-tools-used"><span className="soft-label">TOOLS USED</span>{agentToolsUsed.map((tool, index) => <span className="tool-call-chip" key={`${tool}-${index}`}>{tool}</span>)}</div>}</div>{approval && <AgentApprovalCard approval={approval} status={approvalStatus} error={approvalError} stablecoinOptions={stablecoinOptions} decimals={mandateDecimals} onApprove={onApprove} />}<div className="assistant-input"><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onAsk(); }} aria-label="Ask ChainPay" placeholder="Ask about your mandate, invoice, or receipt" /><button className={listening ? "voice-button listening" : "voice-button"} onClick={onVoice} aria-label={listening ? "Stop voice input" : "Use voice input"}>{listening ? "■" : "●"}</button><button className="button button-primary ask-button" onClick={onAsk} disabled={thinking}>Ask <Arrow /></button></div><small className="assistant-note">The AI can verify invoices and prepare actions. Your wallet approves a mandate once; it never receives your private key.</small></div><div className="assistant-side"><div className="dashboard-card"><span className="section-kicker">DEMO INVOICE</span><h2>Test a signed request.</h2><p>Load a real Devnet demo invoice with a valid recipient and merchant signature, then ask me to verify it.</p><button className="button button-dark full-button" onClick={onLoadDemoInvoice} disabled={thinking}>{thinking ? "Preparing demo…" : "Load signed demo invoice"}</button></div><div className="dashboard-card"><span className="section-kicker">VOICE INPUT</span><h2>Give your agent a voice.</h2><p>Speak naturally. ChainPay verifies the request and shows any wallet approval before an action can continue.</p><button className="button button-secondary-light full-button" onClick={onVoice}>{listening ? "Stop listening" : "Start voice command"}</button></div><div className="dashboard-card safety-card"><Shield /><div><b>Safe by default</b><p>Payment execution stays behind the approved mandate and signer boundary.</p></div></div></div></section>;
+function AgentFlowRail({ stage }: { stage: AgentInboxStage }) {
+  const current = agentStageIndex(stage);
+  return <div className="agent-flow-rail" aria-label="AI payment flow">{agentFlowSteps.map((step, index) => <div className={`agent-flow-step ${index < current ? "complete" : index === current ? "current" : ""}`} key={step}><span>{String(index + 1).padStart(2, "0")}</span><b>{step}</b></div>)}</div>;
 }
 
-function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimals, onApprove }: { approval: AgentApproval; status: "idle" | "signing" | "success" | "error"; error: string; stablecoinOptions: StablecoinOption[]; decimals: number | null; onApprove: () => Promise<void> }) {
+function AgentRequirementChecklist({ requirements }: { requirements: AgentRequirements }) {
+  const statusLabel = requirements.status === "ready" ? "Ready to route" : requirements.status === "blocked" ? "Blocked" : "Details needed";
+  return <div className={`agent-requirement-checklist ${requirements.status}`}>
+    <div className="agent-requirement-heading"><span className="soft-label">AI CHECKS BEFORE ROUTING</span><span className="simulation-pill"><i /> {statusLabel}</span></div>
+    <div className="agent-requirement-grid">{requirements.checks.map((check) => <div className={`agent-requirement-row ${check.status}`} key={check.key}><span>{check.status === "pass" ? "✓" : check.status === "fail" ? "×" : check.status === "missing" ? "!" : "·"}</span><div><b>{check.label}</b><small>{check.detail}</small></div></div>)}</div>
+    {requirements.missing.length > 0 && <p className="agent-requirement-missing"><b>Please provide:</b> {requirements.missing.join(" · ")}</p>}
+  </div>;
+}
+
+function AgentInboxPanel({ inbox, approvalStatuses, approvalErrors, stablecoinOptions, mandateDecimals, onApprove, onOpenReceipts }: { inbox: AgentInboxItem[]; approvalStatuses: Record<string, ApprovalStatus>; approvalErrors: Record<string, string>; stablecoinOptions: StablecoinOption[]; mandateDecimals: number | null; onApprove: (id: string) => Promise<void>; onOpenReceipts: () => void }) {
+  return <section className="agent-inbox-panel" aria-labelledby="agent-inbox-title">
+    <div className="agent-inbox-heading"><div><span className="section-kicker">AI RECEIVED & PREPARED</span><h2 id="agent-inbox-title">Approval queue</h2></div><span className="chip chip-muted">{inbox.filter((item) => item.stage === "waiting_for_approval").length} waiting</span></div>
+    {inbox.length ? <div className="agent-inbox-list">{inbox.slice(0, 12).map((item) => <article className={`agent-inbox-item ${item.stage}`} key={item.id}>
+      <div className="agent-inbox-item-heading"><div><span className="agent-inbox-source">{item.source === "invoice" ? "INVOICE / DOCUMENT" : item.source === "mandate" ? "MANDATE REQUEST" : "AI REQUEST"}</span><h3>{item.title}</h3></div><span className={`simulation-pill ${item.stage === "receipt_ready" || item.stage === "approved" ? "ok" : item.stage === "blocked" ? "failed" : ""}`}><i /> {item.stage === "waiting_for_approval" ? "Approval needed" : item.stage === "receipt_ready" ? "Receipt ready" : item.stage === "approved" ? "Policy active" : item.stage === "blocked" ? "Blocked" : item.stage.replaceAll("_", " ")}</span></div>
+      <small className="agent-inbox-time">{new Date(item.createdAt).toLocaleString()}</small>
+      {item.attachments.length > 0 && <div className="agent-attachment-previews">{item.attachments.map((attachment) => <div className="agent-attachment-preview" key={attachment.name}>{attachment.previewUrl ? <img src={attachment.previewUrl} alt="" /> : <span className="agent-attachment-icon">{attachment.kind === "image" ? "▧" : "▤"}</span>}<span><b>{attachment.name}</b><small>{attachment.textPreview ?? (attachment.mimeType || "document")}</small></span></div>)}</div>}
+      <AgentFlowRail stage={item.stage} />
+      {item.requirements && <AgentRequirementChecklist requirements={item.requirements} />}
+      <AssistantMessage value={item.response} className="agent-inbox-response" />
+      {item.approval && item.stage === "waiting_for_approval" && <AgentApprovalCard approval={item.approval} status={approvalStatuses[item.id] ?? "idle"} error={approvalErrors[item.id] ?? item.error ?? ""} stablecoinOptions={stablecoinOptions} decimals={mandateDecimals} onApprove={() => onApprove(item.id)} />}
+      {item.stage === "receipt_ready" && <div className="agent-receipt-callout"><div><b>Payment complete</b><p>I'm done with the payment. Kindly go to ChainPay and verify the payment in Receipts.</p></div><button className="button button-secondary-light button-small" onClick={onOpenReceipts}>Verify payment <Arrow /></button></div>}
+    </article>)}</div> : <div className="agent-inbox-empty"><span className="empty-icon">◎</span><p>AI-created mandates, invoices, and payment requests will appear here before anything reaches the wallet.</p></div>}
+  </section>;
+}
+
+function AssistantPanel({ prompt, setPrompt, reply, thinking, listening, agentToolsUsed, inbox, approvalStatuses, approvalErrors, attachments, attachmentError, stablecoinOptions, mandateDecimals, onAsk, onVoice, onLoadDemoInvoice, onApprove, onAddAttachments, onRemoveAttachment, onOpenReceipts }: { prompt: string; setPrompt: (value: string) => void; reply: string; thinking: boolean; listening: boolean; agentToolsUsed: string[]; inbox: AgentInboxItem[]; approvalStatuses: Record<string, ApprovalStatus>; approvalErrors: Record<string, string>; attachments: AgentAttachment[]; attachmentError: string; stablecoinOptions: StablecoinOption[]; mandateDecimals: number | null; onAsk: () => void; onVoice: () => void; onLoadDemoInvoice: () => void; onApprove: (id: string) => Promise<void>; onAddAttachments: (files: FileList | File[]) => Promise<void>; onRemoveAttachment: (name: string) => void; onOpenReceipts: () => void }) {
+  return <section className="assistant-layout"><div className="assistant-card dashboard-card"><div className="assistant-visual"><span className="assistant-caption">{listening ? "Listening…" : thinking ? "ChainPay agent is thinking…" : "ChainPay agent"}</span><span className="overview-agent-state"><i /> Online</span></div><div className="assistant-flow-intro"><span className="section-kicker">ONE HUMAN APPROVAL</span><h2>AI handles the payment path.</h2><p>Receive the invoice, understand it, create or use a policy, check limits, route the payment, and leave only the wallet approval in your queue.</p><AgentFlowRail stage={inbox[0]?.stage ?? "received"} /><div className="assistant-guardrails"><span className="soft-label">REQUIRED BEFORE ROUTING</span><div><span>Limits</span><span>Token</span><span>Recipient</span><span>Expiry</span><span>Policy</span></div></div></div><div className="assistant-log"><span className="soft-label">LIVE RESPONSE</span><AssistantMessage value={reply} className="assistant-response" />{agentToolsUsed.length > 0 && <div className="assistant-tools-used"><span className="soft-label">TOOLS USED</span>{agentToolsUsed.map((tool, index) => <span className="tool-call-chip" key={`${tool}-${index}`}>{tool}</span>)}</div>}</div><div className="assistant-attachments">{attachments.map((attachment) => <span className="assistant-attachment-chip" key={attachment.name}><span>{attachment.kind === "image" ? "▧" : "▤"} {attachment.name}</span><button type="button" onClick={() => onRemoveAttachment(attachment.name)} aria-label={`Remove ${attachment.name}`}>×</button></span>)}</div>{attachmentError && <p className="attachment-error" role="alert">{attachmentError}</p>}<div className="assistant-input"><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onAsk(); }} aria-label="Ask ChainPay" placeholder="Ask about a mandate, invoice, or payment" /><label className="attachment-button" title="Attach an image or invoice"><input type="file" accept="image/*,.pdf,.csv,.json,.txt,.md" multiple onChange={(event) => { if (event.target.files) void onAddAttachments(event.target.files); event.currentTarget.value = ""; }} />＋ Attach</label><button className={listening ? "voice-button listening" : "voice-button"} onClick={onVoice} aria-label={listening ? "Stop voice input" : "Use voice input"}>{listening ? "■" : "●"}</button><button className="button button-primary ask-button" onClick={onAsk} disabled={thinking}>Ask <Arrow /></button></div><small className="assistant-note">The AI can receive images and invoice text, prepare mandates, check policy, and route payments. Your wallet approves the mandate once; it never receives your private key.</small><AgentInboxPanel inbox={inbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} onApprove={onApprove} onOpenReceipts={onOpenReceipts} /></div><div className="assistant-side"><div className="dashboard-card"><span className="section-kicker">DEMO INVOICE</span><h2>Test a signed request.</h2><p>Load a real Devnet demo invoice with a valid recipient and merchant signature, then ask me to verify it.</p><button className="button button-dark full-button" onClick={onLoadDemoInvoice} disabled={thinking}>{thinking ? "Preparing demo…" : "Load signed demo invoice"}</button></div><div className="dashboard-card"><span className="section-kicker">VOICE INPUT</span><h2>Give your agent a voice.</h2><p>Speak naturally. ChainPay verifies the request and shows any wallet approval before an action can continue.</p><button className="button button-secondary-light full-button" onClick={onVoice}>{listening ? "Stop listening" : "Start voice command"}</button></div><div className="dashboard-card safety-card"><Shield /><div><b>Safe by default</b><p>Payment execution stays behind the approved mandate and signer boundary.</p></div></div></div></section>;
+}
+
+function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimals, onApprove }: { approval: AgentApproval; status: ApprovalStatus; error: string; stablecoinOptions: StablecoinOption[]; decimals: number | null; onApprove: () => Promise<void> }) {
   const instructionNames = approval.transaction?.instructions?.map((instruction) => instruction.name).join(" + ") || "mandate transaction";
   const isPayment = approval.kind === "payment";
   const payment = approval.payment;
@@ -1949,7 +2235,7 @@ function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimal
       displayAmount = `${amount} base units`;
     }
   }
-  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Approve this payment" : "Approve this mandate once"}</h3></div><span className={`simulation-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "The policy preflight passed. Review the amount and recipient in your wallet before ChainPay submits the signed transaction." : "I prepared the spending policy. Review it in your wallet; future payments must still stay inside these on-chain limits."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b><code>{displayAmount}</code></span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<button className="button button-dark full-button" onClick={() => void onApprove()} disabled={status === "signing" || status === "success"}>{status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Review & pay in wallet" : "Review & approve in wallet"} <Arrow /></button></div>;
+  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Payment approval fallback" : "Approve this mandate once"}</h3></div><span className={`simulation-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "No approved agent signer completed this payment. Review the transaction here, or configure the server-side agent signer to keep the one-approval flow." : "The AI prepared this spending policy. Approve it once; future policy-compliant payments can settle without another wallet prompt."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b><code>{displayAmount}</code></span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<button className="button button-dark full-button" onClick={() => void onApprove()} disabled={status === "signing" || status === "success"}>{status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Approve payment in wallet" : "Approve wallet once"} <Arrow /></button></div>;
 }
 
 function AgentsPanel({ connections, onConnect, onOpenAssistant }: { connections: AgentConnection[]; onConnect: () => void; onOpenAssistant: () => void }) {

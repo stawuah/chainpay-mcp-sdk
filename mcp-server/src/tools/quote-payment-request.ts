@@ -4,6 +4,7 @@ import type { ChainPayMcpContext } from "./context.js";
 import { requiredString, solanaAddress, toolResult } from "./common.js";
 import { quotePayment } from "./quote_payment.js";
 import { requireObject } from "./payment-input.js";
+import { checkPaymentRequirements } from "./check_payment_requirements.js";
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -23,7 +24,7 @@ export async function quotePaymentRequest(
   const invoiceHash = bytesToHex(verification.invoiceHash);
   const paymentId = sha256Hex(`payment:${invoiceHash}`);
   const signatureReference = sha256Hex(`merchant-signature:${requiredString(request.signature, "request.signature")}`);
-  const quote = await quotePayment(context, {
+  const paymentArgs = {
     mandate,
     agent,
     invoiceHash,
@@ -33,7 +34,27 @@ export async function quotePaymentRequest(
     recipient: verification.payload.recipient,
     amount: verification.payload.amount,
     tokenProgram: verification.payload.tokenProgram,
-  });
+  };
+  const checked = await checkPaymentRequirements(context, paymentArgs);
+  const checkedContent = checked.structuredContent && typeof checked.structuredContent === "object"
+    ? checked.structuredContent as { requirements?: unknown }
+    : undefined;
+  if (checked.isError) {
+    return toolResult({
+      action: "payment_request_blocked",
+      verification: {
+        valid: true,
+        invoiceHash,
+        payload: verification.payload,
+      },
+      references: { invoiceHash, paymentId, signatureReference },
+      requirements: checkedContent?.requirements,
+      check: checkedContent,
+      message: "The merchant request is valid, but the five payment checks did not pass.",
+    }, true);
+  }
+
+  const quote = await quotePayment(context, paymentArgs);
 
   return toolResult({
     action: "payment_request_quoted",
@@ -43,6 +64,9 @@ export async function quotePaymentRequest(
       payload: verification.payload,
     },
     references: { invoiceHash, paymentId, signatureReference },
+    requirements: checkedContent?.requirements ?? (quote.structuredContent && typeof quote.structuredContent === "object"
+      ? (quote.structuredContent as { requirements?: unknown }).requirements
+      : undefined),
     quote: quote.structuredContent,
     message: "The merchant request is valid and has been checked against the selected mandate. Wallet or approved-agent signing is still required before settlement.",
   }, quote.isError === true);

@@ -137,8 +137,27 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "check_payment_requirements",
+    description: "Check whether a payment has the token, recipient, amount, expiry, mandate limits, and policy details needed to proceed. Ask the user for missing details before quoting or settling.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mandate: { type: "string" },
+        agent: { type: "string" },
+        invoiceHash: { type: "string", description: "32-byte hexadecimal idempotency hash from a verified request" },
+        paymentId: { type: "string", description: "32-byte hexadecimal payment id from a verified request" },
+        signatureReference: { type: "string", description: "32-byte hexadecimal merchant signature reference" },
+        mint: { type: "string" },
+        tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+        recipient: { type: "string" },
+        amount: { type: "string", description: "Unsigned token amount in base units" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "prepare_payment",
-    description: "Validate a payment request against the on-chain mandate and prepare an agent-signed transaction.",
+    description: "Validate a payment request against the on-chain mandate and prepare a transaction for the approved agent signer.",
     inputSchema: {
       type: "object",
       properties: {

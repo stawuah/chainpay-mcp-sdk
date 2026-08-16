@@ -5,6 +5,8 @@ import type {
 
 export type ChainPayMcpContext = {
   client: ChainPayClient;
+  /** Public identity of the optionally configured approved-agent signer. */
+  agentAddress?: string;
   /** Optional Rust backend URL used for signed-transaction relay and status tracking. */
   backendUrl?: string;
   backendAuthToken?: string;
