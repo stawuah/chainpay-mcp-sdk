@@ -1,7 +1,8 @@
-import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, type PaymentPreflight, type PolicyCheck } from "@chainpay/sdk";
+import { bytesToHex, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, verifyPaymentRequest, type PaymentPreflight, type PolicyCheck, type SignedPaymentRequest } from "@chainpay/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import { tokenProgram, toolResult } from "./common.js";
-import { parsePaymentInput } from "./payment-input.js";
+import { parsePaymentInput, requireObject } from "./payment-input.js";
+import { derivePaymentReferences } from "./payment-request-references.js";
 
 type RequirementKey = "limits" | "token" | "recipient" | "expiry" | "policy";
 type RequirementStatus = "pass" | "fail" | "missing" | "pending";
@@ -77,7 +78,7 @@ function incompleteChecks(args: Record<string, unknown>): { checks: RequirementC
   if (!has("mandate")) missing.push("active mandate");
   if (!has("agent")) missing.push("approved agent address");
   if (!has("invoiceHash") || !has("paymentId") || !has("signatureReference")) {
-    checks[4] = check("policy", "missing", "Provide a merchant-signed ChainPay request with invoice, payment, and signature references.");
+      checks[4] = check("policy", "missing", "Provide a merchant-signed ChainPay request with invoice, payment, and signature references.");
     missing.push("a merchant-signed ChainPay payment request");
   }
   return { checks, missing };
@@ -87,7 +88,38 @@ export async function checkPaymentRequirements(
   context: ChainPayMcpContext,
   args: Record<string, unknown>,
 ) {
-  const incomplete = incompleteChecks(args);
+  let normalizedArgs = args;
+  let verification: Record<string, unknown> | undefined;
+  if (args.request !== undefined) {
+    try {
+      const request = requireObject(args.request) as unknown as SignedPaymentRequest;
+      const currentSlot = await context.client.getCurrentSlot();
+      const checkedRequest = await verifyPaymentRequest(request, currentSlot);
+      if (!checkedRequest.valid) {
+        return toolResult({ action: "payment_request_rejected", status: "blocked", verification: checkedRequest, message: "The signed payment request must be corrected before its requirements can be checked." }, true);
+      }
+      const invoiceHash = bytesToHex(checkedRequest.invoiceHash);
+      const references = derivePaymentReferences(invoiceHash, request.signature);
+      normalizedArgs = {
+        ...args,
+        ...references,
+        invoiceHash,
+        mint: checkedRequest.payload.mint,
+        recipient: checkedRequest.payload.recipient,
+        amount: checkedRequest.payload.amount,
+        tokenProgram: checkedRequest.payload.tokenProgram,
+      };
+      verification = {
+        valid: true,
+        invoiceHash,
+        payload: checkedRequest.payload,
+      };
+    } catch (error) {
+      return toolResult({ action: "details_required", status: "needs_details", missing: [error instanceof Error ? error.message : String(error)], message: "The signed payment request could not be verified." }, true);
+    }
+  }
+
+  const incomplete = incompleteChecks(normalizedArgs);
   if (incomplete.missing.length > 0) {
     const requirements: PaymentRequirements = {
       status: "needs_details",
@@ -107,8 +139,8 @@ export async function checkPaymentRequirements(
   let parsed;
   try {
     parsed = parsePaymentInput({
-      ...args,
-      tokenProgram: tokenProgram(args.tokenProgram),
+      ...normalizedArgs,
+      tokenProgram: tokenProgram(normalizedArgs.tokenProgram),
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -162,9 +194,13 @@ export async function checkPaymentRequirements(
     requirements,
     receiptAddress: prepared.receiptAddress,
     preflight,
+    ...(verification ? { verification } : {}),
     request: {
       mandate: parsed.input.mandate,
       agent: parsed.agent,
+      invoiceHash: bytesToHex(parsed.input.invoiceHash),
+      paymentId: bytesToHex(parsed.input.paymentId),
+      signatureReference: bytesToHex(parsed.input.signatureReference),
       mint: parsed.input.mint,
       recipient: parsed.input.recipient,
       amount: parsed.input.amount,

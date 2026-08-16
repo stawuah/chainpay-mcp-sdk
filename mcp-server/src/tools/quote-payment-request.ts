@@ -1,14 +1,10 @@
-import { createHash } from "node:crypto";
 import { bytesToHex, verifyPaymentRequest, type SignedPaymentRequest } from "@chainpay/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import { requiredString, solanaAddress, toolResult } from "./common.js";
 import { quotePayment } from "./quote_payment.js";
 import { requireObject } from "./payment-input.js";
 import { checkPaymentRequirements } from "./check_payment_requirements.js";
-
-function sha256Hex(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
+import { derivePaymentReferences } from "./payment-request-references.js";
 
 export async function quotePaymentRequest(
   context: ChainPayMcpContext,
@@ -22,8 +18,7 @@ export async function quotePaymentRequest(
   if (!verification.valid) return toolResult({ action: "payment_request_rejected", verification }, true);
 
   const invoiceHash = bytesToHex(verification.invoiceHash);
-  const paymentId = sha256Hex(`payment:${invoiceHash}`);
-  const signatureReference = sha256Hex(`merchant-signature:${requiredString(request.signature, "request.signature")}`);
+  const { paymentId, signatureReference } = derivePaymentReferences(invoiceHash, requiredString(request.signature, "request.signature"));
   const paymentArgs = {
     mandate,
     agent,

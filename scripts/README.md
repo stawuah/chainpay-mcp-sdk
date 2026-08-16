@@ -34,3 +34,16 @@ Token-2022 mint can be enabled by the config authority. Basic Token-2022
 transfers are supported by the settlement program; extension-specific mints
 that require extra accounts need those accounts supplied to the payment
 instruction.
+
+## Render keep-alive
+
+The root render.yaml now declares a Render Cron service named
+chainpay-keep-alive. After the Blueprint is deployed, Render runs
+scripts/keep-alive.mjs every minute and pings the public frontend, backend
+health endpoint, and MCP health endpoint automatically.
+
+The service uses Render's starter cron plan, which has a paid minimum charge.
+The schedule is in UTC. Override CHAINPAY_FRONTEND_URL,
+CHAINPAY_BACKEND_URL, CHAINPAY_MCP_URL, or
+CHAINPAY_KEEPALIVE_TIMEOUT_SECONDS in the Render service environment when
+using different public URLs.

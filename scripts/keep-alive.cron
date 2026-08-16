@@ -1,0 +1,2 @@
+# Run every minute. Replace /absolute/path/to/umbral with the checkout path.
+* * * * * /absolute/path/to/umbral/scripts/keep-alive.sh >> /tmp/chainpay-keep-alive.log 2>&1

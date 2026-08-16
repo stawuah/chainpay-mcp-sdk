@@ -210,7 +210,7 @@ const coreToolReferences = [
   {
     name: "check_payment_requirements",
     description: "Check whether a payment has the token, recipient, amount, expiry, mandate limits, and policy details needed to proceed.",
-    inputSchema: { type: "object", properties: { mandate: { type: "string" }, agent: { type: "string" }, mint: { type: "string" }, recipient: { type: "string" }, amount: { type: "string" }, tokenProgram: { type: "string" }, invoiceHash: { type: "string" }, paymentId: { type: "string" }, signatureReference: { type: "string" } }, additionalProperties: false },
+    inputSchema: { type: "object", properties: { mandate: { type: "string" }, agent: { type: "string" }, request: { type: "object", description: "Optional signed merchant request; MCP derives its payment references" }, mint: { type: "string" }, recipient: { type: "string" }, amount: { type: "string" }, tokenProgram: { type: "string" }, invoiceHash: { type: "string" }, paymentId: { type: "string" }, signatureReference: { type: "string" } }, additionalProperties: false },
   },
   {
     name: "prepare_payment",

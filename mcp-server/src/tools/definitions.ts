@@ -147,6 +147,7 @@ export const TOOL_DEFINITIONS = [
         invoiceHash: { type: "string", description: "32-byte hexadecimal idempotency hash from a verified request" },
         paymentId: { type: "string", description: "32-byte hexadecimal payment id from a verified request" },
         signatureReference: { type: "string", description: "32-byte hexadecimal merchant signature reference" },
+        request: { type: "object", description: "Optional signed merchant request; MCP verifies it and derives the payment references before checking requirements" },
         mint: { type: "string" },
         tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
         recipient: { type: "string" },

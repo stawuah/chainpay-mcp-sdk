@@ -67,3 +67,19 @@ services:
         value: https://chainpay-mcp.onrender.com/mcp
       - key: VITE_CHAINPAY_AGENT_URL
         value: https://chainpay-mcp.onrender.com/agent/chat
+  - type: cron
+    name: chainpay-keep-alive
+    runtime: node
+    plan: starter
+    buildCommand: "true"
+    startCommand: node scripts/keep-alive.mjs
+    schedule: "* * * * *"
+    envVars:
+      - key: CHAINPAY_FRONTEND_URL
+        value: https://chainpay-frontend.onrender.com
+      - key: CHAINPAY_BACKEND_URL
+        value: https://chainpay-backend.onrender.com/healthz
+      - key: CHAINPAY_MCP_URL
+        value: https://chainpay-mcp.onrender.com/healthz
+      - key: CHAINPAY_KEEPALIVE_TIMEOUT_SECONDS
+        value: "20"
