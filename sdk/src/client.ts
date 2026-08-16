@@ -77,6 +77,41 @@ export class ChainPayClient {
     return account ? decodeProtocolConfig(account.data, account.address) : null;
   }
 
+  private async getMandateCreationMetadata(mandateAddress: Address): Promise<Pick<Mandate, "createdAt" | "createdAtSlot">> {
+    try {
+      let before: string | undefined;
+      let oldest: Awaited<ReturnType<Connection["getSignaturesForAddress"]>>[number] | undefined;
+
+      // Signatures are returned newest first. Walk pages so updates and
+      // payments do not make the creation time look newer than it is.
+      const historyCommitment: "confirmed" | "finalized" =
+        this.commitment === "finalized" ? "finalized" : "confirmed";
+      for (let page = 0; page < 10; page += 1) {
+        const options: { limit: number; before?: string } = { limit: 1_000 };
+        if (before) options.before = before;
+        const signatures = await this.connection.getSignaturesForAddress(
+          publicKey(mandateAddress),
+          options,
+          historyCommitment,
+        );
+        if (signatures.length === 0) break;
+        oldest = signatures[signatures.length - 1];
+        if (signatures.length < 1_000) break;
+        before = oldest.signature;
+      }
+
+      if (!oldest) return {};
+      return {
+        ...(oldest.blockTime === null ? {} : { createdAt: oldest.blockTime }),
+        createdAtSlot: BigInt(oldest.slot),
+      };
+    } catch {
+      // History is display metadata only. A temporary history RPC failure
+      // must not hide a valid mandate or block payment preparation.
+      return {};
+    }
+  }
+
   async getMandate(mandateAddress: Address): Promise<Mandate | null> {
     const currentSlot = await this.getCurrentSlot();
     const account = await this.getProgramAccount(mandateAddress);
@@ -88,7 +123,8 @@ export class ChainPayClient {
       this.commitment,
     );
     const tokenProgram = source ? tokenProgramFromAddress(source.owner.toBase58()) : undefined;
-    return { ...decoded, tokenProgram };
+    const creation = await this.getMandateCreationMetadata(decoded.address);
+    return { ...decoded, tokenProgram, ...creation };
   }
 
   async getMandatesByOwner(owner: Address): Promise<Mandate[]> {
@@ -115,7 +151,8 @@ export class ChainPayClient {
       }
       const source = await sourceRequest;
       const tokenProgram = source ? tokenProgramFromAddress(source.owner.toBase58()) : undefined;
-      return { ...decoded, tokenProgram };
+      const creation = await this.getMandateCreationMetadata(decoded.address);
+      return { ...decoded, tokenProgram, ...creation };
     }));
   }
 

@@ -923,6 +923,14 @@ mod tests {
                     "pubkey": "mandate-pda",
                     "account": { "data": ["account-data", "base64"], "executable": false, "lamports": 1, "owner": "program-id", "space": 235 }
                 }]),
+                "getSignaturesForAddress" => json!([{
+                    "signature": "create-signature",
+                    "slot": 41,
+                    "blockTime": 1_700_000_000_i64,
+                    "err": null,
+                    "memo": null,
+                    "confirmationStatus": "finalized"
+                }]),
                 _ => json!({}),
             };
             Json(json!({ "jsonrpc": "2.0", "id": 1, "result": result }))
@@ -986,6 +994,21 @@ mod tests {
         assert_eq!(discovered.status(), StatusCode::OK);
         let discovered_json: Value = discovered.json().await.unwrap();
         assert_eq!(discovered_json["result"][0]["pubkey"], "mandate-pda");
+
+        let history = reqwest::Client::new()
+            .post(format!("http://{api_address}/rpc"))
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "getSignaturesForAddress",
+                "params": ["mandate-pda", { "limit": 1 }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(history.status(), StatusCode::OK);
+        let history_json: Value = history.json().await.unwrap();
+        assert_eq!(history_json["result"][0]["slot"], 41);
 
         api_task.abort();
         rpc_task.abort();

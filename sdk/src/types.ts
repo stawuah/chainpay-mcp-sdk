@@ -70,6 +70,10 @@ export type Mandate = {
   tokenProgram?: TokenProgram;
   /** Present for nonce-scoped mandates; absent for legacy accounts. */
   mandateNonce?: Address;
+  /** Unix timestamp from the oldest confirmed transaction for this PDA. */
+  createdAt?: number;
+  /** Slot from the oldest confirmed transaction for this PDA. */
+  createdAtSlot?: bigint;
 };
 
 export type SupportedAsset = {

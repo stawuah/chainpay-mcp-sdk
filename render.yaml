@@ -45,3 +45,22 @@ services:
         value: openrouter
       - key: CHAINPAY_AGENT_MODEL
         value: openrouter/free
+  - type: web
+    name: chainpay-frontend
+    runtime: static
+    plan: free
+    buildCommand: npm ci --ignore-scripts && npm --prefix sdk run build && npm ci --prefix frontend --ignore-scripts && npm --prefix frontend run build
+    staticPublishPath: frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_CHAINPAY_BACKEND_URL
+        value: https://chainpay-backend.onrender.com
+      - key: VITE_CHAINPAY_RPC_URL
+        value: https://chainpay-backend.onrender.com/rpc
+      - key: VITE_CHAINPAY_MCP_URL
+        value: https://chainpay-mcp.onrender.com/mcp
+      - key: VITE_CHAINPAY_AGENT_URL
+        value: https://chainpay-mcp.onrender.com/agent/chat
