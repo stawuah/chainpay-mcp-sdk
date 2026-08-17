@@ -1449,3 +1449,44 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
     width: auto;
   }
 }
+
+/* AI inbox hierarchy: keep the active request prominent and history quiet. */
+.assistant-card { overflow: hidden; }
+.assistant-log { padding: 17px; margin-top: 20px; border: 1px solid var(--line-soft); border-radius: 14px; background: #fbfcff; }
+.assistant-input { padding: 7px; margin-top: 16px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.assistant-input input { height: 42px; border: 0; background: transparent; }
+.assistant-input input:focus { border-color: transparent; }
+.agent-inbox-heading { align-items: flex-end; }
+.agent-inbox-summary { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.agent-inbox-summary .chip { white-space: nowrap; }
+.agent-current-item { padding: 20px; box-shadow: 0 8px 26px rgba(24, 39, 75, .055); }
+.agent-current-label { display: inline-flex; align-items: center; padding: 4px 7px; margin-left: 8px; border-radius: 999px; color: var(--blue); background: var(--blue-soft); font: 600 9px var(--mono); letter-spacing: .04em; vertical-align: 1px; }
+.agent-history { overflow: hidden; margin-top: 2px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.agent-history summary { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 14px 16px; color: var(--ink); cursor: pointer; list-style: none; }
+.agent-history summary::-webkit-details-marker { display: none; }
+.agent-history summary::after { content: "+"; color: var(--muted); font: 18px/1 var(--sans); }
+.agent-history[open] summary { border-bottom: 1px solid var(--line-soft); }
+.agent-history[open] summary::after { content: "−"; }
+.agent-history summary > span:first-child { display: grid; gap: 3px; }
+.agent-history summary b { font-size: 12px; font-weight: 600; }
+.agent-history summary small { color: var(--muted); font-size: 10px; }
+.agent-history-list { display: grid; gap: 0; }
+.agent-history-item { padding: 15px 16px; border: 0; border-bottom: 1px solid var(--line-soft); border-radius: 0; background: #fff; }
+.agent-history-item:last-child { border-bottom: 0; }
+.agent-history-item.waiting_for_approval { background: #fbfcff; }
+.agent-history-item.receipt_ready, .agent-history-item.approved { background: #fbfffd; }
+.agent-history-item.blocked { background: #fffafb; }
+.agent-history-item .agent-inbox-item-heading h3 { margin-top: 6px; font-size: 13px; }
+.agent-history-item .agent-inbox-response { max-height: 54px; overflow: hidden; }
+.agent-history-item .agent-inbox-response p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.agent-history-item .agent-approval-card { margin-top: 13px; }
+
+@media (max-width: 760px) {
+  .agent-inbox-heading { align-items: flex-start; flex-direction: column; }
+  .agent-inbox-summary { width: 100%; justify-content: stretch; }
+  .agent-inbox-summary .chip { flex: 1; text-align: center; }
+  .agent-current-item { padding: 16px; }
+  .agent-current-label { display: table; margin: 8px 0 0; }
+  .agent-history summary { padding: 13px 14px; }
+  .agent-history-item { padding: 14px; }
+}
