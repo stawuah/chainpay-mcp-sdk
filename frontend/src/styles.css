@@ -633,6 +633,13 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 
 /* Landing page mid-to-footer polish — keep the ChainPay system quiet, editorial, and high contrast. */
 .site-shell .command-section { padding-top: 112px; }
+.site-shell main > .command-section,
+.site-shell main > .assets-section,
+.site-shell main > .connector-section,
+.site-shell main > .use-cases-section,
+.site-shell main > .market-section,
+.site-shell main > .proof-section,
+.site-shell main > .steps-section { margin-bottom: 24px; }
 .site-shell .command-panel,
 .site-shell .action-panel,
 .site-shell .asset-card,
@@ -669,6 +676,45 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 }
 .site-shell .asset-card:hover { border-color: #b8c8ed; transform: translateY(-2px); }
 .site-shell .asset-button { border-radius: var(--radius-control); }
+
+.site-shell .connector-section {
+  display: grid;
+  grid-template-columns: minmax(0, .82fr) minmax(480px, 1.18fr);
+  align-items: center;
+  gap: 72px;
+  padding-top: 128px;
+}
+.connector-copy h2 { margin-top: 14px; color: var(--ink); font-size: clamp(40px, 5vw, 52px); font-weight: 400; line-height: 1; letter-spacing: -1.3px; }
+.connector-copy p { max-width: 440px; margin: 22px 0 24px; color: var(--body); font-size: 16px; line-height: 1.65; }
+.connector-live-note { display: flex; align-items: center; gap: 11px; max-width: 385px; padding: 13px 14px; margin-bottom: 27px; border: 1px solid #dcefe5; border-radius: 14px; background: #f7fcf9; }
+.connector-live-icon { width: 30px; height: 30px; display: grid; place-items: center; flex: 0 0 30px; border-radius: 50%; color: var(--green); background: #e2f6e9; font-size: 15px; }
+.connector-live-note b, .connector-live-note small { display: block; }
+.connector-live-note b { color: var(--ink); font-size: 11px; font-weight: 600; }
+.connector-live-note small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.connector-stage { position: relative; min-height: 476px; overflow: hidden; border: 1px solid #242a35; border-radius: var(--radius-card); background: #090b0f; box-shadow: 0 24px 56px rgba(10, 11, 13, .14); }
+.connector-route-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 53% center; opacity: .92; }
+.connector-stage-overlay { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(9, 11, 15, .82) 0%, rgba(9, 11, 15, .2) 49%, rgba(9, 11, 15, .15) 100%); }
+.connector-anchor-card { position: absolute; z-index: 2; top: 50%; left: 28px; width: 176px; padding: 17px; border: 1px solid rgba(142, 174, 255, .45); border-radius: 16px; color: #fff; background: rgba(17, 23, 34, .84); box-shadow: 0 14px 34px rgba(0, 0, 0, .25); transform: translateY(-50%); backdrop-filter: blur(12px); }
+.connector-anchor-card .soft-label { color: #8eaefe; }
+.connector-anchor-card strong, .connector-anchor-card small { display: block; }
+.connector-anchor-card strong { margin-top: 10px; color: #fff; font-size: 15px; font-weight: 600; }
+.connector-anchor-card small { margin-top: 7px; color: #b7bec9; font-size: 10px; line-height: 1.5; }
+.connector-stack { position: absolute; z-index: 3; top: 50%; right: 27px; width: min(49%, 290px); height: 308px; transform: translateY(-50%); }
+.connector-card { position: absolute; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; width: 100%; min-height: 88px; padding: 14px; border: 1px solid rgba(255, 255, 255, .28); border-radius: 16px; color: #fff; background: rgba(22, 27, 37, .87); box-shadow: 0 15px 30px rgba(0, 0, 0, .25); backdrop-filter: blur(13px); }
+.connector-card-1 { top: 0; right: 0; transform: rotate(-2.8deg); }
+.connector-card-2 { top: 99px; right: 13px; transform: rotate(1.8deg); }
+.connector-card-3 { top: 197px; right: 2px; transform: rotate(-1deg); }
+.connector-logo { width: 38px; height: 38px; display: grid; place-items: center; overflow: hidden; border-radius: 12px; color: #fff; background: #fff; font: 500 21px var(--mono); }
+.connector-card-2 .connector-logo { background: #f4ede5; }
+.connector-card-3 .connector-logo { color: #8eaefe; background: #1b2945; }
+.connector-logo img { width: 100%; height: 100%; padding: 7px; object-fit: contain; }
+.connector-card strong, .connector-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connector-card strong { color: #fff; font-size: 12px; font-weight: 600; }
+.connector-card small { margin-top: 4px; color: #b7bec9; font-size: 10px; }
+.connector-card a, .connector-more { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid rgba(255, 255, 255, .22); border-radius: 50%; color: #fff; font-size: 12px; }
+.connector-card a:hover { border-color: #6d91ff; color: #6d91ff; }
+.connector-more { color: #8eaefe; }
+.connector-coming-soon { position: absolute; z-index: 4; top: 20px; right: 20px; padding: 7px 10px; border: 1px solid rgba(255, 255, 255, .2); border-radius: var(--radius-control); color: #d7dbe3; background: rgba(9, 11, 15, .62); font: 500 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; backdrop-filter: blur(8px); }
 
 .site-shell .use-cases-section { padding-top: 112px; }
 .site-shell .use-case-grid { gap: 16px; }
@@ -755,13 +801,22 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 @media (max-width: 639px) {
   .site-shell .command-section,
   .site-shell .assets-section,
+  .site-shell .connector-section,
   .site-shell .use-cases-section,
   .site-shell .market-section,
   .site-shell .proof-section,
   .site-shell .steps-section { padding-top: 80px; }
+  .site-shell main > .command-section,
+  .site-shell main > .assets-section,
+  .site-shell main > .connector-section,
+  .site-shell main > .use-cases-section,
+  .site-shell main > .market-section,
+  .site-shell main > .proof-section,
+  .site-shell main > .steps-section { margin-bottom: 16px; }
   .site-shell .assets-section,
   .site-shell .proof-section { padding-bottom: 80px; }
   .site-shell .asset-card { min-height: 0; }
+  .site-shell .connector-section { padding-top: 80px; }
   .site-shell .use-case-card { min-height: 0; }
   .site-shell .proof-stats { border-radius: 20px; }
   .site-shell .cta-section { margin-top: 80px; margin-bottom: 80px; padding: 72px 24px; }
@@ -771,6 +826,8 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
   .hero { grid-template-columns: 1fr; gap: 35px; }
   .hero-copy { max-width: 760px; }
   .hero-visual { max-width: 620px; }
+  .site-shell .connector-section { grid-template-columns: 1fr; gap: 40px; }
+  .connector-stage { max-width: 680px; }
   .proof-section { gap: 40px; }
   .steps-grid { grid-template-columns: repeat(2, 1fr); }
   .dashboard-layout { grid-template-columns: 220px minmax(0, 1fr); }
@@ -797,6 +854,7 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
   .section-heading { align-items: flex-start; flex-direction: column; gap: 17px; }
   .section-heading h2 { font-size: 36px; }
   .command-section, .assets-section, .market-section, .proof-section, .steps-section { padding-top: 72px; }
+  .connector-section { padding-top: 72px; }
   .command-grid, .asset-grid, .proof-section, .mandate-details, .assistant-layout, .mandate-builder-layout, .payment-flow-layout { grid-template-columns: 1fr; }
   .asset-grid, .steps-grid { gap: 16px; }
   .table-head { display: none; }
@@ -808,6 +866,13 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
   .insurance-note { align-items: flex-start; text-align: left; }
   .proof-section { padding-bottom: 0; }
   .proof-stats { margin-top: 15px; }
+  .connector-stage { min-height: 420px; margin-inline: -2px; }
+  .connector-anchor-card { top: auto; bottom: 24px; left: 18px; width: 155px; padding: 14px; transform: none; }
+  .connector-stack { right: 18px; width: min(56%, 270px); height: 278px; }
+  .connector-card { min-height: 78px; padding: 12px; }
+  .connector-card-2 { top: 88px; }
+  .connector-card-3 { top: 176px; }
+  .connector-copy p { font-size: 15px; }
   .cta-section { margin-top: 72px; margin-bottom: 72px; padding: 72px 24px; }
   .footer-main { grid-template-columns: 1fr; gap: 38px; }
   .footer-links { gap: 18px; }
@@ -1361,4 +1426,26 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
   .batch-readiness .shield-icon { display: none; }
   .batch-readiness .button { width: 100%; }
   .batch-receipt-links { min-width: 0; padding-top: 12px; border-top: 1px solid #dcefe2; }
+}
+
+@media (max-width: 460px) {
+  .site-shell .connector-stage {
+    min-height: 520px;
+  }
+
+  .site-shell .connector-stack {
+    top: 48px;
+    right: 14px;
+    left: 14px;
+    width: auto;
+    height: 260px;
+    transform: none;
+  }
+
+  .site-shell .connector-anchor-card {
+    right: 14px;
+    bottom: 18px;
+    left: 14px;
+    width: auto;
+  }
 }

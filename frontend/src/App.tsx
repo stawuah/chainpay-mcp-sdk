@@ -4,6 +4,7 @@ import { ChainPayClient, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreat
 import type { ChainPayInstruction, Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, SimulationResult, TokenProgram } from "@chainpay/sdk";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import { connectChainPayWallet, restoreChainPayWallet, type ChainPayWallet } from "./wallet";
+import connectorRoutingImage from "./assets/connector-routing.png";
 
 (globalThis as typeof globalThis & { Buffer: typeof Buffer }).Buffer = Buffer;
 
@@ -783,6 +784,12 @@ const assets = [
   { name: "ChainPay receipt", symbol: "RECEIPT", price: "Verified", change: "On-chain", className: "green", icon: "✓" },
 ];
 
+const connectorRoadmap = [
+  { name: "x402", detail: "HTTP payment requests", logo: "https://x402.org/wp-content/uploads/sites/10/2026/06/favicon.png", href: "https://x402.org/" },
+  { name: "Lobster.cash", detail: "Scoped agent wallets", logo: "https://www.lobster.cash/lobster-logo-icon.svg", href: "https://www.lobster.cash/" },
+  { name: "Your agent stack", detail: "Custom rail adapters", logo: "", href: "" },
+] as const;
+
 const useCases = [
   { title: "Treasury approvals", quote: "Set a capped transfer policy.", detail: "Agents can request payments without receiving unrestricted wallet access." },
   { title: "Merchant settlement", quote: "Route every invoice through one policy.", detail: "Preflight the recipient, mint, amount, and mandate before signing." },
@@ -1039,6 +1046,7 @@ function App() {
         </a>
         <nav className={`main-nav ${menuOpen ? "open" : ""}`}>
           <a href="#products">Products</a>
+          <a href="#connectors">Connectors</a>
           <a href="#use-cases">Use cases</a>
           <a href="#how-it-works">How it works</a>
           <a href="#activity">Activity</a>
@@ -1064,7 +1072,6 @@ function App() {
               </button>
               <a className="text-link" href="#how-it-works">See how it works <Arrow /></a>
             </div>
-            <div className="hero-trust"><Shield /> One interface for every rail <span /> ✓ Policy before payment <span /> ✓ Receipt for every settlement</div>
             <ol className="hero-steps" aria-label="How ChainPay handles an agent payment">
               <li><span>01</span><b>Set a policy</b><small>Limit token, spend, and expiry.</small></li>
               <li><span>02</span><b>Approve in wallet</b><small>Your signing key stays with you.</small></li>
@@ -1110,6 +1117,29 @@ function App() {
         <section className="assets-section page-width">
           <div className="section-heading"><div><span className="section-kicker">SUPPORTED RAILS</span><h2>Built for stablecoin settlement.</h2><p>Connect the assets your agents already use. ChainPay handles the policy; Solana handles settlement.</p></div><a className="text-link" href="#support">View all assets <Arrow /></a></div>
           <div className="asset-grid">{assets.map((asset) => <article className="asset-card" key={asset.symbol}><div className="asset-card-top"><span className={`asset-logo ${asset.className}`}>{asset.icon}</span><span className="asset-more">···</span></div><h3>{asset.name}</h3><div className="asset-pair">{asset.symbol} <span>/ DEVNET</span></div><div className="asset-price">{asset.price}</div><div className={`asset-change ${asset.change.startsWith("+") ? "positive" : "neutral"}`}>{asset.change}</div><MiniChart color={asset.className} /><button className="asset-button" onClick={() => selectAction(asset.symbol === "RECEIPT" ? "Receipts" : "Send")}>{asset.symbol === "RECEIPT" ? "View receipts" : "Route payment"} <Arrow /></button></article>)}</div>
+        </section>
+
+        <section className="connector-section page-width" id="connectors">
+          <div className="connector-copy">
+            <span className="section-kicker">FUTURE CONNECTOR ROADMAP</span>
+            <h2>More payment paths.<br /><em>One policy layer.</em></h2>
+            <p>Stablecoin transfers on Solana Devnet are live today. Next, ChainPay will route approved payment requests through agent-native payment networks without weakening the policy controls you set.</p>
+            <div className="connector-live-note"><span className="connector-live-icon">◈</span><span><b>Live today</b><small>Policy-checked stablecoin transfers on Solana Devnet</small></span></div>
+            <a className="text-link" href="#products">Route a stablecoin payment <Arrow /></a>
+          </div>
+          <div className="connector-stage" aria-label="Connector roadmap preview">
+            <img className="connector-route-art" src={connectorRoutingImage} alt="Abstract payment routes branching from a policy layer" loading="lazy" />
+            <div className="connector-stage-overlay" aria-hidden="true" />
+            <div className="connector-anchor-card"><span className="soft-label">CHAINPAY</span><strong>Policy layer</strong><small>Limits, approval, and receipts stay in one place.</small></div>
+            <div className="connector-stack">
+              {connectorRoadmap.map((connector, index) => <article className={`connector-card connector-card-${index + 1}`} key={connector.name}>
+                <span className="connector-logo">{connector.logo ? <img src={connector.logo} alt="" loading="lazy" /> : "＋"}</span>
+                <span><strong>{connector.name}</strong><small>{connector.detail}</small></span>
+                {connector.href ? <a href={connector.href} target="_blank" rel="noreferrer" aria-label={`Learn about ${connector.name}`}>↗</a> : <span className="connector-more">+</span>}
+              </article>)}
+            </div>
+            <span className="connector-coming-soon">Coming soon</span>
+          </div>
         </section>
 
         <section className="use-cases-section page-width" id="use-cases">
