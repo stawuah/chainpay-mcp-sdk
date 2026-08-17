@@ -1,0 +1,3 @@
+mandate_address,invoice,amount,recipient,required_token,receipt_address,token_program
+REPLACE_WITH_ACTIVE_MANDATE_PDA,chainpay-csv-test-001,1.00,REPLACE_WITH_RECIPIENT_WALLET_OR_TOKEN_ACCOUNT,4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU,,spl-token
+REPLACE_WITH_ACTIVE_MANDATE_PDA,chainpay-csv-test-002,2.50,REPLACE_WITH_RECIPIENT_WALLET_OR_TOKEN_ACCOUNT,4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU,,spl-token
