@@ -791,17 +791,199 @@ const connectorRoadmap = [
 ] as const;
 
 const useCases = [
-  { title: "Treasury approvals", quote: "Set a capped transfer policy.", detail: "Agents can request payments without receiving unrestricted wallet access." },
-  { title: "Merchant settlement", quote: "Route every invoice through one policy.", detail: "Preflight the recipient, mint, amount, and mandate before signing." },
-  { title: "Programmatic payouts", quote: "Keep recipients and limits explicit.", detail: "The protocol records the request and returns a durable receipt." },
-  { title: "Reconciliation", quote: "Verify the settlement later.", detail: "Look up the receipt PDA and transaction signature from MCP." },
-];
+  {
+    slug: "treasury-approvals",
+    number: "01",
+    title: "Treasury approvals",
+    quote: "Set a capped transfer policy.",
+    detail: "Agents can request payments without receiving unrestricted wallet access.",
+    headline: "Treasury decisions,",
+    accent: "without treasury bottlenecks.",
+    summary: "Give a treasury agent a defined stablecoin budget and let ChainPay return a clear approval path for every vendor request.",
+    agent: "treasury-agent",
+    request: "Release the monthly cloud vendor invoice for 4,500 USDC.",
+    requestMeta: "Invoice #CLD-248 · signed merchant request",
+    policy: "Operations · USDC spend mandate",
+    amount: "4,500 USDC",
+    limit: "10,000 USDC",
+    outcome: "The agent can request the payment, but the wallet still approves the final transaction.",
+    feedback: "The invoice is inside the mandate limit. I prepared the transfer and need your wallet approval to continue.",
+    metrics: [
+      ["10,000 USDC", "Max per payment"],
+      ["30,000 USDC", "Monthly limit"],
+      ["3 checks", "Before approval"],
+    ],
+    flow: [
+      ["Request", "Agent attaches the signed vendor invoice."],
+      ["Policy", "ChainPay checks the treasury mandate and limits."],
+      ["Approval", "The owner wallet reviews and signs once."],
+    ],
+  },
+  {
+    slug: "merchant-settlement",
+    number: "02",
+    title: "Merchant settlement",
+    quote: "Route every invoice through one policy.",
+    detail: "Preflight the recipient, mint, amount, and mandate before signing.",
+    headline: "A better checkout",
+    accent: "for agent-run commerce.",
+    summary: "Let an agent bring a merchant-signed invoice into one policy-controlled payment path instead of inventing settlement logic for every checkout.",
+    agent: "checkout-agent",
+    request: "Settle a verified 1.00 PYUSD API-credit invoice.",
+    requestMeta: "Invoice #API-2048 · merchant signature verified",
+    policy: "API credits · Token-2022 mandate",
+    amount: "1.00 PYUSD",
+    limit: "10 PYUSD",
+    outcome: "The agent can explain the invoice and its checks before it ever asks the wallet to sign.",
+    feedback: "Merchant signature, PYUSD mint, recipient, amount, and expiry all passed. The payment is ready for approval.",
+    metrics: [
+      ["1.00 PYUSD", "Invoice amount"],
+      ["5 checks", "Before preparation"],
+      ["1 receipt", "Per settlement"],
+    ],
+    flow: [
+      ["Receive", "The agent captures a signed merchant request."],
+      ["Verify", "ChainPay derives the payment references and policy quote."],
+      ["Settle", "The wallet signs the prepared transaction and receives a receipt."],
+    ],
+  },
+  {
+    slug: "programmatic-payouts",
+    number: "03",
+    title: "Programmatic payouts",
+    quote: "Keep recipients and limits explicit.",
+    detail: "The protocol records the request and returns a durable receipt.",
+    headline: "Payouts your agent can run,",
+    accent: "inside the limits you set.",
+    summary: "Route routine disbursements through a mandate that defines the asset, spend ceiling, agent authority, and recipient checks up front.",
+    agent: "payout-agent",
+    request: "Prepare the contractor payout for 250 USDC.",
+    requestMeta: "Batch #WEEK-32 · recipient account resolved",
+    policy: "Contractor payouts · USDC mandate",
+    amount: "250 USDC",
+    limit: "2,000 USDC",
+    outcome: "Every request remains specific: one amount, one recipient, one policy, and one receipt.",
+    feedback: "The recipient account and mandate allowance match this payout. I prepared the transaction for your review.",
+    metrics: [
+      ["250 USDC", "Payout request"],
+      ["2,000 USDC", "Available policy spend"],
+      ["1 recipient", "Per payment"],
+    ],
+    flow: [
+      ["Build", "The agent composes an amount and recipient for the payout."],
+      ["Check", "ChainPay enforces the mandate, allowance, and token program."],
+      ["Record", "A confirmed settlement creates a receipt for the payout."],
+    ],
+  },
+  {
+    slug: "reconciliation",
+    number: "04",
+    title: "Reconciliation",
+    quote: "Verify the settlement later.",
+    detail: "Look up the receipt PDA and transaction signature from MCP.",
+    headline: "Every agent payment leaves",
+    accent: "a record you can verify.",
+    summary: "Move from agent activity to an auditable payment trail with receipts, deterministic identifiers, and confirmation state available through the same interface.",
+    agent: "ops-agent",
+    request: "Verify the receipt for invoice #MRCH-1903.",
+    requestMeta: "Receipt PDA located · confirmation available",
+    policy: "Settlement archive · receipt lookup",
+    amount: "4.50 USDC",
+    limit: "Confirmed",
+    outcome: "Operations can match an invoice to its policy, receipt, and on-chain confirmation without asking the agent to remember what happened.",
+    feedback: "The payment receipt is confirmed. I matched the invoice hash, mandate, amount, and settlement reference.",
+    metrics: [
+      ["1 receipt", "Per settlement"],
+      ["On-chain", "Confirmation state"],
+      ["Any time", "Receipt lookup"],
+    ],
+    flow: [
+      ["Locate", "Look up the receipt by address or invoice hash."],
+      ["Match", "Compare the invoice, mandate, amount, and payment ID."],
+      ["Reconcile", "Share a verified settlement reference with operations."],
+    ],
+  },
+] as const;
+
+type UseCase = (typeof useCases)[number];
 
 const activity = [
   ["Mandate created", "@agent_aurora", "10 USDC", "Active", "2m ago", "created"],
   ["Payment settled", "@merchant_one", "4.50 USDC", "Settled", "18m ago", "settled"],
   ["Receipt verified", "@procure_bot", "32 USDC", "Verified", "1h ago", "verified"],
   ["Policy updated", "@chainpay", "Devnet", "Updated", "3h ago", "policy"],
+] as const;
+
+const agentFeedback = [
+  {
+    id: "request",
+    index: "01",
+    label: "Request",
+    title: "Signed invoice received",
+    detail: "The merchant request, token, recipient, and expiry are captured before any policy check.",
+    status: "Signed request",
+    tone: "request",
+  },
+  {
+    id: "policy",
+    index: "02",
+    label: "Policy",
+    title: "Five checks passed",
+    detail: "ChainPay verified the mint, recipient, limit, expiry, and mandate rules for this payment.",
+    status: "Prepared",
+    tone: "policy",
+  },
+  {
+    id: "wallet",
+    index: "03",
+    label: "Wallet",
+    title: "Waiting for approval",
+    detail: "The transaction is ready, but the wallet still controls the final signature and submission.",
+    status: "Awaiting wallet",
+    tone: "wallet",
+  },
+  {
+    id: "receipt",
+    index: "04",
+    label: "Receipt",
+    title: "Receipt ready to verify",
+    detail: "Once confirmed, ChainPay returns the payment receipt and on-chain reference for reconciliation.",
+    status: "Confirmed",
+    tone: "receipt",
+  },
+] as const;
+
+type AgentFeedbackId = (typeof agentFeedback)[number]["id"];
+
+const aifiLayers = [
+  {
+    number: "01",
+    label: "Intent",
+    title: "Bring in a specific request.",
+    detail: "An agent starts with a merchant-signed request or invoice—not an open-ended instruction to spend.",
+    status: "Signed input",
+  },
+  {
+    number: "02",
+    label: "Policy",
+    title: "Check the rules before value moves.",
+    detail: "ChainPay evaluates the mandate, mint, token program, recipient, amount, remaining limit, and expiry.",
+    status: "Policy checked",
+  },
+  {
+    number: "03",
+    label: "Authority",
+    title: "Keep the owner at the control point.",
+    detail: "The agent can explain and prepare the payment. The wallet owner still provides the final signature.",
+    status: "Awaiting wallet",
+  },
+  {
+    number: "04",
+    label: "Proof",
+    title: "Close the loop with a receipt.",
+    detail: "After settlement, ChainPay returns a durable reference for the agent, merchant, and operations team to verify.",
+    status: "Confirmed",
+  },
 ] as const;
 
 function shortAddress(value: string) {
@@ -836,6 +1018,259 @@ function MiniChart({ color }: { color: string }) {
   );
 }
 
+function useCaseFromHash(hash: string): UseCase | undefined {
+  const match = hash.match(/^#\/?use-cases\/([^/?#]+)\/?$/);
+  if (!match) return undefined;
+  return useCases.find((useCase) => useCase.slug === match[1]);
+}
+
+function isAiFiHash(hash: string) {
+  return /^#\/?aifi\/?$/.test(hash);
+}
+
+type UseCasePageProps = {
+  useCase: UseCase;
+  wallet: string;
+  connecting: boolean;
+  onPrimaryAction: () => void;
+};
+
+function UseCasePage({ useCase, wallet, connecting, onPrimaryAction }: UseCasePageProps) {
+  return (
+    <div className="case-page cp-app">
+      <header className="case-topbar page-width">
+        <a className="brand" href="#" aria-label="Back to ChainPay home">
+          <span className="brand-mark"><span /></span>
+          <span>chain<span>pay</span></span>
+        </a>
+        <nav className="case-nav" aria-label="Use case pages">
+          {useCases.map((item) => <a className={item.slug === useCase.slug ? "active" : ""} href={`#/use-cases/${item.slug}`} key={item.slug}>{item.number} {item.title}</a>)}
+        </nav>
+        <a className="case-back-link" href="#use-cases">All use cases <Arrow /></a>
+      </header>
+
+      <main>
+        <section className="case-hero">
+          <div className="case-hero-grid page-width">
+            <div className="case-hero-copy">
+              <span className="case-eyebrow">USE CASE {useCase.number} · {useCase.title}</span>
+              <h1>{useCase.headline}<br /><em>{useCase.accent}</em></h1>
+              <p>{useCase.summary}</p>
+              <div className="case-hero-actions">
+                <button className="button button-primary" onClick={onPrimaryAction}>
+                  {connecting ? "Connecting…" : wallet ? "Open dashboard" : "Connect wallet"} <Arrow />
+                </button>
+                <a className="text-link" href="#use-cases">Explore all use cases <Arrow /></a>
+              </div>
+
+              <div className="case-metric-strip">
+                {useCase.metrics.map(([value, label]) => <div key={label}><strong>{value}</strong><span>{label}</span></div>)}
+              </div>
+            </div>
+
+            <aside className="case-request-card" aria-label={`${useCase.title} agent request preview`}>
+              <div className="case-request-topline"><span className="soft-label">AGENT REQUEST</span><span className="case-request-status"><i /> Ready to check</span></div>
+              <div className="case-agent-row"><span>{useCase.agent.slice(0, 2).toUpperCase()}</span><div><strong>{useCase.agent}</strong><small>{useCase.requestMeta}</small></div></div>
+              <p className="case-request-message">“{useCase.request}”</p>
+              <div className="case-request-details">
+                <div><span>Mandate</span><strong>{useCase.policy}</strong></div>
+                <div><span>Amount</span><strong className="case-amount">{useCase.amount}</strong></div>
+                <div><span>Payment state</span><strong>Policy checked</strong></div>
+                <div><span>Limit / result</span><strong>{useCase.limit}</strong></div>
+              </div>
+              <div className="case-request-footer"><span>Agent feedback</span><strong><i /> Clear next step</strong></div>
+            </aside>
+          </div>
+        </section>
+
+        <section className="case-flow-section page-width">
+          <div className="case-section-heading"><span className="section-kicker">THE PAYMENT PATH</span><h2>One request. Clear control.</h2><p>ChainPay keeps the steps visible to both the agent and the wallet owner.</p></div>
+          <ol className="case-flow-grid">
+            {useCase.flow.map(([label, detail], index) => <li key={label}><span>{String(index + 1).padStart(2, "0")}</span><h3>{label}</h3><p>{detail}</p></li>)}
+          </ol>
+        </section>
+
+        <section className="case-feedback-section">
+          <div className="case-feedback-grid page-width">
+            <div className="case-feedback-copy">
+              <span className="section-kicker">EXPLAINABLE BY DESIGN</span>
+              <h2>The agent reports.<br /><em>You decide.</em></h2>
+              <p>{useCase.outcome}</p>
+            </div>
+            <div className="case-feedback-message">
+              <div><span className="case-feedback-avatar">CP</span><span><strong>ChainPay</strong><small>Policy response</small></span><em>Prepared</em></div>
+              <p>{useCase.feedback}</p>
+              <div className="case-feedback-checks"><span><i>✓</i> Amount</span><span><i>✓</i> Token</span><span><i>✓</i> Recipient</span><span><i>✓</i> Expiry</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section className="case-switcher-section page-width">
+          <div><span className="section-kicker">MORE USE CASES</span><h2>Choose another payment path.</h2></div>
+          <div className="case-switcher-grid">
+            {useCases.filter((item) => item.slug !== useCase.slug).map((item) => <a href={`#/use-cases/${item.slug}`} key={item.slug}><span>{item.number}</span><strong>{item.title}</strong><Arrow /></a>)}
+          </div>
+        </section>
+      </main>
+
+      <footer className="case-footer"><div className="page-width"><span>ChainPay · policy-controlled payments for AI agents</span><a href="#use-cases">Back to all use cases <Arrow /></a></div></footer>
+    </div>
+  );
+}
+
+type AiFiPageProps = {
+  wallet: string;
+  connecting: boolean;
+  onPrimaryAction: () => void;
+};
+
+function AiFiPage({ wallet, connecting, onPrimaryAction }: AiFiPageProps) {
+  return (
+    <div className="aifi-page cp-app">
+      <header className="aifi-topbar page-width">
+        <a className="brand" href="#" aria-label="Back to ChainPay home">
+          <span className="brand-mark"><span /></span>
+          <span>chain<span>pay</span></span>
+        </a>
+        <nav className="aifi-nav" aria-label="AiFi page navigation">
+          <a className="active" href="#/aifi">AiFi</a>
+          <a href="#use-cases">Use cases</a>
+          <a href="#agent-feedback">Agent feedback</a>
+        </nav>
+        <a className="aifi-back-link" href="#use-cases">Explore payment flows <Arrow /></a>
+      </header>
+
+      <main>
+        <section className="aifi-hero">
+          <div className="aifi-hero-grid page-width">
+            <div className="aifi-hero-copy">
+              <span className="aifi-eyebrow"><i /> AIFI · AGENTIC FINANCE ON CHAINPAY</span>
+              <h1>Agentic finance with<br /><em>proof at every step.</em></h1>
+              <p>ChainPay turns a payment request into a visible flow: agents bring the context, mandates enforce the policy, wallet owners approve the spend, and receipts make the result verifiable.</p>
+              <div className="aifi-hero-actions">
+                <button className="button button-primary" onClick={onPrimaryAction}>
+                  {connecting ? "Connecting…" : wallet ? "Open dashboard" : "Connect wallet"} <Arrow />
+                </button>
+                <a className="text-link" href="#use-cases">See payment flows <Arrow /></a>
+              </div>
+              <div className="aifi-hero-stats">
+                <div><strong>Specific</strong><span>Request before payment</span></div>
+                <div><strong>Scoped</strong><span>Mandate before approval</span></div>
+                <div><strong>Verifiable</strong><span>Receipt after settlement</span></div>
+              </div>
+            </div>
+
+            <aside className="aifi-request-card" aria-label="AiFi request walkthrough">
+              <div className="aifi-card-topline"><span className="soft-label">AIFI REQUEST</span><span><i /> Live feedback</span></div>
+              <div className="aifi-agent-row"><span>PA</span><div><strong>procure-agent</strong><small>Merchant request · just now</small></div></div>
+              <p>“I found a signed 1.00 PYUSD invoice. I can check it against your API credits mandate before I ask the wallet to approve.”</p>
+              <ol className="aifi-request-path">
+                <li className="complete"><span>01</span><div><strong>Signed request</strong><small>Merchant, token, amount, and expiry captured.</small></div><em>Received</em></li>
+                <li className="complete"><span>02</span><div><strong>Mandate check</strong><small>Limit, recipient, and token program match.</small></div><em>Prepared</em></li>
+                <li><span>03</span><div><strong>Wallet approval</strong><small>The owner signs the prepared transaction.</small></div><em>Next</em></li>
+                <li><span>04</span><div><strong>Receipt returned</strong><small>Settlement reference is ready to reconcile.</small></div><em>Then</em></li>
+              </ol>
+              <div className="aifi-settlement-rail" aria-label="Stablecoin settlement flow">
+                <div className="aifi-rail-topline"><span>STABLECOIN RAIL</span><small><i /> Solana Devnet</small></div>
+                <div className="aifi-rail-flow">
+                  <div className="aifi-rail-stage">
+                    <div className="aifi-token-stack" aria-hidden="true">
+                      <span className="aifi-token usdc"><img src="https://cryptologos.cc/logos/usd-coin-usdc-logo.png" alt="" /></span>
+                      <span className="aifi-token pyusd"><img src="https://cryptologos.cc/logos/paypal-usd-pyusd-logo.png" alt="" /></span>
+                    </div>
+                    <span><strong>USDC · PYUSD</strong><small>Policy-approved</small></span>
+                  </div>
+                  <div className="aifi-rail-connector" aria-hidden="true"><span><i /></span></div>
+                  <div className="aifi-rail-stage">
+                    <span className="aifi-solana-node" aria-hidden="true"><img src="https://cryptologos.cc/logos/solana-sol-logo.png" alt="" /></span>
+                    <span><strong>Settlement</strong><small>Wallet signs once</small></span>
+                  </div>
+                  <div className="aifi-rail-connector" aria-hidden="true"><span><i /></span></div>
+                  <div className="aifi-rail-stage">
+                    <span className="aifi-receipt-node" aria-hidden="true">✓</span>
+                    <span><strong>Receipt</strong><small>Ready to verify</small></span>
+                  </div>
+                </div>
+              </div>
+              <div className="aifi-card-footer"><span>Private key</span><strong><i /> Never shared with the agent</strong></div>
+            </aside>
+          </div>
+        </section>
+
+        <section className="aifi-flow-section page-width">
+          <div className="aifi-section-heading">
+            <div><span className="section-kicker">THE AIFI CONTROL LOOP</span><h2>Give agents a path—<br /><em>not a blank cheque.</em></h2></div>
+            <p>AiFi becomes useful when every model decision is bounded by deterministic payment controls that the owner can inspect.</p>
+          </div>
+          <ol className="aifi-flow-grid">
+            {aifiLayers.map((layer) => (
+              <li key={layer.number}>
+                <div><span>{layer.number}</span><em>{layer.label}</em></div>
+                <h3>{layer.title}</h3>
+                <p>{layer.detail}</p>
+                <small><i /> {layer.status}</small>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section className="aifi-boundaries-section">
+          <div className="aifi-boundaries-grid page-width">
+            <div className="aifi-boundaries-copy">
+              <span className="section-kicker">CLEAR BOUNDARIES</span>
+              <h2>Useful autonomy.<br /><em>Visible authority.</em></h2>
+              <p>ChainPay separates the work an agent is good at—reading, comparing, explaining, and preparing—from the controls that should remain with the wallet owner.</p>
+            </div>
+            <div className="aifi-boundary-cards">
+              <article>
+                <span className="aifi-boundary-index">AGENT CAN</span>
+                <h3>Make the payment understandable.</h3>
+                <ul>
+                  <li><i>✓</i> Collect a signed request or invoice</li>
+                  <li><i>✓</i> Check available policy and payment details</li>
+                  <li><i>✓</i> Prepare one clear next action</li>
+                </ul>
+              </article>
+              <article>
+                <span className="aifi-boundary-index">OWNER KEEPS</span>
+                <h3>Control of what actually moves.</h3>
+                <ul>
+                  <li><i>✓</i> The spending mandate and its limits</li>
+                  <li><i>✓</i> The wallet signing key and final approval</li>
+                  <li><i>✓</i> The ability to pause or revoke access</li>
+                </ul>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section className="aifi-proof-section page-width">
+          <div className="aifi-section-heading">
+            <div><span className="section-kicker">WHY CHAINPAY FOR AIFI</span><h2>Built from controls<br /><em>agents can explain.</em></h2></div>
+            <p>The same payment primitives that make a transaction safe also give an agent the context to report exactly what happened.</p>
+          </div>
+          <div className="aifi-proof-grid">
+            <article><span>01</span><h3>Policy before payment</h3><p>Mandates define the token, budget, agent authority, and expiry before an agent reaches a checkout or payout.</p></article>
+            <article><span>02</span><h3>No secrets in the prompt</h3><p>Agents work from payment requests and policy results. Wallet keys stay with the owner and the wallet extension.</p></article>
+            <article><span>03</span><h3>Receipts for the whole team</h3><p>Confirmed settlement returns a reference that agents can surface and operations can use for reconciliation.</p></article>
+          </div>
+        </section>
+
+        <section className="aifi-cta-section page-width">
+          <span className="section-kicker">START WITH A POLICY</span>
+          <h2>Let agents do the work.<br /><em>Keep the authority.</em></h2>
+          <p>Use ChainPay to turn a request in your AI inbox into a policy-aware payment path on Solana.</p>
+          <button className="button button-light" onClick={onPrimaryAction}>
+            {connecting ? "Connecting…" : wallet ? "Open dashboard" : "Connect wallet"} <Arrow />
+          </button>
+        </section>
+      </main>
+
+      <footer className="aifi-footer"><div className="page-width"><span>ChainPay AiFi · agentic finance with policy, approval, and proof</span><a href="#use-cases">Explore use cases <Arrow /></a></div></footer>
+    </div>
+  );
+}
+
 function App() {
   const [walletConnection, setWalletConnection] = useState<ChainPayWallet | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -843,6 +1278,8 @@ function App() {
   const [selectedAction, setSelectedAction] = useState<Action>("Send");
   const [range, setRange] = useState<Range>("1D");
   const [heroMessage, setHeroMessage] = useState<"rail" | "sign">("rail");
+  const [activeAgentFeedback, setActiveAgentFeedback] = useState<AgentFeedbackId>("policy");
+  const [routeHash, setRouteHash] = useState(() => window.location.hash);
   const [mandateAddress, setMandateAddress] = useState("");
   const [mandate, setMandate] = useState<Mandate | null>(null);
   const [mandates, setMandates] = useState<Mandate[]>([]);
@@ -853,6 +1290,9 @@ function App() {
   const [integrationStatus, setIntegrationStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [integrationError, setIntegrationError] = useState("");
   const wallet = walletConnection?.address ?? "";
+  const selectedAgentFeedback = agentFeedback.find((item) => item.id === activeAgentFeedback) ?? agentFeedback[0];
+  const selectedUseCase = useCaseFromHash(routeHash);
+  const isAiFiPage = isAiFiHash(routeHash);
 
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -860,6 +1300,12 @@ function App() {
       setHeroMessage((current) => current === "rail" ? "sign" : "rail");
     }, 3000);
     return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => setRouteHash(window.location.hash);
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   async function loadWalletState(owner: string, preferredMandateAddress?: string) {
@@ -999,6 +1445,22 @@ function App() {
     document.querySelector("#mandates")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
+  function openDashboardFromUseCase() {
+    if (wallet) {
+      window.location.hash = "";
+      return;
+    }
+    void connectWallet();
+  }
+
+  if (selectedUseCase) {
+    return <UseCasePage useCase={selectedUseCase} wallet={wallet} connecting={connecting} onPrimaryAction={openDashboardFromUseCase} />;
+  }
+
+  if (isAiFiPage) {
+    return <AiFiPage wallet={wallet} connecting={connecting} onPrimaryAction={openDashboardFromUseCase} />;
+  }
+
   if (wallet) {
     return (
       <Dashboard
@@ -1048,6 +1510,8 @@ function App() {
           <a href="#products">Products</a>
           <a href="#connectors">Connectors</a>
           <a href="#use-cases">Use cases</a>
+          <a href="#/aifi">AiFi</a>
+          <a href="#agent-feedback">Agents</a>
           <a href="#how-it-works">How it works</a>
           <a href="#activity">Activity</a>
           <a href="#support">Support</a>
@@ -1114,6 +1578,83 @@ function App() {
           </div>
         </section>
 
+        <section className="agentic-section page-width" id="agent-feedback">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">AGENT FEEDBACK LOOP</span>
+              <h2>Every request answers back.</h2>
+              <p>Give your agent a clear payment path and a clear explanation of what happened at each checkpoint.</p>
+            </div>
+            <a className="agentic-live-label" href="#/aifi"><i /> AiFi · policy-aware finance <Arrow /></a>
+          </div>
+
+          <div className="agentic-grid">
+            <article className="agent-inbox-preview">
+              <div className="agentic-card-topline">
+                <div><span className="soft-label">AGENT INBOX</span><strong>Incoming payment request</strong></div>
+                <span className="agentic-chip"><i /> Signed</span>
+              </div>
+
+              <div className="agent-message-bubble">
+                <span className="agent-message-avatar">AP</span>
+                <div>
+                  <span className="agent-message-meta">procure-agent · just now</span>
+                  <p>“I found a 1.00 PYUSD merchant invoice. I verified the signature and matched it to your mandate.”</p>
+                </div>
+              </div>
+
+              <div className="agent-request-grid">
+                <div><span>Merchant</span><strong className="mono">cloud-api…4f2a</strong></div>
+                <div><span>Token</span><strong>PYUSD · Token-2022</strong></div>
+                <div><span>Amount</span><strong className="agentic-amount">1.00 PYUSD</strong></div>
+                <div><span>Expiry</span><strong>Devnet slot + 4,820</strong></div>
+              </div>
+
+              <div className="agent-check-list" aria-label="Payment checks">
+                <span><i>✓</i> Merchant signature</span>
+                <span><i>✓</i> Mandate limit</span>
+                <span><i>✓</i> Recipient check</span>
+                <span><i>✓</i> Token program</span>
+              </div>
+            </article>
+
+            <article className="agent-feedback-card">
+              <div className="agentic-card-topline">
+                <div><span className="soft-label">CHAINPAY RESPONSE</span><strong>What the agent can report</strong></div>
+                <span className={`agent-response-status ${selectedAgentFeedback.tone}`}>{selectedAgentFeedback.status}</span>
+              </div>
+
+              <div className="agent-feedback-copy">
+                <span className="agent-feedback-index">{selectedAgentFeedback.index}</span>
+                <div>
+                  <h3>{selectedAgentFeedback.title}</h3>
+                  <p>{selectedAgentFeedback.detail}</p>
+                </div>
+              </div>
+
+              <div className="agent-stage-list" role="tablist" aria-label="Agent payment stages">
+                {agentFeedback.map((item) => (
+                  <button
+                    className={activeAgentFeedback === item.id ? "active" : ""}
+                    key={item.id}
+                    role="tab"
+                    aria-selected={activeAgentFeedback === item.id}
+                    onClick={() => setActiveAgentFeedback(item.id)}
+                  >
+                    <span>{item.index}</span>{item.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="agent-payment-feed">
+                <div><span className="agent-feed-icon prepared">◇</span><span><b>Invoice #CP-2048</b><small>Policy checked for 1.00 PYUSD</small></span><em>Prepared</em></div>
+                <div><span className="agent-feed-icon wallet">✦</span><span><b>Wallet approval</b><small>Owner signature is still required</small></span><em>Pending</em></div>
+                <div><span className="agent-feed-icon receipt">✓</span><span><b>Receipt #0182</b><small>Settlement reference returned</small></span><em>Confirmed</em></div>
+              </div>
+            </article>
+          </div>
+        </section>
+
         <section className="assets-section page-width">
           <div className="section-heading"><div><span className="section-kicker">SUPPORTED RAILS</span><h2>Built for stablecoin settlement.</h2><p>Connect the assets your agents already use. ChainPay handles the policy; Solana handles settlement.</p></div><a className="text-link" href="#support">View all assets <Arrow /></a></div>
           <div className="asset-grid">{assets.map((asset) => <article className="asset-card" key={asset.symbol}><div className="asset-card-top"><span className={`asset-logo ${asset.className}`}>{asset.icon}</span><span className="asset-more">···</span></div><h3>{asset.name}</h3><div className="asset-pair">{asset.symbol} <span>/ DEVNET</span></div><div className="asset-price">{asset.price}</div><div className={`asset-change ${asset.change.startsWith("+") ? "positive" : "neutral"}`}>{asset.change}</div><MiniChart color={asset.className} /><button className="asset-button" onClick={() => selectAction(asset.symbol === "RECEIPT" ? "Receipts" : "Send")}>{asset.symbol === "RECEIPT" ? "View receipts" : "Route payment"} <Arrow /></button></article>)}</div>
@@ -1144,7 +1685,7 @@ function App() {
 
         <section className="use-cases-section page-width" id="use-cases">
           <div className="section-heading"><div><span className="section-kicker">USE CASES</span><h2>One interface. Every agent payment.</h2><p>If an agent needs to move money, it calls ChainPay. The agent does not need to understand the underlying wallet, connector, or settlement rail.</p></div><a className="text-link" href="#how-it-works">See the flow <Arrow /></a></div>
-          <div className="use-case-grid">{useCases.map((useCase, index) => <article className="use-case-card" key={useCase.title}><span className="use-case-number">{String(index + 1).padStart(2, "0")}</span><h3>{useCase.title}</h3><p className="use-case-quote">{useCase.quote}</p><p>{useCase.detail}</p></article>)}</div>
+          <div className="use-case-grid">{useCases.map((useCase) => <a className="use-case-card" href={`#/use-cases/${useCase.slug}`} key={useCase.title}><span className="use-case-number">{useCase.number}</span><h3>{useCase.title}</h3><p className="use-case-quote">{useCase.quote}</p><p>{useCase.detail}</p><span className="use-case-link">Explore this flow <Arrow /></span></a>)}</div>
         </section>
 
         <section className="market-section page-width" id="activity">
