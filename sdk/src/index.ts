@@ -9,4 +9,6 @@ export * from "./pda.js";
 export * from "./receipt.js";
 export * from "./solana.js";
 export * from "./token.js";
+export * from "./token-capabilities.js";
 export * from "./types.js";
+export * from "./x402.js";

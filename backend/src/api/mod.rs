@@ -51,6 +51,25 @@ pub struct PaymentSubmissionRequest {
     #[serde(default, deserialize_with = "deserialize_optional_u64")]
     pub amount: Option<u64>,
     pub token_program: Option<String>,
+    #[serde(default)]
+    pub x402: Option<X402PaymentMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct X402PaymentMetadata {
+    pub resource: String,
+    pub challenge: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct X402ProofRequest {
+    pub idempotency_key: String,
+    pub proof: serde_json::Value,
+    pub response_status: u16,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

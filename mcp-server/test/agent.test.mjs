@@ -1,9 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Keypair } from "@solana/web3.js";
-import { runChainPayAgent } from "../dist/agent.js";
+import { outcomeFromToolResult, runChainPayAgent } from "../dist/agent.js";
 import { createDefaultContext } from "../dist/index.js";
 import { checkPaymentRequirements } from "../dist/tools/check_payment_requirements.js";
+
+test("AI settlement outcome requires confirmed signature and receipt", () => {
+  const failed = outcomeFromToolResult({
+    isError: true,
+    structuredContent: { action: "backend_relayed", status: "failed", error: "on-chain transaction failed" },
+  });
+  assert.equal(failed?.kind, "payment_blocked");
+
+  const confirmed = outcomeFromToolResult({
+    structuredContent: {
+      action: "backend_relayed",
+      status: "confirmed",
+      signature: "finalized-devnet-signature",
+      receiptAddress: "finalized-receipt-pda",
+    },
+  });
+  assert.equal(confirmed?.kind, "payment_settled");
+
+  const incomplete = outcomeFromToolResult({
+    structuredContent: { action: "backend_relayed", status: "confirmed" },
+  });
+  assert.equal(incomplete, undefined);
+});
 
 test("agent executes an MCP lookup before answering", async () => {
   const previousFetch = globalThis.fetch;
@@ -111,19 +133,14 @@ test("agent asks for payment details before using a payment tool", async () => {
   }
 });
 
-test("approved-agent signer identity is derived from the configured secret key", () => {
-  const previousSecret = process.env.CHAINPAY_AGENT_SECRET_KEY;
+test("default MCP context uses only the configured public agent identity", () => {
   const previousPublic = process.env.CHAINPAY_AGENT_PUBLIC_KEY;
-  const keypair = Keypair.generate();
-  process.env.CHAINPAY_AGENT_SECRET_KEY = JSON.stringify(Array.from(keypair.secretKey));
-  delete process.env.CHAINPAY_AGENT_PUBLIC_KEY;
+  process.env.CHAINPAY_AGENT_PUBLIC_KEY = "FmFHfuMx1U6sjKKsuD9SrFedspnAuTUki1KPKjWbehkU";
   try {
     const context = createDefaultContext();
-    assert.equal(context.agentAddress, keypair.publicKey.toBase58());
-    assert.ok(context.paymentExecutor);
+    assert.equal(context.agentAddress, process.env.CHAINPAY_AGENT_PUBLIC_KEY);
+    assert.equal("paymentExecutor" in context, false);
   } finally {
-    if (previousSecret === undefined) delete process.env.CHAINPAY_AGENT_SECRET_KEY;
-    else process.env.CHAINPAY_AGENT_SECRET_KEY = previousSecret;
     if (previousPublic === undefined) delete process.env.CHAINPAY_AGENT_PUBLIC_KEY;
     else process.env.CHAINPAY_AGENT_PUBLIC_KEY = previousPublic;
   }

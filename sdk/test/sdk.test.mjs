@@ -11,6 +11,7 @@ import {
   deriveMintMandateAddress,
   deriveVersionedMandateAddress,
   deriveReceiptAddress,
+  deriveX402PaymentReferences,
   preflightPayment,
   preparePayment,
 } from "../dist/index.js";
@@ -107,40 +108,35 @@ test("derives the canonical Token-2022 associated token account", () => {
   );
 });
 
-test("carries Token-2022 extension accounts through settlement", () => {
+test("keeps x402 client and merchant references on one canonical hash", async () => {
+  const references = await deriveX402PaymentReferences({
+    mint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    recipient: "EA8QyhmtjjBhEwdzPCwmjLcN9SqU7LwR2eFfcN7p23Jm",
+    amount: "100000",
+    resource: "http://127.0.0.1:3402/data",
+    tokenProgram: "spl-token",
+  });
+  assert.deepEqual(references, {
+    nonce: "9f3279a23a50a08337257f7f6aa1a991",
+    invoiceHash: "899cb334272fed4cb80a9afeafb180134bbe1a394669107c10b998a6383b3803",
+    paymentId: "6cd07625b56e30e3a54afe12675d72a3b225b6c7e2ace0bdc4b0fadc64669a29",
+    signatureReference: "cd5285b2bd499abd120849a99ebe9ca55685eddc75e49ca2541179cb1e2960e7",
+  });
+});
+
+test("rejects caller-supplied Token-2022 extension accounts", () => {
   const extensionAccount = Keypair.generate().publicKey.toBase58();
-  const request = preparePayment({
-    mandate: mandateAddress,
-    invoiceHash: Uint8Array.of(...Array(32).fill(4)),
-    paymentId: Uint8Array.of(...Array(32).fill(5)),
-    signatureReference: Uint8Array.of(...Array(32).fill(6)),
-    mint,
-    recipient,
-    amount: 10n,
-    tokenProgram: "token-2022",
-    remainingAccounts: [{ address: extensionAccount, isSigner: false, isWritable: true }],
-  });
-  const instruction = buildExecutePaymentInstruction(request, agent, {
-    address: mandateAddress,
-    owner,
-    approvedAgent: agent,
-    sourceTokenAccount: source,
-    allowedMint: mint,
-    maxPerPayment: 10n,
-    totalLimit: 100n,
-    amountSpent: 0n,
-    paymentCount: 0n,
-    expiresAtSlot: 10_000n,
-    maxPaymentCount: 0n,
-    cooldownSlots: 0n,
-    lastPaymentSlot: 0n,
-    paused: false,
-    revoked: false,
-    status: "active",
-    tokenProgram: "token-2022",
-  });
-  assert.equal(instruction.keys.length, 11);
-  assert.equal(instruction.keys.at(-1)?.address, extensionAccount);
+  assert.throws(() => preparePayment({
+      mandate: mandateAddress,
+      invoiceHash: Uint8Array.of(...Array(32).fill(4)),
+      paymentId: Uint8Array.of(...Array(32).fill(5)),
+      signatureReference: Uint8Array.of(...Array(32).fill(6)),
+      mint,
+      recipient,
+      amount: 10n,
+      tokenProgram: "token-2022",
+      remainingAccounts: [{ address: extensionAccount, isSigner: false, isWritable: true }],
+    }), /Caller-supplied remainingAccounts are not accepted/);
 });
 
 test("preflight rejects an unapproved agent while accepting a per-payment recipient", () => {

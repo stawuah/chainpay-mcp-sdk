@@ -5,6 +5,7 @@
   "workspaces": [
     "sdk",
     "mcp-server",
+    "demo-merchant",
     "app"
   ],
   "scripts": {
@@ -12,14 +13,18 @@
     "check:mcp": "npm --prefix mcp-server run typecheck",
     "check:app": "npm --prefix app run typecheck",
     "check:frontend": "npm --prefix frontend run typecheck",
+    "check:merchant": "npm --prefix demo-merchant run typecheck",
     "dev:app": "npm --prefix app run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "build:frontend": "npm --prefix frontend run build",
     "bootstrap:devnet": "npm --prefix sdk run build && node scripts/bootstrap-devnet.mjs",
-    "check": "npm run check:sdk && npm run check:mcp && npm run check:app && npm run check:frontend"
+    "verify:devnet": "npm --prefix sdk run build && node scripts/verify-devnet.mjs",
+    "verify:stack": "node scripts/verify-live-stack.mjs",
+    "check": "npm run check:sdk && npm run check:mcp && npm run check:merchant && npm run check:app && npm run check:frontend"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
+    "pg": "^8.16.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

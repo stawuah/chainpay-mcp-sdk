@@ -6,6 +6,7 @@ stdio, so MCP-capable LLM clients can discover and call the same payment tools:
 - `get_mandate`
 - `get_protocol_config`
 - `get_asset`
+- `get_supported_assets`
 - `list_mandates`
 - `find_compatible_mandate`
 - `create_mandate`
@@ -17,6 +18,7 @@ stdio, so MCP-capable LLM clients can discover and call the same payment tools:
 - `quote_payment`
 - `verify_payment_request`
 - `prepare_x402_payment`
+- `execute_x402_payment`
 - `execute_payment`
 - `get_payment`
 - `wait_for_payment`
@@ -34,21 +36,20 @@ a payment. `prepare_payment` returns a policy-checked transaction plan; the
 connected wallet signs it only after the user reviews the request in the web
 UI.
 `prepare_x402_payment` normalizes an x402 exact challenge into the same
-policy-checked flow and can relay a wallet-signed transaction through the Rust
-backend. The x402 adapter does not custody keys or operate a hosted facilitator.
+policy-checked flow. `execute_x402_payment` performs the live resource request,
+requires a real HTTP 402 challenge, returns an unsigned transaction, relays only
+an externally signed transaction through Axum, verifies the finalized receipt
+PDA, and retries the resource with an `X-PAYMENT` proof. The x402 adapter does
+not custody keys or operate a hosted facilitator.
 
-`execute_payment` performs SDK preflight first. When a base64 wallet-signed
-transaction is supplied and `CHAINPAY_BACKEND_URL` is configured, MCP relays
-it to the Rust backend for simulation, submission, finality confirmation, and
-status tracking. If `CHAINPAY_AGENT_SECRET_KEY` is configured server-side, the
-MCP process can sign policy-compliant payments with that approved-agent key
-after the owner has approved a mandate once. The key may be a base64-encoded
-Solana 64-byte secret key or a JSON byte array; `CHAINPAY_AGENT_PUBLIC_KEY`,
-when set, must match its derived public key. With `CHAINPAY_BACKEND_URL`
-configured, the signed transaction is relayed through
-`/v1/transactions/submit` for simulation, submission, finality confirmation,
-and status tracking. Never expose the secret key to the browser or an AI
-client.
+`execute_payment` performs SDK preflight first. Without a signed transaction it
+returns a base64 unsigned transaction, recent blockhash, and last valid block
+height for review and local signing. MCP never loads or accepts an
+approved-agent private key. The browser wallet or external agent runtime signs
+outside ChainPay servers and calls `execute_payment` again with only the signed
+transaction. With `CHAINPAY_BACKEND_URL` configured, MCP relays it to Axum for
+signed-wire validation, direct Devnet submission, finality confirmation, and
+receipt reconciliation.
 
 Build and run it locally:
 
@@ -79,14 +80,16 @@ npm run test:sdk
 The server also exposes a developer documentation preview at `/` (and `/docs`),
 the ChainPay logo at `/logo.svg`, MCP Streamable HTTP at `/mcp`, a health
 endpoint at `/healthz`, a browser-friendly read-only tool catalog at `/tools`,
-and the dashboard's AI assistant at `/agent/chat`. The assistant uses the
+the dashboard's AI assistant at `/agent/chat`, and PostgreSQL-backed inbox
+history at `/inbox?wallet=<address>`. The assistant uses the
 server-side `OPENROUTER_API_KEY` through OpenRouter's OpenAI-compatible Chat
 Completions API and can inspect requests, verify signed demo invoices, find a
-compatible mandate, quote a payment, and prepare an approval transaction. With
-an approved-agent signer configured, it can also execute a policy-compliant
-payment after the mandate approval. The web UI keeps received invoices and
-prepared mandates in a local AI inbox, where owner wallet approval remains
-explicit. The HTTP process supports POST JSON-RPC requests plus GET event
+compatible mandate, quote a payment, and prepare an approval transaction. An
+external approved-agent signer can sign that transaction locally and return
+only the signed transaction for relay. HTTP agent connections, hashed bearer
+tokens, tool-call activity, and chat history persist in PostgreSQL; production
+startup refuses to fall back to memory when `DATABASE_URL` is absent. Owner
+wallet approval remains explicit. The HTTP process supports POST JSON-RPC requests plus GET event
 streams, so a remote MCP client can use a URL such as:
 
 ```json
@@ -124,7 +127,7 @@ Start command: node mcp-server/dist/http.js
 Health check: /healthz
 ```
 
-Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, `CHAINPAY_BACKEND_URL`,
+Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, `CHAINPAY_BACKEND_URL`, `DATABASE_URL`,
 `CHAINPAY_BACKEND_AUTH_TOKEN`, and `CHAINPAY_HTTP_AUTH_TOKEN` in the host's
 environment settings. Set `OPENROUTER_API_KEY` and `CHAINPAY_AI_PROVIDER=openrouter`
 to enable the dashboard assistant. The default model is `openrouter/free`; you can

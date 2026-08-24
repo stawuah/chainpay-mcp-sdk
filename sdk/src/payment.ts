@@ -1,5 +1,4 @@
 import type {
-  AccountMeta,
   Address,
   ChainPayInstruction,
   Mandate,
@@ -29,20 +28,16 @@ export type PreparePaymentInput = {
   recipient: Address;
   amount: bigint;
   tokenProgram?: TokenProgram;
-  /** Extra accounts required by a Token-2022 extension such as transfer-hook. */
-  remainingAccounts?: AccountMeta[];
 };
 
 export function preparePayment(input: PreparePaymentInput): PaymentRequest {
   publicKey(input.mandate);
   publicKey(input.mint);
   publicKey(input.recipient);
-  input.remainingAccounts?.forEach((account, index) => {
-    publicKey(account.address);
-    if (typeof account.isSigner !== "boolean" || typeof account.isWritable !== "boolean") {
-      throw new Error(`remainingAccounts[${index}] must declare boolean isSigner and isWritable fields`);
-    }
-  });
+  const untrustedRemainingAccounts = (input as PreparePaymentInput & { remainingAccounts?: unknown[] }).remainingAccounts;
+  if (untrustedRemainingAccounts?.length) {
+    throw new Error("Caller-supplied remainingAccounts are not accepted; ChainPay must resolve extension accounts from verified on-chain state");
+  }
   bytes32(input.invoiceHash, "invoiceHash");
   bytes32(input.paymentId, "paymentId");
   bytes32(input.signatureReference, "signatureReference");
@@ -63,7 +58,6 @@ export function preparePayment(input: PreparePaymentInput): PaymentRequest {
     invoiceHash: new Uint8Array(input.invoiceHash),
     paymentId: new Uint8Array(input.paymentId),
     signatureReference: new Uint8Array(input.signatureReference),
-    remainingAccounts: input.remainingAccounts?.map((account) => ({ ...account })),
   };
 }
 
@@ -97,7 +91,6 @@ export function buildExecutePaymentInstruction(
       meta(request.recipient, true),
       meta(tokenProgramAddress(tokenProgram)),
       meta(SYSTEM_PROGRAM_ID),
-      ...(request.remainingAccounts ?? []),
     ],
     encodePayment(request),
   );

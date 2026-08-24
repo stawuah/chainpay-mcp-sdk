@@ -29,18 +29,14 @@ function pubkey(value, label) {
   }
 }
 
-async function simulateAndSend(transaction, signers, label) {
+async function submitDirectly(transaction, signers, label) {
   const latest = await connection.getLatestBlockhash("confirmed");
   transaction.feePayer = payer.publicKey;
   transaction.recentBlockhash = latest.blockhash;
   transaction.sign(...signers);
-  const simulation = await connection.simulateTransaction(transaction, signers);
-  if (simulation.value.err) {
-    throw new Error(`${label} simulation failed: ${JSON.stringify(simulation.value.err)}\n${(simulation.value.logs ?? []).join("\n")}`);
-  }
-  console.log(`${label}: simulation passed${simulation.value.unitsConsumed ? ` (${simulation.value.unitsConsumed} units)` : ""}`);
   const signature = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true });
-  await connection.confirmTransaction({ signature, ...latest }, "confirmed");
+  const confirmation = await connection.confirmTransaction({ signature, ...latest }, "finalized");
+  if (confirmation.value.err) throw new Error(`${label} failed on Devnet: ${JSON.stringify(confirmation.value.err)}`);
   console.log(`${label}: ${signature}`);
   return signature;
 }
@@ -117,7 +113,7 @@ if (pendingProtocolInstructions.length > 0) {
   };
   const latest = await connection.getLatestBlockhash("confirmed");
   const transaction = toWeb3Transaction(prepared, latest.blockhash);
-  await simulateAndSend(transaction, [payer], "initialize config and register Devnet USDC");
+  await submitDirectly(transaction, [payer], "initialize config and register Devnet USDC");
 } else {
   console.log(`USDC asset: ${usdcAsset.action} ${usdcAsset.address.toBase58()}`);
 }
@@ -133,7 +129,7 @@ if (pendingToken2022.length > 0) {
   };
   const latest = await connection.getLatestBlockhash("confirmed");
   const transaction = toWeb3Transaction(prepared, latest.blockhash);
-  await simulateAndSend(transaction, [payer], "register Token-2022 asset");
+  await submitDirectly(transaction, [payer], "register Token-2022 asset");
 } else {
   console.log(`Token-2022 asset: ${token2022Asset.action} ${token2022Asset.address.toBase58()}`);
 }

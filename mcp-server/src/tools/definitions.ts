@@ -51,6 +51,11 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "get_supported_assets",
+    description: "List every mint in the scalable on-chain SupportedAsset registry, including enabled state and exact token program.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "quote_payment_request",
     description: "Verify a merchant-signed request, derive deterministic payment references, and quote it against a mandate without signing or submitting.",
     inputSchema: {
@@ -171,20 +176,6 @@ export const TOOL_DEFINITIONS = [
         recipient: { type: "string" },
         amount: { type: "string", description: "Unsigned token amount in base units" },
         tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
-        remainingAccounts: {
-          type: "array",
-          description: "Optional Token-2022 extension accounts, for example transfer-hook accounts",
-          items: {
-            type: "object",
-            properties: {
-              address: { type: "string" },
-              isSigner: { type: "boolean" },
-              isWritable: { type: "boolean" },
-            },
-            required: ["address", "isSigner", "isWritable"],
-            additionalProperties: false,
-          },
-        },
       },
       required: [
         "mandate",
@@ -201,7 +192,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "execute_payment",
-    description: "Simulate and submit a policy-checked payment through the configured execution adapter.",
+    description: "Prepare a policy-checked payment for an external signer, or relay a supplied wallet-signed transaction through Axum.",
     inputSchema: {
       type: "object",
       properties: {
@@ -217,20 +208,6 @@ export const TOOL_DEFINITIONS = [
         signedTransaction: {
           type: "string",
           description: "Base64 wallet-signed transaction for relay through the Rust backend",
-        },
-        remainingAccounts: {
-          type: "array",
-          description: "Optional Token-2022 extension accounts, for example transfer-hook accounts",
-          items: {
-            type: "object",
-            properties: {
-              address: { type: "string" },
-              isSigner: { type: "boolean" },
-              isWritable: { type: "boolean" },
-            },
-            required: ["address", "isSigner", "isWritable"],
-            additionalProperties: false,
-          },
         },
       },
       required: [
@@ -256,20 +233,6 @@ export const TOOL_DEFINITIONS = [
         paymentId: { type: "string" }, signatureReference: { type: "string" }, mint: { type: "string" },
         recipient: { type: "string" }, amount: { type: "string" },
         tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
-        remainingAccounts: {
-          type: "array",
-          description: "Optional Token-2022 extension accounts, for example transfer-hook accounts",
-          items: {
-            type: "object",
-            properties: {
-              address: { type: "string" },
-              isSigner: { type: "boolean" },
-              isWritable: { type: "boolean" },
-            },
-            required: ["address", "isSigner", "isWritable"],
-            additionalProperties: false,
-          },
-        },
       },
       required: ["mandate", "agent", "invoiceHash", "paymentId", "signatureReference", "mint", "recipient", "amount"],
       additionalProperties: false,
@@ -305,25 +268,38 @@ export const TOOL_DEFINITIONS = [
             resource: { type: "string" },
             nonce: { type: "string" },
             tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
-            remainingAccounts: { type: "array" },
           },
-          required: ["asset", "payTo", "amount", "nonce"],
+          required: ["asset", "payTo", "amount", "resource"],
           additionalProperties: true,
         },
         mandate: { type: "string" },
         agent: { type: "string" },
-        signedTransaction: {
-          type: "string",
-          description: "Optional base64 wallet-signed transaction to relay through the Rust backend",
-        },
       },
       required: ["challenge", "mandate", "agent"],
       additionalProperties: false,
     },
   },
   {
+    name: "execute_x402_payment",
+    description: "Run the live x402 GET/402 flow, prepare an externally signed ChainPay settlement, verify its receipt, and retry the resource with proof.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        resource: { type: "string", description: "HTTPS x402-gated resource URL" },
+        mandate: { type: "string" },
+        agent: { type: "string" },
+        signedTransaction: {
+          type: "string",
+          description: "Optional base64 transaction signed outside ChainPay; omit on the first call",
+        },
+      },
+      required: ["resource", "mandate", "agent"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_payment",
-    description: "Fetch a ChainPay receipt by address or by mandate and invoice hash.",
+    description: "Fetch a ChainPay receipt PDA and join it with Axum's persisted transaction signature.",
     inputSchema: {
       type: "object",
       properties: {

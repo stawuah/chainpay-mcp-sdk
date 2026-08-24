@@ -1,4 +1,10 @@
-import { publicKey, type Address } from "@chainpay/sdk";
+import {
+  publicKey,
+  toWeb3Transaction,
+  type Address,
+  type ChainPayClient,
+  type PreparedTransaction,
+} from "@chainpay/sdk";
 
 export function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.trim() === "") {
@@ -108,6 +114,23 @@ export function serializeTransaction(transaction: {
   };
 }
 
+export async function materializeUnsignedTransaction(
+  client: ChainPayClient,
+  transaction: PreparedTransaction,
+) {
+  const latest = await client.connection.getLatestBlockhash("confirmed");
+  const unsigned = toWeb3Transaction(transaction, latest.blockhash);
+  return {
+    encoding: "base64" as const,
+    value: base64FromUint8Array(unsigned.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    })),
+    recentBlockhash: latest.blockhash,
+    lastValidBlockHeight: latest.lastValidBlockHeight,
+  };
+}
+
 export function toolResult(data: unknown, isError = false) {
   const safe = jsonSafe(data);
   return {
@@ -116,4 +139,3 @@ export function toolResult(data: unknown, isError = false) {
     content: [{ type: "text", text: JSON.stringify(safe) }],
   };
 }
-

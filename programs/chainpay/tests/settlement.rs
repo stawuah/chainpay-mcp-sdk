@@ -248,7 +248,9 @@ fn run_settlement(kind: TokenKind) {
                 system_program: system_program::ID,
             },
             instruction::InitializeConfig {
-                supported_mints: [mint.pubkey(), Pubkey::default(), Pubkey::default()],
+                // This legacy bootstrap list deliberately excludes the payment
+                // mint. SupportedAsset is the sole scalable authorization gate.
+                supported_mints: [Pubkey::new_unique(), Pubkey::default(), Pubkey::default()],
             },
         )],
         &[&owner],
@@ -456,6 +458,60 @@ fn run_settlement(kind: TokenKind) {
         &[&owner],
     );
     assert!(svm.get_account(&second_mandate).is_some());
+
+    // Disabling the registry entry must stop settlement even though the legacy
+    // config, mandate, delegation, mint, and token accounts remain valid.
+    submit(
+        &mut svm,
+        vec![chainpay_instruction(
+            accounts::SetAssetStatus {
+                config,
+                asset,
+                authority: owner.pubkey(),
+            },
+            instruction::SetAssetStatus { enabled: false },
+        )],
+        &[&owner],
+    );
+    let disabled_invoice_hash = [31u8; 32];
+    let (disabled_receipt, _) = Pubkey::find_program_address(
+        &[
+            b"receipt",
+            second_mandate.as_ref(),
+            disabled_invoice_hash.as_ref(),
+        ],
+        &chainpay::ID,
+    );
+    let disabled_payment = chainpay_instruction(
+        accounts::ExecutePayment {
+            config,
+            asset_registry: asset,
+            mandate: second_mandate,
+            receipt: disabled_receipt,
+            agent: agent.pubkey(),
+            allowed_mint: mint.pubkey(),
+            source_token_account: source.pubkey(),
+            recipient_token_account: recipient.pubkey(),
+            token_program,
+            system_program: system_program::ID,
+        },
+        instruction::ExecutePayment {
+            params: PaymentParams {
+                invoice_hash: disabled_invoice_hash,
+                payment_id: [32u8; 32],
+                signature_reference: [33u8; 32],
+                amount: PAYMENT_AMOUNT,
+            },
+        },
+    );
+    let disabled_transaction = Transaction::new(
+        &[&agent],
+        Message::new(&[disabled_payment], Some(&agent.pubkey())),
+        svm.latest_blockhash(),
+    );
+    assert!(svm.send_transaction(disabled_transaction).is_err());
+    assert!(svm.get_account(&disabled_receipt).is_none());
+    assert_eq!(token_balance(&svm, &recipient.pubkey()), PAYMENT_AMOUNT);
 }
 
 #[test]

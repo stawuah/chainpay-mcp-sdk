@@ -96,7 +96,7 @@ PDA, and the receipt slot is the receipt PDA.
 | Area | Important files | What it contributes |
 | --- | --- | --- |
 | SDK | `sdk/src/client.ts`, `mandate.ts`, `payment.ts`, `encoding.ts`, `accounts.ts`, `pda.ts` | Derives addresses, encodes instructions, decodes state, performs local preflight, and prepares transactions. |
-| Backend | `backend/src/server.rs`, `rpc/mod.rs`, `api/mod.rs`, `status/mod.rs`, `storage/mod.rs` | Validates signed requests, simulates, relays, confirms, and stores public status metadata. |
+| Backend | `backend/src/server.rs`, `rpc/mod.rs`, `api/mod.rs`, `status/mod.rs`, `storage/mod.rs` | Validates signed requests, submits directly, confirms, verifies receipts, and stores public status metadata in PostgreSQL. |
 | MCP | `mcp-server/src/index.ts`, `server.ts`, `http.ts`, `tools/*` | Exposes safe JSON-RPC tools to agents and keeps signing outside MCP. |
 | Deployment | `Anchor.toml`, `render.yaml`, `Makefile` | Selects Devnet, program ID, build/test commands, and Render services. |
 | UI | `frontend/`, `app/` | Presentation and wallet-operation boundaries; neither is the on-chain authority. |
@@ -1137,17 +1137,15 @@ Wraps one payment instruction and marks the agent as signer and fee payer.
 - `preparePayment` loads the mandate, detects token program, constructs the
   request, derives the receipt, checks for an existing receipt, runs preflight,
   and returns instruction plus transaction plan;
-- `simulate` calls the SDK Solana simulation helper;
-- `executePayment` simulates first, stops on simulation failure, submits through
-  an injected adapter, optionally confirms, and returns a structured result;
+- `executePayment` submits through an injected external-signing adapter,
+  optionally confirms, and returns a structured result;
 - private `getProgramAccount` ensures the account is actually owned by the
   ChainPay program before decoding it.
 
 ### `sdk/src/solana.ts`
 
-This converts the SDK's neutral instruction format to `web3.js` objects, adds a
-recent blockhash and fee payer, and calls `simulateTransaction`. It does not sign
-or submit by itself.
+This converts the SDK's neutral instruction format to `web3.js` objects and adds
+a recent blockhash and fee payer. It does not sign or submit by itself.
 
 ### `sdk/src/payment-request.ts`
 
@@ -1220,11 +1218,11 @@ Registers:
 | `GET /v1/config` | Backend cluster/program config. |
 | `POST /v1/payment-requests/verify` | Verify merchant-signed payment demand. |
 | `GET /v1/rpc/latest-blockhash` | Get a recent blockhash. |
-| `POST /v1/payments` | Validate, simulate, submit, and finalize a payment. |
+| `POST /v1/payments` | Validate, submit, finalize, and verify a payment receipt. |
 | `GET /v1/payments/{payment_id}` | Read stored payment status. |
 | `POST /v1/transactions/submit` | Generic signed transaction relay. |
 | `GET /v1/transactions/{transaction_id}` | Read generic transaction status. |
-| `POST /rpc` | Allowlisted read/simulation RPC proxy. |
+| `POST /rpc` | Allowlisted read-only RPC proxy. |
 
 It also attaches authentication middleware, CORS, body limits, and request
 tracing.
@@ -1260,16 +1258,15 @@ This authenticates the merchant's request. It does not execute a payment.
    decoding, signatures, and ChainPay instruction fields.
 2. Return an existing record if the idempotency key was already used.
 3. Create a deterministic payment record in `prepared` state.
-4. Simulate the already-signed transaction with signature verification.
-5. If simulation fails, persist `failed` and return the diagnostic.
-6. Send the signed transaction to Solana RPC.
-7. Persist the returned transaction signature in `submitted` state.
-8. Poll until finalized or an error/timeout.
-9. Persist `confirmed` with slot, or `failed` with the error.
+4. Send the signed transaction directly to Solana RPC with preflight skipped.
+5. Persist the returned transaction signature in `submitted` state.
+6. Poll until finalized or an error/timeout.
+7. Decode and verify the finalized receipt PDA against the request fields.
+8. Persist `confirmed` with slot, or `failed` with the error.
 
-The backend sends `sendTransaction` with `skipPreflight: true` only after its own
-explicit simulation step has succeeded. The chain program still validates the
-transaction during actual execution.
+The backend sends `sendTransaction` with `skipPreflight: true`. The chain program
+validates the transaction during actual execution, and Axum verifies the
+finalized receipt before reporting payment success.
 
 #### `validate_payment_request`
 
@@ -1304,9 +1301,7 @@ apply ChainPay payment-specific account binding.
 - `validate_transaction_request`: validates generic relay input;
 - `validate_string`: rejects empty strings;
 - `decode_transaction`: base64-decodes and enforces byte size;
-- `simulation_summary`: converts RPC simulation data to API data;
-- `fail_payment` and `fail_transaction`: set failed state, error, optional
-  simulation, and update time;
+- `fail_payment` and `fail_transaction`: set failed state, error, and update time;
 - `deterministic_id`: hashes an idempotency key and adds a namespace prefix;
 - `hex_encode`: renders bytes as lowercase hex;
 - `now_ms`: returns Unix milliseconds;
@@ -1323,12 +1318,10 @@ RPC failures to 502, and storage failures to 500.
 - `config` exposes RPC settings;
 - `latest_blockhash` calls `getLatestBlockhash`;
 - `current_slot` calls `getSlot`;
-- `simulate_signed_transaction` calls `simulateTransaction` with base64,
-  signature verification, and the configured commitment;
 - `send_transaction` calls `sendTransaction` with retries;
 - `signature_status` calls `getSignatureStatuses`;
 - `wait_for_finalized` polls until finalized, transaction error, or timeout;
-- `forward_proxy` allows only the read/simulation method allowlist;
+- `forward_proxy` allows only the read-method allowlist;
 - private `call` creates the JSON-RPC envelope, handles HTTP/JSON/RPC errors,
   and requires a result field.
 
@@ -1344,7 +1337,7 @@ prepared -> submitted -> confirmed
                     \-> failed
 ```
 
-`PaymentRecord` adds public metadata, signature, slot, simulation, and timestamps
+`PaymentRecord` adds public metadata, signature, slot, and timestamps
 to a payment. `TransactionRecord` is the generic relay equivalent.
 
 These statuses describe backend observation. The on-chain receipt's status byte
@@ -1519,8 +1512,8 @@ Here is the order to follow while debugging a direct payment:
 9. An external wallet/signer signs the prepared payment transaction as the
    approved agent.
 10. MCP can send that base64 transaction to the Rust backend.
-11. Backend binds HTTP metadata to the signed instruction, simulates, sends, and
-    polls finality.
+11. Backend binds HTTP metadata to the signed instruction, submits directly, and
+    polls finality before verifying the receipt.
 12. Solana runs Anchor account constraints and `validate_payment` again.
 13. ChainPay signs the token CPI with the mandate PDA.
 14. SPL Token or Token-2022 moves the base units.
@@ -1536,9 +1529,9 @@ Here is the order to follow while debugging a direct payment:
 | per-payment recipient | yes | exact signed-transaction match | yes |
 | token program | yes | optional metadata match | yes |
 | amount positive/limits | yes | optional amount match | yes |
-| pause/revoke/expiry | yes | simulation observes it | yes |
-| cooldown/count/total | yes | simulation observes it | yes |
-| duplicate invoice | yes, if receipt read | simulation/account init | yes, receipt PDA `init` |
+| pause/revoke/expiry | yes | signed instruction binding | yes |
+| cooldown/count/total | yes | signed instruction binding | yes |
+| duplicate invoice | yes, if receipt read | finalized receipt verification | yes, receipt PDA `init` |
 | merchant signature | yes/backend verifier | yes/backend verifier | no; the program receives derived identifiers |
 
 The repeated checks are intentional defense in depth. Only the on-chain checks

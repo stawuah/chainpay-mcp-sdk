@@ -23,5 +23,35 @@ export async function getPayment(
   const display = await displayTokenAmounts(context.client, receipt.mint, {
     amount: receipt.amount,
   });
-  return toolResult({ found: true, receipt, display });
+  let offChain: Record<string, unknown> | null = null;
+  if (context.backendUrl) {
+    const response = await fetch(
+      `${context.backendUrl.replace(/\/$/, "")}/v1/receipts/${encodeURIComponent(receipt.address)}`,
+      {
+        headers: context.backendAuthToken
+          ? { Authorization: `Bearer ${context.backendAuthToken}` }
+          : undefined,
+      },
+    );
+    if (response.ok) {
+      const payment = await response.json() as Record<string, unknown>;
+      offChain = {
+        paymentId: payment.payment_id,
+        transactionSignature: payment.signature,
+        slot: payment.slot,
+        status: payment.status,
+        finalizedAtMs: payment.updated_at_ms,
+      };
+    } else if (response.status !== 404) {
+      const error = await response.text();
+      throw new Error(`Axum receipt lookup failed (${response.status}): ${error}`);
+    }
+  }
+  return toolResult({
+    found: true,
+    receiptAddress: receipt.address,
+    onChain: receipt,
+    offChain,
+    display,
+  });
 }

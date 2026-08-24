@@ -1,4 +1,36 @@
-# Devnet bootstrap
+# ChainPay Devnet operations
+
+## Read-only regression verification
+
+Run the production baseline check before and after settlement-path changes:
+
+```sh
+npm run verify:devnet
+```
+
+`verify-devnet.mjs` is strictly read-only. It rejects non-Devnet RPCs and
+verifies the deployed ChainPay program, USDC and PYUSD mint owners, enabled
+asset PDAs, known confirmed settlements, and the current PYUSD transfer-fee and
+transfer-hook configuration. It never loads a signer or submits a transaction.
+
+## Live service communication verification
+
+After starting Axum, HTTP MCP, the independent x402 merchant, and Neon, run:
+
+```sh
+CHAINPAY_BACKEND_URL=https://backend.example.com \
+CHAINPAY_MCP_URL=https://mcp.example.com/mcp \
+CHAINPAY_X402_RESOURCE_URL=https://merchant.example.com/data \
+DATABASE_URL='postgresql://...' \
+npm run verify:stack
+```
+
+The verifier requires real service endpoints. It follows Axum and MCP reads to
+Devnet, presents a known finalized receipt to the merchant to prove the merchant
+can read chain state, and queries the actual Neon schema. It does not use a
+local settlement server or broadcast a transaction.
+
+## Devnet bootstrap
 
 `bootstrap-devnet.mjs` performs the real, idempotent ChainPay Devnet setup:
 
@@ -8,9 +40,9 @@
 4. verifies the official Solana Devnet PYUSD Token-2022 mint; and
 5. registers and verifies that Token-2022 mint.
 
-Every transaction is simulated first. A transaction is only submitted after
-simulation succeeds. The script requires an explicit signer path and never
-creates, prints, or stores a private key in the repository.
+Each transaction is submitted directly to Devnet and must reach finalized
+status before the script continues. The script requires an explicit signer path
+and never creates, prints, or stores a private key in the repository.
 
 Run it with a funded Devnet authority:
 
@@ -30,10 +62,12 @@ The default Devnet PYUSD mint is
 after its account owner is verified as Token-2022.
 
 The scalable registry is one PDA per mint, so any valid classic SPL Token or
-Token-2022 mint can be enabled by the config authority. Basic Token-2022
-transfers are supported by the settlement program; extension-specific mints
-that require extra accounts need those accounts supplied to the payment
-instruction.
+Token-2022 mint can be enabled by the config authority. Registration alone does
+not imply compatibility: the SDK scans the live mint plus source and recipient
+accounts before every payment. The current transparent path rejects active
+transfer hooks, non-zero fees, required memos, CPI guard conflicts,
+non-transferable/frozen state, and unknown transfer-affecting extensions rather
+than accepting caller-supplied extra accounts.
 
 ## Render keep-alive
 

@@ -191,7 +191,7 @@ In the local frontend:
 4. Enter the approved agent wallet and spending limits.
 5. Select USDC or the registered Token-2022 asset.
 6. Use `Prepare wallet` when the source token account does not exist.
-7. Select `Review mandate` to build and simulate the transaction through the hosted RPC.
+7. Select `Review mandate` to build the transaction and inspect live account/policy state.
 8. Select `Sign & create mandate` and approve the real Devnet transaction in the wallet.
 
 The review step does not submit anything. The wallet approval step creates the
@@ -231,7 +231,7 @@ discovers all mandate accounts and shows their individual IDs for selection.
 In `Payments`:
 
 1. Enter the invoice/reference, amount, and recipient wallet.
-2. Select `Prepare payment`. This performs MCP policy validation and SDK/RPC simulation only.
+2. Select `Prepare payment`. This performs MCP policy validation and reads live Devnet state without submitting.
 3. Confirm the recipient, mint, amount, mandate checks, and receipt PDA.
 4. Select `Sign & settle payment`.
 5. Approve the wallet prompt. This is the real settlement step.

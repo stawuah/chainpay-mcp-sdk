@@ -26,7 +26,7 @@ The honest qualification is:
 | Classic SPL Token settlement | Implemented and covered by LiteSVM |
 | Basic Token-2022 settlement | Implemented and covered by LiteSVM |
 | SDK payment preparation | Implemented |
-| Rust backend simulation, relay, and status tracking | Implemented |
+| Rust backend direct relay, receipt verification, and status tracking | Implemented |
 | MCP payment tools | Implemented |
 | x402 exact challenge normalization on Solana Devnet | Implemented |
 | Live mainnet USDC settlement | Not deployed or verified here |
@@ -87,7 +87,7 @@ replace an approved stablecoin mint with a different token.
 | [`programs/chainpay/tests/settlement.rs`](programs/chainpay/tests/settlement.rs) | Runs the same program flow against classic SPL Token and Token-2022 in LiteSVM. |
 | [`sdk/src/payment.ts`](sdk/src/payment.ts) | Builds the payment instruction and performs local preflight. |
 | [`sdk/src/mandate.ts`](sdk/src/mandate.ts) | Builds mandate creation and token delegate approval. |
-| [`backend/src/server.rs`](backend/src/server.rs) | Validates signed payment bytes, simulates, relays, and tracks confirmation. |
+| [`backend/src/server.rs`](backend/src/server.rs) | Validates signed payment bytes, relays directly, tracks finality, and verifies the receipt. |
 | [`mcp-server/src/tools/execute_payment.ts`](mcp-server/src/tools/execute_payment.ts) | Connects an agent payment request to the SDK and optional backend relay. |
 
 ## The real on-chain flow
@@ -457,13 +457,13 @@ from a text request. It accepts a wallet-signed transaction.
 4. binds request metadata to the signed instruction's mandate, invoice hash,
    receipt, agent, mint, recipient, token program, and amount;
 5. stores a prepared status record;
-6. simulates the signed transaction with signature verification;
-7. sends it to Solana RPC after successful simulation;
-8. stores the transaction signature;
-9. polls until finalized or failed;
+6. sends it directly to Solana RPC with preflight skipped;
+7. stores the transaction signature;
+8. polls until finalized or failed;
+9. verifies the finalized on-chain receipt;
 10. returns the backend status and signature.
 
-The backend is useful for relay, simulation, and status tracking. It cannot make
+The backend is useful for direct relay, receipt verification, and status tracking. It cannot make
 an invalid mandate valid. The program is still the final authority.
 
 The backend currently enforces Devnet in `BackendConfig`. Therefore the current
@@ -621,8 +621,8 @@ settles_through_token_2022_and_rejects_replay
 ```
 
 These commands build and test the program. They do not sign or send a Devnet or
-mainnet transaction. Any live wallet operation must be separately reviewed,
-simulated, and explicitly approved.
+mainnet transaction. Any live wallet operation must be separately reviewed and
+explicitly approved.
 
 ## Final answer in plain language
 

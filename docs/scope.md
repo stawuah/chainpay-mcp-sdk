@@ -132,7 +132,7 @@ Responsibility:
 
 - provide APIs for the UI and MCP server;
 - handle Devnet RPC submission;
-- simulate transactions;
+- validate externally signed wire transactions;
 - refresh blockhashes;
 - track confirmation status;
 - store off-chain metadata that should not live on-chain;
@@ -445,7 +445,7 @@ Required checks:
 - expiry check;
 - paused/revoked check;
 - invoice hash uniqueness check;
-- transaction simulation before submission;
+- signed-wire validation before direct submission;
 - finality confirmation before marking payment final.
 
 Operational checks:
@@ -555,7 +555,7 @@ Build:
 - receipt fetcher;
 - MCP server with safe payment tools;
 - lightweight backend API for status tracking;
-- transaction simulation and confirmation tracking;
+- direct transaction submission and confirmation tracking;
 - better test coverage for policy failures.
 
 Exit criteria:

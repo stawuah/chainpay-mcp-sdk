@@ -13,6 +13,8 @@ services:
         sync: false
       - key: CHAINPAY_PROGRAM_ID
         value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
+      - key: DATABASE_URL
+        sync: false
       - key: CHAINPAY_HTTP_AUTH_TOKEN
         value: ""
       - key: CHAINPAY_ALLOWED_ORIGINS
@@ -32,7 +34,7 @@ services:
       - key: CHAINPAY_PROGRAM_ID
         value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
       - key: CHAINPAY_BACKEND_URL
-        value: https://chainpay-backend.onrender.com 
+        value: https://chainpay-backend.onrender.com
       - key: CHAINPAY_BACKEND_AUTH_TOKEN
         value: ""
       - key: CHAINPAY_HTTP_AUTH_TOKEN
@@ -45,9 +47,9 @@ services:
         value: openrouter
       - key: CHAINPAY_AGENT_MODEL
         value: openrouter/free
-      - key: CHAINPAY_AGENT_SECRET_KEY
-        sync: false
       - key: CHAINPAY_AGENT_PUBLIC_KEY
+        sync: false
+      - key: DATABASE_URL
         sync: false
   - type: web
     name: chainpay-frontend

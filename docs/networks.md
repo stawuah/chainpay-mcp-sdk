@@ -18,7 +18,8 @@ both assets. Run the real setup with:
 CHAINPAY_KEYPAIR=/absolute/path/to/devnet-authority.json npm run bootstrap:devnet
 ```
 
-The command is idempotent and simulates every transaction before submission.
+The command is idempotent and submits each authority-signed transaction directly,
+waiting for finalized status before continuing.
 The default Devnet PYUSD mint is:
 
 `CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM`

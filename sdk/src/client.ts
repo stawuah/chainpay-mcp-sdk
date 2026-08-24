@@ -41,7 +41,7 @@ import {
   type PreparePaymentInput,
 } from "./payment.js";
 import { deriveAssetAddress, deriveConfigAddress, deriveReceiptAddress } from "./pda.js";
-import { simulatePrepared } from "./solana.js";
+import { inspectTokenCapabilities } from "./token-capabilities.js";
 
 export type PaymentLookup =
   | Address
@@ -160,6 +160,19 @@ export class ChainPayClient {
     const assetAddress = deriveAssetAddress(mint, this.programId);
     const account = await this.getProgramAccount(assetAddress);
     return account ? decodeSupportedAsset(account.data, account.address) : null;
+  }
+
+  async getSupportedAssets(): Promise<SupportedAsset[]> {
+    const accounts = await this.connection.getProgramAccounts(publicKey(this.programId), {
+      commitment: this.commitment,
+      filters: [{ dataSize: 106 }],
+    });
+    return accounts
+      .map((account) => decodeSupportedAsset(
+        new Uint8Array(account.account.data),
+        account.pubkey.toBase58(),
+      ))
+      .sort((left, right) => left.mint.localeCompare(right.mint));
   }
 
   async getPayment(lookup: PaymentLookup): Promise<PaymentReceipt | null> {
@@ -287,6 +300,28 @@ export class ChainPayClient {
     const mandate = await this.getMandate(input.mandate);
     if (!mandate) throw new Error(`Mandate not found: ${input.mandate}`);
     const tokenProgram = input.tokenProgram ?? mandate.tokenProgram ?? await this.getTokenProgram(mandate.sourceTokenAccount);
+    const untrustedRemainingAccounts = (input as PreparePaymentInput & { remainingAccounts?: unknown[] }).remainingAccounts;
+    if (untrustedRemainingAccounts?.length) {
+      throw new Error("Caller-supplied remainingAccounts are not accepted; extension accounts must be resolved from verified on-chain state");
+    }
+    const asset = await this.getSupportedAsset(input.mint);
+    const expectedProgram = tokenProgram === "token-2022" ? TOKEN_2022_PROGRAM_ID : SPL_TOKEN_PROGRAM_ID;
+    if (!asset || !asset.enabled) {
+      throw new Error("Payment mint is not enabled in the ChainPay SupportedAsset registry");
+    }
+    if (asset.mint !== input.mint || asset.tokenProgram !== expectedProgram) {
+      throw new Error("SupportedAsset mint or token program does not match the payment request");
+    }
+    const capabilityProfile = await inspectTokenCapabilities(this.connection, {
+      mint: input.mint,
+      sourceTokenAccount: mandate.sourceTokenAccount,
+      recipientTokenAccount: input.recipient,
+      tokenProgram,
+      commitment: this.commitment,
+    });
+    if (!capabilityProfile.compatible) {
+      throw new Error(`Token capability check failed: ${capabilityProfile.blockers.join("; ")}`);
+    }
     const request: PaymentRequest = preparePaymentRequest({ ...input, tokenProgram });
     const currentSlot = await this.getCurrentSlot();
     const executionAgent = agent ?? mandate.approvedAgent;
@@ -308,42 +343,14 @@ export class ChainPayClient {
       instruction,
       transaction: preparedPaymentTransaction(instruction, executionAgent),
       preflight,
+      capabilityProfile,
     };
-  }
-
-  async simulate(prepared: PreparedTransaction) {
-    return simulatePrepared(this.connection, prepared, this.commitment);
   }
 
   async executePayment(
     prepared: PreparedPayment,
     adapter: PaymentSubmissionAdapter,
   ) {
-    let simulation;
-    try {
-      simulation = await adapter.simulate(prepared.transaction);
-    } catch (error) {
-      return {
-        status: "failed" as const,
-        receiptAddress: prepared.receiptAddress,
-        simulation: {
-          ok: false,
-          logs: [],
-          error: error instanceof Error ? error.message : String(error),
-        },
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-
-    if (!simulation.ok) {
-      return {
-        status: "failed" as const,
-        receiptAddress: prepared.receiptAddress,
-        simulation,
-        error: simulation.error ?? "Transaction simulation failed",
-      };
-    }
-
     try {
       const submission = await adapter.submit(prepared.transaction);
       let status = submission.status ?? "submitted";
@@ -358,13 +365,11 @@ export class ChainPayClient {
         receiptAddress: prepared.receiptAddress,
         signature: submission.signature,
         slot,
-        simulation,
       };
     } catch (error) {
       return {
         status: "failed" as const,
         receiptAddress: prepared.receiptAddress,
-        simulation,
         error: error instanceof Error ? error.message : String(error),
       };
     }

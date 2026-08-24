@@ -10,14 +10,6 @@ pub enum PaymentStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SimulationSummary {
-    pub ok: bool,
-    pub logs: Vec<String>,
-    pub units_consumed: Option<u64>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaymentRecord {
     pub payment_id: String,
     pub idempotency_key: String,
@@ -37,7 +29,6 @@ pub struct PaymentRecord {
     pub signature: Option<String>,
     pub slot: Option<u64>,
     pub status: PaymentStatus,
-    pub simulation: Option<SimulationSummary>,
     pub error: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
@@ -50,7 +41,33 @@ pub struct TransactionRecord {
     pub signature: Option<String>,
     pub slot: Option<u64>,
     pub status: PaymentStatus,
-    pub simulation: Option<SimulationSummary>,
+    pub error: Option<String>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum X402PaymentStatus {
+    Prepared,
+    Submitted,
+    Confirmed,
+    Verified,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct X402PaymentRecord {
+    pub x402_payment_id: String,
+    pub idempotency_key: String,
+    pub resource: String,
+    pub payment_id: Option<String>,
+    pub receipt_address: Option<String>,
+    pub transaction_signature: Option<String>,
+    pub status: X402PaymentStatus,
+    pub challenge: serde_json::Value,
+    pub proof: Option<serde_json::Value>,
+    pub response_status: Option<u16>,
     pub error: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,

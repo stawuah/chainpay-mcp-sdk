@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use thiserror::Error;
 
@@ -57,6 +57,8 @@ pub enum RpcError {
     UnsupportedProxyMethod(String),
     #[error("Solana RPC response did not contain {0}")]
     MissingField(&'static str),
+    #[error("Solana RPC returned invalid account data: {0}")]
+    InvalidAccountData(String),
 }
 
 #[derive(Debug, Clone)]
@@ -65,19 +67,17 @@ pub struct LatestBlockhash {
     pub last_valid_block_height: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct SimulationResult {
-    pub ok: bool,
-    pub logs: Vec<String>,
-    pub units_consumed: Option<u64>,
-    pub error: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct SignatureStatus {
     pub slot: Option<u64>,
     pub confirmation_status: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RpcAccount {
+    pub owner: String,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -113,20 +113,6 @@ struct BlockhashResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct SimulationValue {
-    err: Option<Value>,
-    #[serde(default)]
-    logs: Option<Vec<String>>,
-    #[serde(rename = "unitsConsumed")]
-    units_consumed: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SimulationResponse {
-    value: SimulationValue,
-}
-
-#[derive(Debug, Deserialize)]
 struct SignatureStatusResponse {
     value: Vec<Option<RawSignatureStatus>>,
 }
@@ -137,6 +123,17 @@ struct RawSignatureStatus {
     err: Option<Value>,
     #[serde(rename = "confirmationStatus")]
     confirmation_status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountInfoResponse {
+    value: Option<RawAccountInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawAccountInfo {
+    owner: String,
+    data: Value,
 }
 
 impl RpcClient {
@@ -169,31 +166,33 @@ impl RpcClient {
             .await
     }
 
-    pub async fn simulate_signed_transaction(
-        &self,
-        encoded_transaction: &str,
-    ) -> Result<SimulationResult, RpcError> {
-        let response: SimulationResponse = self
+    pub async fn account_info(&self, address: &str) -> Result<Option<RpcAccount>, RpcError> {
+        let response: AccountInfoResponse = self
             .call(
-                "simulateTransaction",
-                json!([
-                    encoded_transaction,
-                    {
-                        "encoding": "base64",
-                        "sigVerify": true,
-                        "replaceRecentBlockhash": false,
-                        "commitment": self.config.commitment
-                    }
-                ]),
+                "getAccountInfo",
+                json!([address, { "commitment": self.config.commitment, "encoding": "base64" }]),
             )
             .await?;
-        let error = response.value.err.map(|value| value.to_string());
-        Ok(SimulationResult {
-            ok: error.is_none(),
-            logs: response.value.logs.unwrap_or_default(),
-            units_consumed: response.value.units_consumed,
-            error,
-        })
+        response
+            .value
+            .map(|account| {
+                let encoded = account
+                    .data
+                    .as_array()
+                    .and_then(|parts| parts.first())
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        RpcError::InvalidAccountData("expected base64 tuple".to_owned())
+                    })?;
+                let data =
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+                        .map_err(|error| RpcError::InvalidAccountData(error.to_string()))?;
+                Ok(RpcAccount {
+                    owner: account.owner,
+                    data,
+                })
+            })
+            .transpose()
     }
 
     pub async fn send_transaction(&self, encoded_transaction: &str) -> Result<String, RpcError> {
@@ -263,6 +262,7 @@ impl RpcClient {
             "getAccountInfo",
             "getBalance",
             "getEpochInfo",
+            "getGenesisHash",
             "getProgramAccounts",
             "getLatestBlockhash",
             "getMultipleAccounts",
@@ -272,7 +272,6 @@ impl RpcClient {
             "getTokenAccountBalance",
             "getTokenSupply",
             "getTransaction",
-            "simulateTransaction",
         ];
         if !ALLOWED_METHODS.contains(&request.method.as_str()) {
             return Err(RpcError::UnsupportedProxyMethod(request.method));

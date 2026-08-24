@@ -28,16 +28,19 @@ use crate::{
     api::{
         BackendConfigResponse, JsonRpcProxyRequest, PaymentRequestVerificationResponse,
         PaymentSubmissionRequest, SignedPaymentRequest, TransactionSubmissionRequest,
+        X402PaymentMetadata, X402ProofRequest,
     },
-    rpc::{LatestBlockhash, RpcClient, RpcConfig, RpcError, SimulationResult},
-    status::{PaymentRecord, PaymentStatus, SimulationSummary, TransactionRecord},
+    rpc::{LatestBlockhash, RpcAccount, RpcClient, RpcConfig, RpcError},
+    status::{
+        PaymentRecord, PaymentStatus, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
+    },
     storage::{StatusStore, StorageError},
 };
 
 const DEFAULT_PROGRAM_ID: &str = "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4";
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 8080;
-const MAX_TRANSACTION_BYTES: usize = 1_048_576;
+const MAX_TRANSACTION_BYTES: usize = 1_232;
 const SPL_TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 
@@ -209,6 +212,11 @@ pub fn build_router(state: BackendState) -> Router {
         .route("/v1/rpc/latest-blockhash", get(latest_blockhash))
         .route("/v1/payments", post(submit_payment))
         .route("/v1/payments/{payment_id}", get(get_payment))
+        .route(
+            "/v1/receipts/{receipt_address}",
+            get(get_payment_by_receipt),
+        )
+        .route("/v1/x402-payments/proof", post(record_x402_proof))
         .route("/v1/transactions/submit", post(submit_transaction))
         .route("/v1/transactions/{transaction_id}", get(get_transaction))
         .route("/rpc", post(proxy_rpc))
@@ -444,7 +452,20 @@ async fn get_payment(
     state
         .store
         .get_payment(&payment_id)
-        .await
+        .await?
+        .map(Json)
+        .ok_or(ApiError::NotFound)
+}
+
+async fn get_payment_by_receipt(
+    State(state): State<BackendState>,
+    Path(receipt_address): Path<String>,
+) -> Result<Json<PaymentRecord>, ApiError> {
+    validate_string(&receipt_address, "receipt_address")?;
+    state
+        .store
+        .find_payment_by_receipt(&receipt_address)
+        .await?
         .map(Json)
         .ok_or(ApiError::NotFound)
 }
@@ -456,7 +477,7 @@ async fn get_transaction(
     state
         .store
         .get_transaction(&transaction_id)
-        .await
+        .await?
         .map(Json)
         .ok_or(ApiError::NotFound)
 }
@@ -466,10 +487,11 @@ async fn submit_payment(
     Json(request): Json<PaymentSubmissionRequest>,
 ) -> Result<Json<PaymentRecord>, ApiError> {
     validate_payment_request(&request, &state.config.program_id)?;
+    let x402 = request.x402.clone();
     if let Some(existing) = state
         .store
         .find_payment_by_idempotency(&request.idempotency_key)
-        .await
+        .await?
     {
         return Ok(Json(existing));
     }
@@ -490,38 +512,11 @@ async fn submit_payment(
         signature: None,
         slot: None,
         status: PaymentStatus::Prepared,
-        simulation: None,
         error: None,
         created_at_ms: now,
         updated_at_ms: now,
     };
-    state.store.put_payment(record.clone()).await?;
-
-    let simulation = match state
-        .rpc
-        .simulate_signed_transaction(&request.signed_transaction)
-        .await
-    {
-        Ok(simulation) => simulation,
-        Err(error) => {
-            record = fail_payment(record, error.to_string(), None);
-            state.store.put_payment(record.clone()).await?;
-            return Ok(Json(record));
-        }
-    };
-    record.simulation = Some(simulation_summary(&simulation));
-    if !simulation.ok {
-        record = fail_payment(
-            record,
-            simulation
-                .error
-                .clone()
-                .unwrap_or_else(|| "transaction simulation failed".to_owned()),
-            Some(simulation),
-        );
-        state.store.put_payment(record.clone()).await?;
-        return Ok(Json(record));
-    }
+    persist_payment(&state, &record, x402.as_ref()).await?;
 
     let signature = match state
         .rpc
@@ -530,27 +525,109 @@ async fn submit_payment(
     {
         Ok(signature) => signature,
         Err(error) => {
-            record = fail_payment(record, error.to_string(), None);
-            state.store.put_payment(record.clone()).await?;
+            record = fail_payment(record, error.to_string());
+            persist_payment(&state, &record, x402.as_ref()).await?;
             return Ok(Json(record));
         }
     };
     record.signature = Some(signature.clone());
     record.status = PaymentStatus::Submitted;
     record.updated_at_ms = now_ms();
-    state.store.put_payment(record.clone()).await?;
+    persist_payment(&state, &record, x402.as_ref()).await?;
 
     match state.rpc.wait_for_finalized(&signature).await {
         Ok(status) => {
-            record.status = PaymentStatus::Confirmed;
-            record.slot = status.slot;
-            record.updated_at_ms = now_ms();
+            match verify_finalized_receipt(&state.rpc, &record, &state.config.program_id).await {
+                Ok(()) => {
+                    record.status = PaymentStatus::Confirmed;
+                    record.slot = status.slot;
+                    record.updated_at_ms = now_ms();
+                }
+                Err(error) => {
+                    record = fail_payment(
+                        record,
+                        format!("finalized transaction receipt verification failed: {error}"),
+                    );
+                }
+            }
         }
         Err(error) => {
-            record = fail_payment(record, error.to_string(), None);
+            record = fail_payment(record, error.to_string());
         }
     }
-    state.store.put_payment(record.clone()).await?;
+    persist_payment(&state, &record, x402.as_ref()).await?;
+    Ok(Json(record))
+}
+
+async fn persist_payment(
+    state: &BackendState,
+    payment: &PaymentRecord,
+    metadata: Option<&X402PaymentMetadata>,
+) -> Result<(), ApiError> {
+    state.store.put_payment(payment.clone()).await?;
+    let Some(metadata) = metadata else {
+        return Ok(());
+    };
+    let status = match payment.status {
+        PaymentStatus::Prepared => X402PaymentStatus::Prepared,
+        PaymentStatus::Submitted => X402PaymentStatus::Submitted,
+        PaymentStatus::Confirmed => X402PaymentStatus::Confirmed,
+        PaymentStatus::Failed => X402PaymentStatus::Failed,
+    };
+    state
+        .store
+        .put_x402(X402PaymentRecord {
+            x402_payment_id: deterministic_id("x402", &payment.idempotency_key),
+            idempotency_key: payment.idempotency_key.clone(),
+            resource: metadata.resource.clone(),
+            payment_id: Some(payment.payment_id.clone()),
+            receipt_address: payment.receipt_address.clone(),
+            transaction_signature: payment.signature.clone(),
+            status,
+            challenge: metadata.challenge.clone(),
+            proof: None,
+            response_status: None,
+            error: payment.error.clone(),
+            created_at_ms: payment.created_at_ms,
+            updated_at_ms: payment.updated_at_ms,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn record_x402_proof(
+    State(state): State<BackendState>,
+    Json(request): Json<X402ProofRequest>,
+) -> Result<Json<X402PaymentRecord>, ApiError> {
+    validate_string(&request.idempotency_key, "idempotency_key")?;
+    if !(100..=599).contains(&request.response_status) {
+        return Err(ApiError::BadRequest(
+            "response_status must be a valid HTTP status".to_owned(),
+        ));
+    }
+    let mut record = state
+        .store
+        .find_x402_by_idempotency(&request.idempotency_key)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if !matches!(
+        record.status,
+        X402PaymentStatus::Confirmed | X402PaymentStatus::Verified
+    ) {
+        return Err(ApiError::BadRequest(
+            "x402 proof can only be recorded after confirmed settlement".to_owned(),
+        ));
+    }
+    record.proof = Some(request.proof);
+    record.response_status = Some(request.response_status);
+    record.error = request.error;
+    record.status = if (200..300).contains(&request.response_status) {
+        X402PaymentStatus::Verified
+    } else {
+        X402PaymentStatus::Confirmed
+    };
+    record.updated_at_ms = now_ms();
+    state.store.put_x402(record.clone()).await?;
     Ok(Json(record))
 }
 
@@ -562,7 +639,7 @@ async fn submit_transaction(
     if let Some(existing) = state
         .store
         .find_transaction_by_idempotency(&request.idempotency_key)
-        .await
+        .await?
     {
         return Ok(Json(existing));
     }
@@ -574,38 +651,11 @@ async fn submit_transaction(
         signature: None,
         slot: None,
         status: PaymentStatus::Prepared,
-        simulation: None,
         error: None,
         created_at_ms: now,
         updated_at_ms: now,
     };
     state.store.put_transaction(record.clone()).await?;
-
-    let simulation = match state
-        .rpc
-        .simulate_signed_transaction(&request.signed_transaction)
-        .await
-    {
-        Ok(simulation) => simulation,
-        Err(error) => {
-            record = fail_transaction(record, error.to_string(), None);
-            state.store.put_transaction(record.clone()).await?;
-            return Ok(Json(record));
-        }
-    };
-    record.simulation = Some(simulation_summary(&simulation));
-    if !simulation.ok {
-        record = fail_transaction(
-            record,
-            simulation
-                .error
-                .clone()
-                .unwrap_or_else(|| "transaction simulation failed".to_owned()),
-            Some(simulation),
-        );
-        state.store.put_transaction(record.clone()).await?;
-        return Ok(Json(record));
-    }
 
     let signature = match state
         .rpc
@@ -614,7 +664,7 @@ async fn submit_transaction(
     {
         Ok(signature) => signature,
         Err(error) => {
-            record = fail_transaction(record, error.to_string(), None);
+            record = fail_transaction(record, error.to_string());
             state.store.put_transaction(record.clone()).await?;
             return Ok(Json(record));
         }
@@ -631,7 +681,7 @@ async fn submit_transaction(
             record.updated_at_ms = now_ms();
         }
         Err(error) => {
-            record = fail_transaction(record, error.to_string(), None);
+            record = fail_transaction(record, error.to_string());
         }
     }
     state.store.put_transaction(record.clone()).await?;
@@ -645,8 +695,20 @@ fn validate_payment_request(
     validate_string(&request.idempotency_key, "idempotency_key")?;
     validate_string(&request.mandate, "mandate")?;
     validate_string(&request.invoice_hash, "invoice_hash")?;
+    let receipt_address = request.receipt_address.as_deref().ok_or_else(|| {
+        ApiError::BadRequest("receipt_address is required for settlement verification".to_owned())
+    })?;
+    validate_string(receipt_address, "receipt_address")?;
     validate_string(&request.recipient, "recipient")?;
     validate_string(&request.signed_transaction, "signed_transaction")?;
+    if let Some(x402) = &request.x402 {
+        validate_string(&x402.resource, "x402.resource")?;
+        if !x402.challenge.is_object() {
+            return Err(ApiError::BadRequest(
+                "x402.challenge must be a JSON object".to_owned(),
+            ));
+        }
+    }
     let invoice_hash = request.invoice_hash.trim().trim_start_matches("0x");
     if invoice_hash.len() != 64 || !invoice_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(ApiError::BadRequest(
@@ -661,6 +723,104 @@ fn validate_payment_request(
     let transaction = decode_transaction(&request.signed_transaction)?;
     validate_chainpay_transaction(&transaction, request, program_id)?;
     Ok(())
+}
+
+async fn verify_finalized_receipt(
+    rpc: &RpcClient,
+    record: &PaymentRecord,
+    program_id: &str,
+) -> Result<(), String> {
+    let address = record
+        .receipt_address
+        .as_deref()
+        .ok_or_else(|| "payment record has no receipt address".to_owned())?;
+    let account = rpc
+        .account_info(address)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("receipt account does not exist: {address}"))?;
+    verify_receipt_account(&account, record, program_id)
+}
+
+fn verify_receipt_account(
+    account: &RpcAccount,
+    record: &PaymentRecord,
+    program_id: &str,
+) -> Result<(), String> {
+    const RECEIPT_DISCRIMINATOR: [u8; 8] = [168, 198, 209, 4, 60, 235, 126, 109];
+    const RECEIPT_ACCOUNT_LENGTH: usize = 282;
+    const RECEIPT_STATUS_SETTLED: u8 = 1;
+
+    if account.owner != program_id {
+        return Err(format!(
+            "receipt is owned by {}, not {program_id}",
+            account.owner
+        ));
+    }
+    if account.data.len() < RECEIPT_ACCOUNT_LENGTH {
+        return Err(format!(
+            "receipt data is truncated: {} bytes",
+            account.data.len()
+        ));
+    }
+    if account.data[..8] != RECEIPT_DISCRIMINATOR {
+        return Err("receipt account discriminator is invalid".to_owned());
+    }
+    verify_receipt_pubkey(&account.data[8..40], &record.mandate, "mandate")?;
+    let invoice_hash = decode_hex_32(&record.invoice_hash, "invoice_hash")?;
+    if account.data[40..72] != invoice_hash {
+        return Err("receipt invoice hash does not match payment".to_owned());
+    }
+    if let Some(mint) = &record.mint {
+        verify_receipt_pubkey(&account.data[104..136], mint, "mint")?;
+    }
+    if let Some(recipient) = &record.recipient {
+        verify_receipt_pubkey(&account.data[168..200], recipient, "recipient")?;
+    }
+    if let Some(amount) = record.amount {
+        let receipt_amount = u64::from_le_bytes(account.data[200..208].try_into().unwrap());
+        if receipt_amount != amount {
+            return Err(format!(
+                "receipt amount {receipt_amount} does not match payment {amount}"
+            ));
+        }
+    }
+    if let Some(agent) = &record.agent {
+        verify_receipt_pubkey(&account.data[208..240], agent, "agent")?;
+    }
+    if account.data[280] != RECEIPT_STATUS_SETTLED {
+        return Err(format!(
+            "receipt status {} is not settled",
+            account.data[280]
+        ));
+    }
+    Ok(())
+}
+
+fn verify_receipt_pubkey(actual: &[u8], expected: &str, field: &str) -> Result<(), String> {
+    let expected = bs58::decode(expected)
+        .into_vec()
+        .map_err(|error| format!("stored {field} is not base58: {error}"))?;
+    if expected.len() != 32 {
+        return Err(format!("stored {field} is not a 32-byte Solana address"));
+    }
+    if actual != expected {
+        return Err(format!("receipt {field} does not match payment"));
+    }
+    Ok(())
+}
+
+fn decode_hex_32(value: &str, field: &str) -> Result<[u8; 32], String> {
+    let value = value.trim().trim_start_matches("0x");
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("stored {field} is not a 32-byte hexadecimal value"));
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .map_err(|error| format!("stored {field} is invalid: {error}"))?;
+    }
+    Ok(bytes)
 }
 
 fn validate_chainpay_transaction(
@@ -787,7 +947,20 @@ fn validate_transaction_request(request: &TransactionSubmissionRequest) -> Resul
             "signed_transaction is too large".to_owned(),
         ));
     }
-    decode_transaction(&request.signed_transaction)?;
+    let bytes = decode_transaction(&request.signed_transaction)?;
+    let transaction: VersionedTransaction = bincode::deserialize(&bytes).map_err(|error| {
+        ApiError::BadRequest(format!(
+            "signed_transaction is not a Solana transaction: {error}"
+        ))
+    })?;
+    transaction.sanitize().map_err(|error| {
+        ApiError::BadRequest(format!("signed_transaction failed sanitization: {error}"))
+    })?;
+    transaction.verify_and_hash_message().map_err(|error| {
+        ApiError::BadRequest(format!(
+            "signed_transaction signatures are invalid: {error}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -815,39 +988,16 @@ fn decode_transaction(encoded: &str) -> Result<Vec<u8>, ApiError> {
         })
 }
 
-fn simulation_summary(simulation: &SimulationResult) -> SimulationSummary {
-    SimulationSummary {
-        ok: simulation.ok,
-        logs: simulation.logs.clone(),
-        units_consumed: simulation.units_consumed,
-        error: simulation.error.clone(),
-    }
-}
-
-fn fail_payment(
-    mut record: PaymentRecord,
-    error: String,
-    simulation: Option<SimulationResult>,
-) -> PaymentRecord {
+fn fail_payment(mut record: PaymentRecord, error: String) -> PaymentRecord {
     record.status = PaymentStatus::Failed;
     record.error = Some(error);
-    if let Some(simulation) = simulation {
-        record.simulation = Some(simulation_summary(&simulation));
-    }
     record.updated_at_ms = now_ms();
     record
 }
 
-fn fail_transaction(
-    mut record: TransactionRecord,
-    error: String,
-    simulation: Option<SimulationResult>,
-) -> TransactionRecord {
+fn fail_transaction(mut record: TransactionRecord, error: String) -> TransactionRecord {
     record.status = PaymentStatus::Failed;
     record.error = Some(error);
-    if let Some(simulation) = simulation {
-        record.simulation = Some(simulation_summary(&simulation));
-    }
     record.updated_at_ms = now_ms();
     record
 }
@@ -902,23 +1052,59 @@ mod tests {
         assert!(validate_transaction_request(&request).is_err());
     }
 
+    #[test]
+    fn verifies_all_settlement_receipt_fields() {
+        let program_id = bs58::encode([9_u8; 32]).into_string();
+        let mandate = bs58::encode([1_u8; 32]).into_string();
+        let mint = bs58::encode([2_u8; 32]).into_string();
+        let recipient = bs58::encode([3_u8; 32]).into_string();
+        let agent = bs58::encode([4_u8; 32]).into_string();
+        let mut data = vec![0_u8; 282];
+        data[..8].copy_from_slice(&[168, 198, 209, 4, 60, 235, 126, 109]);
+        data[8..40].copy_from_slice(&[1_u8; 32]);
+        data[40..72].copy_from_slice(&[5_u8; 32]);
+        data[104..136].copy_from_slice(&[2_u8; 32]);
+        data[168..200].copy_from_slice(&[3_u8; 32]);
+        data[200..208].copy_from_slice(&10_u64.to_le_bytes());
+        data[208..240].copy_from_slice(&[4_u8; 32]);
+        data[280] = 1;
+        let account = RpcAccount {
+            owner: program_id.clone(),
+            data,
+        };
+        let record = PaymentRecord {
+            payment_id: "payment-1".into(),
+            idempotency_key: "invoice-1".into(),
+            mandate,
+            invoice_hash: "05".repeat(32),
+            receipt_address: Some(bs58::encode([6_u8; 32]).into_string()),
+            agent: Some(agent),
+            mint: Some(mint),
+            recipient: Some(recipient),
+            amount: Some(10),
+            token_program: Some("token-2022".into()),
+            signature: Some("signature".into()),
+            slot: Some(1),
+            status: PaymentStatus::Submitted,
+            error: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+
+        assert!(verify_receipt_account(&account, &record, &program_id).is_ok());
+        let mut wrong_amount = record;
+        wrong_amount.amount = Some(11);
+        assert!(verify_receipt_account(&account, &wrong_amount, &program_id).is_err());
+    }
+
     #[tokio::test]
-    async fn relays_a_signed_transaction_through_simulation_and_finality() {
-        async fn mock_rpc(Json(request): Json<Value>) -> Json<Value> {
+    async fn rpc_proxy_routes_allowlisted_read_methods() {
+        async fn read_rpc_fixture(Json(request): Json<Value>) -> Json<Value> {
             let method = request
                 .get("method")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let result = match method {
-                "simulateTransaction" => json!({
-                    "context": { "slot": 42 },
-                    "value": { "err": null, "logs": ["Program success"], "unitsConsumed": 100 }
-                }),
-                "sendTransaction" => json!("5NfQmockSignature"),
-                "getSignatureStatuses" => json!({
-                    "context": { "slot": 43 },
-                    "value": [{ "slot": 43, "err": null, "confirmationStatus": "finalized" }]
-                }),
                 "getProgramAccounts" => json!([{
                     "pubkey": "mandate-pda",
                     "account": { "data": ["account-data", "base64"], "executable": false, "lamports": 1, "owner": "program-id", "space": 235 }
@@ -939,7 +1125,7 @@ mod tests {
         let rpc_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let rpc_address = rpc_listener.local_addr().unwrap();
         let rpc_task = tokio::spawn(async move {
-            axum::serve(rpc_listener, Router::new().fallback(mock_rpc))
+            axum::serve(rpc_listener, Router::new().fallback(read_rpc_fixture))
                 .await
                 .unwrap();
         });
@@ -956,29 +1142,6 @@ mod tests {
                 .await
                 .unwrap();
         });
-
-        let response = reqwest::Client::new()
-            .post(format!("http://{api_address}/v1/transactions/submit"))
-            .json(&json!({
-                "idempotency_key": "test-transaction",
-                "signed_transaction": BASE64.encode([1_u8, 2, 3]),
-            }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let record: TransactionRecord = response.json().await.unwrap();
-        assert_eq!(record.status, PaymentStatus::Confirmed);
-        assert_eq!(record.signature.as_deref(), Some("5NfQmockSignature"));
-        assert_eq!(record.slot, Some(43));
-
-        let stored = reqwest::get(format!(
-            "http://{api_address}/v1/transactions/{}",
-            record.transaction_id
-        ))
-        .await
-        .unwrap();
-        assert_eq!(stored.status(), StatusCode::OK);
 
         let discovered = reqwest::Client::new()
             .post(format!("http://{api_address}/rpc"))

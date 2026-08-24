@@ -1,6 +1,6 @@
 import type { ChainPayMcpContext } from "./context.js";
 import { bytesToHex } from "@chainpay/sdk";
-import { serializeTransaction, toolResult } from "./common.js";
+import { materializeUnsignedTransaction, serializeTransaction, toolResult } from "./common.js";
 import { parsePaymentInput, requireObject } from "./payment-input.js";
 import { requirementsFromPreflight } from "./check_payment_requirements.js";
 
@@ -17,8 +17,25 @@ export async function executePayment(
         action: "rejected_by_preflight",
         receiptAddress: prepared.receiptAddress,
         preflight: prepared.preflight,
+        capabilityProfile: prepared.capabilityProfile,
         requirements: requirementsFromPreflight(prepared.preflight),
         transaction: serializeTransaction(prepared.transaction),
+      },
+      true,
+    );
+  }
+
+  if (context.agentAddress && parsed.agent !== context.agentAddress) {
+    return toolResult(
+      {
+        action: "agent_identity_mismatch",
+        message: "The requested agent does not match the configured approved-agent public identity.",
+        configuredAgent: context.agentAddress,
+        requestedAgent: parsed.agent,
+        receiptAddress: prepared.receiptAddress,
+        preflight: prepared.preflight,
+        capabilityProfile: prepared.capabilityProfile,
+        requirements: requirementsFromPreflight(prepared.preflight),
       },
       true,
     );
@@ -35,6 +52,7 @@ export async function executePayment(
           message: "CHAINPAY_BACKEND_URL must be configured to relay a signed transaction.",
           receiptAddress: prepared.receiptAddress,
           preflight: prepared.preflight,
+          capabilityProfile: prepared.capabilityProfile,
           requirements: requirementsFromPreflight(prepared.preflight),
           transaction: serializeTransaction(prepared.transaction),
         },
@@ -67,43 +85,32 @@ export async function executePayment(
     if (!response.ok) {
       return toolResult({ action: "backend_rejected", ...payload }, true);
     }
+    if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
+      return toolResult({
+        action: "backend_not_finalized",
+        ...payload,
+        receiptAddress: prepared.receiptAddress,
+        message: "Axum did not return a finalized signature and verified payment receipt.",
+      }, true);
+    }
     return toolResult({
       action: "backend_relayed",
       ...payload,
       receiptAddress: prepared.receiptAddress,
       preflight: prepared.preflight,
+      capabilityProfile: prepared.capabilityProfile,
       requirements: requirementsFromPreflight(prepared.preflight),
-    }, payload.status === "failed");
+    });
   }
 
-  if (!context.paymentExecutor) {
-    return toolResult(
-      {
-        action: "execution_adapter_required",
-        message: "No transaction execution adapter is configured. Return this transaction to a wallet or approved signer service.",
-        receiptAddress: prepared.receiptAddress,
-        preflight: prepared.preflight,
-        transaction: serializeTransaction(prepared.transaction),
-      },
-      true,
-    );
-  }
-
-  if (context.agentAddress && parsed.agent !== context.agentAddress) {
-    return toolResult(
-      {
-        action: "agent_identity_mismatch",
-        message: "The requested agent does not match the configured approved-agent signer.",
-        configuredAgent: context.agentAddress,
-        requestedAgent: parsed.agent,
-        receiptAddress: prepared.receiptAddress,
-        preflight: prepared.preflight,
-        requirements: requirementsFromPreflight(prepared.preflight),
-      },
-      true,
-    );
-  }
-
-  const result = await context.client.executePayment(prepared, context.paymentExecutor);
-  return toolResult({ ...result, requirements: requirementsFromPreflight(prepared.preflight) }, result.status === "failed");
+  return toolResult({
+    action: "agent_signature_required",
+    message: "Sign this transaction in the browser wallet or external agent runtime, then call execute_payment again with signedTransaction.",
+    receiptAddress: prepared.receiptAddress,
+    preflight: prepared.preflight,
+    capabilityProfile: prepared.capabilityProfile,
+    requirements: requirementsFromPreflight(prepared.preflight),
+    transaction: serializeTransaction(prepared.transaction),
+    unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction),
+  });
 }

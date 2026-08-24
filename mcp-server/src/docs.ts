@@ -768,7 +768,7 @@ export function renderDocsHtml(): string {
               <div class="flow-step"><strong>05</strong><h3>Relay</h3><p>Pass the wallet-signed transaction back to the connector for idempotent Rust backend relay and receipt tracking.</p></div>
             </div>
             <div class="split connector-detail" style="margin-top: 20px">
-              <div class="info-card"><div class="card-icon">↔</div><h3>How agents use it</h3><p>When an API responds with an x402 challenge, the agent passes that challenge, the approved mandate PDA, and its public key to <code>prepare_x402_payment</code>. After a signer approves the returned transaction, the agent calls the same tool again with <code>signedTransaction</code>, then uses <code>wait_for_payment</code> or <code>get_payment</code>.</p></div>
+              <div class="info-card"><div class="card-icon">↔</div><h3>How agents use it</h3><p>Call <code>execute_x402_payment</code> with the resource, mandate PDA, and approved-agent public key. The first call fetches and validates the live 402 challenge and returns an unsigned transaction. After an external signer approves it, call <code>execute_x402_payment</code> again with <code>signedTransaction</code>; ChainPay verifies finality and the receipt before retrying the resource.</p></div>
               <div class="callout connector-callout"><strong>Connector boundary</strong><span>x402 does not bypass ChainPay policy.</span><span>The adapter validates the challenge.</span><span>It binds the challenge to a deterministic invoice hash.</span><span>It sends only a wallet-signed transaction to:</span><code>/v1/payments</code><span>It is not a key custodian or hosted facilitator.</span></div>
             </div>
           </section>
@@ -779,12 +779,12 @@ export function renderDocsHtml(): string {
               <div class="flow-step"><strong>01</strong><h3>Choose the rail</h3><p>Set the stablecoin mint and choose <code>spl-token</code> or <code>token-2022</code>.</p></div>
               <div class="flow-step"><strong>02</strong><h3>Set the boundary</h3><p>Bind the source account, approved agent, per-payment and total limits. The recipient is supplied with each payment request.</p></div>
               <div class="flow-step"><strong>03</strong><h3>Quote in base units</h3><p>Use <code>quote_payment</code> or <code>prepare_payment</code> before any signature is requested.</p></div>
-              <div class="flow-step"><strong>04</strong><h3>Transfer on Solana</h3><p>The program enforces the mandate and transfers through the selected token program. Token-2022 extension accounts can be forwarded when the mint requires them.</p></div>
+              <div class="flow-step"><strong>04</strong><h3>Transfer on Solana</h3><p>The program enforces the mandate and transfers through the selected token program. The SDK capability scan admits only extension combinations supported by the current transparent transfer path.</p></div>
               <div class="flow-step"><strong>05</strong><h3>Reconcile</h3><p>Read the receipt PDA and backend status to give the agent and merchant durable proof.</p></div>
             </div>
             <div class="rail-grid">
               <div class="rail-card"><span class="rail-icon">$</span><div><h3>Classic SPL Token</h3><p>For standard SPL stablecoins and tokens. Every mint and token account must belong to the classic Token program.</p></div><code>spl-token</code></div>
-              <div class="rail-card"><span class="rail-icon">◈</span><div><h3>Token-2022</h3><p>For any registered Token-2022 mint and its accounts. Transfer-hook accounts can be supplied as <code>remainingAccounts</code>; confidential transfers need a separate flow.</p></div><code>token-2022</code></div>
+              <div class="rail-card"><span class="rail-icon">◈</span><div><h3>Token-2022</h3><p>For enabled registry mints whose live mint, source, and recipient capability scan is compatible. Active hooks, non-zero fees, confidential-only transfers, and unknown transfer-affecting extensions fail closed.</p></div><code>token-2022</code></div>
             </div>
           </section>
 
@@ -806,7 +806,7 @@ export function renderDocsHtml(): string {
             <div class="section-heading"><div><span class="section-index">07 · Assets and token programs</span><h2 id="assets-title">SPL-compatible by design.</h2><p>ChainPay supports classic SPL Token and Token-2022 settlement, with explicit program selection so an agent cannot accidentally mix account types.</p></div></div>
             <div class="split">
               <div class="info-card"><div class="card-icon">◎</div><h3>Classic SPL Token</h3><p>Set <code>tokenProgram</code> to <code>spl-token</code>. The mint, source account, and destination account must belong to the classic Token program.</p><a href="#tool-get-asset">Inspect an asset →</a></div>
-              <div class="info-card"><div class="card-icon">✦</div><h3>Token-2022</h3><p>Register any Token-2022 mint, then keep its program identity across the mint and every token account. Supply extension accounts through <code>remainingAccounts</code> when required.</p><a href="#tool-get-protocol-config">Read protocol config →</a></div>
+              <div class="info-card"><div class="card-icon">✦</div><h3>Token-2022</h3><p>Register a Token-2022 mint, then ChainPay verifies its program identity and scans the live mint and token-account extensions before every prepared payment. Unsupported transfer behavior is rejected until a tested adapter exists.</p><a href="#tool-get-protocol-config">Read protocol config →</a></div>
             </div>
             <div class="callout" style="margin-top: 16px"><strong>Important:</strong> token amounts are passed as unsigned base units. The protocol validates the configured mint and token program before a payment can settle.</div>
           </section>

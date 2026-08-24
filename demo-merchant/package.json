@@ -1,0 +1,22 @@
+{
+  "name": "@chainpay/demo-merchant",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm --prefix ../sdk run build && tsc",
+    "start": "node dist/server.js",
+    "dev": "npm run build && npm start"
+  },
+  "dependencies": {
+    "@chainpay/sdk": "0.1.0",
+    "@solana/web3.js": "^1.98.4",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^26.2.0",
+    "typescript": "^5.0.0"
+  }
+}

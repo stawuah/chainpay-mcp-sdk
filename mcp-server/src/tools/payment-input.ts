@@ -1,4 +1,4 @@
-import type { AccountMeta, PreparePaymentInput } from "@chainpay/sdk";
+import type { PreparePaymentInput } from "@chainpay/sdk";
 import {
   hex32,
   requiredString,
@@ -11,6 +11,9 @@ export function parsePaymentInput(args: Record<string, unknown>): {
   input: PreparePaymentInput;
   agent: string;
 } {
+  if (args.remainingAccounts !== undefined) {
+    throw new Error("remainingAccounts cannot be supplied by callers; ChainPay resolves compatible extension requirements from on-chain state");
+  }
   const input: PreparePaymentInput = {
     mandate: solanaAddress(args.mandate, "mandate"),
     invoiceHash: hex32(args.invoiceHash, "invoiceHash"),
@@ -22,32 +25,12 @@ export function parsePaymentInput(args: Record<string, unknown>): {
     tokenProgram: args.tokenProgram === undefined
       ? undefined
       : tokenProgram(args.tokenProgram),
-    remainingAccounts: parseRemainingAccounts(args.remainingAccounts),
   };
 
   return {
     input,
     agent: solanaAddress(args.agent, "agent"),
   };
-}
-
-export function parseRemainingAccounts(value: unknown): AccountMeta[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new Error("remainingAccounts must be an array");
-  return value.map((item, index) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new Error(`remainingAccounts[${index}] must be an object`);
-    }
-    const account = item as Record<string, unknown>;
-    if (typeof account.isSigner !== "boolean" || typeof account.isWritable !== "boolean") {
-      throw new Error(`remainingAccounts[${index}] must declare boolean isSigner and isWritable fields`);
-    }
-    return {
-      address: solanaAddress(account.address, `remainingAccounts[${index}].address`),
-      isSigner: account.isSigner,
-      isWritable: account.isWritable,
-    };
-  });
 }
 
 export function requireObject(args: unknown): Record<string, unknown> {

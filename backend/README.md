@@ -15,9 +15,9 @@ cargo run -p chainpay-backend
 ~~~
 
 The backend accepts wallet-signed transactions only. It never receives a
-private key or seed phrase. It simulates every transaction, submits it to
-Solana Devnet, waits for finalized status, and stores public lifecycle metadata
-with idempotency keys.
+private key or seed phrase. It validates the signed wire transaction, submits
+it directly to Solana Devnet, waits for finalized status, verifies payment
+receipts on-chain, and stores public lifecycle metadata with idempotency keys.
 
 ## Configuration
 
@@ -25,9 +25,13 @@ with idempotency keys.
 CHAINPAY_RPC_URL=https://api.devnet.solana.com \
 CHAINPAY_PROGRAM_ID=3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4 \
 CHAINPAY_HTTP_PORT=8080 \
-CHAINPAY_STATUS_FILE=./data/chainpay-status.json \
+DATABASE_URL=postgresql://chainpay:chainpay@127.0.0.1:5432/chainpay \
 cargo run -p chainpay-backend
 ~~~
+
+The backend runs SQL migrations from `backend/migrations` during startup and
+refuses to start without `DATABASE_URL`. In-memory storage is available only to
+unit tests; production never falls back to ephemeral state.
 
 Optional production settings include `CHAINPAY_HTTP_AUTH_TOKEN`,
 `CHAINPAY_ALLOWED_ORIGINS`, `CHAINPAY_CONFIRMATION_TIMEOUT_SECS`, and
@@ -39,10 +43,12 @@ Optional production settings include `CHAINPAY_HTTP_AUTH_TOKEN`,
 - `GET /v1/config` — public runtime configuration.
 - `POST /rpc` — authenticated, read-only Solana RPC proxy for the SDK.
 - `GET /v1/rpc/latest-blockhash` — current Devnet blockhash.
-- `POST /v1/transactions/submit` — simulate, submit, and finalize any wallet-signed transaction.
+- `POST /v1/transactions/submit` — validate, submit, and finalize any wallet-signed transaction.
 - `GET /v1/transactions/:id` — transaction relay status.
-- `POST /v1/payments` — simulate, submit, finalize, and persist a payment relay record.
+- `POST /v1/payments` — validate, submit, finalize, verify the receipt, and persist a payment relay record.
 - `GET /v1/payments/:id` — payment status and finalized signature.
+- `GET /v1/receipts/:receipt_address` — persisted payment metadata for an on-chain receipt join.
+- `POST /v1/x402-payments/proof` — persist the x402 proof retry outcome after confirmed settlement.
 - `POST /v1/payment-requests/verify` — verify a merchant-signed Ed25519 payment request and derive its invoice hash.
 
 The MCP server uses `CHAINPAY_BACKEND_URL` and

@@ -18,7 +18,7 @@ the authority for every payment.
 - build update, pause, revoke, and delegate-revoke transactions;
 - prepare payment transactions with local policy preflight;
 - detect duplicate invoice receipts before submission;
-- simulate and execute through an injected signing/submission adapter.
+- execute through an injected external-signing/submission adapter.
 
 The SDK returns transaction plans. Wallets or approved signer services remain
 responsible for signing. It never accepts a keypair or seed phrase.

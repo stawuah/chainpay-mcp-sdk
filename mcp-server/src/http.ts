@@ -173,7 +173,7 @@ async function handleMcpPost(
   options: Required<HttpOptions>,
   headers: Record<string, string>,
 ): Promise<void> {
-  if (!authAllowed(req, options.authToken) && !registry.identify(req)) {
+  if (!authAllowed(req, options.authToken) && !await registry.identify(req)) {
     writeJson(res, 401, { error: "Unauthorized" }, { ...headers, "WWW-Authenticate": "Bearer" });
     return;
   }
@@ -192,7 +192,7 @@ async function handleMcpPost(
     return;
   }
 
-  registry.observe(req, request.method === "tools/call" && typeof request.params?.name === "string" ? request.params.name : undefined);
+  await registry.observe(req, request.method === "tools/call" && typeof request.params?.name === "string" ? request.params.name : undefined);
   const response = await mcpServer.handle(request);
   if (!response) {
     res.writeHead(202, headers);
@@ -218,6 +218,7 @@ function openEventStream(req: IncomingMessage, res: ServerResponse, headers: Rec
 export function createHttpServer(
   context: ChainPayMcpContext,
   options: HttpOptions = {},
+  registry: McpConnectionRegistry = McpConnectionRegistry.inMemory(),
 ) {
   const environment = envOptions();
   const resolved: Required<HttpOptions> = {
@@ -232,7 +233,6 @@ export function createHttpServer(
   }
 
   const mcpServer = createMcpServer(context);
-  const registry = new McpConnectionRegistry();
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const cors = corsHeaders(req.headers.origin, resolved.allowedOrigins);
@@ -288,14 +288,14 @@ export function createHttpServer(
         writeJson(res, 400, { error: "wallet query parameter is required" }, headers);
         return;
       }
-      writeJson(res, 200, { connections: registry.list(wallet) }, headers);
+      writeJson(res, 200, { connections: await registry.list(wallet) }, headers);
       return;
     }
 
     if (url.pathname === "/connections" && req.method === "POST") {
       try {
         const body = await readJsonValue(req) as Partial<RegisterConnectionInput>;
-        const registered = registry.register({
+        const registered = await registry.register({
           wallet: typeof body.wallet === "string" ? body.wallet : "",
           agentName: typeof body.agentName === "string" ? body.agentName : "",
           scope: typeof body.scope === "string" ? body.scope : undefined,
@@ -314,6 +314,13 @@ export function createHttpServer(
       }
       try {
         const body = await readJsonValue(req) as Partial<ChainPayAgentRequest>;
+        const wallet = typeof body.wallet === "string" ? body.wallet.trim() : "";
+        if (wallet) {
+          await registry.appendInboxMessage(wallet, "user", {
+            message: body.message ?? "",
+            mandateAddress: body.mandateAddress,
+          });
+        }
         const result = await runChainPayAgent(context, {
           message: body.message ?? "",
           wallet: body.wallet,
@@ -322,6 +329,7 @@ export function createHttpServer(
           attachments: body.attachments,
           history: body.history,
         });
+        if (wallet) await registry.appendInboxMessage(wallet, "assistant", result);
         writeJson(res, 200, result, headers);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -331,10 +339,20 @@ export function createHttpServer(
       return;
     }
 
+    if (url.pathname === "/inbox" && req.method === "GET") {
+      const wallet = url.searchParams.get("wallet")?.trim();
+      if (!wallet) {
+        writeJson(res, 400, { error: "wallet query parameter is required" }, headers);
+        return;
+      }
+      writeJson(res, 200, { messages: await registry.listInbox(wallet) }, headers);
+      return;
+    }
+
     const revokeMatch = url.pathname.match(/^\/connections\/([^/]+)$/);
     if (revokeMatch && req.method === "DELETE") {
       const wallet = url.searchParams.get("wallet")?.trim();
-      const revoked = wallet ? registry.revoke(wallet, decodeURIComponent(revokeMatch[1])) : false;
+      const revoked = wallet ? await registry.revoke(wallet, decodeURIComponent(revokeMatch[1])) : false;
       writeJson(res, revoked ? 200 : 404, revoked ? { ok: true } : { error: "Connection not found" }, headers);
       return;
     }
@@ -345,11 +363,11 @@ export function createHttpServer(
     }
 
     if (req.method === "GET") {
-      if (!authAllowed(req, resolved.authToken) && !registry.identify(req)) {
+      if (!authAllowed(req, resolved.authToken) && !await registry.identify(req)) {
         writeJson(res, 401, { error: "Unauthorized" }, { ...headers, "WWW-Authenticate": "Bearer" });
         return;
       }
-      registry.observe(req);
+      await registry.observe(req);
       openEventStream(req, res, headers);
       return;
     }
@@ -362,11 +380,16 @@ export function createHttpServer(
     writeJson(res, 405, { error: "Method not allowed" }, { ...headers, Allow: "GET, POST, OPTIONS" });
   });
 
+  server.on("close", () => {
+    void registry.close();
+  });
+
   return { server, options: resolved, mcpServer, registry, tools: TOOL_DEFINITIONS };
 }
 
 export async function runHttpServer(context: ChainPayMcpContext = createDefaultContext()): Promise<void> {
-  const { server, options } = createHttpServer(context);
+  const registry = await McpConnectionRegistry.fromEnv();
+  const { server, options } = createHttpServer(context, {}, registry);
   await new Promise<void>((resolve) => {
     server.listen(options.port, options.host, () => {
       process.stderr.write(`ChainPay MCP HTTP listening on http://${options.host}:${options.port}${options.path}\n`);

@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { callTool, createDefaultContext, TOOL_DEFINITIONS } from "./index.js";
 import type { ChainPayMcpContext } from "./tools/context.js";
+import process from "node:process";
 
 const MCP_PROTOCOL_VERSIONS = ["2025-06-18", "2024-11-05"] as const;
 const DEFAULT_MCP_PROTOCOL_VERSION = MCP_PROTOCOL_VERSIONS[0];

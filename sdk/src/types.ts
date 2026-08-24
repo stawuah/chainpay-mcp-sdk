@@ -21,13 +21,6 @@ export type PreparedTransaction = {
   feePayer?: Address;
 };
 
-export type SimulationResult = {
-  ok: boolean;
-  logs: string[];
-  unitsConsumed?: bigint;
-  error?: string;
-};
-
 export type PaymentSubmission = {
   signature: string;
   slot?: bigint;
@@ -35,7 +28,6 @@ export type PaymentSubmission = {
 };
 
 export type PaymentSubmissionAdapter = {
-  simulate(prepared: PreparedTransaction): Promise<SimulationResult>;
   submit(prepared: PreparedTransaction): Promise<PaymentSubmission>;
   confirm?(signature: string): Promise<{ slot?: bigint }>;
 };
@@ -85,6 +77,22 @@ export type SupportedAsset = {
   bump: number;
 };
 
+export type TokenCapabilityProfile = {
+  mint: Address;
+  tokenProgram: TokenProgram;
+  compatible: boolean;
+  mintExtensions: string[];
+  sourceAccountExtensions: string[];
+  recipientAccountExtensions: string[];
+  blockers: string[];
+  warnings: string[];
+  transferFee?: {
+    basisPoints: number;
+    maximumFee: bigint;
+  };
+  transferHookProgram?: Address;
+};
+
 export type PaymentRequestPayload = {
   version: 1;
   cluster: "devnet" | "mainnet-beta";
@@ -121,8 +129,6 @@ export type PaymentRequest = {
   recipient: Address;
   amount: bigint;
   tokenProgram?: TokenProgram;
-  /** Extra accounts required by a Token-2022 extension such as transfer-hook. */
-  remainingAccounts?: AccountMeta[];
 };
 
 export type PaymentReceipt = {
@@ -163,6 +169,7 @@ export type PreparedPayment = {
   instruction: ChainPayInstruction;
   transaction: PreparedTransaction;
   preflight: PaymentPreflight;
+  capabilityProfile?: TokenCapabilityProfile;
 };
 
 export type PaymentExecutionResult = {
@@ -170,7 +177,6 @@ export type PaymentExecutionResult = {
   receiptAddress: Address;
   signature?: string;
   slot?: bigint;
-  simulation: SimulationResult;
   error?: string;
 };
 
