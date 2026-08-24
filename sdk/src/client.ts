@@ -183,6 +183,43 @@ export class ChainPayClient {
     return account ? decodePaymentReceipt(account.data, account.address) : null;
   }
 
+  async getPaymentsByMandate(mandateAddress: Address): Promise<PaymentReceipt[]> {
+    const mandate = address(mandateAddress);
+    const accounts = await this.connection.getProgramAccounts(publicKey(this.programId), {
+      commitment: this.commitment,
+      filters: [
+        { dataSize: 282 },
+        { memcmp: { offset: 8, bytes: mandate } },
+      ],
+    });
+    const historyCommitment: "confirmed" | "finalized" =
+      this.commitment === "finalized" ? "finalized" : "confirmed";
+    const receipts = await Promise.all(accounts.map(async (account) => {
+      let transactionSignature: string | undefined;
+      try {
+        const history = await this.connection.getSignaturesForAddress(
+          account.pubkey,
+          { limit: 1 },
+          historyCommitment,
+        );
+        transactionSignature = history[0]?.signature;
+      } catch {
+        // The receipt itself remains verifiable if transaction history is
+        // temporarily unavailable. The dashboard can retry enrichment.
+      }
+      return decodePaymentReceipt(
+        new Uint8Array(account.account.data),
+        account.pubkey.toBase58(),
+        transactionSignature,
+      );
+    }));
+    return receipts.sort((left, right) => (
+      left.executedAtSlot === right.executedAtSlot
+        ? right.address.localeCompare(left.address)
+        : left.executedAtSlot > right.executedAtSlot ? -1 : 1
+    ));
+  }
+
   async getTokenProgram(accountAddress: Address): Promise<TokenProgram> {
     const account = await this.connection.getAccountInfo(publicKey(accountAddress), this.commitment);
     if (!account) throw new Error(`Token account not found: ${accountAddress}`);

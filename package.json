@@ -15,7 +15,7 @@
     "check:frontend": "npm --prefix frontend run typecheck",
     "check:merchant": "npm --prefix demo-merchant run typecheck",
     "dev:app": "npm --prefix app run dev",
-    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:frontend": "npm --prefix frontend run dev --",
     "build:frontend": "npm --prefix frontend run build",
     "bootstrap:devnet": "npm --prefix sdk run build && node scripts/bootstrap-devnet.mjs",
     "verify:devnet": "npm --prefix sdk run build && node scripts/verify-devnet.mjs",

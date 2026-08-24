@@ -84,7 +84,7 @@
 **Owns:**
 - Wallet connection (Wallet Standard / Phantom)
 - Mandate creation UI (both modes 1.1 and 1.2)
-- Ephemeral keypair generation for delegated wallet mode (mode 1.2) — keypair generated in browser, shown ONCE, never transmitted
+- Managed-signer enrollment for delegated wallet mode (mode 1.2) — the frontend handles only provider IDs and public addresses
 - Transaction reconstruction and wallet signature request
 - AI inbox UI
 - Receipt display
@@ -105,13 +105,15 @@
 - Policy preflight (advisory only — Anchor is the authority)
 - Payment preparation and serialization
 - Agent identity verification
+- Managed-signer routing by opaque provider wallet ID
 
 **Does NOT own:**
 - Private keys of any kind (removed from implementation)
 - Final policy authority (Anchor owns this)
 - Transaction submission (backend owns this)
 
-**Critical fix needed:** Remove `CHAINPAY_AGENT_SECRET_KEY` from MCP server. The approved-agent key must come from the delegated wallet (held by agent, not server) or the user's browser wallet.
+The approved-agent key is held by the user's browser wallet in mode 1.1 or by
+the configured HSM/MPC signer provider in mode 1.2. MCP receives no key bytes.
 
 ### 2.3 Rust Backend (Axum) — Kwasi
 **Owns:**
@@ -167,28 +169,31 @@ Receipt PDA created
 ```
 [SETUP - one time]
 Human opens "Create Mandate with Delegation" in frontend →
-Frontend generates ephemeral keypair in-browser (window.crypto) →
-Frontend shows private key ONCE in UI →
-User copies and stores private key themselves →
-User funds delegated wallet (SOL for fees + token amount) →
-Frontend builds create_mandate with ephemeral pubkey as approved_agent →
+Owner proves wallet control with a signed challenge →
+Axum provisions a Solana signer with the configured HSM/MPC provider →
+Provider returns an opaque wallet ID and public address; no key is exported →
+PostgreSQL stores owner, provider wallet ID, public address, policy ID, and status only →
+User funds the managed signer with SOL for fees and receipt rent →
+Owner keeps the payment token in the mandate's source token account →
+Frontend builds create_mandate with the managed signer pubkey as approved_agent →
 Human's main wallet signs the create_mandate + approve_checked transaction →
 Mandate PDA created on-chain →
 
 [PAYMENT - autonomous]
-Agent has delegated private key (given by user, out of band) →
 Agent calls MCP execute_payment tool →
 MCP builds transaction →
-Agent signs with delegated key (never touches server) →
-MCP submits signed transaction to backend →
-Backend validates and submits directly →
+Axum authenticates the agent and loads the signer reference from PostgreSQL →
+Axum validates the exact transaction, then requests provider signing →
+Provider returns signed wire bytes without exposing the private key →
+Axum revalidates and submits directly →
 Anchor enforces limits atomically →
 Receipt PDA created
 ```
 
 **Security properties of Mode 1.2:**
-- ChainPay platform never sees the delegated private key
-- Even if the delegated key is compromised, Anchor limits total damage to mandate limits
+- Browser, MCP, Axum, logs, and PostgreSQL never contain the delegated private key
+- Provider policy allows only the ChainPay program and expected Solana instruction shape
+- Even if signing access is compromised, Anchor limits total damage to mandate limits
 - Mandate can be revoked instantly by owner wallet
 
 ---
@@ -227,7 +232,7 @@ Agent → MCP tool: execute_x402_payment({
 MCP →  Check mandate exists and covers this payment
 MCP →  Build Solana transfer_checked instruction
        (recipient = payTo, amount = maxAmountRequired, mint = asset)
-MCP →  Sign (mode 1.2: delegated key | mode 1.1: return to browser)
+MCP →  Sign (mode 1.2: provider-held managed signer | mode 1.1: return to browser)
 MCP →  Submit via backend
 MCP →  Wait for receipt PDA confirmation
 
@@ -385,6 +390,21 @@ CREATE TABLE agent_connections (
   revoked_at TIMESTAMPTZ
 );
 
+-- Delegated signer metadata. Private keys and encrypted key blobs are forbidden.
+CREATE TABLE managed_signers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_wallet TEXT NOT NULL,
+  public_key TEXT NOT NULL UNIQUE,
+  provider TEXT NOT NULL,
+  provider_wallet_id TEXT NOT NULL,
+  provider_policy_id TEXT,
+  mandate_pda TEXT,
+  status TEXT NOT NULL, -- provisioning | active | suspended | revoked
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ,
+  UNIQUE (provider, provider_wallet_id)
+);
+
 -- AI inbox history (replaces localStorage)
 CREATE TABLE inbox_messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -534,7 +554,7 @@ Week 1 (Aug 22-25):
   [5] Fix receipt lookup (join PDA + tx signature)
 
 Week 2 (Aug 28 - Sep 1):
-  [6] Delegated wallet mode (Mode 1.2) — frontend keygen + Anchor approved_agent
+  [6] Delegated wallet mode (Mode 1.2) — managed signer provider + DB reference + Anchor approved_agent
   [7] AI inbox full lifecycle (invoice → mandate → payment → receipt)
   [8] Regression-test SupportedAsset as the sole authorization gate; preserve the legacy config layout
   [9] Colosseum Eternal Sprint submission

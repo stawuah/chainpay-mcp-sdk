@@ -196,27 +196,32 @@ async function executeX402Payment(params: {
 
 **Frontend changes:**
 - Add "Create Mandate with Delegation" option
-- In browser: `const keypair = Keypair.generate()` (using @solana/web3.js)
-- Show private key as base58 in a modal: "Save this — you won't see it again"
-- Use `keypair.publicKey` as `approved_agent` in create_mandate instruction
-- Show "Fund delegated wallet" step: user sends SOL + token amount to `keypair.publicKey`
-- After mandate created, show QR code / copy button for private key to give to agent
+- Require a signed owner-wallet challenge before managed-signer provisioning
+- Request a signer from the configured HSM/MPC provider through Axum
+- Use the provider-held signer's public key as `approved_agent` in create_mandate
+- Show "Fund delegated signer" step: user sends enough SOL for transaction fees and receipt rent to the managed signer public key
+- Keep USDC/PYUSD in the owner's source token account; the mandate PDA is its limited token delegate
+- Never display, export, accept, or persist delegated private-key material
 
 **MCP changes:**
 - `execute_payment` tool returns an unsigned serialized transaction and required signer address
 - Never accept a private key, seed phrase, or keypair bytes in MCP arguments
-- Delegated mode is signed by an external agent runtime; human mode is signed by the browser wallet
+- Delegated mode is signed by the configured HSM/MPC provider after Axum validates the transaction; human mode is signed by the browser wallet
 - Only the signed serialized transaction is sent to the Axum backend
+
+**Database changes:**
+- Store `owner_wallet`, `public_key`, `provider`, `provider_wallet_id`, optional `provider_policy_id`, `mandate_pda`, and status
+- Do not add a private-key, seed, ciphertext, keypair, or recovery-phrase column
 
 **Anchor changes:**
 - None required — approved_agent field already supports any pubkey
 
 **Test:**
 1. Create mandate with delegation in frontend
-2. Save ephemeral private key
-3. Fund delegated wallet (devnet airdrop)
+2. Verify PostgreSQL contains signer metadata and no key material
+3. Fund the managed signer with Devnet SOL for fees and receipt rent (devnet airdrop)
 4. Call MCP `execute_payment` to prepare the unsigned transaction
-5. Sign locally in the external agent runtime and send only the signed transaction to Axum
+5. Have Axum validate it, request provider signing, revalidate the signed wire, and submit it
 6. Confirm: payment executed, receipt created, NO human approval popup
 7. Confirm: no server endpoint accepts or logs key material
 
@@ -278,7 +283,7 @@ const currentSlot = await connection.getSlot("confirmed");
 // Build mandate creation transaction
 const { transaction } = await sdk.buildCreateMandateTx({
   owner: ownerPublicKey,
-  approvedAgent: agentPublicKey,  // mode 1.1: owner's key. mode 1.2: ephemeral key
+  approvedAgent: agentPublicKey,  // mode 1.1: owner's key. mode 1.2: managed signer public key
   mint: USDC_MINT_DEVNET,
   tokenProgram: TOKEN_PROGRAM_ID,  // detect automatically
   sourceATA: ownerSourceATA,

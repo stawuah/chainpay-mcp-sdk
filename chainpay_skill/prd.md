@@ -73,24 +73,26 @@ Receipt PDA created → Agent receives confirmation
 
 ---
 
-### Feature 1.2 — Delegated Wallet Mode 🔧 IN PROGRESS
-Human creates mandate and optionally generates a delegated ephemeral wallet in the browser.
+### Feature 1.2 — Managed Delegated Wallet Mode 🔧 IN PROGRESS
+Human creates a mandate and optionally provisions a managed signer whose key remains inside an HSM/MPC provider.
 
 Flow:
 ```
 Human opens "Create Mandate with Delegation" →
-Browser generates ephemeral keypair (never leaves browser) →
-User sees private key ONCE, saves it themselves →
-User funds delegated wallet with spend amount →
+Owner proves wallet control with a signed challenge →
+Axum provisions a provider-held Solana signer →
+PostgreSQL stores only provider wallet ID, public address, owner, policy, and status →
+User funds delegated wallet with SOL for transaction fees and receipt rent →
+USDC/PYUSD remains in the owner's source token account under the mandate PDA allowance →
 Anchor mandate created with delegated wallet as approved_agent →
-Agent receives private key from user (out of band) →
-Agent signs x402 payments directly from delegated wallet →
+Agent requests a policy-checked provider signature through authenticated ChainPay infrastructure →
 Anchor enforces all limits regardless →
 Receipt PDA created on every payment
 ```
 
 **Rules:**
-- ChainPay platform NEVER receives or stores the delegated private key
+- Browser, MCP, Axum, logs, and PostgreSQL NEVER receive or store the delegated private key
+- The managed signer provider must sign without exporting the key and must enforce a ChainPay-only policy
 - The Anchor program hard-limits spending regardless of the key
 - Future: ZK-based delegation (not in scope now)
 

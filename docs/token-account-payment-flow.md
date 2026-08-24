@@ -62,6 +62,21 @@ Your wallet then approves the mandate PDA as a limited token delegate.
 
 The mandate PDA is allowed to spend only within those rules.
 
+The payment signer can be configured in two ways:
+
+- **Human approval:** the connected owner wallet is the approved agent and
+  signs every payment.
+- **Delegated agent:** a provider-held managed signer is the approved agent and
+  signs payments without an owner popup, while the on-chain mandate still
+  enforces every limit.
+
+In delegated mode, the mandate PDA stores the policy and the owner's source
+token account continues to hold the USDC or PYUSD. PostgreSQL stores only the
+managed signer's provider ID, public address, owner, policy, mandate, and
+status. The HSM/MPC provider retains the private key. The delegated signer
+needs SOL for transaction fees and receipt rent; it does not need to custody
+the payment tokens.
+
 ## 4. The AI requests a payment
 
 The AI agent uses ChainPay MCP to request a payment. It supplies:
@@ -121,7 +136,7 @@ selected token and the correct network.
    └── Put USDC or PYUSD into the account
 
 3. Create mandate
-   └── Set agent, mint, limits, and expiry
+   └── Choose human approval or a delegated signer, then set mint, limits, and expiry
 
 4. Approve mandate PDA
    └── Give ChainPay limited delegate authority
@@ -142,4 +157,3 @@ selected token and the correct network.
 The wallet remains the owner of the funds throughout the flow. The AI can
 request and sign an approved payment transaction, but it cannot spend outside
 the mandate or take control of the wallet.
-
