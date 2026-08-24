@@ -23,7 +23,7 @@ services:
     name: chainpay-mcp
     runtime: node
     plan: free
-    buildCommand: npm ci --ignore-scripts && npm --prefix sdk run build && npm --prefix mcp-server run build
+    buildCommand: npm ci --include=dev --ignore-scripts && npm --prefix sdk run build && npm --prefix mcp-server run build
     startCommand: node mcp-server/dist/http.js
     healthCheckPath: /healthz
     envVars:
@@ -54,7 +54,7 @@ services:
   - type: web
     name: chainpay-frontend
     runtime: static
-    buildCommand: npm ci --ignore-scripts && npm --prefix sdk run build && npm ci --prefix frontend --ignore-scripts && npm --prefix frontend run build
+    buildCommand: npm ci --include=dev --ignore-scripts && npm --prefix sdk run build && npm ci --prefix frontend --include=dev --ignore-scripts && npm --prefix frontend run build
     staticPublishPath: frontend/dist
     routes:
       - type: rewrite

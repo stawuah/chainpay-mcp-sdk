@@ -122,7 +122,7 @@ The included root `Dockerfile` builds both packages and starts
 `node mcp-server/dist/http.js` on port `3000`. Configure the platform with:
 
 ```text
-Build command: npm ci && npm --prefix sdk run build && npm --prefix mcp-server run build
+Build command: npm ci --include=dev --ignore-scripts && npm --prefix sdk run build && npm --prefix mcp-server run build
 Start command: node mcp-server/dist/http.js
 Health check: /healthz
 ```
