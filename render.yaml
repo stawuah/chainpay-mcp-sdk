@@ -16,7 +16,13 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: CHAINPAY_HTTP_AUTH_TOKEN
-        value: ""
+        sync: false
+      - key: PRIVY_APP_ID
+        sync: false
+      - key: PRIVY_APP_SECRET
+        sync: false
+      - key: PRIVY_POLICY_ID
+        sync: false
       - key: CHAINPAY_ALLOWED_ORIGINS
         value: "*"
   - type: web
@@ -36,7 +42,7 @@ services:
       - key: CHAINPAY_BACKEND_URL
         value: https://chainpay-backend.onrender.com
       - key: CHAINPAY_BACKEND_AUTH_TOKEN
-        value: ""
+        sync: false
       - key: CHAINPAY_HTTP_AUTH_TOKEN
         value: ""
       - key: CHAINPAY_ALLOWED_ORIGINS

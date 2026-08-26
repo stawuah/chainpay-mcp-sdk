@@ -36,20 +36,21 @@ a payment. `prepare_payment` returns a policy-checked transaction plan; the
 connected wallet signs it only after the user reviews the request in the web
 UI.
 `prepare_x402_payment` normalizes an x402 exact challenge into the same
-policy-checked flow. `execute_x402_payment` performs the live resource request,
-requires a real HTTP 402 challenge, returns an unsigned transaction, relays only
-an externally signed transaction through Axum, verifies the finalized receipt
-PDA, and retries the resource with an `X-PAYMENT` proof. The x402 adapter does
-not custody keys or operate a hosted facilitator.
+policy-checked flow. `execute_x402_payment` requires an explicit `signingMode`.
+Human mode returns or relays a browser-signed transaction. Delegated mode sends
+the unsigned wire transaction to Axum, which validates it, asks the
+mandate-bound Privy wallet to sign, revalidates the unchanged message, submits
+it, verifies the finalized receipt PDA, and retries the resource with an
+`X-PAYMENT` proof. The x402 adapter does not custody keys or operate a hosted
+facilitator.
 
-`execute_payment` performs SDK preflight first. Without a signed transaction it
-returns a base64 unsigned transaction, recent blockhash, and last valid block
-height for review and local signing. MCP never loads or accepts an
-approved-agent private key. The browser wallet or external agent runtime signs
-outside ChainPay servers and calls `execute_payment` again with only the signed
-transaction. With `CHAINPAY_BACKEND_URL` configured, MCP relays it to Axum for
-signed-wire validation, direct Devnet submission, finality confirmation, and
-receipt reconciliation.
+`execute_payment` performs SDK preflight first and requires an explicit
+`signingMode`. In `human` mode it returns a base64 unsigned transaction, recent
+blockhash, and last valid block height for review, or relays a supplied
+browser-signed transaction. In `delegated` mode it never accepts a supplied
+signature: it sends the unsigned transaction to Axum's authenticated managed
+payment endpoint. MCP never loads or accepts a wallet private key or Privy
+credential.
 
 Build and run it locally:
 
@@ -131,9 +132,11 @@ Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, `CHAINPAY_BACKEND_URL`, `DATABASE
 `CHAINPAY_BACKEND_AUTH_TOKEN`, and `CHAINPAY_HTTP_AUTH_TOKEN` in the host's
 environment settings. Set `OPENROUTER_API_KEY` and `CHAINPAY_AI_PROVIDER=openrouter`
 to enable the dashboard assistant. The default model is `openrouter/free`; you can
-override it with `CHAINPAY_AGENT_MODEL`. For public Devnet testing, leave
-`CHAINPAY_HTTP_AUTH_TOKEN` empty; MCP clients can connect with only the server URL.
-For real payment traffic, put HTTPS and authentication in front of both endpoints.
+override it with `CHAINPAY_AGENT_MODEL`. For public read-only Devnet testing,
+`CHAINPAY_HTTP_AUTH_TOKEN` may be empty. Delegated signing requires a non-empty
+backend token, and the same value must be configured as Axum's
+`CHAINPAY_HTTP_AUTH_TOKEN` and MCP's `CHAINPAY_BACKEND_AUTH_TOKEN`. For payment
+traffic, put HTTPS and authentication in front of both endpoints.
 
 Render is also supported through the root [render.yaml](../render.yaml)
 Blueprint. In Render, choose **New → Blueprint**, connect this repository, and

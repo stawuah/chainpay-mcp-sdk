@@ -3,6 +3,7 @@
 pub mod api;
 pub mod rpc;
 pub mod server;
+pub mod signer;
 pub mod status;
 pub mod storage;
 

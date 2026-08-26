@@ -8,7 +8,9 @@ import {
   type StandardEventsFeature,
 } from "@wallet-standard/features";
 import {
+  SolanaSignMessage,
   SolanaSignTransaction,
+  type SolanaSignMessageFeature,
   type SolanaSignTransactionFeature,
 } from "@solana/wallet-standard-features";
 import { Transaction } from "@solana/web3.js";
@@ -39,6 +41,7 @@ export type ChainPayWallet = {
   address: string;
   name: string;
   signTransaction: (transaction: Transaction) => Promise<Transaction>;
+  signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
   disconnect?: () => Promise<void>;
   changeAccount: () => Promise<ChainPayWallet>;
   subscribeToAccountChange?: (listener: (wallet: ChainPayWallet | null) => void) => () => void;
@@ -74,6 +77,7 @@ async function connectStandardWallet(wallet: StandardSolanaWallet, accountProvid
 
 function walletAdapter(wallet: StandardSolanaWallet, account: WalletAccount, accountProvider?: LegacyProvider): ChainPayWallet {
   const disconnectFeature = (wallet.features as Wallet["features"] & Partial<StandardDisconnectFeature>)[StandardDisconnect];
+  const signMessageFeature = (wallet.features as Wallet["features"] & Partial<SolanaSignMessageFeature>)[SolanaSignMessage];
 
   return {
     address: account.address,
@@ -92,6 +96,15 @@ function walletAdapter(wallet: StandardSolanaWallet, account: WalletAccount, acc
       if (!signed) throw new Error(`${wallet.name} did not return a signed transaction.`);
       return Transaction.from(signed.signedTransaction);
     },
+    signMessage: signMessageFeature
+      ? async (message) => {
+          const [signed] = await signMessageFeature.signMessage({ account, message });
+          if (!signed) throw new Error(`${wallet.name} did not return a message signature.`);
+          return signed.signature;
+        }
+      : accountProvider?.signMessage
+        ? async (message) => (await accountProvider.signMessage!(message, "utf8")).signature
+        : undefined,
     disconnect: accountProvider?.disconnect
       ? () => accountProvider.disconnect!()
       : disconnectFeature
@@ -123,6 +136,7 @@ type LegacyProvider = {
   connect?: (options?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey: { toString(): string } }>;
   disconnect?: () => Promise<void>;
   signTransaction?: (transaction: Transaction) => Promise<Transaction>;
+  signMessage?: (message: Uint8Array, display?: "utf8" | "hex") => Promise<{ signature: Uint8Array }>;
   on?: (event: "accountChanged", listener: (publicKey: { toString(): string } | null) => void) => void;
   removeListener?: (event: "accountChanged", listener: (publicKey: { toString(): string } | null) => void) => void;
 };
@@ -133,6 +147,9 @@ function legacyWalletAdapter(provider: LegacyProvider, address: string, name: st
     address,
     name,
     signTransaction: provider.signTransaction.bind(provider),
+    signMessage: provider.signMessage
+      ? async (message) => (await provider.signMessage!(message, "utf8")).signature
+      : undefined,
     disconnect: provider.disconnect?.bind(provider),
     changeAccount: async () => {
       await provider.disconnect?.();

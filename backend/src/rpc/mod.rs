@@ -234,7 +234,9 @@ impl RpcClient {
     }
 
     pub async fn wait_for_finalized(&self, signature: &str) -> Result<SignatureStatus, RpcError> {
-        let deadline = tokio::time::Instant::now() + self.config.confirmation_timeout;
+        let deadline = tokio::time::Instant::now()
+            .checked_add(self.config.confirmation_timeout)
+            .unwrap_or(tokio::time::Instant::now());
         loop {
             if let Some(status) = self.signature_status(signature).await? {
                 if let Some(message) = status.error.clone() {

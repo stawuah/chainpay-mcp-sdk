@@ -139,15 +139,18 @@ const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
 let database;
 try {
   const migrations = await pool.query("SELECT version, success FROM _sqlx_migrations ORDER BY version");
-  assert(migrations.rows.some((row) => Number(row.version) === 4 && row.success === true), "Neon migration 0004 is not installed");
+  assert(migrations.rows.some((row) => Number(row.version) === 5 && row.success === true), "Neon migration 0005 is not installed");
   const tables = await pool.query(`
     SELECT table_name
     FROM information_schema.tables
     WHERE table_schema = 'public'
-      AND table_name IN ('payments', 'transactions', 'agent_connections', 'inbox_messages', 'x402_payments')
+      AND table_name IN (
+        'payments', 'transactions', 'agent_connections', 'inbox_messages', 'x402_payments',
+        'managed_signers', 'managed_signer_challenges'
+      )
     ORDER BY table_name
   `);
-  assert(tables.rowCount === 5, "Neon is missing one or more ChainPay tables");
+  assert(tables.rowCount === 7, "Neon is missing one or more ChainPay tables");
   const oldColumns = await pool.query(`
     SELECT table_name
     FROM information_schema.columns
@@ -156,6 +159,14 @@ try {
       AND column_name = 'simulation'
   `);
   assert(oldColumns.rowCount === 0, "Neon still contains obsolete simulation state");
+  const managedColumns = await pool.query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'payments'
+      AND column_name = 'signing_mode'
+  `);
+  assert(managedColumns.rowCount === 1, "Neon migration 0005 did not add payments.signing_mode");
   database = { migrationCount: migrations.rowCount, tables: tables.rows.map((row) => row.table_name) };
 } finally {
   await pool.end();

@@ -57,6 +57,46 @@ pub struct PaymentSubmissionRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ManagedSignerChallengeRequest {
+    pub owner_wallet: String,
+    pub mandate_pda: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagedSignerChallengeResponse {
+    pub challenge_id: String,
+    pub message: String,
+    pub expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedSignerProvisionRequest {
+    pub challenge_id: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedPaymentSubmissionRequest {
+    pub idempotency_key: String,
+    pub mandate: String,
+    pub invoice_hash: String,
+    #[serde(default)]
+    pub receipt_address: Option<String>,
+    pub unsigned_transaction: String,
+    pub agent: String,
+    pub mint: String,
+    pub recipient: String,
+    #[serde(default, deserialize_with = "deserialize_optional_u64")]
+    pub amount: Option<u64>,
+    pub token_program: String,
+    #[serde(default)]
+    pub x402: Option<X402PaymentMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct X402PaymentMetadata {
     pub resource: String,
     pub challenge: serde_json::Value,

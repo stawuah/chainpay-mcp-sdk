@@ -14,10 +14,13 @@ cargo test -p chainpay-backend
 cargo run -p chainpay-backend
 ~~~
 
-The backend accepts wallet-signed transactions only. It never receives a
-private key or seed phrase. It validates the signed wire transaction, submits
-it directly to Solana Devnet, waits for finalized status, verifies payment
-receipts on-chain, and stores public lifecycle metadata with idempotency keys.
+The backend accepts browser-wallet-signed transactions and unsigned,
+mandate-bound autonomous payment transactions. For autonomous payments it asks
+Privy's managed-wallet API to sign only after validating the complete wire
+message. Privy never exports the Solana private key. Axum then validates the
+provider-signed message again, submits it directly to Solana Devnet, waits for
+finalized status, verifies the payment receipt on-chain, and stores public
+lifecycle metadata with idempotency keys.
 
 ## Configuration
 
@@ -37,6 +40,13 @@ Optional production settings include `CHAINPAY_HTTP_AUTH_TOKEN`,
 `CHAINPAY_ALLOWED_ORIGINS`, `CHAINPAY_CONFIRMATION_TIMEOUT_SECS`, and
 `CHAINPAY_CONFIRMATION_POLL_MS`.
 
+Autonomous signing is disabled unless all of `PRIVY_APP_ID`,
+`PRIVY_APP_SECRET`, and `PRIVY_POLICY_ID` are configured. The Privy policy must
+restrict the managed wallet to the ChainPay program. When these values are
+configured, `CHAINPAY_HTTP_AUTH_TOKEN` is mandatory and must match the MCP
+server's `CHAINPAY_BACKEND_AUTH_TOKEN`. PostgreSQL stores only the Privy wallet
+ID, policy ID, and public Solana address—never key material.
+
 ## HTTP surface
 
 - `GET /healthz` — backend, cluster, and program health.
@@ -50,6 +60,9 @@ Optional production settings include `CHAINPAY_HTTP_AUTH_TOKEN`,
 - `GET /v1/receipts/:receipt_address` — persisted payment metadata for an on-chain receipt join.
 - `POST /v1/x402-payments/proof` — persist the x402 proof retry outcome after confirmed settlement.
 - `POST /v1/payment-requests/verify` — verify a merchant-signed Ed25519 payment request and derive its invoice hash.
+- `POST /v1/managed-signers/challenge` — create a one-time owner-wallet authorization message bound to an intended mandate PDA.
+- `POST /v1/managed-signers/provision` — verify the owner signature and provision a policy-bound Privy Solana wallet.
+- `POST /v1/managed-payments` — strictly validate, provider-sign, revalidate, submit, finalize, and verify an autonomous payment.
 
 The MCP server uses `CHAINPAY_BACKEND_URL` and
 `CHAINPAY_BACKEND_AUTH_TOKEN` to call `/v1/payments` after a wallet or approved

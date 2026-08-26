@@ -192,7 +192,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "execute_payment",
-    description: "Prepare a policy-checked payment for an external signer, or relay a supplied wallet-signed transaction through Axum.",
+    description: "Settle through an explicitly selected human or delegated signing path. Delegated mode uses the mandate-bound provider signer through Axum.",
     inputSchema: {
       type: "object",
       properties: {
@@ -205,6 +205,11 @@ export const TOOL_DEFINITIONS = [
         recipient: { type: "string" },
         amount: { type: "string" },
         tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
+        signingMode: {
+          type: "string",
+          enum: ["human", "delegated"],
+          description: "human returns/relays a browser-signed transaction; delegated asks Axum's mandate-bound provider signer",
+        },
         signedTransaction: {
           type: "string",
           description: "Base64 wallet-signed transaction for relay through the Rust backend",
@@ -219,6 +224,7 @@ export const TOOL_DEFINITIONS = [
         "mint",
         "recipient",
         "amount",
+        "signingMode",
       ],
       additionalProperties: false,
     },
@@ -274,6 +280,7 @@ export const TOOL_DEFINITIONS = [
         },
         mandate: { type: "string" },
         agent: { type: "string" },
+        signingMode: { type: "string", enum: ["human", "delegated"] },
       },
       required: ["challenge", "mandate", "agent"],
       additionalProperties: false,
@@ -293,7 +300,7 @@ export const TOOL_DEFINITIONS = [
           description: "Optional base64 transaction signed outside ChainPay; omit on the first call",
         },
       },
-      required: ["resource", "mandate", "agent"],
+      required: ["resource", "mandate", "agent", "signingMode"],
       additionalProperties: false,
     },
   },

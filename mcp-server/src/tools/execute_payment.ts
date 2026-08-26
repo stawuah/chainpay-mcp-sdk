@@ -9,6 +9,10 @@ export async function executePayment(
   args: Record<string, unknown>,
 ) {
   const input = requireObject(args);
+  const signingMode = input.signingMode === undefined ? "human" : input.signingMode;
+  if (signingMode !== "human" && signingMode !== "delegated") {
+    throw new Error("signingMode must be human or delegated");
+  }
   const parsed = parsePaymentInput(input);
   const prepared = await context.client.preparePayment(parsed.input, parsed.agent);
   if (!prepared.preflight.valid) {
@@ -25,7 +29,7 @@ export async function executePayment(
     );
   }
 
-  if (context.agentAddress && parsed.agent !== context.agentAddress) {
+  if (signingMode === "human" && context.agentAddress && parsed.agent !== context.agentAddress) {
     return toolResult(
       {
         action: "agent_identity_mismatch",
@@ -44,6 +48,63 @@ export async function executePayment(
   const signedTransaction = typeof input.signedTransaction === "string"
     ? input.signedTransaction.trim()
     : undefined;
+  if (signingMode === "delegated") {
+    if (signedTransaction) {
+      return toolResult({
+        action: "delegated_signature_rejected",
+        message: "Delegated mode accepts only an unsigned ChainPay transaction; Axum obtains the provider signature after validation.",
+        receiptAddress: prepared.receiptAddress,
+      }, true);
+    }
+    if (!context.backendUrl || !context.backendAuthToken) {
+      return toolResult({
+        action: "managed_backend_required",
+        message: "Delegated mode requires CHAINPAY_BACKEND_URL and CHAINPAY_BACKEND_AUTH_TOKEN.",
+        receiptAddress: prepared.receiptAddress,
+      }, true);
+    }
+    const unsignedTransaction = await materializeUnsignedTransaction(context.client, prepared.transaction);
+    const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/managed-payments`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${context.backendAuthToken}`,
+      },
+      body: JSON.stringify({
+        idempotency_key: `${parsed.input.mandate}:${bytesToHex(parsed.input.invoiceHash)}`,
+        mandate: parsed.input.mandate,
+        invoice_hash: bytesToHex(parsed.input.invoiceHash),
+        receipt_address: prepared.receiptAddress,
+        unsigned_transaction: unsignedTransaction.value,
+        agent: parsed.agent,
+        mint: parsed.input.mint,
+        recipient: parsed.input.recipient,
+        amount: parsed.input.amount.toString(),
+        token_program: parsed.input.tokenProgram,
+      }),
+    });
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (!response.ok) {
+      return toolResult({ action: "managed_backend_rejected", ...payload }, true);
+    }
+    if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
+      return toolResult({
+        action: "managed_backend_not_finalized",
+        ...payload,
+        receiptAddress: prepared.receiptAddress,
+        message: "Axum did not return a finalized provider-signed payment and verified receipt.",
+      }, true);
+    }
+    return toolResult({
+      action: "managed_payment_settled",
+      signingMode,
+      ...payload,
+      receiptAddress: prepared.receiptAddress,
+      preflight: prepared.preflight,
+      capabilityProfile: prepared.capabilityProfile,
+      requirements: requirementsFromPreflight(prepared.preflight),
+    });
+  }
   if (signedTransaction) {
     if (!context.backendUrl) {
       return toolResult(
@@ -105,6 +166,7 @@ export async function executePayment(
 
   return toolResult({
     action: "agent_signature_required",
+    signingMode,
     message: "Sign this transaction in the browser wallet or external agent runtime, then call execute_payment again with signedTransaction.",
     receiptAddress: prepared.receiptAddress,
     preflight: prepared.preflight,

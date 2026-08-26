@@ -26,13 +26,17 @@ use tower_http::{
 
 use crate::{
     api::{
-        BackendConfigResponse, JsonRpcProxyRequest, PaymentRequestVerificationResponse,
+        BackendConfigResponse, JsonRpcProxyRequest, ManagedPaymentSubmissionRequest,
+        ManagedSignerChallengeRequest, ManagedSignerChallengeResponse,
+        ManagedSignerProvisionRequest, PaymentRequestVerificationResponse,
         PaymentSubmissionRequest, SignedPaymentRequest, TransactionSubmissionRequest,
         X402PaymentMetadata, X402ProofRequest,
     },
     rpc::{LatestBlockhash, RpcAccount, RpcClient, RpcConfig, RpcError},
+    signer::{PrivySignerProvider, SignerConfigError, SignerProviderError},
     status::{
-        PaymentRecord, PaymentStatus, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
+        ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord,
+        PaymentStatus, SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
     },
     storage::{StatusStore, StorageError},
 };
@@ -43,6 +47,7 @@ const DEFAULT_PORT: u16 = 8080;
 const MAX_TRANSACTION_BYTES: usize = 1_232;
 const SPL_TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const MANAGED_SIGNER_CHALLENGE_TTL_MS: u64 = 5 * 60 * 1_000;
 
 #[derive(Debug, Clone)]
 pub struct BackendConfig {
@@ -148,12 +153,32 @@ pub struct BackendState {
     pub config: BackendConfig,
     pub rpc: RpcClient,
     pub store: StatusStore,
+    pub signer_provider: Option<PrivySignerProvider>,
+}
+
+#[derive(Debug, Error)]
+pub enum BackendStateError {
+    #[error("RPC configuration error: {0}")]
+    Rpc(#[from] RpcError),
+    #[error("managed signer configuration error: {0}")]
+    Signer(#[from] SignerConfigError),
+    #[error("CHAINPAY_HTTP_AUTH_TOKEN is required when managed signing is enabled")]
+    MissingManagedPaymentAuth,
 }
 
 impl BackendState {
-    pub fn new(config: BackendConfig, store: StatusStore) -> Result<Self, RpcError> {
+    pub fn new(config: BackendConfig, store: StatusStore) -> Result<Self, BackendStateError> {
         let rpc = RpcClient::new(config.rpc.clone())?;
-        Ok(Self { config, rpc, store })
+        let signer_provider = PrivySignerProvider::from_env()?;
+        if signer_provider.is_some() && config.auth_token.is_empty() {
+            return Err(BackendStateError::MissingManagedPaymentAuth);
+        }
+        Ok(Self {
+            config,
+            rpc,
+            store,
+            signer_provider,
+        })
     }
 }
 
@@ -169,6 +194,10 @@ enum ApiError {
     Rpc(#[from] RpcError),
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+    #[error("managed signer provider error: {0}")]
+    SignerProvider(#[from] SignerProviderError),
+    #[error("managed signer service is not configured")]
+    ManagedSignerUnavailable,
 }
 
 impl IntoResponse for ApiError {
@@ -179,6 +208,8 @@ impl IntoResponse for ApiError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Rpc(_) => StatusCode::BAD_GATEWAY,
             Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::SignerProvider(_) => StatusCode::BAD_GATEWAY,
+            Self::ManagedSignerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         };
         let body = Json(json!({
             "error": self.to_string(),
@@ -193,6 +224,7 @@ struct HealthResponse {
     cluster: &'static str,
     program_id: String,
     rpc_proxy: &'static str,
+    managed_signing: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -209,6 +241,15 @@ pub fn build_router(state: BackendState) -> Router {
         .route("/healthz", get(health))
         .route("/v1/config", get(config))
         .route("/v1/payment-requests/verify", post(verify_payment_request))
+        .route(
+            "/v1/managed-signers/challenge",
+            post(create_managed_signer_challenge),
+        )
+        .route(
+            "/v1/managed-signers/provision",
+            post(provision_managed_signer),
+        )
+        .route("/v1/managed-payments", post(submit_managed_payment))
         .route("/v1/rpc/latest-blockhash", get(latest_blockhash))
         .route("/v1/payments", post(submit_payment))
         .route("/v1/payments/{payment_id}", get(get_payment))
@@ -271,7 +312,10 @@ async fn auth_middleware(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    let wallet_signed_relay = path == "/rpc" || path == "/v1/transactions/submit";
+    let wallet_signed_relay = path == "/rpc"
+        || path == "/v1/transactions/submit"
+        || path == "/v1/managed-signers/challenge"
+        || path == "/v1/managed-signers/provision";
     if request.method() == axum::http::Method::OPTIONS
         || path == "/healthz"
         || wallet_signed_relay
@@ -318,6 +362,11 @@ async fn health(State(state): State<BackendState>) -> Json<HealthResponse> {
         cluster: state.config.cluster,
         program_id: state.config.program_id.clone(),
         rpc_proxy: "/rpc",
+        managed_signing: if state.signer_provider.is_some() {
+            "privy"
+        } else {
+            "disabled"
+        },
     })
 }
 
@@ -482,11 +531,228 @@ async fn get_transaction(
         .ok_or(ApiError::NotFound)
 }
 
+async fn create_managed_signer_challenge(
+    State(state): State<BackendState>,
+    Json(request): Json<ManagedSignerChallengeRequest>,
+) -> Result<Json<ManagedSignerChallengeResponse>, ApiError> {
+    if state.signer_provider.is_none() {
+        return Err(ApiError::ManagedSignerUnavailable);
+    }
+    validate_solana_address(&request.owner_wallet, "owner_wallet")?;
+    validate_solana_address(&request.mandate_pda, "mandate_pda")?;
+
+    let mut nonce = [0_u8; 32];
+    getrandom::fill(&mut nonce).map_err(|error| {
+        ApiError::BadRequest(format!(
+            "could not create a secure authorization challenge: {error}"
+        ))
+    })?;
+    let now = now_ms();
+    let expires_at_ms = now.saturating_add(MANAGED_SIGNER_CHALLENGE_TTL_MS);
+    let challenge_id = format!("challenge_{}", hex_encode(&Sha256::digest(nonce)));
+    let message = format!(
+        "ChainPay autonomous payment authorization\nCluster: devnet\nOwner: {}\nMandate: {}\nChallenge: {}\nExpires: {}\n\nAuthorize ChainPay to provision one provider-held signer for this mandate. This does not transfer tokens or reveal a private key.",
+        request.owner_wallet,
+        request.mandate_pda,
+        BASE64.encode(nonce),
+        expires_at_ms,
+    );
+    state
+        .store
+        .put_managed_signer_challenge(ManagedSignerChallenge {
+            challenge_id: challenge_id.clone(),
+            owner_wallet: request.owner_wallet,
+            mandate_pda: request.mandate_pda,
+            message: message.clone(),
+            expires_at_ms,
+            consumed_at_ms: None,
+            created_at_ms: now,
+        })
+        .await?;
+
+    Ok(Json(ManagedSignerChallengeResponse {
+        challenge_id,
+        message,
+        expires_at_ms,
+    }))
+}
+
+async fn provision_managed_signer(
+    State(state): State<BackendState>,
+    Json(request): Json<ManagedSignerProvisionRequest>,
+) -> Result<Json<ManagedSignerRecord>, ApiError> {
+    let provider = state
+        .signer_provider
+        .as_ref()
+        .ok_or(ApiError::ManagedSignerUnavailable)?;
+    validate_string(&request.challenge_id, "challenge_id")?;
+    validate_string(&request.signature, "signature")?;
+    let challenge = state
+        .store
+        .get_managed_signer_challenge(&request.challenge_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    verify_wallet_message_signature(
+        &challenge.owner_wallet,
+        challenge.message.as_bytes(),
+        &request.signature,
+    )?;
+
+    if challenge.consumed_at_ms.is_some() {
+        let existing = state
+            .store
+            .find_managed_signer_by_mandate(&challenge.mandate_pda)
+            .await?
+            .filter(|record| record.owner_wallet == challenge.owner_wallet)
+            .ok_or_else(|| {
+                ApiError::BadRequest("managed signer challenge was already consumed".to_owned())
+            })?;
+        return Ok(Json(existing));
+    }
+    let now = now_ms();
+    if challenge.expires_at_ms < now {
+        return Err(ApiError::BadRequest(
+            "managed signer challenge has expired".to_owned(),
+        ));
+    }
+    if !state
+        .store
+        .consume_managed_signer_challenge(&challenge.challenge_id, now)
+        .await?
+    {
+        return Err(ApiError::BadRequest(
+            "managed signer challenge is expired or already consumed".to_owned(),
+        ));
+    }
+
+    if let Some(existing) = state
+        .store
+        .find_managed_signer_by_mandate(&challenge.mandate_pda)
+        .await?
+    {
+        if existing.owner_wallet != challenge.owner_wallet {
+            return Err(ApiError::BadRequest(
+                "mandate is already assigned to another owner".to_owned(),
+            ));
+        }
+        return Ok(Json(existing));
+    }
+
+    let provisioned = provider
+        .provision(&challenge.owner_wallet, &challenge.mandate_pda)
+        .await?;
+    let signer = ManagedSignerRecord {
+        signer_id: format!("signer_{}", random_hex_32()?),
+        owner_wallet: challenge.owner_wallet,
+        public_key: provisioned.public_key,
+        provider: "privy".to_owned(),
+        provider_wallet_id: provisioned.provider_wallet_id,
+        provider_policy_id: provisioned.provider_policy_id,
+        mandate_pda: challenge.mandate_pda,
+        signing_mode: SigningMode::Delegated,
+        status: ManagedSignerStatus::Provisioning,
+        created_at_ms: now,
+        updated_at_ms: now,
+        revoked_at_ms: None,
+    };
+    state.store.put_managed_signer(signer.clone()).await?;
+    Ok(Json(signer))
+}
+
+async fn submit_managed_payment(
+    State(state): State<BackendState>,
+    Json(request): Json<ManagedPaymentSubmissionRequest>,
+) -> Result<Json<PaymentRecord>, ApiError> {
+    let provider = state
+        .signer_provider
+        .as_ref()
+        .ok_or(ApiError::ManagedSignerUnavailable)?;
+    let amount = request
+        .amount
+        .ok_or_else(|| ApiError::BadRequest("amount is required".to_owned()))?;
+    let payment = PaymentSubmissionRequest {
+        idempotency_key: request.idempotency_key,
+        mandate: request.mandate,
+        invoice_hash: request.invoice_hash,
+        receipt_address: request.receipt_address,
+        signed_transaction: request.unsigned_transaction.clone(),
+        agent: Some(request.agent.clone()),
+        mint: Some(request.mint),
+        recipient: request.recipient,
+        amount: Some(amount),
+        token_program: Some(request.token_program),
+        x402: request.x402,
+    };
+    validate_managed_payment_request(
+        &request.unsigned_transaction,
+        &payment,
+        &state.config.program_id,
+    )?;
+    if let Some(existing) = state
+        .store
+        .find_payment_by_idempotency(&payment.idempotency_key)
+        .await?
+    {
+        if existing.signing_mode != SigningMode::Delegated {
+            return Err(ApiError::BadRequest(
+                "idempotency key is already used by a human-signed payment".to_owned(),
+            ));
+        }
+        return Ok(Json(existing));
+    }
+
+    let mut signer = state
+        .store
+        .find_managed_signer_by_public_key(&request.agent)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if signer.mandate_pda != payment.mandate
+        || !matches!(
+            signer.status,
+            ManagedSignerStatus::Provisioning | ManagedSignerStatus::Active
+        )
+    {
+        return Err(ApiError::BadRequest(
+            "managed signer is not active for this mandate".to_owned(),
+        ));
+    }
+    verify_managed_mandate(&state.rpc, &signer, &payment, &state.config.program_id).await?;
+
+    let signed_transaction = provider
+        .sign_transaction(&signer.provider_wallet_id, &request.unsigned_transaction)
+        .await?;
+    validate_provider_signed_transaction(
+        &request.unsigned_transaction,
+        &signed_transaction,
+        &payment,
+        &state.config.program_id,
+    )?;
+    if signer.status == ManagedSignerStatus::Provisioning {
+        signer.status = ManagedSignerStatus::Active;
+        signer.updated_at_ms = now_ms();
+        state.store.put_managed_signer(signer).await?;
+    }
+
+    let payment = PaymentSubmissionRequest {
+        signed_transaction,
+        ..payment
+    };
+    settle_payment(&state, payment, SigningMode::Delegated).await
+}
+
 async fn submit_payment(
     State(state): State<BackendState>,
     Json(request): Json<PaymentSubmissionRequest>,
 ) -> Result<Json<PaymentRecord>, ApiError> {
     validate_payment_request(&request, &state.config.program_id)?;
+    settle_payment(&state, request, SigningMode::Human).await
+}
+
+async fn settle_payment(
+    state: &BackendState,
+    request: PaymentSubmissionRequest,
+    signing_mode: SigningMode,
+) -> Result<Json<PaymentRecord>, ApiError> {
     let x402 = request.x402.clone();
     if let Some(existing) = state
         .store
@@ -509,6 +775,7 @@ async fn submit_payment(
         recipient: Some(request.recipient.clone()),
         amount: request.amount,
         token_program: request.token_program,
+        signing_mode,
         signature: None,
         slot: None,
         status: PaymentStatus::Prepared,
@@ -692,15 +959,106 @@ fn validate_payment_request(
     request: &PaymentSubmissionRequest,
     program_id: &str,
 ) -> Result<(), ApiError> {
-    validate_string(&request.idempotency_key, "idempotency_key")?;
-    validate_string(&request.mandate, "mandate")?;
-    validate_string(&request.invoice_hash, "invoice_hash")?;
-    let receipt_address = request.receipt_address.as_deref().ok_or_else(|| {
-        ApiError::BadRequest("receipt_address is required for settlement verification".to_owned())
-    })?;
-    validate_string(receipt_address, "receipt_address")?;
-    validate_string(&request.recipient, "recipient")?;
+    validate_common_payment_fields(request)?;
     validate_string(&request.signed_transaction, "signed_transaction")?;
+    if request.signed_transaction.len() > MAX_TRANSACTION_BYTES * 2 {
+        return Err(ApiError::BadRequest(
+            "signed_transaction is too large".to_owned(),
+        ));
+    }
+    let transaction = decode_transaction(&request.signed_transaction)?;
+    validate_chainpay_transaction(&transaction, request, program_id)?;
+    Ok(())
+}
+
+fn validate_managed_payment_request(
+    unsigned_transaction: &str,
+    request: &PaymentSubmissionRequest,
+    program_id: &str,
+) -> Result<(), ApiError> {
+    validate_common_payment_fields(request)?;
+    validate_string(unsigned_transaction, "unsigned_transaction")?;
+    if unsigned_transaction.len() > MAX_TRANSACTION_BYTES * 2 {
+        return Err(ApiError::BadRequest(
+            "unsigned_transaction is too large".to_owned(),
+        ));
+    }
+    if request.agent.is_none()
+        || request.mint.is_none()
+        || request.amount.is_none()
+        || request.token_program.is_none()
+    {
+        return Err(ApiError::BadRequest(
+            "managed payments require agent, mint, amount, and token_program".to_owned(),
+        ));
+    }
+    let bytes = decode_transaction(unsigned_transaction)?;
+    let transaction = decode_solana_transaction(&bytes, "unsigned_transaction")?;
+    transaction.sanitize().map_err(|error| {
+        ApiError::BadRequest(format!("unsigned_transaction failed sanitization: {error}"))
+    })?;
+    validate_single_signer_transaction(&transaction, request, true)?;
+    validate_chainpay_transaction_semantics(&transaction, request, program_id)
+}
+
+fn validate_provider_signed_transaction(
+    unsigned_transaction: &str,
+    signed_transaction: &str,
+    request: &PaymentSubmissionRequest,
+    program_id: &str,
+) -> Result<(), ApiError> {
+    let unsigned_bytes = decode_transaction(unsigned_transaction)?;
+    let signed_bytes = decode_transaction(signed_transaction)?;
+    let unsigned = decode_solana_transaction(&unsigned_bytes, "unsigned_transaction")?;
+    let signed = decode_solana_transaction(&signed_bytes, "provider signed_transaction")?;
+    let unsigned_message = bincode::serialize(&unsigned.message).map_err(|error| {
+        ApiError::BadRequest(format!(
+            "cannot encode unsigned transaction message: {error}"
+        ))
+    })?;
+    let signed_message = bincode::serialize(&signed.message).map_err(|error| {
+        ApiError::BadRequest(format!(
+            "cannot encode provider transaction message: {error}"
+        ))
+    })?;
+    if unsigned_message != signed_message {
+        return Err(ApiError::BadRequest(
+            "managed signer provider changed the reviewed transaction message".to_owned(),
+        ));
+    }
+    signed.sanitize().map_err(|error| {
+        ApiError::BadRequest(format!(
+            "provider signed_transaction failed sanitization: {error}"
+        ))
+    })?;
+    signed.verify_and_hash_message().map_err(|error| {
+        ApiError::BadRequest(format!(
+            "managed signer provider returned an invalid signature: {error}"
+        ))
+    })?;
+    validate_single_signer_transaction(&signed, request, false)?;
+    validate_chainpay_transaction_semantics(&signed, request, program_id)
+}
+
+fn validate_common_payment_fields(request: &PaymentSubmissionRequest) -> Result<(), ApiError> {
+    validate_string(&request.idempotency_key, "idempotency_key")?;
+    validate_solana_address(&request.mandate, "mandate")?;
+    validate_string(&request.invoice_hash, "invoice_hash")?;
+    validate_solana_address(
+        request.receipt_address.as_deref().ok_or_else(|| {
+            ApiError::BadRequest(
+                "receipt_address is required for settlement verification".to_owned(),
+            )
+        })?,
+        "receipt_address",
+    )?;
+    validate_solana_address(&request.recipient, "recipient")?;
+    if let Some(agent) = &request.agent {
+        validate_solana_address(agent, "agent")?;
+    }
+    if let Some(mint) = &request.mint {
+        validate_solana_address(mint, "mint")?;
+    }
     if let Some(x402) = &request.x402 {
         validate_string(&x402.resource, "x402.resource")?;
         if !x402.challenge.is_object() {
@@ -715,13 +1073,95 @@ fn validate_payment_request(
             "invoice_hash must be exactly 32 bytes encoded as hexadecimal".to_owned(),
         ));
     }
-    if request.signed_transaction.len() > MAX_TRANSACTION_BYTES * 2 {
+    Ok(())
+}
+
+fn validate_single_signer_transaction(
+    transaction: &VersionedTransaction,
+    request: &PaymentSubmissionRequest,
+    require_unsigned: bool,
+) -> Result<(), ApiError> {
+    let required_signatures = transaction.message.header().num_required_signatures as usize;
+    if required_signatures != 1 || transaction.signatures.len() != 1 {
         return Err(ApiError::BadRequest(
-            "signed_transaction is too large".to_owned(),
+            "managed payments must require exactly one provider-held signer".to_owned(),
         ));
     }
-    let transaction = decode_transaction(&request.signed_transaction)?;
-    validate_chainpay_transaction(&transaction, request, program_id)?;
+    let agent = request
+        .agent
+        .as_deref()
+        .ok_or_else(|| ApiError::BadRequest("managed payment agent is required".to_owned()))?;
+    if transaction
+        .message
+        .static_account_keys()
+        .first()
+        .map(ToString::to_string)
+        .as_deref()
+        != Some(agent)
+    {
+        return Err(ApiError::BadRequest(
+            "managed signer must be the only required signer and fee payer".to_owned(),
+        ));
+    }
+    if transaction.message.instructions().len() != 1 {
+        return Err(ApiError::BadRequest(
+            "managed payments may contain only one ChainPay execute_payment instruction".to_owned(),
+        ));
+    }
+    if require_unsigned
+        && transaction
+            .signatures
+            .iter()
+            .any(|signature| signature.as_ref().iter().any(|byte| *byte != 0))
+    {
+        return Err(ApiError::BadRequest(
+            "unsigned_transaction must not contain any existing signatures".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+async fn verify_managed_mandate(
+    rpc: &RpcClient,
+    signer: &ManagedSignerRecord,
+    request: &PaymentSubmissionRequest,
+    program_id: &str,
+) -> Result<(), ApiError> {
+    const MANDATE_DISCRIMINATOR: [u8; 8] = [139, 106, 43, 122, 82, 211, 96, 162];
+    const MANDATE_ACCOUNT_LENGTH: usize = 235;
+    let account = rpc
+        .account_info(&request.mandate)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest("managed payment mandate was not found".to_owned()))?;
+    if account.owner != program_id
+        || account.data.len() < MANDATE_ACCOUNT_LENGTH
+        || account.data[..8] != MANDATE_DISCRIMINATOR
+    {
+        return Err(ApiError::BadRequest(
+            "managed payment mandate is not a valid ChainPay mandate".to_owned(),
+        ));
+    }
+    verify_account_pubkey(&account.data[8..40], &signer.owner_wallet, "owner")?;
+    verify_account_pubkey(&account.data[40..72], &signer.public_key, "approved agent")?;
+    verify_account_pubkey(
+        &account.data[104..136],
+        request
+            .mint
+            .as_deref()
+            .ok_or_else(|| ApiError::BadRequest("mint is required".to_owned()))?,
+        "mint",
+    )?;
+    if account.data[232] != 0 || account.data[233] != 0 {
+        return Err(ApiError::BadRequest(
+            "managed payment mandate is paused or revoked".to_owned(),
+        ));
+    }
+    let expires_at_slot = u64::from_le_bytes(account.data[200..208].try_into().unwrap());
+    if expires_at_slot <= rpc.current_slot().await? {
+        return Err(ApiError::BadRequest(
+            "managed payment mandate has expired".to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -828,11 +1268,7 @@ fn validate_chainpay_transaction(
     request: &PaymentSubmissionRequest,
     program_id: &str,
 ) -> Result<(), ApiError> {
-    let transaction: VersionedTransaction = bincode::deserialize(bytes).map_err(|error| {
-        ApiError::BadRequest(format!(
-            "signed_transaction is not a Solana transaction: {error}"
-        ))
-    })?;
+    let transaction = decode_solana_transaction(bytes, "signed_transaction")?;
     transaction.sanitize().map_err(|error| {
         ApiError::BadRequest(format!("signed_transaction failed sanitization: {error}"))
     })?;
@@ -842,6 +1278,14 @@ fn validate_chainpay_transaction(
         ))
     })?;
 
+    validate_chainpay_transaction_semantics(&transaction, request, program_id)
+}
+
+fn validate_chainpay_transaction_semantics(
+    transaction: &VersionedTransaction,
+    request: &PaymentSubmissionRequest,
+    program_id: &str,
+) -> Result<(), ApiError> {
     const EXECUTE_PAYMENT: [u8; 8] = [86, 4, 7, 7, 120, 139, 232, 139];
     let keys = transaction.message.static_account_keys();
     for instruction in transaction.message.instructions() {
@@ -856,7 +1300,7 @@ fn validate_chainpay_transaction(
                 "execute_payment instruction has an invalid data length".to_owned(),
             ));
         }
-        if instruction.accounts.len() < 8 {
+        if instruction.accounts.len() < 10 {
             return Err(ApiError::BadRequest(
                 "execute_payment instruction is missing required accounts".to_owned(),
             ));
@@ -939,6 +1383,12 @@ fn validate_chainpay_transaction(
     ))
 }
 
+fn decode_solana_transaction(bytes: &[u8], field: &str) -> Result<VersionedTransaction, ApiError> {
+    bincode::deserialize(bytes).map_err(|error| {
+        ApiError::BadRequest(format!("{field} is not a Solana transaction: {error}"))
+    })
+}
+
 fn validate_transaction_request(request: &TransactionSubmissionRequest) -> Result<(), ApiError> {
     validate_string(&request.idempotency_key, "idempotency_key")?;
     validate_string(&request.signed_transaction, "signed_transaction")?;
@@ -969,6 +1419,65 @@ fn validate_string(value: &str, name: &str) -> Result<(), ApiError> {
         return Err(ApiError::BadRequest(format!("{name} must not be empty")));
     }
     Ok(())
+}
+
+fn validate_solana_address(value: &str, name: &str) -> Result<(), ApiError> {
+    validate_string(value, name)?;
+    let bytes = bs58::decode(value).into_vec().map_err(|error| {
+        ApiError::BadRequest(format!("{name} must be a base58 Solana address: {error}"))
+    })?;
+    if bytes.len() != 32 {
+        return Err(ApiError::BadRequest(format!(
+            "{name} must decode to a 32-byte Solana address"
+        )));
+    }
+    Ok(())
+}
+
+fn verify_wallet_message_signature(
+    wallet: &str,
+    message: &[u8],
+    encoded_signature: &str,
+) -> Result<(), ApiError> {
+    validate_solana_address(wallet, "owner_wallet")?;
+    let wallet_bytes = bs58::decode(wallet)
+        .into_vec()
+        .map_err(|error| ApiError::BadRequest(format!("invalid owner wallet: {error}")))?;
+    let signature_bytes = BASE64.decode(encoded_signature).map_err(|error| {
+        ApiError::BadRequest(format!("owner signature must be base64: {error}"))
+    })?;
+    let verifying_key = VerifyingKey::from_bytes(
+        wallet_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| ApiError::BadRequest("owner wallet must be 32 bytes".to_owned()))?,
+    )
+    .map_err(|error| ApiError::BadRequest(format!("invalid owner wallet key: {error}")))?;
+    let signature = Signature::from_slice(&signature_bytes)
+        .map_err(|error| ApiError::BadRequest(format!("invalid owner signature: {error}")))?;
+    verifying_key.verify(message, &signature).map_err(|_| {
+        ApiError::BadRequest("owner signature does not match the challenge".to_owned())
+    })
+}
+
+fn verify_account_pubkey(actual: &[u8], expected: &str, field: &str) -> Result<(), ApiError> {
+    let expected = bs58::decode(expected)
+        .into_vec()
+        .map_err(|error| ApiError::BadRequest(format!("stored {field} is not base58: {error}")))?;
+    if expected.len() != 32 || actual != expected {
+        return Err(ApiError::BadRequest(format!(
+            "on-chain mandate {field} does not match the managed signer registry"
+        )));
+    }
+    Ok(())
+}
+
+fn random_hex_32() -> Result<String, ApiError> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        ApiError::BadRequest(format!("could not create a secure identifier: {error}"))
+    })?;
+    Ok(hex_encode(&bytes))
 }
 
 fn decode_transaction(encoded: &str) -> Result<Vec<u8>, ApiError> {
@@ -1029,6 +1538,7 @@ fn to_blockhash_response(blockhash: LatestBlockhash) -> BlockhashResponse {
 mod tests {
     use super::*;
     use axum::Router;
+    use ed25519_dalek::{Signer as _, SigningKey};
     use serde_json::json;
 
     #[test]
@@ -1050,6 +1560,17 @@ mod tests {
             signed_transaction: "not-base64".into(),
         };
         assert!(validate_transaction_request(&request).is_err());
+    }
+
+    #[test]
+    fn owner_challenge_signature_is_bound_to_the_exact_message() {
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let wallet = bs58::encode(signing_key.verifying_key().as_bytes()).into_string();
+        let message = b"ChainPay delegated signer enrollment";
+        let signature = BASE64.encode(signing_key.sign(message).to_bytes());
+
+        assert!(verify_wallet_message_signature(&wallet, message, &signature).is_ok());
+        assert!(verify_wallet_message_signature(&wallet, b"different message", &signature).is_err());
     }
 
     #[test]
@@ -1083,6 +1604,7 @@ mod tests {
             recipient: Some(recipient),
             amount: Some(10),
             token_program: Some("token-2022".into()),
+            signing_mode: SigningMode::Human,
             signature: Some("signature".into()),
             slot: Some(1),
             status: PaymentStatus::Submitted,

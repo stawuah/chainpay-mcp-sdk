@@ -15,7 +15,8 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::status::{
-    PaymentRecord, PaymentStatus, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
+    ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord, PaymentStatus,
+    SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
 };
 
 #[derive(Debug, Error)]
@@ -37,6 +38,8 @@ struct MemoryState {
     payments: HashMap<String, PaymentRecord>,
     transactions: HashMap<String, TransactionRecord>,
     x402_payments: HashMap<String, X402PaymentRecord>,
+    managed_signer_challenges: HashMap<String, ManagedSignerChallenge>,
+    managed_signers: HashMap<String, ManagedSignerRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -161,12 +164,12 @@ impl StatusStore {
                     INSERT INTO payments (
                         payment_id, idempotency_key, mandate, invoice_hash,
                         receipt_address, agent, mint, recipient, amount,
-                        token_program, signature, slot, status, error,
-                        created_at_ms, updated_at_ms
+                        token_program, signing_mode, signature, slot, status,
+                        error, created_at_ms, updated_at_ms
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8,
-                        CAST($9 AS NUMERIC), $10, $11, $12, $13,
-                        $14, $15, $16
+                        CAST($9 AS NUMERIC), $10, $11, $12, $13, $14,
+                        $15, $16, $17
                     )
                     ON CONFLICT (payment_id) DO UPDATE SET
                         idempotency_key = EXCLUDED.idempotency_key,
@@ -178,6 +181,7 @@ impl StatusStore {
                         recipient = EXCLUDED.recipient,
                         amount = EXCLUDED.amount,
                         token_program = EXCLUDED.token_program,
+                        signing_mode = EXCLUDED.signing_mode,
                         signature = EXCLUDED.signature,
                         slot = EXCLUDED.slot,
                         status = EXCLUDED.status,
@@ -195,6 +199,7 @@ impl StatusStore {
                 .bind(&record.recipient)
                 .bind(record.amount.map(|value| value.to_string()))
                 .bind(&record.token_program)
+                .bind(signing_mode_name(record.signing_mode))
                 .bind(&record.signature)
                 .bind(to_i64(record.slot, "slot")?)
                 .bind(status_name(record.status))
@@ -365,25 +370,219 @@ impl StatusStore {
             }
         }
     }
+
+    pub async fn put_managed_signer_challenge(
+        &self,
+        challenge: ManagedSignerChallenge,
+    ) -> Result<(), StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                state
+                    .write()
+                    .await
+                    .managed_signer_challenges
+                    .insert(challenge.challenge_id.clone(), challenge);
+                Ok(())
+            }
+            StorageBackend::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO managed_signer_challenges (
+                        challenge_id, owner_wallet, mandate_pda, message,
+                        expires_at_ms, consumed_at_ms, created_at_ms
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    "#,
+                )
+                .bind(&challenge.challenge_id)
+                .bind(&challenge.owner_wallet)
+                .bind(&challenge.mandate_pda)
+                .bind(&challenge.message)
+                .bind(to_i64(Some(challenge.expires_at_ms), "expires_at_ms")?)
+                .bind(to_i64(challenge.consumed_at_ms, "consumed_at_ms")?)
+                .bind(to_i64(Some(challenge.created_at_ms), "created_at_ms")?)
+                .execute(pool)
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn get_managed_signer_challenge(
+        &self,
+        challenge_id: &str,
+    ) -> Result<Option<ManagedSignerChallenge>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .managed_signer_challenges
+                .get(challenge_id)
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(MANAGED_SIGNER_CHALLENGE_SELECT_BY_ID)
+                    .bind(challenge_id)
+                    .fetch_optional(pool)
+                    .await?;
+                row.map(managed_signer_challenge_from_row).transpose()
+            }
+        }
+    }
+
+    pub async fn consume_managed_signer_challenge(
+        &self,
+        challenge_id: &str,
+        consumed_at_ms: u64,
+    ) -> Result<bool, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                let Some(challenge) = state.managed_signer_challenges.get_mut(challenge_id) else {
+                    return Ok(false);
+                };
+                if challenge.consumed_at_ms.is_some() || challenge.expires_at_ms < consumed_at_ms {
+                    return Ok(false);
+                }
+                challenge.consumed_at_ms = Some(consumed_at_ms);
+                Ok(true)
+            }
+            StorageBackend::Postgres(pool) => {
+                let consumed_at_ms = to_i64(Some(consumed_at_ms), "consumed_at_ms")?;
+                let result = sqlx::query(
+                    r#"
+                    UPDATE managed_signer_challenges
+                    SET consumed_at_ms = $2
+                    WHERE challenge_id = $1
+                      AND consumed_at_ms IS NULL
+                      AND expires_at_ms >= $2
+                    "#,
+                )
+                .bind(challenge_id)
+                .bind(consumed_at_ms)
+                .execute(pool)
+                .await?;
+                Ok(result.rows_affected() == 1)
+            }
+        }
+    }
+
+    pub async fn put_managed_signer(
+        &self,
+        signer: ManagedSignerRecord,
+    ) -> Result<(), StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                state
+                    .write()
+                    .await
+                    .managed_signers
+                    .insert(signer.signer_id.clone(), signer);
+                Ok(())
+            }
+            StorageBackend::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO managed_signers (
+                        signer_id, owner_wallet, public_key, provider,
+                        provider_wallet_id, provider_policy_id, mandate_pda,
+                        signing_mode, status, created_at_ms, updated_at_ms,
+                        revoked_at_ms
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+                    )
+                    ON CONFLICT (signer_id) DO UPDATE SET
+                        owner_wallet = EXCLUDED.owner_wallet,
+                        public_key = EXCLUDED.public_key,
+                        provider = EXCLUDED.provider,
+                        provider_wallet_id = EXCLUDED.provider_wallet_id,
+                        provider_policy_id = EXCLUDED.provider_policy_id,
+                        mandate_pda = EXCLUDED.mandate_pda,
+                        signing_mode = EXCLUDED.signing_mode,
+                        status = EXCLUDED.status,
+                        updated_at_ms = EXCLUDED.updated_at_ms,
+                        revoked_at_ms = EXCLUDED.revoked_at_ms
+                    "#,
+                )
+                .bind(&signer.signer_id)
+                .bind(&signer.owner_wallet)
+                .bind(&signer.public_key)
+                .bind(&signer.provider)
+                .bind(&signer.provider_wallet_id)
+                .bind(&signer.provider_policy_id)
+                .bind(&signer.mandate_pda)
+                .bind(signing_mode_name(signer.signing_mode))
+                .bind(managed_signer_status_name(signer.status))
+                .bind(to_i64(Some(signer.created_at_ms), "created_at_ms")?)
+                .bind(to_i64(Some(signer.updated_at_ms), "updated_at_ms")?)
+                .bind(to_i64(signer.revoked_at_ms, "revoked_at_ms")?)
+                .execute(pool)
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn find_managed_signer_by_public_key(
+        &self,
+        public_key: &str,
+    ) -> Result<Option<ManagedSignerRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .managed_signers
+                .values()
+                .find(|record| record.public_key == public_key)
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(MANAGED_SIGNER_SELECT_BY_PUBLIC_KEY)
+                    .bind(public_key)
+                    .fetch_optional(pool)
+                    .await?;
+                row.map(managed_signer_from_row).transpose()
+            }
+        }
+    }
+
+    pub async fn find_managed_signer_by_mandate(
+        &self,
+        mandate_pda: &str,
+    ) -> Result<Option<ManagedSignerRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .managed_signers
+                .values()
+                .find(|record| record.mandate_pda == mandate_pda)
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(MANAGED_SIGNER_SELECT_BY_MANDATE)
+                    .bind(mandate_pda)
+                    .fetch_optional(pool)
+                    .await?;
+                row.map(managed_signer_from_row).transpose()
+            }
+        }
+    }
 }
 
 const PAYMENT_SELECT_BY_ID: &str = r#"
     SELECT payment_id, idempotency_key, mandate, invoice_hash, receipt_address,
-           agent, mint, recipient, amount::text AS amount_text, token_program,
+           agent, mint, recipient, amount::text AS amount_text, token_program, signing_mode,
            signature, slot, status, error, created_at_ms, updated_at_ms
     FROM payments WHERE payment_id = $1
 "#;
 
 const PAYMENT_SELECT_BY_IDEMPOTENCY: &str = r#"
     SELECT payment_id, idempotency_key, mandate, invoice_hash, receipt_address,
-           agent, mint, recipient, amount::text AS amount_text, token_program,
+           agent, mint, recipient, amount::text AS amount_text, token_program, signing_mode,
            signature, slot, status, error, created_at_ms, updated_at_ms
     FROM payments WHERE idempotency_key = $1
 "#;
 
 const PAYMENT_SELECT_BY_RECEIPT: &str = r#"
     SELECT payment_id, idempotency_key, mandate, invoice_hash, receipt_address,
-           agent, mint, recipient, amount::text AS amount_text, token_program,
+           agent, mint, recipient, amount::text AS amount_text, token_program, signing_mode,
            signature, slot, status, error, created_at_ms, updated_at_ms
     FROM payments WHERE receipt_address = $1
     ORDER BY updated_at_ms DESC LIMIT 1
@@ -410,6 +609,26 @@ const X402_SELECT_BY_IDEMPOTENCY: &str = r#"
     FROM x402_payments WHERE idempotency_key = $1
 "#;
 
+const MANAGED_SIGNER_CHALLENGE_SELECT_BY_ID: &str = r#"
+    SELECT challenge_id, owner_wallet, mandate_pda, message, expires_at_ms,
+           consumed_at_ms, created_at_ms
+    FROM managed_signer_challenges WHERE challenge_id = $1
+"#;
+
+const MANAGED_SIGNER_SELECT_BY_PUBLIC_KEY: &str = r#"
+    SELECT signer_id, owner_wallet, public_key, provider, provider_wallet_id,
+           provider_policy_id, mandate_pda, signing_mode, status,
+           created_at_ms, updated_at_ms, revoked_at_ms
+    FROM managed_signers WHERE public_key = $1
+"#;
+
+const MANAGED_SIGNER_SELECT_BY_MANDATE: &str = r#"
+    SELECT signer_id, owner_wallet, public_key, provider, provider_wallet_id,
+           provider_policy_id, mandate_pda, signing_mode, status,
+           created_at_ms, updated_at_ms, revoked_at_ms
+    FROM managed_signers WHERE mandate_pda = $1
+"#;
+
 fn payment_from_row(row: PgRow) -> Result<PaymentRecord, StorageError> {
     let amount = row
         .try_get::<Option<String>, _>("amount_text")?
@@ -426,6 +645,7 @@ fn payment_from_row(row: PgRow) -> Result<PaymentRecord, StorageError> {
         recipient: row.try_get("recipient")?,
         amount,
         token_program: row.try_get("token_program")?,
+        signing_mode: parse_signing_mode(row.try_get("signing_mode")?)?,
         signature: row.try_get("signature")?,
         slot: from_i64(row.try_get("slot")?, "slot")?,
         status: parse_status(row.try_get("status")?)?,
@@ -434,6 +654,39 @@ fn payment_from_row(row: PgRow) -> Result<PaymentRecord, StorageError> {
             .unwrap_or_default(),
         updated_at_ms: from_i64(row.try_get("updated_at_ms")?, "updated_at_ms")?
             .unwrap_or_default(),
+    })
+}
+
+fn managed_signer_challenge_from_row(row: PgRow) -> Result<ManagedSignerChallenge, StorageError> {
+    Ok(ManagedSignerChallenge {
+        challenge_id: row.try_get("challenge_id")?,
+        owner_wallet: row.try_get("owner_wallet")?,
+        mandate_pda: row.try_get("mandate_pda")?,
+        message: row.try_get("message")?,
+        expires_at_ms: from_i64(row.try_get("expires_at_ms")?, "expires_at_ms")?
+            .unwrap_or_default(),
+        consumed_at_ms: from_i64(row.try_get("consumed_at_ms")?, "consumed_at_ms")?,
+        created_at_ms: from_i64(row.try_get("created_at_ms")?, "created_at_ms")?
+            .unwrap_or_default(),
+    })
+}
+
+fn managed_signer_from_row(row: PgRow) -> Result<ManagedSignerRecord, StorageError> {
+    Ok(ManagedSignerRecord {
+        signer_id: row.try_get("signer_id")?,
+        owner_wallet: row.try_get("owner_wallet")?,
+        public_key: row.try_get("public_key")?,
+        provider: row.try_get("provider")?,
+        provider_wallet_id: row.try_get("provider_wallet_id")?,
+        provider_policy_id: row.try_get("provider_policy_id")?,
+        mandate_pda: row.try_get("mandate_pda")?,
+        signing_mode: parse_signing_mode(row.try_get("signing_mode")?)?,
+        status: parse_managed_signer_status(row.try_get("status")?)?,
+        created_at_ms: from_i64(row.try_get("created_at_ms")?, "created_at_ms")?
+            .unwrap_or_default(),
+        updated_at_ms: from_i64(row.try_get("updated_at_ms")?, "updated_at_ms")?
+            .unwrap_or_default(),
+        revoked_at_ms: from_i64(row.try_get("revoked_at_ms")?, "revoked_at_ms")?,
     })
 }
 
@@ -504,6 +757,46 @@ fn parse_status(value: String) -> Result<PaymentStatus, StorageError> {
     }
 }
 
+fn signing_mode_name(mode: SigningMode) -> &'static str {
+    match mode {
+        SigningMode::Human => "human",
+        SigningMode::Delegated => "delegated",
+    }
+}
+
+fn parse_signing_mode(value: String) -> Result<SigningMode, StorageError> {
+    match value.as_str() {
+        "human" => Ok(SigningMode::Human),
+        "delegated" => Ok(SigningMode::Delegated),
+        _ => Err(StorageError::InvalidValue {
+            field: "signing_mode",
+            value,
+        }),
+    }
+}
+
+fn managed_signer_status_name(status: ManagedSignerStatus) -> &'static str {
+    match status {
+        ManagedSignerStatus::Provisioning => "provisioning",
+        ManagedSignerStatus::Active => "active",
+        ManagedSignerStatus::Suspended => "suspended",
+        ManagedSignerStatus::Revoked => "revoked",
+    }
+}
+
+fn parse_managed_signer_status(value: String) -> Result<ManagedSignerStatus, StorageError> {
+    match value.as_str() {
+        "provisioning" => Ok(ManagedSignerStatus::Provisioning),
+        "active" => Ok(ManagedSignerStatus::Active),
+        "suspended" => Ok(ManagedSignerStatus::Suspended),
+        "revoked" => Ok(ManagedSignerStatus::Revoked),
+        _ => Err(StorageError::InvalidValue {
+            field: "managed_signer_status",
+            value,
+        }),
+    }
+}
+
 fn x402_status_name(status: X402PaymentStatus) -> &'static str {
     match status {
         X402PaymentStatus::Prepared => "prepared",
@@ -569,6 +862,7 @@ mod tests {
             recipient: None,
             amount: None,
             token_program: None,
+            signing_mode: SigningMode::Human,
             signature: None,
             slot: None,
             status: PaymentStatus::Prepared,
@@ -602,6 +896,64 @@ mod tests {
                 .unwrap()
                 .payment_id,
             "payment-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_signer_challenges_are_single_use() {
+        let store = StatusStore::in_memory();
+        store
+            .put_managed_signer_challenge(ManagedSignerChallenge {
+                challenge_id: "challenge-1".into(),
+                owner_wallet: "owner".into(),
+                mandate_pda: "mandate".into(),
+                message: "authorize".into(),
+                expires_at_ms: 200,
+                consumed_at_ms: None,
+                created_at_ms: 100,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            store
+                .consume_managed_signer_challenge("challenge-1", 150)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .consume_managed_signer_challenge("challenge-1", 151)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .get_managed_signer_challenge("challenge-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .consumed_at_ms,
+            Some(150)
+        );
+
+        store
+            .put_managed_signer_challenge(ManagedSignerChallenge {
+                challenge_id: "expired-challenge".into(),
+                owner_wallet: "owner".into(),
+                mandate_pda: "mandate".into(),
+                message: "authorize".into(),
+                expires_at_ms: 100,
+                consumed_at_ms: None,
+                created_at_ms: 1,
+            })
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .consume_managed_signer_challenge("expired-challenge", 101)
+                .await
+                .unwrap()
         );
     }
 

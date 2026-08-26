@@ -278,6 +278,48 @@ async function relaySignedPayment(
   return payload;
 }
 
+async function relayManagedPayment(
+  context: ChainPayMcpContext,
+  challenge: NormalizedX402Challenge,
+  prepared: PreparedPayment,
+  mandate: string,
+  agent: string,
+): Promise<Record<string, unknown>> {
+  if (!context.backendUrl || !context.backendAuthToken) {
+    throw new Error("Delegated x402 requires CHAINPAY_BACKEND_URL and CHAINPAY_BACKEND_AUTH_TOKEN");
+  }
+  const unsigned = await materializeUnsignedTransaction(context.client, prepared.transaction);
+  const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/managed-payments`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${context.backendAuthToken}`,
+    },
+    body: JSON.stringify({
+      idempotency_key: `x402:${mandate}:${challenge.invoiceHash}`,
+      mandate,
+      invoice_hash: challenge.invoiceHash,
+      receipt_address: prepared.receiptAddress,
+      unsigned_transaction: unsigned.value,
+      agent,
+      mint: challenge.mint,
+      recipient: challenge.recipient,
+      amount: challenge.amount,
+      token_program: challenge.tokenProgram,
+      x402: {
+        resource: challenge.resource,
+        challenge,
+      },
+    }),
+  });
+  const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) throw new Error(`Axum rejected delegated x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
+  if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
+    throw new Error(`delegated x402 settlement was not confirmed: ${JSON.stringify(payload)}`);
+  }
+  return payload;
+}
+
 async function persistX402Proof(
   context: ChainPayMcpContext,
   idempotencyKey: string,
@@ -351,6 +393,10 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   const resource = resourceUrl(args.resource);
   const mandate = solanaAddress(args.mandate, "mandate");
   const agent = solanaAddress(args.agent, "agent");
+  const signingMode = args.signingMode;
+  if (signingMode !== "human" && signingMode !== "delegated") {
+    throw new Error("signingMode must be human or delegated");
+  }
   const initial = await fetchResource(resource);
   const initialBody = await limitedResponseBody(initial);
   if (initial.status !== 402) {
@@ -370,7 +416,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   }
 
   const signedTransaction = typeof args.signedTransaction === "string" ? args.signedTransaction.trim() : "";
-  if (!signedTransaction) {
+  if (signingMode === "human" && !signedTransaction) {
     return toolResult({
       action: "x402_agent_signature_required",
       challenge,
@@ -382,8 +428,18 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
       message: "The live resource returned HTTP 402. Sign this transaction outside ChainPay and call execute_x402_payment again with signedTransaction.",
     });
   }
+  if (signingMode === "delegated" && signedTransaction) {
+    return toolResult({
+      action: "delegated_signature_rejected",
+      message: "Delegated x402 accepts only the unsigned transaction prepared by ChainPay; Axum obtains and validates the provider signature.",
+      challenge,
+      receiptAddress: prepared.receiptAddress,
+    }, true);
+  }
 
-  const settlement = await relaySignedPayment(context, challenge, prepared, mandate, agent, signedTransaction);
+  const settlement = signingMode === "delegated"
+    ? await relayManagedPayment(context, challenge, prepared, mandate, agent)
+    : await relaySignedPayment(context, challenge, prepared, mandate, agent, signedTransaction);
   const receipt = verifyReceipt(await context.client.getPayment(prepared.receiptAddress), challenge, prepared, mandate, agent);
   const signature = settlement.signature as string;
   const proof = proofHeader(signature, prepared.receiptAddress);
@@ -415,6 +471,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   return toolResult({
     action: "x402_verified",
     status: "confirmed",
+    signingMode,
     resource,
     challenge,
     settlement,

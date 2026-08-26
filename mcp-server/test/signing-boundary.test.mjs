@@ -89,6 +89,73 @@ test("execute_payment returns an unsigned wire transaction for an external signe
   assert.equal(transaction.signatures[0]?.signature, null);
 });
 
+test("delegated execute_payment never accepts a caller-supplied signature", async () => {
+  const fixture = paymentFixture();
+  const context = {
+    client: {
+      preparePayment: async () => fixture.prepared,
+      connection: {
+        getLatestBlockhash: async () => ({
+          blockhash: fixture.blockhash,
+          lastValidBlockHeight: 1234,
+        }),
+      },
+    },
+    backendUrl: "https://backend.example",
+    backendAuthToken: "test-token",
+  };
+
+  const result = await executePayment(context, {
+    ...fixture.args,
+    signingMode: "delegated",
+    signedTransaction: "caller-controlled-signature",
+  });
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent.action, "delegated_signature_rejected");
+});
+
+test("delegated execute_payment sends only an unsigned transaction to authenticated Axum", async () => {
+  const fixture = paymentFixture();
+  const context = {
+    client: {
+      preparePayment: async () => fixture.prepared,
+      connection: {
+        getLatestBlockhash: async () => ({
+          blockhash: fixture.blockhash,
+          lastValidBlockHeight: 1234,
+        }),
+      },
+    },
+    backendUrl: "https://backend.example/",
+    backendAuthToken: "test-token",
+  };
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (url, init) => {
+    request = { url, ...init };
+    return new Response(JSON.stringify({ status: "confirmed", signature: "provider-signature" }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    const result = await executePayment(context, { ...fixture.args, signingMode: "delegated" });
+    assert.equal(result.isError, undefined);
+    assert.equal(result.structuredContent.action, "managed_payment_settled");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(request.url, "https://backend.example/v1/managed-payments");
+  assert.equal(request.method, "POST");
+  assert.equal(request.headers.Authorization, "Bearer test-token");
+  const payload = JSON.parse(request.body);
+  assert.equal(payload.unsigned_transaction.includes("provider-signature"), false);
+  assert.equal(payload.agent, fixture.args.agent);
+  assert.equal(payload.receipt_address, fixture.prepared.receiptAddress);
+  assert.equal(payload.signed_transaction, undefined);
+});
+
 test("MCP rejects private-key-shaped tool arguments before dispatch", async () => {
   await assert.rejects(
     callTool(
