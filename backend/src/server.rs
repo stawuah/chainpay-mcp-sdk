@@ -1570,7 +1570,9 @@ mod tests {
         let signature = BASE64.encode(signing_key.sign(message).to_bytes());
 
         assert!(verify_wallet_message_signature(&wallet, message, &signature).is_ok());
-        assert!(verify_wallet_message_signature(&wallet, b"different message", &signature).is_err());
+        assert!(
+            verify_wallet_message_signature(&wallet, b"different message", &signature).is_err()
+        );
     }
 
     #[test]

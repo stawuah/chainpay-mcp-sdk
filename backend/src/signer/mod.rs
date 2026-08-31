@@ -132,6 +132,7 @@ impl PrivySignerProvider {
         owner_wallet: &str,
         mandate_pda: &str,
     ) -> Result<ProvisionedSigner, SignerProviderError> {
+        validate_policy_id(&self.policy_id)?;
         let external_id = external_id(owner_wallet, mandate_pda);
         let response = self
             .http
@@ -254,6 +255,23 @@ fn validate_provider_id(value: &str) -> Result<(), SignerProviderError> {
     Ok(())
 }
 
+fn validate_policy_id(value: &str) -> Result<(), SignerProviderError> {
+    let valid = value.len() == 24
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if index == 0 {
+                byte.is_ascii_lowercase()
+            } else {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit()
+            }
+        });
+    if !valid {
+        return Err(SignerProviderError::InvalidResponse(
+            "automatic payments are unavailable because PRIVY_POLICY_ID is not a valid 24-character Privy policy ID. In Privy, copy the policy ID (not its name, an app ID, a secret, or a rule ID) into the backend environment.".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_solana_address(value: &str) -> Result<(), SignerProviderError> {
     let bytes = bs58::decode(value)
         .into_vec()
@@ -293,5 +311,12 @@ mod tests {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         );
+    }
+
+    #[test]
+    fn policy_id_requires_a_24_character_cuid2() {
+        assert!(validate_policy_id("tb54eps4z44ed0jepousxi4n").is_ok());
+        assert!(validate_policy_id("policy-name").is_err());
+        assert!(validate_policy_id("TB54EPS4Z44ED0JEPOUSXI4N").is_err());
     }
 }
