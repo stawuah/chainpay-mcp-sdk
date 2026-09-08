@@ -21,7 +21,10 @@
   },
   "dependencies": {
     "@chainpay/sdk": "0.1.0",
+    "@solana/web3.js": "^1.98.4",
     "@types/pg": "^8.15.5",
+    "@x402/core": "^2.24.0",
+    "@x402/svm": "^2.24.0",
     "openai": "^7.4.0",
     "pg": "^8.16.3"
   },

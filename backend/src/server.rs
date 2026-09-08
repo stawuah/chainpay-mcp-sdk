@@ -26,11 +26,11 @@ use tower_http::{
 
 use crate::{
     api::{
-        BackendConfigResponse, JsonRpcProxyRequest, ManagedPaymentSubmissionRequest,
-        ManagedSignerChallengeRequest, ManagedSignerChallengeResponse,
-        ManagedSignerProvisionRequest, PaymentRequestVerificationResponse,
-        PaymentSubmissionRequest, SignedPaymentRequest, TransactionSubmissionRequest,
-        X402PaymentMetadata, X402ProofRequest,
+        BackendConfigResponse, ExternalX402SettlementRequest, JsonRpcProxyRequest,
+        ManagedPaymentSubmissionRequest, ManagedSignerChallengeRequest,
+        ManagedSignerChallengeResponse, ManagedSignerProvisionRequest,
+        PaymentRequestVerificationResponse, PaymentSubmissionRequest, SignedPaymentRequest,
+        TransactionSubmissionRequest, X402PaymentMetadata, X402ProofRequest,
     },
     rpc::{LatestBlockhash, RpcAccount, RpcClient, RpcConfig, RpcError},
     signer::{PrivySignerProvider, SignerConfigError, SignerProviderError},
@@ -258,6 +258,10 @@ pub fn build_router(state: BackendState) -> Router {
             get(get_payment_by_receipt),
         )
         .route("/v1/x402-payments/proof", post(record_x402_proof))
+        .route(
+            "/v1/x402-payments/external-settlement",
+            post(record_external_x402_settlement),
+        )
         .route("/v1/transactions/submit", post(submit_transaction))
         .route("/v1/transactions/{transaction_id}", get(get_transaction))
         .route("/rpc", post(proxy_rpc))
@@ -894,6 +898,57 @@ async fn record_x402_proof(
         X402PaymentStatus::Confirmed
     };
     record.updated_at_ms = now_ms();
+    state.store.put_x402(record.clone()).await?;
+    Ok(Json(record))
+}
+
+async fn record_external_x402_settlement(
+    State(state): State<BackendState>,
+    Json(request): Json<ExternalX402SettlementRequest>,
+) -> Result<Json<X402PaymentRecord>, ApiError> {
+    validate_string(&request.idempotency_key, "idempotency_key")?;
+    validate_string(&request.resource, "resource")?;
+    validate_string(&request.facilitator, "facilitator")?;
+    validate_string(&request.transaction_signature, "transaction_signature")?;
+    if !(200..=599).contains(&request.response_status) {
+        return Err(ApiError::BadRequest(
+            "response_status must be a valid HTTP status".to_owned(),
+        ));
+    }
+    if !request.challenge.is_object()
+        || !request.payment_payload.is_object()
+        || !request.settlement.is_object()
+    {
+        return Err(ApiError::BadRequest(
+            "external x402 challenge, payment_payload, and settlement must be JSON objects"
+                .to_owned(),
+        ));
+    }
+
+    let now = now_ms();
+    let record = X402PaymentRecord {
+        x402_payment_id: deterministic_id("x402-external", &request.idempotency_key),
+        idempotency_key: request.idempotency_key,
+        resource: request.resource,
+        payment_id: None,
+        receipt_address: None,
+        transaction_signature: Some(request.transaction_signature),
+        status: if (200..300).contains(&request.response_status) {
+            X402PaymentStatus::Verified
+        } else {
+            X402PaymentStatus::Confirmed
+        },
+        challenge: request.challenge,
+        proof: Some(json!({
+            "facilitator": request.facilitator,
+            "payment_payload": request.payment_payload,
+            "settlement": request.settlement,
+        })),
+        response_status: Some(request.response_status),
+        error: request.error,
+        created_at_ms: now,
+        updated_at_ms: now,
+    };
     state.store.put_x402(record.clone()).await?;
     Ok(Json(record))
 }

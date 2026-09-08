@@ -120,24 +120,26 @@ goes directly through Axum to Devnet.
 ---
 
 ### Feature 2.0 — x402 Real Implementation 🔧 IN PROGRESS
-ChainPay implements the x402 open protocol natively.
+ChainPay implements the x402 open protocol through a standards-compliant
+facilitator, starting with the human-approved direct-transfer route.
 
 Flow:
 ```
 Agent requests resource →
-Resource returns HTTP 402 + payment details header →
-ChainPay MCP parses 402 response →
-Checks agent mode (1.1 or 1.2) →
-  Mode 1.2: signs payment from delegated wallet directly →
-  Mode 1.1: returns payment request to human wallet for approval →
-Payment settled on Solana →
-Receipt PDA created →
-Agent retries request with X-PAYMENT proof header →
-Resource verifies receipt PDA →
-Resource releases content
+Resource returns HTTP 402 + PAYMENT-REQUIRED →
+ChainPay MCP validates a standard Devnet exact option and Corbits capability →
+Connected wallet reviews and signs one direct SPL Token / Token-2022 transfer →
+Agent retries with PAYMENT-SIGNATURE →
+Merchant calls Corbits /verify and /settle →
+Merchant returns PAYMENT-RESPONSE and resource →
+ChainPay records the facilitator-confirmed transaction for audit
 ```
 
-Works with **any x402-compliant server** out of the box.
+The first implementation supports standard x402 v2 `exact` merchants that use
+the configured Corbits facilitator and advertise Solana Devnet. It deliberately
+does not claim arbitrary facilitator, native SOL, PYUSD, or delegated-token
+support until Corbits advertises the capability and a real Devnet payment has
+been accepted. ChainPay-native mandate payments remain a separate direct route.
 
 ---
 

@@ -1,66 +1,89 @@
+import { x402Client, x402HTTPClient } from "@x402/core/client";
+import { createHash } from "node:crypto";
+import {
+  ComputeBudgetProgram,
+  PublicKey,
+  Transaction,
+  TransactionInstruction,
+  type AccountInfo,
+} from "@solana/web3.js";
 import {
   SPL_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
-  bytesToHex,
-  deriveX402PaymentReferences,
-  type PaymentReceipt,
-  type PreparedPayment,
+  deriveAssociatedTokenAddress,
+  type TokenProgram,
 } from "@chainpay/sdk";
 import type { ChainPayMcpContext } from "./context.js";
-import {
-  materializeUnsignedTransaction,
-  serializeTransaction,
-  solanaAddress,
-  tokenProgram as parseTokenProgram,
-  toolResult,
-  unsignedInteger,
-} from "./common.js";
-import { requireObject } from "./payment-input.js";
+import { solanaAddress, toolResult, unsignedInteger } from "./common.js";
 
+const CORBITS_FACILITATOR_URL = "https://facilitator.corbits.dev";
+const SOLANA_DEVNET_CAIP2 = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 const MAX_RESOURCE_BODY_BYTES = 1_048_576;
 const RESOURCE_TIMEOUT_MS = 10_000;
+const X402_HTTP = new x402HTTPClient(new x402Client());
 
-type X402Challenge = {
-  network?: unknown;
-  scheme?: unknown;
-  asset?: unknown;
-  mint?: unknown;
-  payTo?: unknown;
-  recipient?: unknown;
-  amount?: unknown;
-  maxAmountRequired?: unknown;
-  resource?: unknown;
-  nonce?: unknown;
-  expiresAtSlot?: unknown;
-  tokenProgram?: unknown;
-};
+type JsonObject = Record<string, unknown>;
 
-type NormalizedX402Challenge = {
-  network: "solana-devnet";
+type PaymentRequirement = {
   scheme: "exact";
-  mint: string;
-  recipient: string;
+  network: typeof SOLANA_DEVNET_CAIP2;
+  asset: string;
   amount: string;
-  tokenProgram: "spl-token" | "token-2022";
-  resource: string;
-  nonce: string;
-  invoiceHash: string;
-  paymentId: string;
-  signatureReference: string;
-  expiresAtSlot?: string;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  extra: JsonObject;
 };
+
+type StandardPaymentRequired = {
+  x402Version: 2;
+  resource: JsonObject & { url: string };
+  accepts: PaymentRequirement[];
+  extensions: JsonObject;
+};
+
+type ExpectedPayment = {
+  requirement: PaymentRequirement;
+  payer: string;
+  sourceTokenAccount: string;
+  merchantTokenAccount: string;
+  feePayer: string;
+  tokenProgram: TokenProgram;
+  decimals: number;
+};
+
+function requireObject(value: unknown, label: string): JsonObject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  return value as JsonObject;
+}
 
 function resourceUrl(value: unknown): string {
   if (typeof value !== "string" || value.trim() === "") throw new Error("resource is required");
   const url = new URL(value.trim());
   if (url.username || url.password) throw new Error("x402 resource URLs must not contain credentials");
   if (url.protocol !== "https:" && !(url.protocol === "http:" && process.env.CHAINPAY_X402_ALLOW_HTTP === "true")) {
-    throw new Error("x402 resources must use HTTPS; set CHAINPAY_X402_ALLOW_HTTP=true only for a local demo merchant");
+    throw new Error("x402 resources must use HTTPS; enable CHAINPAY_X402_ALLOW_HTTP=true only for a local merchant");
   }
   return url.toString();
 }
 
-async function fetchResource(url: string, paymentHeader?: string): Promise<Response> {
+function normalizedFacilitator(value: string): string {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    throw new Error("CHAINPAY_X402_FACILITATOR_URL must be a credential-free HTTPS origin");
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+function configuredFacilitator(advertised: string | null): string {
+  const configured = normalizedFacilitator(process.env.CHAINPAY_X402_FACILITATOR_URL ?? CORBITS_FACILITATOR_URL);
+  if (!advertised) return configured;
+  if (normalizedFacilitator(advertised) !== configured) {
+    throw new Error("merchant advertised an untrusted x402 facilitator; ChainPay is configured only for Corbits");
+  }
+  return configured;
+}
+
+async function fetchResource(url: string, paymentHeaders?: HeadersInit): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), RESOURCE_TIMEOUT_MS);
   try {
@@ -70,7 +93,7 @@ async function fetchResource(url: string, paymentHeader?: string): Promise<Respo
       signal: controller.signal,
       headers: {
         Accept: "application/json, text/plain;q=0.9, */*;q=0.1",
-        ...(paymentHeader ? { "X-PAYMENT": paymentHeader } : {}),
+        ...paymentHeaders,
       },
     });
   } finally {
@@ -80,30 +103,9 @@ async function fetchResource(url: string, paymentHeader?: string): Promise<Respo
 
 async function limitedResponseBody(response: Response): Promise<{ text: string; parsed?: unknown }> {
   const contentLength = response.headers.get("content-length");
-  if (contentLength && Number(contentLength) > MAX_RESOURCE_BODY_BYTES) {
-    throw new Error("x402 resource response is too large");
-  }
-  if (!response.body) return { text: "" };
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.length;
-    if (size > MAX_RESOURCE_BODY_BYTES) {
-      await reader.cancel();
-      throw new Error("x402 resource response is too large");
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  const text = new TextDecoder().decode(bytes);
+  if (contentLength && Number(contentLength) > MAX_RESOURCE_BODY_BYTES) throw new Error("x402 resource response is too large");
+  const text = await response.text();
+  if (Buffer.byteLength(text, "utf8") > MAX_RESOURCE_BODY_BYTES) throw new Error("x402 resource response is too large");
   try {
     return { text, parsed: JSON.parse(text) };
   } catch {
@@ -111,379 +113,332 @@ async function limitedResponseBody(response: Response): Promise<{ text: string; 
   }
 }
 
-function parseHeaderJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    try {
-      return JSON.parse(Buffer.from(value, "base64").toString("utf8"));
-    } catch {
-      throw new Error("x402 payment-required header is neither JSON nor base64 JSON");
+function standardPaymentRequired(value: unknown, expectedResource: string): StandardPaymentRequired {
+  const payment = requireObject(value, "x402 payment requirements");
+  if (payment.x402Version !== 2) throw new Error("only x402 version 2 is supported");
+  const resource = requireObject(payment.resource, "x402 resource");
+  if (resourceUrl(resource.url) !== expectedResource) throw new Error("x402 resource does not match the requested URL");
+  if (!Array.isArray(payment.accepts)) throw new Error("x402 payment requirements have no accepts array");
+
+  const accepts = payment.accepts.map((candidate) => {
+    const item = requireObject(candidate, "x402 payment option");
+    if (item.scheme !== "exact" || item.network !== SOLANA_DEVNET_CAIP2) return undefined;
+    const asset = solanaAddress(item.asset, "x402 asset");
+    const payTo = solanaAddress(item.payTo, "x402 payTo");
+    const amount = unsignedInteger(item.amount, "x402 amount").toString();
+    if (BigInt(amount) === 0n) throw new Error("x402 amount must be greater than zero");
+    if (!Number.isSafeInteger(item.maxTimeoutSeconds) || (item.maxTimeoutSeconds as number) <= 0) {
+      throw new Error("x402 maxTimeoutSeconds must be a positive integer");
     }
+    return {
+      scheme: "exact" as const,
+      network: SOLANA_DEVNET_CAIP2,
+      asset,
+      amount,
+      payTo,
+      maxTimeoutSeconds: item.maxTimeoutSeconds as number,
+      extra: item.extra === undefined ? {} : requireObject(item.extra, "x402 payment option extra"),
+    };
+  }).filter((candidate): candidate is PaymentRequirement => Boolean(candidate));
+
+  if (accepts.length === 0) throw new Error("x402 response has no Corbits-compatible Solana Devnet exact option");
+  return {
+    x402Version: 2,
+    resource: resource as JsonObject & { url: string },
+    accepts,
+    extensions: payment.extensions === undefined ? {} : requireObject(payment.extensions, "x402 extensions"),
+  };
+}
+
+function paymentRequiredFromResponse(response: Response, body: { parsed?: unknown }, resource: string): StandardPaymentRequired {
+  try {
+    const parsed = X402_HTTP.getPaymentRequiredResponse(
+      (name) => response.headers.get(name),
+      body.parsed,
+    );
+    return standardPaymentRequired(parsed, resource);
+  } catch (error) {
+    throw new Error(`could not parse standard x402 PAYMENT-REQUIRED response: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-function challengeOptions(value: unknown): X402Challenge[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-  const object = value as Record<string, unknown>;
-  if (Array.isArray(object.accepts)) {
-    return object.accepts.filter((item): item is X402Challenge => Boolean(item) && typeof item === "object" && !Array.isArray(item));
-  }
-  if (object.paymentRequired) return challengeOptions(object.paymentRequired);
-  return [object as X402Challenge];
+async function corbitsFeePayer(facilitator: string): Promise<string> {
+  const response = await fetch(`${facilitator}/supported`, { method: "GET", redirect: "error" });
+  if (!response.ok) throw new Error(`Corbits /supported returned HTTP ${response.status}`);
+  const payload = requireObject(await response.json(), "Corbits /supported response");
+  if (!Array.isArray(payload.kinds)) throw new Error("Corbits /supported response has no kinds array");
+  const kind = payload.kinds
+    .map((candidate) => requireObject(candidate, "Corbits supported kind"))
+    .find((candidate) => candidate.x402Version === 2 && candidate.scheme === "exact" && candidate.network === SOLANA_DEVNET_CAIP2);
+  if (!kind) throw new Error("Corbits does not currently advertise x402 v2 exact support for Solana Devnet");
+  return solanaAddress(requireObject(kind.extra, "Corbits supported kind extra").feePayer, "Corbits fee payer");
 }
 
-function selectChallenge(value: unknown): X402Challenge {
-  const options = challengeOptions(value);
-  const selected = options.find((option) => {
-    const network = typeof option.network === "string" ? option.network : "solana-devnet";
-    const scheme = typeof option.scheme === "string" ? option.scheme : "exact";
-    return (network === "devnet" || network === "solana-devnet") && scheme === "exact";
-  });
-  if (!selected) throw new Error("x402 response has no Solana Devnet exact payment option");
-  return selected;
-}
-
-async function challengeFromResponse(response: Response, body: { text: string; parsed?: unknown }): Promise<X402Challenge> {
-  const header = response.headers.get("x-payment-required") ?? response.headers.get("payment-required");
-  const source = header ? parseHeaderJson(header) : body.parsed;
-  if (!source) throw new Error("HTTP 402 response did not include payment requirements");
-  return selectChallenge(source);
-}
-
-async function normalizedTokenProgram(
+async function expectedPayment(
   context: ChainPayMcpContext,
-  mint: string,
-  requested: unknown,
-): Promise<"spl-token" | "token-2022"> {
-  const asset = await context.client.getSupportedAsset(mint);
-  if (!asset || !asset.enabled) throw new Error("x402 asset is not enabled in the ChainPay SupportedAsset registry");
-  const registered = asset.tokenProgram === SPL_TOKEN_PROGRAM_ID
+  paymentRequired: StandardPaymentRequired,
+  payer: string,
+  facilitator: string,
+): Promise<ExpectedPayment> {
+  const requirement = paymentRequired.accepts[0];
+  const asset = await context.client.getSupportedAsset(requirement.asset);
+  if (!asset?.enabled) throw new Error("x402 asset is not enabled in ChainPay's on-chain asset registry");
+  const tokenProgram = asset.tokenProgram === SPL_TOKEN_PROGRAM_ID
     ? "spl-token"
     : asset.tokenProgram === TOKEN_2022_PROGRAM_ID
       ? "token-2022"
       : undefined;
-  if (!registered) throw new Error(`x402 asset uses an unsupported token program: ${asset.tokenProgram}`);
-  if (requested !== undefined && parseTokenProgram(requested) !== registered) {
-    throw new Error(`x402 challenge token program does not match the on-chain SupportedAsset registry (${registered})`);
+  if (!tokenProgram) throw new Error(`x402 asset uses unsupported token program ${asset.tokenProgram}`);
+  if (await context.client.getTokenProgram(requirement.asset) !== tokenProgram) {
+    throw new Error("x402 asset registry token program does not match the live mint account");
   }
-  return registered;
-}
-
-async function normalizeChallenge(
-  context: ChainPayMcpContext,
-  challenge: X402Challenge,
-  expectedResource?: string,
-): Promise<NormalizedX402Challenge> {
-  const network = typeof challenge.network === "string" ? challenge.network : "solana-devnet";
-  if (network !== "devnet" && network !== "solana-devnet") {
-    throw new Error("Only Solana Devnet x402 challenges are enabled");
-  }
-  const scheme = typeof challenge.scheme === "string" ? challenge.scheme : "exact";
-  if (scheme !== "exact") throw new Error("Only the x402 exact scheme is enabled");
-  const mint = solanaAddress(challenge.asset ?? challenge.mint, "asset");
-  const recipient = solanaAddress(challenge.payTo ?? challenge.recipient, "payTo");
-  const amountValue = challenge.amount ?? challenge.maxAmountRequired;
-  const amount = typeof amountValue === "number" ? String(amountValue) : amountValue;
-  if (typeof amount !== "string" || amount.trim() === "") throw new Error("x402 challenge amount is required");
-  unsignedInteger(amount, "amount");
-  const resource = resourceUrl(challenge.resource ?? expectedResource);
-  if (expectedResource && resource !== expectedResource) {
-    throw new Error("x402 challenge resource does not match the requested resource URL");
-  }
-  const tokenProgram = await normalizedTokenProgram(context, mint, challenge.tokenProgram);
-  const expiresAtSlot = challenge.expiresAtSlot === undefined
-    ? undefined
-    : unsignedInteger(challenge.expiresAtSlot, "expiresAtSlot").toString();
-  const references = await deriveX402PaymentReferences({
-    mint,
-    recipient,
-    amount,
-    resource,
-    tokenProgram,
-    ...(typeof challenge.nonce === "string" && challenge.nonce.trim() ? { nonce: challenge.nonce.trim() } : {}),
-    ...(expiresAtSlot ? { expiresAtSlot } : {}),
-  });
+  const sourceTokenAccount = deriveAssociatedTokenAddress(payer, requirement.asset, tokenProgram);
+  const merchantTokenAccount = deriveAssociatedTokenAddress(requirement.payTo, requirement.asset, tokenProgram);
+  const [source, merchant, feePayer] = await Promise.all([
+    context.client.connection.getAccountInfo(new PublicKey(sourceTokenAccount), "confirmed"),
+    context.client.connection.getAccountInfo(new PublicKey(merchantTokenAccount), "confirmed"),
+    corbitsFeePayer(facilitator),
+  ]);
+  assertTokenAccount(source, sourceTokenAccount, payer, requirement.asset, tokenProgram);
+  assertTokenAccount(merchant, merchantTokenAccount, requirement.payTo, requirement.asset, tokenProgram);
   return {
-    network: "solana-devnet",
-    scheme: "exact",
-    mint,
-    recipient,
-    amount,
+    requirement,
+    payer,
+    sourceTokenAccount,
+    merchantTokenAccount,
+    feePayer,
     tokenProgram,
-    resource,
-    ...references,
-    ...(expiresAtSlot ? { expiresAtSlot } : {}),
+    decimals: await context.client.getMintDecimals(requirement.asset),
   };
 }
 
-async function prepareChallenge(
-  context: ChainPayMcpContext,
-  challenge: NormalizedX402Challenge,
-  mandate: string,
-  agent: string,
-): Promise<PreparedPayment> {
-  if (challenge.expiresAtSlot !== undefined && BigInt(challenge.expiresAtSlot) <= await context.client.getCurrentSlot()) {
-    throw new Error("x402 challenge has expired");
+function assertTokenAccount(
+  account: AccountInfo<Buffer> | null,
+  accountAddress: string,
+  expectedOwner: string,
+  mint: string,
+  tokenProgram: TokenProgram,
+): void {
+  if (!account) throw new Error(`required associated token account does not exist: ${accountAddress}`);
+  const expectedProgram = tokenProgram === "spl-token" ? SPL_TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID;
+  if (account.owner.toBase58() !== expectedProgram) throw new Error(`token account ${accountAddress} has the wrong token program`);
+  if (account.data.length < 64) throw new Error(`token account ${accountAddress} is truncated`);
+  if (!new PublicKey(account.data.subarray(0, 32)).equals(new PublicKey(mint))) {
+    throw new Error(`token account ${accountAddress} has the wrong mint`);
   }
-  return context.client.preparePayment({
-    mandate,
-    invoiceHash: hexBytes(challenge.invoiceHash),
-    paymentId: hexBytes(challenge.paymentId),
-    signatureReference: hexBytes(challenge.signatureReference),
-    mint: challenge.mint,
-    recipient: challenge.recipient,
-    amount: BigInt(challenge.amount),
-    tokenProgram: challenge.tokenProgram,
-  }, agent);
+  if (!new PublicKey(account.data.subarray(32, 64)).equals(new PublicKey(expectedOwner))) {
+    throw new Error(`token account ${accountAddress} has the wrong owner`);
+  }
 }
 
-async function relaySignedPayment(
-  context: ChainPayMcpContext,
-  challenge: NormalizedX402Challenge,
-  prepared: PreparedPayment,
-  mandate: string,
-  agent: string,
-  signedTransaction: string,
-): Promise<Record<string, unknown>> {
-  if (!context.backendUrl) throw new Error("CHAINPAY_BACKEND_URL must be configured to relay a signed x402 transaction");
-  const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/payments`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(context.backendAuthToken ? { Authorization: `Bearer ${context.backendAuthToken}` } : {}),
-    },
-    body: JSON.stringify({
-      idempotency_key: `x402:${mandate}:${challenge.invoiceHash}`,
-      mandate,
-      invoice_hash: challenge.invoiceHash,
-      receipt_address: prepared.receiptAddress,
-      signed_transaction: signedTransaction,
-      agent,
-      mint: challenge.mint,
-      recipient: challenge.recipient,
-      amount: challenge.amount,
-      token_program: challenge.tokenProgram,
-      x402: {
-        resource: challenge.resource,
-        challenge,
-      },
-    }),
+function transferCheckedInstruction(expected: ExpectedPayment): TransactionInstruction {
+  const data = Buffer.alloc(10);
+  data[0] = 12; // SPL Token TransferChecked
+  data.writeBigUInt64LE(BigInt(expected.requirement.amount), 1);
+  data[9] = expected.decimals;
+  return new TransactionInstruction({
+    programId: new PublicKey(expected.tokenProgram === "spl-token" ? SPL_TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID),
+    keys: [
+      { pubkey: new PublicKey(expected.sourceTokenAccount), isSigner: false, isWritable: true },
+      { pubkey: new PublicKey(expected.requirement.asset), isSigner: false, isWritable: false },
+      { pubkey: new PublicKey(expected.merchantTokenAccount), isSigner: false, isWritable: true },
+      { pubkey: new PublicKey(expected.payer), isSigner: true, isWritable: false },
+    ],
+    data,
   });
-  const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new Error(`Axum rejected x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
-  if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
-    throw new Error(`x402 settlement was not confirmed: ${JSON.stringify(payload)}`);
-  }
-  return payload;
 }
 
-async function relayManagedPayment(
-  context: ChainPayMcpContext,
-  challenge: NormalizedX402Challenge,
-  prepared: PreparedPayment,
-  mandate: string,
-  agent: string,
-): Promise<Record<string, unknown>> {
-  if (!context.backendUrl || !context.backendAuthToken) {
-    throw new Error("Delegated x402 requires CHAINPAY_BACKEND_URL and CHAINPAY_BACKEND_AUTH_TOKEN");
-  }
-  const unsigned = await materializeUnsignedTransaction(context.client, prepared.transaction);
-  const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/managed-payments`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${context.backendAuthToken}`,
-    },
-    body: JSON.stringify({
-      idempotency_key: `x402:${mandate}:${challenge.invoiceHash}`,
-      mandate,
-      invoice_hash: challenge.invoiceHash,
-      receipt_address: prepared.receiptAddress,
-      unsigned_transaction: unsigned.value,
-      agent,
-      mint: challenge.mint,
-      recipient: challenge.recipient,
-      amount: challenge.amount,
-      token_program: challenge.tokenProgram,
-      x402: {
-        resource: challenge.resource,
-        challenge,
-      },
-    }),
-  });
-  const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new Error(`Axum rejected delegated x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
-  if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
-    throw new Error(`delegated x402 settlement was not confirmed: ${JSON.stringify(payload)}`);
-  }
-  return payload;
+function buildUnsignedTransaction(expected: ExpectedPayment, blockhash: string): Transaction {
+  return new Transaction({ feePayer: new PublicKey(expected.feePayer), recentBlockhash: blockhash })
+    .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }))
+    .add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1_000 }))
+    .add(transferCheckedInstruction(expected));
 }
 
-async function persistX402Proof(
+function encodeUnsigned(transaction: Transaction): string {
+  return transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64");
+}
+
+function signedTransaction(value: unknown, expected: ExpectedPayment): string {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("signedTransaction is required after wallet signing");
+  let transaction: Transaction;
+  try {
+    transaction = Transaction.from(Buffer.from(value.trim(), "base64"));
+  } catch {
+    throw new Error("signedTransaction must be a valid base64 Solana legacy transaction");
+  }
+  if (!transaction.feePayer?.equals(new PublicKey(expected.feePayer))) throw new Error("signed x402 transaction has an unexpected fee payer");
+  const allowedPrograms = new Set([
+    ComputeBudgetProgram.programId.toBase58(),
+    expected.tokenProgram === "spl-token" ? SPL_TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID,
+  ]);
+  if (transaction.instructions.some((instruction) => !allowedPrograms.has(instruction.programId.toBase58()))) {
+    throw new Error("signed x402 transaction contains an unapproved instruction");
+  }
+  const transfers = transaction.instructions.filter((instruction) => instruction.programId.toBase58() === (expected.tokenProgram === "spl-token" ? SPL_TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID));
+  if (transfers.length !== 1) throw new Error("signed x402 transaction must contain exactly one token transfer");
+  const transfer = transfers[0];
+  if (transfer.data.length !== 10 || transfer.data[0] !== 12 || transfer.data.readBigUInt64LE(1) !== BigInt(expected.requirement.amount) || transfer.data[9] !== expected.decimals) {
+    throw new Error("signed x402 transaction transfer does not match the payment requirement");
+  }
+  const expectedAccounts = [expected.sourceTokenAccount, expected.requirement.asset, expected.merchantTokenAccount, expected.payer];
+  if (transfer.keys.length !== expectedAccounts.length || transfer.keys.some((key, index) => key.pubkey.toBase58() !== expectedAccounts[index])) {
+    throw new Error("signed x402 transaction transfer accounts do not match the payment requirement");
+  }
+  const payerSignature = transaction.signatures.find((signature) => signature.publicKey.equals(new PublicKey(expected.payer)))?.signature;
+  if (!payerSignature || !transaction.verifySignatures(false)) throw new Error("signed x402 transaction has no valid payer signature");
+  return value.trim();
+}
+
+async function persistExternalSettlement(
   context: ChainPayMcpContext,
-  idempotencyKey: string,
-  proof: Record<string, unknown>,
-  responseStatus: number,
-  error?: string,
+  input: JsonObject,
 ): Promise<void> {
-  if (!context.backendUrl) throw new Error("CHAINPAY_BACKEND_URL is required for x402 proof persistence");
-  const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/x402-payments/proof`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(context.backendAuthToken ? { Authorization: `Bearer ${context.backendAuthToken}` } : {}),
-    },
-    body: JSON.stringify({
-      idempotency_key: idempotencyKey,
-      proof,
-      response_status: responseStatus,
-      ...(error ? { error } : {}),
-    }),
-  });
-  if (!response.ok) {
-    const payload = await response.text();
-    throw new Error(`Axum could not persist x402 proof (${response.status}): ${payload}`);
+  if (!context.backendUrl || !context.backendAuthToken) {
+    throw new Error("CHAINPAY_BACKEND_URL and CHAINPAY_BACKEND_AUTH_TOKEN are required to record x402 settlement");
   }
-}
-
-function verifyReceipt(receipt: PaymentReceipt | null, challenge: NormalizedX402Challenge, prepared: PreparedPayment, mandate: string, agent: string): PaymentReceipt {
-  if (!receipt) throw new Error("confirmed x402 settlement has no on-chain receipt PDA");
-  if (receipt.status !== "confirmed") throw new Error("x402 receipt is not settled");
-  if (receipt.address !== prepared.receiptAddress) throw new Error("x402 receipt address mismatch");
-  if (receipt.mandate !== mandate) throw new Error("x402 receipt mandate mismatch");
-  if (bytesToHex(receipt.invoiceHash) !== challenge.invoiceHash) throw new Error("x402 receipt invoice hash mismatch");
-  if (receipt.mint !== challenge.mint) throw new Error("x402 receipt mint mismatch");
-  if (receipt.recipient !== challenge.recipient) throw new Error("x402 receipt recipient mismatch");
-  if (receipt.amount !== BigInt(challenge.amount)) throw new Error("x402 receipt amount mismatch");
-  if (receipt.agent !== agent) throw new Error("x402 receipt agent mismatch");
-  return receipt;
-}
-
-function proofHeader(signature: string, receiptAddress: string): string {
-  return JSON.stringify({
-    version: "x402/1.0",
-    scheme: "exact",
-    network: "solana-devnet",
-    payload: { signature, receiptPDA: receiptAddress },
+  const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/x402-payments/external-settlement`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${context.backendAuthToken}` },
+    body: JSON.stringify(input),
   });
+  if (!response.ok) throw new Error(`Axum could not persist standard x402 settlement (${response.status}): ${await response.text()}`);
+}
+
+function paymentHeaders(payment: JsonObject): HeadersInit {
+  return X402_HTTP.encodePaymentSignatureHeader(payment as never) as HeadersInit;
 }
 
 export async function prepareX402Payment(context: ChainPayMcpContext, args: Record<string, unknown>) {
-  const mandate = solanaAddress(args.mandate, "mandate");
-  const agent = solanaAddress(args.agent, "agent");
-  const challenge = await normalizeChallenge(context, selectChallenge(requireObject(args.challenge)));
-  const prepared = await prepareChallenge(context, challenge, mandate, agent);
-  if (!prepared.preflight.valid) {
-    return toolResult({ action: "x402_rejected_by_preflight", challenge, receiptAddress: prepared.receiptAddress, preflight: prepared.preflight }, true);
+  const resource = resourceUrl(args.resource);
+  const payer = solanaAddress(args.payer, "payer");
+  if (args.signingMode !== undefined && args.signingMode !== "human") {
+    throw new Error("standard Corbits x402 currently supports human wallet signing only; delegated x402 is a separate implementation");
   }
+  const paymentRequired = standardPaymentRequired(args.paymentRequired, resource);
+  const facilitator = configuredFacilitator(null);
+  const expected = await expectedPayment(context, paymentRequired, payer, facilitator);
+  const latest = await context.client.connection.getLatestBlockhash("confirmed");
+  const transaction = buildUnsignedTransaction(expected, latest.blockhash);
   return toolResult({
-    action: "x402_agent_signature_required",
-    challenge,
-    receiptAddress: prepared.receiptAddress,
-    preflight: prepared.preflight,
-    capabilityProfile: prepared.capabilityProfile,
-    transaction: serializeTransaction(prepared.transaction),
-    unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction),
-    message: "Sign outside ChainPay, then call execute_x402_payment with resource, mandate, agent, and signedTransaction.",
+    action: "x402_wallet_signature_required",
+    protocol: "x402/2",
+    facilitator,
+    resource,
+    paymentRequired,
+    payer,
+    sourceTokenAccount: expected.sourceTokenAccount,
+    merchantTokenAccount: expected.merchantTokenAccount,
+    feePayer: expected.feePayer,
+    decimals: expected.decimals,
+    transaction: encodeUnsigned(transaction),
+    recentBlockhash: latest.blockhash,
+    lastValidBlockHeight: latest.lastValidBlockHeight,
+    message: "Review and sign this standard direct SPL transfer in the wallet, then call execute_x402_payment with the same paymentRequired and signedTransaction.",
   });
 }
 
 export async function executeX402Payment(context: ChainPayMcpContext, args: Record<string, unknown>) {
   const resource = resourceUrl(args.resource);
-  const mandate = solanaAddress(args.mandate, "mandate");
-  const agent = solanaAddress(args.agent, "agent");
-  const signingMode = args.signingMode;
-  if (signingMode !== "human" && signingMode !== "delegated") {
-    throw new Error("signingMode must be human or delegated");
+  const payer = solanaAddress(args.payer, "payer");
+  if (args.signingMode !== undefined && args.signingMode !== "human") {
+    throw new Error("standard Corbits x402 currently supports human wallet signing only; it does not use a ChainPay mandate");
   }
-  const initial = await fetchResource(resource);
-  const initialBody = await limitedResponseBody(initial);
-  if (initial.status !== 402) {
+  if (!context.backendUrl || !context.backendAuthToken) {
+    throw new Error("CHAINPAY_BACKEND_URL and CHAINPAY_BACKEND_AUTH_TOKEN are required before starting an auditable x402 payment");
+  }
+
+  let facilitator: string;
+  let paymentRequired: StandardPaymentRequired;
+  if (args.paymentRequired === undefined) {
+    if (typeof args.signedTransaction === "string" && args.signedTransaction.trim() !== "") {
+      throw new Error("paymentRequired from the first x402 call is required when submitting a signed transaction");
+    }
+    const initial = await fetchResource(resource);
+    const initialBody = await limitedResponseBody(initial);
+    if (initial.status !== 402) {
+      return toolResult({
+        action: initial.ok ? "x402_resource_available" : "x402_resource_rejected",
+        resource,
+        httpStatus: initial.status,
+        resourceResponse: initialBody.parsed ?? initialBody.text,
+        message: initial.ok ? "The resource did not require payment." : "The resource did not return an x402 challenge.",
+      }, !initial.ok);
+    }
+    facilitator = configuredFacilitator(initial.headers.get("x-payment-facilitator"));
+    paymentRequired = paymentRequiredFromResponse(initial, initialBody, resource);
+  } else {
+    // The signed transaction must be retried against exactly the quote the
+    // wallet reviewed. Do not fetch a fresh 402 that could change its amount,
+    // recipient, or expiry between the two MCP calls.
+    facilitator = configuredFacilitator(null);
+    paymentRequired = standardPaymentRequired(args.paymentRequired, resource);
+  }
+  const expected = await expectedPayment(context, paymentRequired, payer, facilitator);
+
+  if (typeof args.signedTransaction !== "string" || args.signedTransaction.trim() === "") {
+    const latest = await context.client.connection.getLatestBlockhash("confirmed");
     return toolResult({
-      action: initial.ok ? "x402_resource_available" : "x402_resource_rejected",
+      action: "x402_wallet_signature_required",
+      protocol: "x402/2",
+      facilitator,
       resource,
-      httpStatus: initial.status,
-      resourceResponse: initialBody.parsed ?? initialBody.text,
-      message: initial.ok ? "The resource did not require payment." : "The resource did not return an x402 challenge.",
-    }, !initial.ok);
-  }
-
-  const challenge = await normalizeChallenge(context, await challengeFromResponse(initial, initialBody), resource);
-  const prepared = await prepareChallenge(context, challenge, mandate, agent);
-  if (!prepared.preflight.valid) {
-    return toolResult({ action: "x402_rejected_by_preflight", challenge, receiptAddress: prepared.receiptAddress, preflight: prepared.preflight }, true);
-  }
-
-  const signedTransaction = typeof args.signedTransaction === "string" ? args.signedTransaction.trim() : "";
-  if (signingMode === "human" && !signedTransaction) {
-    return toolResult({
-      action: "x402_agent_signature_required",
-      challenge,
-      receiptAddress: prepared.receiptAddress,
-      preflight: prepared.preflight,
-      capabilityProfile: prepared.capabilityProfile,
-      transaction: serializeTransaction(prepared.transaction),
-      unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction),
-      message: "The live resource returned HTTP 402. Sign this transaction outside ChainPay and call execute_x402_payment again with signedTransaction.",
+      paymentRequired,
+      payer,
+      sourceTokenAccount: expected.sourceTokenAccount,
+      merchantTokenAccount: expected.merchantTokenAccount,
+      feePayer: expected.feePayer,
+      decimals: expected.decimals,
+      transaction: encodeUnsigned(buildUnsignedTransaction(expected, latest.blockhash)),
+      recentBlockhash: latest.blockhash,
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+      message: "The merchant returned x402. Review and sign the direct token transfer, then resend this same paymentRequired and signedTransaction.",
     });
   }
-  if (signingMode === "delegated" && signedTransaction) {
-    return toolResult({
-      action: "delegated_signature_rejected",
-      message: "Delegated x402 accepts only the unsigned transaction prepared by ChainPay; Axum obtains and validates the provider signature.",
-      challenge,
-      receiptAddress: prepared.receiptAddress,
-    }, true);
-  }
 
-  const settlement = signingMode === "delegated"
-    ? await relayManagedPayment(context, challenge, prepared, mandate, agent)
-    : await relaySignedPayment(context, challenge, prepared, mandate, agent, signedTransaction);
-  const receipt = verifyReceipt(await context.client.getPayment(prepared.receiptAddress), challenge, prepared, mandate, agent);
-  const signature = settlement.signature as string;
-  const proof = proofHeader(signature, prepared.receiptAddress);
-  const proofObject = JSON.parse(proof) as Record<string, unknown>;
-  const retried = await fetchResource(resource, proof);
-  const resourceBody = await limitedResponseBody(retried);
-  const idempotencyKey = `x402:${mandate}:${challenge.invoiceHash}`;
-  await persistX402Proof(
-    context,
-    idempotencyKey,
-    proofObject,
-    retried.status,
-    retried.ok ? undefined : "resource rejected the confirmed ChainPay proof",
-  );
-  if (!retried.ok) {
-    return toolResult({
-      action: "x402_settled_resource_rejected",
-      status: "confirmed",
-      resource,
-      challenge,
-      settlement,
-      receipt,
-      proof: proofObject,
-      httpStatus: retried.status,
-      resourceResponse: resourceBody.parsed ?? resourceBody.text,
-      message: "The payment is confirmed on-chain, but the resource rejected the proof retry.",
-    }, true);
+  const signaturePayload = signedTransaction(args.signedTransaction, expected);
+  const payment = {
+    x402Version: 2,
+    resource: paymentRequired.resource,
+    accepted: expected.requirement,
+    payload: { transaction: signaturePayload },
+    extensions: paymentRequired.extensions,
+  };
+  const paid = await fetchResource(resource, paymentHeaders(payment));
+  const paidBody = await limitedResponseBody(paid);
+  let settlement: JsonObject | undefined;
+  try {
+    settlement = requireObject(X402_HTTP.getPaymentSettleResponse((name) => paid.headers.get(name)), "x402 PAYMENT-RESPONSE");
+  } catch (error) {
+    throw new Error(`merchant did not return a valid x402 PAYMENT-RESPONSE: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return toolResult({
-    action: "x402_verified",
-    status: "confirmed",
-    signingMode,
+  if (settlement.success !== true || typeof settlement.transaction !== "string") {
+    throw new Error(`facilitator did not confirm settlement: ${JSON.stringify(settlement)}`);
+  }
+  const idempotencyKey = `x402-external:${createHash("sha256").update(JSON.stringify(payment)).digest("hex")}`;
+  await persistExternalSettlement(context, {
+    idempotency_key: idempotencyKey,
     resource,
-    challenge,
+    facilitator,
+    challenge: paymentRequired,
+    payment_payload: payment,
     settlement,
-    receipt,
-    proof: proofObject,
-    httpStatus: retried.status,
-    resourceResponse: resourceBody.parsed ?? resourceBody.text,
+    transaction_signature: settlement.transaction,
+    response_status: paid.status,
+    ...(paid.ok ? {} : { error: "merchant rejected the resource after facilitator settlement" }),
   });
-}
-
-function hexBytes(value: string): Uint8Array {
-  const bytes = new Uint8Array(32);
-  for (let index = 0; index < 32; index += 1) bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
-  return bytes;
+  return toolResult({
+    action: paid.ok ? "x402_facilitator_verified" : "x402_settled_resource_rejected",
+    protocol: "x402/2",
+    status: settlement.success ? "confirmed" : "failed",
+    resource,
+    facilitator,
+    paymentRequired,
+    settlement,
+    httpStatus: paid.status,
+    resourceResponse: paidBody.parsed ?? paidBody.text,
+    message: paid.ok
+      ? "Corbits settled the standard x402 payment and the merchant accepted the request."
+      : "Corbits settled the payment, but the merchant rejected the protected request.",
+  }, !paid.ok);
 }

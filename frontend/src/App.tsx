@@ -1422,7 +1422,6 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedAction, setSelectedAction] = useState<Action>("Send");
   const [range, setRange] = useState<Range>("1D");
-  const [heroMessage, setHeroMessage] = useState<"rail" | "sign">("rail");
   const [activeAgentFeedback, setActiveAgentFeedback] = useState<AgentFeedbackId>("policy");
   const [routeHash, setRouteHash] = useState(() => window.location.hash);
   const [mandateAddress, setMandateAddress] = useState("");
@@ -1438,14 +1437,6 @@ function App() {
   const selectedAgentFeedback = agentFeedback.find((item) => item.id === activeAgentFeedback) ?? agentFeedback[0];
   const selectedUseCase = useCaseFromHash(routeHash);
   const isAiFiPage = isAiFiHash(routeHash);
-
-  useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const interval = window.setInterval(() => {
-      setHeroMessage((current) => current === "rail" ? "sign" : "rail");
-    }, 3000);
-    return () => window.clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     const onHashChange = () => setRouteHash(window.location.hash);
@@ -1736,44 +1727,60 @@ function App() {
       </header>
 
       <main id="top">
-        <section className="hero page-width">
+        <section className="hero hero-aifi page-width">
           <div className="hero-copy">
-            <div className="eyebrow"><span className="pulse-dot" /> Solana Devnet · MCP connected</div>
-            <h1 className="hero-headline" aria-live="polite"><span key={heroMessage} className="hero-headline-transition">{heroMessage === "rail" ? <>The universal payment rail for <em>AI agents.</em></> : <>Give agents limits.<br /><em>Not your keys.</em></>}</span></h1>
+            <div className="eyebrow"><span className="pulse-dot" /> AI finance infrastructure · Solana Devnet</div>
+            <h1>The universal payment rail for <em>AI agents.</em></h1>
             <p className="hero-text">One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. Solana is the first settlement layer.</p>
             <div className="hero-actions">
               <button className="button button-primary" onClick={requestWalletConnection}>
                 {connecting ? "Connecting…" : wallet ? `Connected ${shortAddress(wallet)}` : "Connect wallet"} <Arrow />
               </button>
-              <a className="text-link" href="#how-it-works">See how it works <Arrow /></a>
+              <a className="text-link" href="#how-it-works">Explore the rail <Arrow /></a>
             </div>
+            <div className="hero-principle"><span>Give agents limits.</span><strong>Not your keys.</strong></div>
             <ol className="hero-steps" aria-label="How ChainPay handles an agent payment">
-              <li><span>01</span><b>Set a policy</b><small>Limit token, spend, and expiry.</small></li>
-              <li><span>02</span><b>Approve in wallet</b><small>Your signing key stays with you.</small></li>
-              <li><span>03</span><b>Verify the receipt</b><small>Every settlement leaves proof.</small></li>
+              <li><span>01</span><b>Set the mandate</b><small>Define agent, spend, token, and expiry.</small></li>
+              <li><span>02</span><b>Route the payment</b><small>One interface across supported rails.</small></li>
+              <li><span>03</span><b>Keep the receipt</b><small>Verify settlement on-chain.</small></li>
             </ol>
           </div>
 
-          <div className="hero-visual" aria-label="ChainPay payment mandate preview">
-            <div className="solana-field" aria-hidden="true">
-              <span className="solana-ring solana-ring-a"><i /></span>
-              <span className="solana-ring solana-ring-b"><i /></span>
-              <span className="solana-ring solana-ring-c"><i /></span>
-              <span className="solana-core"><b>SOL</b><small>DEVNET</small></span>
+          <div className="hero-visual hero-finance-visual" aria-label="Illustrative ChainPay AI finance control desk">
+            <div className="hero-visual-grid" aria-hidden="true" />
+            <div className="finance-orbit finance-orbit-one" aria-hidden="true" />
+            <div className="finance-orbit finance-orbit-two" aria-hidden="true" />
+            <div className="finance-console">
+              <div className="finance-console-topline">
+                <div><span className="soft-label">CHAINPAY CONTROL DESK</span><strong>Autonomous spend, within policy</strong></div>
+                <span className="finance-live"><i /> DEVNET</span>
+              </div>
+
+              <div className="finance-balance">
+                <div><span>AVAILABLE TO ROUTE</span><strong>$2,000<em>.00</em></strong><small>Illustrative USDC mandate</small></div>
+                <div className="finance-approval"><span>POLICY</span><b>ACTIVE</b><small>7 days left</small></div>
+              </div>
+
+              <div className="finance-spend">
+                <div><span>Mandate utilization</span><strong>20.5 <small>/ 100 USDC</small></strong></div>
+                <div className="finance-progress"><i /></div>
+                <small>Max per payment <b>10 USDC</b></small>
+              </div>
+
+              <div className="finance-route" aria-label="AI payment routing sequence">
+                <div className="finance-route-node agent"><span>AI</span><strong>procure-agent</strong><small>Authenticated via MCP</small></div>
+                <div className="finance-route-line"><i /></div>
+                <div className="finance-route-node policy"><span>✓</span><strong>Mandate</strong><small>Limits verified</small></div>
+                <div className="finance-route-line"><i /></div>
+                <div className="finance-route-node merchant"><span>$</span><strong>Merchant</strong><small>USDC settlement</small></div>
+              </div>
+
+              <div className="finance-settlement">
+                <span className="receipt-icon">✓</span>
+                <div><strong>Receipt ready after settlement</strong><small>Owner, agent, policy, and payment remain independently verifiable.</small></div>
+                <span className="mono">ON-CHAIN</span>
+              </div>
             </div>
-            <div className="visual-card mandate-card">
-              <div className="card-topline"><span className="soft-label">EXAMPLE MANDATE</span><span className="status-pill"><i /> Active</span></div>
-              <div className="mandate-balance">$2,000<span>.00</span></div>
-              <div className="muted-small">Available agent spend</div>
-              <div className="mandate-rule"><span>Max per payment</span><strong>10 USDC</strong></div>
-              <div className="mandate-rule"><span>Payment destination</span><strong className="mono">Chosen per payment</strong></div>
-              <div className="mandate-rule"><span>Expires</span><strong>7 days</strong></div>
-              <div className="spend-track"><span /></div>
-              <div className="track-caption"><span>Amount spent</span><strong>20.5 USDC <b>/ 100 USDC</b></strong></div>
-              <div className="mandate-card-footer"><span>Payment checks</span><strong><i /> Ready for wallet approval</strong></div>
-            </div>
-            <div className="floating-receipt receipt-top"><span className="receipt-icon">✓</span><span><b>USDC baseline finalized</b><small>Devnet slot 484791192</small></span><strong>0.01</strong></div>
-            <div className="floating-receipt receipt-bottom"><span className="spark-icon">✦</span><span><b>Agent authority</b><small>Limited by ChainPay</small></span></div>
           </div>
         </section>
 

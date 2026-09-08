@@ -35,14 +35,15 @@ exact fields that the user must provide before it can quote, prepare, or settle
 a payment. `prepare_payment` returns a policy-checked transaction plan; the
 connected wallet signs it only after the user reviews the request in the web
 UI.
-`prepare_x402_payment` normalizes an x402 exact challenge into the same
-policy-checked flow. `execute_x402_payment` requires an explicit `signingMode`.
-Human mode returns or relays a browser-signed transaction. Delegated mode sends
-the unsigned wire transaction to Axum, which validates it, asks the
-mandate-bound Privy wallet to sign, revalidates the unchanged message, submits
-it, verifies the finalized receipt PDA, and retries the resource with an
-`X-PAYMENT` proof. The x402 adapter does not custody keys or operate a hosted
-facilitator.
+`prepare_x402_payment` and `execute_x402_payment` implement the standard x402
+v2 `exact` flow for a human wallet. MCP reads `PAYMENT-REQUIRED`, validates the
+merchant's Devnet asset, recipient ATA, fee payer, and configured Corbits
+capability, then returns one direct SPL Token / Token-2022 transfer for the
+wallet to sign. The retry uses standard `PAYMENT-SIGNATURE`; the merchant calls
+Corbits for `/verify` and `/settle`, then returns `PAYMENT-RESPONSE`. Axum
+records that externally facilitated result for audit. This is intentionally
+separate from ChainPay mandate settlement: standard x402 does not invoke the
+ChainPay program and has no delegated signer in this first route.
 
 `execute_payment` performs SDK preflight first and requires an explicit
 `signingMode`. In `human` mode it returns a base64 unsigned transaction, recent

@@ -112,6 +112,25 @@ pub struct X402ProofRequest {
     pub error: Option<String>,
 }
 
+/// Records an x402 payment settled by a standards-compliant external facilitator.
+///
+/// This is deliberately separate from `PaymentSubmissionRequest`: the facilitator
+/// settles a standard SVM `exact` transfer, not a ChainPay-program instruction.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalX402SettlementRequest {
+    pub idempotency_key: String,
+    pub resource: String,
+    pub facilitator: String,
+    pub challenge: serde_json::Value,
+    pub payment_payload: serde_json::Value,
+    pub settlement: serde_json::Value,
+    pub transaction_signature: String,
+    pub response_status: u16,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaymentRequestPayload {
     pub version: u8,

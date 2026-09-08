@@ -12,7 +12,7 @@ sdk/                             TypeScript mandate/payment SDK
 mcp-server/                      Safe agent/MCP tool boundary
 backend/                         RPC, status, API, and storage boundary
 frontend/                        Wallet-connected React dashboard
-demo-merchant/                   Independent x402 resource/receipt verifier
+demo-merchant/                   Independent standard x402 resource server
 backend/migrations/              PostgreSQL/Neon schema migrations
 app/                             Lightweight UI contract scaffold
 docs/scope.md                    Authoritative ChainPay scope
@@ -89,8 +89,8 @@ schema. It does not fabricate or broadcast a payment.
 
 The MCP server speaks standard JSON-RPC MCP over stdio and exposes protocol
 configuration and asset discovery, mandate lifecycle, payment quote/preflight,
-merchant-signed request verification, x402 challenge preparation, signed
-payment relay, and receipt/status tools. Any MCP-capable LLM client can
+merchant-signed request verification, standard x402 challenge preparation,
+signed payment relay, and receipt/status tools. Any MCP-capable LLM client can
 discover these tools. Owner actions return wallet-signature plans; payment
 execution returns an unsigned wire transaction for a browser wallet or external
 agent runtime. MCP can relay only an already signed transaction, so the MCP
@@ -110,9 +110,10 @@ The on-chain program remains the final authority for every payment.
 
 Axum and the HTTP MCP service require `DATABASE_URL` and run the migrations in
 `backend/migrations`. Production does not fall back to an in-memory status
-store. The x402 verifier in `demo-merchant/` returns 402, independently checks a
-finalized receipt and its transaction, and releases the resource only after the
-proof matches.
+store. The x402 merchant in `demo-merchant/` emits standard x402 v2 responses
+and uses its configured facilitator to verify and settle an explicitly signed
+direct token transfer. The first route is human-signing only and intentionally
+separate from ChainPay's on-chain mandate settlement.
 
 Render deployment is defined in [render.yaml](render.yaml). It runs the MCP
 server as a native Node web service with `/healthz` health checks and `/mcp` as
