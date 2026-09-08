@@ -258,7 +258,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "prepare_x402_payment",
-    description: "Prepare a standard x402 v2 Solana Devnet direct-token-transfer for a human wallet. Corbits settles it; this route does not use a ChainPay mandate or delegated signer.",
+    description: "Prepare a standard x402 v2 Solana Devnet direct-token-transfer for a human wallet. The configured x402 facilitator settles it; this route does not use a ChainPay mandate or delegated signer.",
     inputSchema: {
       type: "object",
       properties: {
@@ -284,7 +284,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "execute_x402_payment",
-    description: "Run a standard x402 v2 Devnet flow: request the merchant, have the user sign a direct transfer, retry with PAYMENT-SIGNATURE, then record the merchant/Corbits settlement result.",
+    description: "Run a standard x402 v2 Devnet flow: request the merchant, have the user sign a direct transfer, retry with PAYMENT-SIGNATURE, then record the merchant/facilitator settlement result.",
     inputSchema: {
       type: "object",
       properties: {

@@ -16,7 +16,7 @@ import {
 import type { ChainPayMcpContext } from "./context.js";
 import { solanaAddress, toolResult, unsignedInteger } from "./common.js";
 
-const CORBITS_FACILITATOR_URL = "https://facilitator.corbits.dev";
+const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
 const SOLANA_DEVNET_CAIP2 = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 const MAX_RESOURCE_BODY_BYTES = 1_048_576;
 const RESOURCE_TIMEOUT_MS = 10_000;
@@ -51,6 +51,14 @@ type ExpectedPayment = {
   decimals: number;
 };
 
+function publicKeyLikeBase58(value: string, label: string): string {
+  try {
+    return new PublicKey(value.trim()).toBase58();
+  } catch {
+    throw new Error(`${label} must be a 32-byte base58 value`);
+  }
+}
+
 function requireObject(value: unknown, label: string): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
   return value as JsonObject;
@@ -68,17 +76,17 @@ function resourceUrl(value: unknown): string {
 
 function normalizedFacilitator(value: string): string {
   const url = new URL(value);
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
-    throw new Error("CHAINPAY_X402_FACILITATOR_URL must be a credential-free HTTPS origin");
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new Error("CHAINPAY_X402_FACILITATOR_URL must be a credential-free HTTPS base URL without a query or fragment");
   }
   return url.toString().replace(/\/$/, "");
 }
 
 function configuredFacilitator(advertised: string | null): string {
-  const configured = normalizedFacilitator(process.env.CHAINPAY_X402_FACILITATOR_URL ?? CORBITS_FACILITATOR_URL);
+  const configured = normalizedFacilitator(process.env.CHAINPAY_X402_FACILITATOR_URL ?? DEFAULT_FACILITATOR_URL);
   if (!advertised) return configured;
   if (normalizedFacilitator(advertised) !== configured) {
-    throw new Error("merchant advertised an untrusted x402 facilitator; ChainPay is configured only for Corbits");
+    throw new Error("merchant advertised an untrusted x402 facilitator; ChainPay is pinned to CHAINPAY_X402_FACILITATOR_URL");
   }
   return configured;
 }
@@ -141,7 +149,7 @@ function standardPaymentRequired(value: unknown, expectedResource: string): Stan
     };
   }).filter((candidate): candidate is PaymentRequirement => Boolean(candidate));
 
-  if (accepts.length === 0) throw new Error("x402 response has no Corbits-compatible Solana Devnet exact option");
+  if (accepts.length === 0) throw new Error("x402 response has no compatible Solana Devnet exact option");
   return {
     x402Version: 2,
     resource: resource as JsonObject & { url: string },
@@ -162,16 +170,16 @@ function paymentRequiredFromResponse(response: Response, body: { parsed?: unknow
   }
 }
 
-async function corbitsFeePayer(facilitator: string): Promise<string> {
+async function facilitatorFeePayer(facilitator: string): Promise<string> {
   const response = await fetch(`${facilitator}/supported`, { method: "GET", redirect: "error" });
-  if (!response.ok) throw new Error(`Corbits /supported returned HTTP ${response.status}`);
-  const payload = requireObject(await response.json(), "Corbits /supported response");
-  if (!Array.isArray(payload.kinds)) throw new Error("Corbits /supported response has no kinds array");
+  if (!response.ok) throw new Error(`x402 facilitator /supported returned HTTP ${response.status}`);
+  const payload = requireObject(await response.json(), "x402 facilitator /supported response");
+  if (!Array.isArray(payload.kinds)) throw new Error("x402 facilitator /supported response has no kinds array");
   const kind = payload.kinds
-    .map((candidate) => requireObject(candidate, "Corbits supported kind"))
+    .map((candidate) => requireObject(candidate, "x402 facilitator supported kind"))
     .find((candidate) => candidate.x402Version === 2 && candidate.scheme === "exact" && candidate.network === SOLANA_DEVNET_CAIP2);
-  if (!kind) throw new Error("Corbits does not currently advertise x402 v2 exact support for Solana Devnet");
-  return solanaAddress(requireObject(kind.extra, "Corbits supported kind extra").feePayer, "Corbits fee payer");
+  if (!kind) throw new Error("the configured x402 facilitator does not advertise x402 v2 exact support for Solana Devnet");
+  return solanaAddress(requireObject(kind.extra, "x402 facilitator supported kind extra").feePayer, "x402 facilitator fee payer");
 }
 
 async function expectedPayment(
@@ -197,7 +205,7 @@ async function expectedPayment(
   const [source, merchant, feePayer] = await Promise.all([
     context.client.connection.getAccountInfo(new PublicKey(sourceTokenAccount), "confirmed"),
     context.client.connection.getAccountInfo(new PublicKey(merchantTokenAccount), "confirmed"),
-    corbitsFeePayer(facilitator),
+    facilitatorFeePayer(facilitator),
   ]);
   assertTokenAccount(source, sourceTokenAccount, payer, requirement.asset, tokenProgram);
   assertTokenAccount(merchant, merchantTokenAccount, requirement.payTo, requirement.asset, tokenProgram);
@@ -246,6 +254,28 @@ function transferCheckedInstruction(expected: ExpectedPayment): TransactionInstr
     ],
     data,
   });
+}
+
+/// Reuses the blockhash the merchant pinned to the challenge when it advertises
+/// one, so the wallet signs inside the window the merchant and facilitator
+/// agreed on instead of a window this process invented from its own RPC.
+async function paymentBlockhash(
+  context: ChainPayMcpContext,
+  requirement: PaymentRequirement,
+): Promise<{ blockhash: string; lastValidBlockHeight: number }> {
+  const advertised = requirement.extra.recentBlockhash;
+  if (typeof advertised === "string" && advertised.trim() !== "") {
+    const blockhash = publicKeyLikeBase58(advertised, "x402 recentBlockhash");
+    const lastValid = requirement.extra.lastValidBlockHeight;
+    const parsed = lastValid === undefined
+      ? 0n
+      : unsignedInteger(lastValid, "x402 lastValidBlockHeight");
+    if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error("x402 lastValidBlockHeight is out of range");
+    }
+    return { blockhash, lastValidBlockHeight: Number(parsed) };
+  }
+  return context.client.connection.getLatestBlockhash("confirmed");
 }
 
 function buildUnsignedTransaction(expected: ExpectedPayment, blockhash: string): Transaction {
@@ -313,12 +343,12 @@ export async function prepareX402Payment(context: ChainPayMcpContext, args: Reco
   const resource = resourceUrl(args.resource);
   const payer = solanaAddress(args.payer, "payer");
   if (args.signingMode !== undefined && args.signingMode !== "human") {
-    throw new Error("standard Corbits x402 currently supports human wallet signing only; delegated x402 is a separate implementation");
+    throw new Error("standard x402 currently supports human wallet signing only; delegated x402 is a separate implementation");
   }
   const paymentRequired = standardPaymentRequired(args.paymentRequired, resource);
   const facilitator = configuredFacilitator(null);
   const expected = await expectedPayment(context, paymentRequired, payer, facilitator);
-  const latest = await context.client.connection.getLatestBlockhash("confirmed");
+  const latest = await paymentBlockhash(context, expected.requirement);
   const transaction = buildUnsignedTransaction(expected, latest.blockhash);
   return toolResult({
     action: "x402_wallet_signature_required",
@@ -342,7 +372,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   const resource = resourceUrl(args.resource);
   const payer = solanaAddress(args.payer, "payer");
   if (args.signingMode !== undefined && args.signingMode !== "human") {
-    throw new Error("standard Corbits x402 currently supports human wallet signing only; it does not use a ChainPay mandate");
+    throw new Error("standard x402 currently supports human wallet signing only; it does not use a ChainPay mandate");
   }
   if (!context.backendUrl || !context.backendAuthToken) {
     throw new Error("CHAINPAY_BACKEND_URL and CHAINPAY_BACKEND_AUTH_TOKEN are required before starting an auditable x402 payment");
@@ -377,7 +407,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   const expected = await expectedPayment(context, paymentRequired, payer, facilitator);
 
   if (typeof args.signedTransaction !== "string" || args.signedTransaction.trim() === "") {
-    const latest = await context.client.connection.getLatestBlockhash("confirmed");
+    const latest = await paymentBlockhash(context, expected.requirement);
     return toolResult({
       action: "x402_wallet_signature_required",
       protocol: "x402/2",
@@ -438,7 +468,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
     httpStatus: paid.status,
     resourceResponse: paidBody.parsed ?? paidBody.text,
     message: paid.ok
-      ? "Corbits settled the standard x402 payment and the merchant accepted the request."
-      : "Corbits settled the payment, but the merchant rejected the protected request.",
+      ? "The facilitator settled the standard x402 payment and the merchant accepted the request."
+      : "The facilitator settled the payment, but the merchant rejected the protected request.",
   }, !paid.ok);
 }

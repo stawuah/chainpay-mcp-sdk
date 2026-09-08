@@ -4,7 +4,7 @@ import { ExactSvmScheme } from "@x402/svm/exact/server";
 import express, { type Request, type Response } from "express";
 import { publicKey } from "@chainpay/sdk";
 
-const CORBITS_FACILITATOR_URL = "https://facilitator.corbits.dev";
+const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
 const SOLANA_DEVNET_CAIP2 = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 
 type MerchantConfig = {
@@ -24,10 +24,10 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
-function httpsOrigin(value: string, label: string): string {
+function facilitatorBaseUrl(value: string, label: string): string {
   const url = new URL(value);
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
-    throw new Error(`${label} must be a credential-free HTTPS origin`);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new Error(`${label} must be a credential-free HTTPS base URL without a query or fragment`);
   }
   return url.toString().replace(/\/$/, "");
 }
@@ -53,7 +53,7 @@ function configuration(): MerchantConfig {
     payTo,
     amount,
     maxTimeoutSeconds,
-    facilitator: httpsOrigin(process.env.CHAINPAY_X402_FACILITATOR_URL ?? CORBITS_FACILITATOR_URL, "CHAINPAY_X402_FACILITATOR_URL"),
+    facilitator: facilitatorBaseUrl(process.env.CHAINPAY_X402_FACILITATOR_URL ?? DEFAULT_FACILITATOR_URL, "CHAINPAY_X402_FACILITATOR_URL"),
     rpcUrl: process.env.CHAINPAY_RPC_URL ?? "https://api.devnet.solana.com",
   };
 }
