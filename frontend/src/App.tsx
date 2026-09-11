@@ -8,7 +8,7 @@ import {
   type ChainPayWallet,
   type ChainPayWalletOption,
 } from "./wallet";
-import connectorRoutingImage from "./assets/connector-routing.png";
+import { Coin3D } from "./Coin3D";
 import solWalletImage from "./assets/your-sol.jpg";
 import usdcWalletImage from "./assets/your-usdc.jpg";
 import pyusdWalletImage from "./assets/yourpyusd.png";
@@ -886,10 +886,14 @@ const actions: { label: Action; icon: string; detail: string }[] = [
   { label: "Receipts", icon: "▤", detail: "Review durable settlement proof" },
 ];
 
+const PYUSD_LOGO = "https://wp.logos-download.com/wp-content/uploads/2024/09/PayPal_USD_PYUSD_Logo.png";
+const SOL_LOGO = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png";
+const USDC_LOGO = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png";
+
 const assets = [
-  { name: "Devnet USDC", symbol: "USDC", price: "$1.00", change: "+0.01%", className: "blue", icon: "$" },
-  { name: "Token-2022", symbol: "USDC-2022", price: "$1.00", change: "+0.02%", className: "violet", icon: "◈" },
-  { name: "ChainPay receipt", symbol: "RECEIPT", price: "Verified", change: "On-chain", className: "green", icon: "✓" },
+  { name: "PayPal USD", symbol: "PYUSD", pair: "PYUSD · SPL-2022", price: "$1.00", change: "+0.00", className: "blue", icon: "P", logo: PYUSD_LOGO },
+  { name: "USD Coin", symbol: "USDC", pair: "USDC · Devnet", price: "$1.00", change: "+0.01", className: "blue", icon: "$", logo: USDC_LOGO },
+  { name: "ChainPay receipt", symbol: "RECEIPT", pair: "Receipt PDA · On-chain", price: "Verified", change: "", className: "green", icon: "✓", logo: "" },
 ];
 
 const connectorRoadmap = [
@@ -1113,15 +1117,6 @@ function Arrow() {
 
 function Shield() {
   return <span className="shield-icon" aria-hidden="true">◇</span>;
-}
-
-function MiniChart({ color }: { color: string }) {
-  return (
-    <svg className={`mini-chart ${color}`} viewBox="0 0 180 56" aria-hidden="true">
-      <path className="chart-fill" d="M2 43 C15 38 22 42 33 33S53 39 63 29S82 35 92 24S113 27 124 18S145 22 158 12S172 13 178 5V56H2Z" />
-      <path className="chart-line" d="M2 43 C15 38 22 42 33 33S53 39 63 29S82 35 92 24S113 27 124 18S145 22 158 12S172 13 178 5" />
-    </svg>
-  );
 }
 
 function useCaseFromHash(hash: string): UseCase | undefined {
@@ -1709,17 +1704,15 @@ function App() {
           <span>chain<span>pay</span></span>
         </a>
         <nav className={`main-nav ${menuOpen ? "open" : ""}`}>
-          <a href="#products">Products</a>
+          <a href="#products">Product</a>
           <a href="#connectors">Connectors</a>
           <a href="#use-cases">Use cases</a>
-          <a href="#/aifi">AiFi</a>
           <a href="#agent-feedback">Agents</a>
           <a href="#how-it-works">How it works</a>
-          <a href="#activity">Activity</a>
-          <a href="#support">Support</a>
+          <a href="https://chainpay-mcp.onrender.com/docs" target="_blank" rel="noreferrer">Docs</a>
         </nav>
         <div className="top-actions">
-          <button className="button button-small button-dark" onClick={requestWalletConnection}>
+          <button className="button button-small button-white" onClick={requestWalletConnection}>
             {wallet ? shortAddress(wallet) : "Connect"}
           </button>
           <button className="mobile-menu" onClick={() => setMenuOpen((open) => !open)} aria-label="Toggle navigation">☰</button>
@@ -1729,14 +1722,14 @@ function App() {
       <main id="top">
         <section className="hero hero-aifi page-width">
           <div className="hero-copy">
-            <div className="eyebrow"><span className="pulse-dot" /> AI finance infrastructure · Solana Devnet</div>
-            <h1>The universal payment rail for <em>AI agents.</em></h1>
-            <p className="hero-text">One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. Solana is the first settlement layer.</p>
+            <div className="eyebrow"><span className="pulse-dot" /> PYUSD · USDC on Solana</div>
+            <h1>The universal rail<br />for <em>agent money.</em></h1>
+            <p className="hero-text">Give an agent a mandate with a token, limit, and expiry. ChainPay checks every payment on-chain and settles in stablecoins on Solana.</p>
             <div className="hero-actions">
               <button className="button button-primary" onClick={requestWalletConnection}>
                 {connecting ? "Connecting…" : wallet ? `Connected ${shortAddress(wallet)}` : "Connect wallet"} <Arrow />
               </button>
-              <a className="text-link" href="#how-it-works">Explore the rail <Arrow /></a>
+              <a className="button button-outline" href="https://chainpay-mcp.onrender.com/docs" target="_blank" rel="noreferrer">Read the docs</a>
             </div>
             <div className="hero-principle"><span>Give agents limits.</span><strong>Not your keys.</strong></div>
             <ol className="hero-steps" aria-label="How ChainPay handles an agent payment">
@@ -1746,41 +1739,11 @@ function App() {
             </ol>
           </div>
 
-          <div className="hero-visual hero-finance-visual" aria-label="Illustrative ChainPay AI finance control desk">
-            <div className="hero-visual-grid" aria-hidden="true" />
-            <div className="finance-orbit finance-orbit-one" aria-hidden="true" />
-            <div className="finance-orbit finance-orbit-two" aria-hidden="true" />
-            <div className="finance-console">
-              <div className="finance-console-topline">
-                <div><span className="soft-label">CHAINPAY CONTROL DESK</span><strong>Autonomous spend, within policy</strong></div>
-                <span className="finance-live"><i /> DEVNET</span>
-              </div>
-
-              <div className="finance-balance">
-                <div><span>AVAILABLE TO ROUTE</span><strong>$2,000<em>.00</em></strong><small>Illustrative USDC mandate</small></div>
-                <div className="finance-approval"><span>POLICY</span><b>ACTIVE</b><small>7 days left</small></div>
-              </div>
-
-              <div className="finance-spend">
-                <div><span>Mandate utilization</span><strong>20.5 <small>/ 100 USDC</small></strong></div>
-                <div className="finance-progress"><i /></div>
-                <small>Max per payment <b>10 USDC</b></small>
-              </div>
-
-              <div className="finance-route" aria-label="AI payment routing sequence">
-                <div className="finance-route-node agent"><span>AI</span><strong>procure-agent</strong><small>Authenticated via MCP</small></div>
-                <div className="finance-route-line"><i /></div>
-                <div className="finance-route-node policy"><span>✓</span><strong>Mandate</strong><small>Limits verified</small></div>
-                <div className="finance-route-line"><i /></div>
-                <div className="finance-route-node merchant"><span>$</span><strong>Merchant</strong><small>USDC settlement</small></div>
-              </div>
-
-              <div className="finance-settlement">
-                <span className="receipt-icon">✓</span>
-                <div><strong>Receipt ready after settlement</strong><small>Owner, agent, policy, and payment remain independently verifiable.</small></div>
-                <span className="mono">ON-CHAIN</span>
-              </div>
-            </div>
+          <div className="hero-visual hero-coin-visual" aria-label="PYUSD, Solana, and USDC settlement assets">
+            <div className="hero-coin-halo" aria-hidden="true" />
+            <Coin3D className="hero-coin hero-coin-pyusd" front={PYUSD_LOGO} tone="silver" backTone="silver" glow="rgba(0,82,255,0.4)" size={250} duration={15} />
+            <Coin3D className="hero-coin hero-coin-sol" front={SOL_LOGO} tone="dark" backTone="dark" glow="rgba(153,69,255,0.45)" size={210} duration={19} />
+            <Coin3D className="hero-coin hero-coin-usdc" front={USDC_LOGO} tone="blue" backTone="blue" glow="rgba(39,117,202,0.45)" size={170} duration={22} />
           </div>
         </section>
 
@@ -1874,8 +1837,8 @@ function App() {
         </section>
 
         <section className="assets-section page-width">
-          <div className="section-heading"><div><span className="section-kicker">SUPPORTED RAILS</span><h2>Built for stablecoin settlement.</h2><p>Connect the assets your agents already use. ChainPay handles the policy; Solana handles settlement.</p></div><a className="text-link" href="#support">View all assets <Arrow /></a></div>
-          <div className="asset-grid">{assets.map((asset) => <article className="asset-card" key={asset.symbol}><div className="asset-card-top"><span className={`asset-logo ${asset.className}`}>{asset.icon}</span><span className="asset-more">···</span></div><h3>{asset.name}</h3><div className="asset-pair">{asset.symbol} <span>/ DEVNET</span></div><div className="asset-price">{asset.price}</div><div className={`asset-change ${asset.change.startsWith("+") ? "positive" : "neutral"}`}>{asset.change}</div><MiniChart color={asset.className} /><button className="asset-button" onClick={() => selectAction(asset.symbol === "RECEIPT" ? "Receipts" : "Send")}>{asset.symbol === "RECEIPT" ? "View receipts" : "Route payment"} <Arrow /></button></article>)}</div>
+          <div className="section-heading"><div><span className="section-kicker">SUPPORTED ON SOLANA</span><h2>Built for stablecoin settlement.</h2><p>Connect the assets your agents already use. ChainPay handles the policy; Solana handles settlement.</p></div><a className="text-link" href="#support">View all assets <Arrow /></a></div>
+          <div className="asset-grid">{assets.map((asset) => <article className="asset-card" key={asset.symbol}><div className="asset-card-top"><span className={`asset-logo ${asset.className}`}><span className="asset-logo-mark">{asset.icon}</span>{asset.logo ? <img src={asset.logo} alt="" loading="lazy" onError={(event) => event.currentTarget.remove()} /> : null}</span><span className="asset-more">···</span></div><h3>{asset.name}</h3><div className="asset-pair">{asset.pair}</div><div className="asset-price">{asset.price}{asset.change ? <span className="asset-change positive">{asset.change}</span> : null}</div><div className="asset-divider" /><button className="asset-button" onClick={() => selectAction(asset.symbol === "RECEIPT" ? "Receipts" : "Send")}>{asset.symbol === "RECEIPT" ? "View receipts" : "Route payment"} <Arrow /></button></article>)}</div>
         </section>
 
         <section className="connector-section page-width" id="connectors">
@@ -1887,17 +1850,19 @@ function App() {
             <a className="text-link" href="#products">Route a stablecoin payment <Arrow /></a>
           </div>
           <div className="connector-stage" aria-label="Connector roadmap preview">
-            <img className="connector-route-art" src={connectorRoutingImage} alt="Abstract payment routes branching from a policy layer" loading="lazy" />
-            <div className="connector-stage-overlay" aria-hidden="true" />
-            <div className="connector-anchor-card"><span className="soft-label">CHAINPAY</span><strong>Policy layer</strong><small>Limits, approval, and receipts stay in one place.</small></div>
+            <span className="connector-stage-slot mono">DEVNET · LIVE</span>
+            <div className="connector-anchor-card"><span className="soft-label">CHAINPAY</span><strong>Policy layer</strong><small>Limits, approval, and receipts stay the same.</small></div>
             <div className="connector-stack">
+              <article className="connector-card connector-card-live">
+                <span className="connector-logo"><img src={SOL_LOGO} alt="" loading="lazy" onError={(event) => event.currentTarget.remove()} /></span>
+                <span><strong>Solana settlement</strong><small className="connector-live">Live now</small></span>
+              </article>
               {connectorRoadmap.map((connector, index) => <article className={`connector-card connector-card-${index + 1}`} key={connector.name}>
-                <span className="connector-logo">{connector.logo ? <img src={connector.logo} alt="" loading="lazy" /> : "＋"}</span>
+                <span className="connector-logo">{connector.logo ? <img src={connector.logo} alt="" loading="lazy" onError={(event) => event.currentTarget.remove()} /> : "＋"}</span>
                 <span><strong>{connector.name}</strong><small>{connector.detail}</small></span>
                 {connector.href ? <a href={connector.href} target="_blank" rel="noreferrer" aria-label={`Learn about ${connector.name}`}>↗</a> : <span className="connector-more">+</span>}
               </article>)}
             </div>
-            <span className="connector-coming-soon">Coming soon</span>
           </div>
         </section>
 
@@ -1915,7 +1880,8 @@ function App() {
 
         <section className="steps-section page-width" id="how-it-works"><div className="section-heading centered"><span className="section-kicker">SIMPLE STEPS</span><h2>Start routing in minutes.</h2><p>From wallet connection to verified settlement, ChainPay keeps every step visible.</p></div><div className="steps-grid"><div className="step-card"><span className="step-number">01.</span><span className="step-icon">◈</span><h3>Connect wallet</h3><p>Connect your Solana wallet on Devnet. Your private key stays with you.</p></div><div className="step-card"><span className="step-number">02.</span><span className="step-icon">◇</span><h3>Create a mandate</h3><p>Choose a token, spend limit, and expiration for your agent.</p></div><div className="step-card"><span className="step-number">03.</span><span className="step-icon">✦</span><h3>Let agents request</h3><p>Agents supply one destination with each payment. ChainPay checks every request on-chain.</p></div><div className="step-card"><span className="step-number">04.</span><span className="step-icon">▤</span><h3>Verify settlement</h3><p>Successful payments create durable receipts for everyone to reconcile.</p></div></div></section>
 
-        <section className="cta-section page-width" id="support"><span className="section-kicker">READY WHEN YOU ARE</span><h2>Give agents one payment interface.<br /><em>Keep the control.</em></h2><p>Create your first policy and connect a settlement rail on Solana Devnet.</p><button className="button button-light" onClick={requestWalletConnection}>{wallet ? "Open mandate dashboard" : "Get started"} <Arrow /></button></section>
+        <section className="cta-wrap page-width" id="support">
+          <div className="cta-section"><span className="section-kicker">READY WHEN YOU ARE</span><h2>Give agents one payment interface.<br /><em>Keep the control.</em></h2><p>Create your first policy and connect a settlement rail on Solana Devnet.</p><div className="cta-actions"><button className="button button-light" onClick={requestWalletConnection}>{wallet ? "Open mandate dashboard" : "Get started"} <Arrow /></button><a className="button button-outline" href="https://chainpay-mcp.onrender.com/docs" target="_blank" rel="noreferrer">Read the docs</a></div></div></section>
       </main>
 
       <footer className="footer page-width"><div className="footer-main"><div className="footer-brand"><a className="brand" href="#top"><span className="brand-mark"><span /></span><span>chain<span>pay</span></span></a><p>Solana Summer School bootcamp project building a policy-controlled payment rail for AI agents.</p><div className="footer-status"><i /> Solana Devnet</div></div><div className="footer-links"><div><b>PRODUCTS</b><a href="#products">Mandates</a><a href="#products">Payments</a><a href="#use-cases">Use cases</a><a href="#activity">Receipts</a></div><div><b>BUILD</b><a href="#how-it-works">How it works</a><a href="https://chainpay-mcp.onrender.com/docs" target="_blank" rel="noreferrer">MCP docs</a><a href="https://chainpay-mcp.onrender.com/tools" target="_blank" rel="noreferrer">MCP tools</a><a href="https://github.com/stawuah/chainpay-mcp-sdk" target="_blank" rel="noreferrer">GitHub repository</a></div><div><b>SOLANA</b><a href={`https://explorer.solana.com/address/${PROGRAM_ID}?cluster=devnet`} target="_blank" rel="noreferrer">Program on Explorer</a><a href="https://api.devnet.solana.com" target="_blank" rel="noreferrer">Devnet RPC</a><a href="https://chainpay-mcp.onrender.com/healthz" target="_blank" rel="noreferrer">MCP status</a></div></div><div className="newsletter"><b>Stay in the loop</b><p>Product updates, protocol news, and Devnet drops.</p><div className="email-box"><input placeholder="Your email" aria-label="Your email" /><button aria-label="Subscribe">→</button></div></div></div><div className="footer-bottom"><span>© 2026 ChainPay. Built on Solana.</span><span>Program <button className="copy-id" onClick={() => navigator.clipboard?.writeText(PROGRAM_ID)}><span className="mono">{shortAddress(PROGRAM_ID)}</span> ⧉</button></span></div></footer>

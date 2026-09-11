@@ -2535,3 +2535,183 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 @media (prefers-reduced-motion: reduce) {
   .finance-route-line i { animation: none; }
 }
+
+/* ==========================================================================
+   Design refresh — matches the ChainPay canvas redesign.
+   Dark hero with spinning stablecoin marks, flat asset cards, inset CTA band.
+   ========================================================================== */
+
+/* Nav connect button sits on the dark hero, so it is solid white. */
+.button-white { color: var(--ink); background: #fff; }
+.button-white:hover { background: #e9ecf1; }
+.button-outline { color: #fff; border: 1px solid #3a3d44; background: transparent; }
+.button-outline:hover { border-color: #6d91ff; background: rgba(109, 145, 255, .1); }
+
+/* --- Hero coins --- */
+.hero-coin-visual { position: relative; min-height: 460px; display: block; }
+.hero-coin-halo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 520px;
+  height: 520px;
+  max-width: 100%;
+  background: radial-gradient(circle, rgba(0, 82, 255, .2), transparent 62%);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.hero-coin { position: absolute; }
+.hero-coin-pyusd { z-index: 3; width: 250px; height: 250px; top: calc(50% - 130px); left: calc(50% - 150px); }
+.hero-coin-sol { z-index: 2; width: 210px; height: 210px; top: calc(50% + 10px); left: calc(50% - 20px); }
+.hero-coin-usdc { z-index: 1; width: 170px; height: 170px; top: calc(50% + 70px); left: calc(50% - 175px); }
+
+.coin3d { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; perspective: 1200px; }
+.coin3d-glow { position: absolute; top: 50%; left: 50%; width: 180%; height: 180%; transform: translate(-50%, -56%); pointer-events: none; }
+.coin3d-tilt, .coin3d-float, .coin3d-body { transform-style: preserve-3d; }
+.coin3d-float { animation: coin3dFloat 6s ease-in-out infinite; }
+.coin3d-body { position: relative; width: 236px; height: 236px; }
+.coin3d-edge {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(90deg, #0b0c10, #3f4552 45%, #565c68 52%, #3f4552 60%, #0b0c10);
+}
+.coin3d-art { position: relative; width: 60%; height: 60%; object-fit: contain; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .25)); }
+.coin3d-art-back { width: 56%; height: 56%; filter: drop-shadow(0 3px 8px rgba(0, 0, 0, .45)); }
+@keyframes coin3dFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+@keyframes coin3dSpin { from { transform: rotateY(0deg); } to { transform: rotateY(360deg); } }
+
+/* Hero type + glow tuned to the canvas: blue accent, softer scale, top wash. */
+.site-shell .hero-aifi h1 { max-width: 620px; font-size: clamp(46px, 5.4vw, 68px); line-height: .98; letter-spacing: -.035em; }
+.site-shell .hero-aifi h1 em { color: var(--blue); }
+.site-shell .hero-aifi .hero-text { max-width: 460px; font-size: 18px; line-height: 1.55; }
+.site-shell .hero-aifi::before {
+  top: -120px;
+  left: 50%;
+  width: 900px;
+  height: 500px;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  background: radial-gradient(ellipse at center, rgba(0, 82, 255, .22), transparent 68%);
+  box-shadow: none;
+  transform: translateX(-50%);
+}
+.hero-aifi .hero-actions { gap: 12px; }
+.hero-aifi .hero-actions .button { min-height: 52px; padding: 15px 26px; }
+
+/* --- Asset cards: token mark, price with inline delta, divider, ghost pill --- */
+.site-shell .asset-card { min-height: 0; padding: 26px; }
+.asset-logo { position: relative; width: 44px; height: 44px; overflow: hidden; background: var(--strong); }
+.asset-logo .asset-logo-mark { position: absolute; font-size: 15px; font-weight: 700; color: var(--blue); }
+.asset-logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.asset-logo.green { background: #eafaf1; color: var(--green); }
+.asset-card h3 { margin-top: 16px; }
+.asset-pair { margin-top: 2px; font-family: var(--mono); font-size: 13px; }
+.asset-price { display: flex; align-items: baseline; gap: 8px; margin-top: 14px; font: 600 26px var(--mono); }
+.asset-price .asset-change { margin: 0; color: var(--green); font-size: 14px; }
+.asset-card:last-child .asset-price { color: var(--green); }
+.asset-divider { height: 1px; margin: 18px 0; background: var(--line-soft); }
+.site-shell .asset-button { min-height: 44px; font-size: 14px; }
+
+/* --- Connector roadmap: flat dark panel instead of the photo collage --- */
+.site-shell .connector-stage {
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 28px;
+  border-color: #23262c;
+  background: var(--dark);
+}
+.connector-stage-slot { position: absolute; top: 16px; right: 20px; color: #5b616e; font-size: 11px; }
+.site-shell .connector-anchor-card {
+  position: static;
+  flex: 0 0 180px;
+  width: 180px;
+  padding: 16px 18px;
+  border: 1px solid #23262c;
+  border-radius: 16px;
+  background: var(--dark-elevated);
+  box-shadow: none;
+  transform: none;
+  backdrop-filter: none;
+}
+.connector-anchor-card .soft-label { color: var(--muted); }
+.site-shell .connector-stack {
+  position: static;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  width: auto;
+  height: auto;
+  transform: none;
+}
+.site-shell .connector-card {
+  position: static;
+  min-height: 0;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  padding: 13px 15px;
+  border: 1px solid #23262c;
+  border-radius: 14px;
+  background: var(--dark-elevated);
+  box-shadow: none;
+  transform: none;
+  backdrop-filter: none;
+}
+.site-shell .connector-card-1 { opacity: .75; }
+.site-shell .connector-card-2 { opacity: .75; }
+.site-shell .connector-card-3 { opacity: .55; }
+.site-shell .connector-card-live { opacity: 1; }
+.site-shell .connector-logo { width: 26px; height: 26px; border-radius: 50%; background: #111318; }
+.site-shell .connector-card-2 .connector-logo,
+.site-shell .connector-card-3 .connector-logo { background: #111318; }
+.site-shell .connector-logo img { padding: 4px; }
+.connector-card strong { font-size: 13px; }
+.connector-card .connector-live { color: var(--green); font-family: var(--mono); }
+
+/* --- CTA band is an inset rounded card, not a full-bleed strip --- */
+.cta-wrap { margin-top: 112px; margin-bottom: 96px; }
+.site-shell .cta-section {
+  padding: 96px 24px;
+  margin: 0;
+  border-radius: var(--radius-card);
+}
+.site-shell .cta-section::after {
+  content: '';
+  position: absolute;
+  bottom: -140px;
+  left: 50%;
+  width: 700px;
+  max-width: 140%;
+  height: 400px;
+  background: radial-gradient(ellipse at center, rgba(0, 82, 255, .28), transparent 68%);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.site-shell .cta-section h2 { max-width: 640px; margin-inline: auto; }
+.cta-actions { position: relative; z-index: 1; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 32px; }
+.cta-actions .button { min-height: 52px; padding: 15px 28px; margin-top: 0; }
+
+@media (max-width: 1024px) {
+  .hero-coin-visual { min-height: 380px; }
+  .hero-coin-pyusd { width: 200px; height: 200px; top: calc(50% - 110px); left: calc(50% - 120px); }
+  .hero-coin-sol { width: 170px; height: 170px; top: calc(50% + 5px); left: calc(50% - 10px); }
+  .hero-coin-usdc { width: 140px; height: 140px; top: calc(50% + 55px); left: calc(50% - 140px); }
+  .site-shell .connector-stage { flex-direction: column; align-items: stretch; }
+  .site-shell .connector-anchor-card { flex: none; width: auto; }
+}
+
+@media (max-width: 639px) {
+  .hero-coin-visual { min-height: 300px; }
+  .hero-coin-pyusd { width: 160px; height: 160px; top: calc(50% - 92px); left: calc(50% - 96px); }
+  .hero-coin-sol { width: 136px; height: 136px; top: calc(50% + 2px); left: calc(50% - 8px); }
+  .hero-coin-usdc { width: 112px; height: 112px; top: calc(50% + 44px); left: calc(50% - 112px); }
+  .cta-wrap { margin-top: 72px; margin-bottom: 64px; }
+  .site-shell .cta-section { padding: 72px 22px; border-radius: 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coin3d-float, .coin3d-body { animation: none !important; }
+}
