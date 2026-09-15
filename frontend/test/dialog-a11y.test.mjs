@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { unlink } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -166,4 +166,13 @@ test("WalletPickerDialog traps tab and restores focus on Escape", async () => {
     await unlink(outfile).catch(() => {});
     dom.window.close();
   }
+});
+
+test("mandate, batch, and receipt ledgers use Astryx table composition", async () => {
+  const source = await readFile(join(frontendRoot, "src/dashboard/Dashboard.tsx"), "utf8");
+  assert.match(source, /<Table[\s\S]*<TableHeader>[\s\S]*<TableHeaderCell scope="col">/);
+  assert.match(source, /<TableBody>[\s\S]*<TableRow/);
+  assert.match(source, /className="mandate-table"/);
+  assert.match(source, /className="batch-payment-table"/);
+  assert.match(source, /className="receipt-ledger-table"/);
 });
