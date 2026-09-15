@@ -47,7 +47,12 @@ trusted; configure requester limits at the trusted edge when sharing a reverse p
 
 ## Authorization and routes
 
-Public: `/healthz`, `/v1/config`, `/v1/rpc/latest-blockhash`, and `/rpc`.
+Public: `/healthz`, `/v1/config`, `/v1/rpc/latest-blockhash`, `/rpc`,
+`POST /v1/delivery-attestations`, and
+`GET /v1/delivery-attestations/{receiptAddress}`.
+Trusted seller identities are public configuration (see
+[trusted-sellers.md](../docs/trusted-sellers.md)); the signing secret never
+enters this service. A missing or invalid seller statement does not change Paid.
 The RPC proxy only forwards named read methods, bounds batches/history/body and
 response sizes, and restricts program discovery to ChainPay with owner/mandate
 filters (the asset registry uses its fixed account size).

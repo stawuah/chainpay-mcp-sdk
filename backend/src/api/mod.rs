@@ -169,4 +169,15 @@ pub struct BackendConfigResponse {
     pub cluster: &'static str,
     pub program_id: String,
     pub rpc_proxy: &'static str,
+    pub trusted_sellers: Vec<TrustedSellerPublicConfig>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrustedSellerPublicConfig {
+    pub cluster: String,
+    #[serde(rename = "programId")]
+    pub program_id: String,
+    pub sellers: Vec<String>,
+    #[serde(rename = "recipientTokenAccount")]
+    pub recipient_token_account: String,
 }

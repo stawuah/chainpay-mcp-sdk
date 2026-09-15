@@ -185,10 +185,19 @@ impl RpcClient {
     }
 
     pub async fn account_info(&self, address: &str) -> Result<Option<RpcAccount>, RpcError> {
+        self.account_info_committed(address, &self.config.commitment)
+            .await
+    }
+
+    pub async fn account_info_committed(
+        &self,
+        address: &str,
+        commitment: &str,
+    ) -> Result<Option<RpcAccount>, RpcError> {
         let response: AccountInfoResponse = self
             .call(
                 "getAccountInfo",
-                json!([address, { "commitment": self.config.commitment, "encoding": "base64" }]),
+                json!([address, { "commitment": commitment, "encoding": "base64" }]),
             )
             .await?;
         response

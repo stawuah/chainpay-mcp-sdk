@@ -14,6 +14,7 @@ use sqlx::{
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+use crate::delivery::{DeliveryAttestationPut, DeliveryAttestationRecord};
 use crate::status::{
     ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord, PaymentStatus,
     SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
@@ -42,6 +43,7 @@ struct MemoryState {
     x402_payments: HashMap<String, X402PaymentRecord>,
     managed_signer_challenges: HashMap<String, ManagedSignerChallenge>,
     managed_signers: HashMap<String, ManagedSignerRecord>,
+    delivery_attestations: HashMap<String, DeliveryAttestationRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -771,6 +773,96 @@ impl StatusStore {
             }
         }
     }
+
+    pub async fn put_delivery_attestation(
+        &self,
+        record: DeliveryAttestationRecord,
+    ) -> Result<DeliveryAttestationPut, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                let key = delivery_key(&record);
+                if let Some(existing) = state.delivery_attestations.get(&key) {
+                    return Ok(delivery_put_result(existing.clone(), &record));
+                }
+                state
+                    .delivery_attestations
+                    .insert(key, record.clone());
+                Ok(DeliveryAttestationPut::Created(record))
+            }
+            StorageBackend::Postgres(pool) => {
+                let inserted = sqlx::query(
+                    r#"
+                    INSERT INTO delivery_attestations (
+                        cluster, program_id, receipt_address, seller,
+                        content_hash, served_at, signature, canonical_payload,
+                        published_at_ms
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (cluster, program_id, receipt_address, seller)
+                    DO NOTHING
+                    "#,
+                )
+                .bind(&record.cluster)
+                .bind(&record.program_id)
+                .bind(&record.receipt_address)
+                .bind(&record.seller)
+                .bind(&record.content_hash)
+                .bind(&record.served_at)
+                .bind(&record.signature)
+                .bind(&record.canonical_payload)
+                .bind(to_i64(Some(record.published_at_ms), "published_at_ms")?)
+                .execute(pool)
+                .await?
+                .rows_affected()
+                    == 1;
+                if inserted {
+                    return Ok(DeliveryAttestationPut::Created(record));
+                }
+                let existing = sqlx::query(DELIVERY_SELECT_BY_KEY)
+                    .bind(&record.cluster)
+                    .bind(&record.program_id)
+                    .bind(&record.receipt_address)
+                    .bind(&record.seller)
+                    .fetch_one(pool)
+                    .await?;
+                Ok(delivery_put_result(
+                    delivery_from_row(existing)?,
+                    &record,
+                ))
+            }
+        }
+    }
+
+    pub async fn find_delivery_attestation(
+        &self,
+        cluster: &str,
+        program_id: &str,
+        receipt_address: &str,
+    ) -> Result<Option<DeliveryAttestationRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .delivery_attestations
+                .values()
+                .filter(|record| {
+                    record.cluster == cluster
+                        && record.program_id == program_id
+                        && record.receipt_address == receipt_address
+                })
+                .min_by_key(|record| record.published_at_ms)
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(DELIVERY_SELECT_BY_RECEIPT)
+                    .bind(cluster)
+                    .bind(program_id)
+                    .bind(receipt_address)
+                    .fetch_optional(pool)
+                    .await?;
+                row.map(delivery_from_row).transpose()
+            }
+        }
+    }
 }
 
 const PAYMENT_SELECT_BY_ID: &str = r#"
@@ -820,6 +912,22 @@ const MANAGED_SIGNER_CHALLENGE_SELECT_BY_ID: &str = r#"
     SELECT challenge_id, owner_wallet, mandate_pda, message, expires_at_ms,
            consumed_at_ms, created_at_ms
     FROM managed_signer_challenges WHERE challenge_id = $1
+"#;
+
+const DELIVERY_SELECT_BY_KEY: &str = r#"
+    SELECT cluster, program_id, receipt_address, seller, content_hash, served_at,
+           signature, canonical_payload, published_at_ms
+    FROM delivery_attestations
+    WHERE cluster = $1 AND program_id = $2 AND receipt_address = $3 AND seller = $4
+"#;
+
+const DELIVERY_SELECT_BY_RECEIPT: &str = r#"
+    SELECT cluster, program_id, receipt_address, seller, content_hash, served_at,
+           signature, canonical_payload, published_at_ms
+    FROM delivery_attestations
+    WHERE cluster = $1 AND program_id = $2 AND receipt_address = $3
+    ORDER BY published_at_ms ASC
+    LIMIT 1
 "#;
 
 const MANAGED_SIGNER_SELECT_BY_PUBLIC_KEY: &str = r#"
@@ -1034,6 +1142,41 @@ fn parse_u64(field: &'static str, value: String) -> Result<u64, StorageError> {
         .map_err(|_| StorageError::InvalidValue { field, value })
 }
 
+fn delivery_key(record: &DeliveryAttestationRecord) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        record.cluster, record.program_id, record.receipt_address, record.seller
+    )
+}
+
+fn delivery_put_result(
+    existing: DeliveryAttestationRecord,
+    incoming: &DeliveryAttestationRecord,
+) -> DeliveryAttestationPut {
+    if existing.canonical_payload == incoming.canonical_payload
+        && existing.signature == incoming.signature
+    {
+        DeliveryAttestationPut::Unchanged(existing)
+    } else {
+        DeliveryAttestationPut::Conflict(existing)
+    }
+}
+
+fn delivery_from_row(row: PgRow) -> Result<DeliveryAttestationRecord, StorageError> {
+    Ok(DeliveryAttestationRecord {
+        cluster: row.try_get("cluster")?,
+        program_id: row.try_get("program_id")?,
+        receipt_address: row.try_get("receipt_address")?,
+        seller: row.try_get("seller")?,
+        content_hash: row.try_get("content_hash")?,
+        served_at: row.try_get("served_at")?,
+        signature: row.try_get("signature")?,
+        canonical_payload: row.try_get("canonical_payload")?,
+        published_at_ms: from_i64(row.try_get("published_at_ms")?, "published_at_ms")?
+            .unwrap_or(0),
+    })
+}
+
 fn to_i64(value: Option<u64>, field: &'static str) -> Result<Option<i64>, StorageError> {
     value
         .map(|value| {
@@ -1167,5 +1310,57 @@ mod tests {
     #[test]
     fn rejects_values_outside_postgres_bigint_range() {
         assert!(to_i64(Some(u64::MAX), "slot").is_err());
+    }
+
+    fn delivery_record(served_at: &str, signature: &str) -> DeliveryAttestationRecord {
+        DeliveryAttestationRecord {
+            cluster: "devnet".into(),
+            program_id: "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4".into(),
+            receipt_address: "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1".into(),
+            seller: "GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB".into(),
+            content_hash: "8e60b641218418bde0cde3b190a028e846ccebed8dc804901b8e6f87b9072eee"
+                .into(),
+            served_at: served_at.into(),
+            signature: signature.into(),
+            canonical_payload: format!("{served_at}:{signature}"),
+            published_at_ms: 1_000,
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_attestations_are_immutable_and_idempotent() {
+        let store = StatusStore::in_memory();
+        let first = delivery_record(
+            "2026-09-15T04:16:00.000Z",
+            "K+hQlY/7U7cbhE2229fk/C2g5MHUahSrhBZz4F3SUxTqyVvLgfV0gZkPosZKdFZzIXbawLS3xJQ3XsrtYXqIDg==",
+        );
+        assert!(matches!(
+            store.put_delivery_attestation(first.clone()).await.unwrap(),
+            DeliveryAttestationPut::Created(_)
+        ));
+        assert!(matches!(
+            store.put_delivery_attestation(first.clone()).await.unwrap(),
+            DeliveryAttestationPut::Unchanged(record) if record.published_at_ms == 1_000
+        ));
+        let mut conflicting = first.clone();
+        conflicting.served_at = "2026-09-15T04:17:00.000Z".into();
+        conflicting.canonical_payload = "different".into();
+        conflicting.published_at_ms = 2_000;
+        assert!(matches!(
+            store.put_delivery_attestation(conflicting).await.unwrap(),
+            DeliveryAttestationPut::Conflict(record) if record.served_at == first.served_at
+                && record.published_at_ms == 1_000
+        ));
+        let stored = store
+            .find_delivery_attestation(
+                "devnet",
+                "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4",
+                "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.served_at, first.served_at);
+        assert_eq!(stored.published_at_ms, 1_000);
     }
 }
