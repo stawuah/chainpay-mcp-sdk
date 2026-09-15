@@ -30,24 +30,24 @@ const removed = [
 ];
 
 async function source() {
-  return readFile(landingPath, "utf8");
+  return (await readFile(landingPath, "utf8")) + (await readFile(resolve(root, "landing/PaymentStory.tsx"), "utf8"));
 }
 
-test("landing keeps the approved headline, eyebrow, and six sections", async () => {
+test("landing preserves identity and tells the permission-to-receipt story", async () => {
   const text = await source();
   assert.match(text, /Give agents limits\./);
   assert.match(text, /Not your keys\./);
   assert.match(text, /Policy payments · Solana Devnet/);
   assert.match(text, /id="how-it-works"/);
-  assert.match(text, /id="spend-limits"/);
-  assert.match(text, /id="receipts"/);
+  assert.match(text, /id: "spend-limits"/);
+  assert.match(text, /id: "receipts"/);
   assert.match(text, /id="developers"/);
   assert.match(text, /id="faq"/);
-  assert.match(text, /From a spend limit to a receipt\./);
-  assert.match(text, /Set the boundary before the first payment\./);
-  assert.match(text, /A receipt someone else can understand\./);
+  assert.match(text, /One agent. One payment./);
+  assert.match(text, /Give the work a budget\./);
+  assert.match(text, /The evidence stays\./);
   assert.match(text, /Fits the agent workflow you already have\./);
-  assert.match(text, /Create your first mandate\./);
+  assert.match(text, /Put your first agent on a budget\./);
 });
 
 test("landing CTAs stay on wired callbacks and do not invent a live receipt URL", async () => {
@@ -69,9 +69,9 @@ test("illustrative receipt uses the approved example and never claims payment", 
   assert.match(text, /4\.50 USDC/);
   assert.match(text, /10 USDC/);
   assert.match(text, /100 USDC/);
-  assert.match(text, /Seller attestation/);
-  assert.match(text, /Missing/);
-  assert.match(text, /Current mandate/);
+  assert.match(text, /No seller statement/);
+  assert.match(text, /Current permission settings are not a historical snapshot/);
+  assert.match(text, /Public receipts exclude private request text and attachments/);
 });
 
 test("x402 and managed signing status stay honest", async () => {

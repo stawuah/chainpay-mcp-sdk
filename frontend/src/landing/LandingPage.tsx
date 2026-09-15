@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { PROGRAM_ID } from "../config/public";
+import { PaymentStory, PermissionExample } from "./PaymentStory";
+import { useLandingMotion } from "./useLandingMotion";
 import "./landing.css";
 
 const MCP_DOCS_URL = "https://chainpay-mcp.onrender.com/docs";
@@ -13,35 +15,6 @@ const NAV_LINKS = [
   { href: "#spend-limits", label: "Spend limits" },
   { href: "#receipts", label: "Receipts" },
   { href: "#developers", label: "Developers" },
-] as const;
-
-const FLOW_STEPS = [
-  {
-    index: "1",
-    title: "Approve a mandate",
-    body: "Choose the agent, token, limits and expiry, then approve in your wallet.",
-  },
-  {
-    index: "2",
-    title: "Pay within the limit",
-    body: "The program checks each payment against the mandate.",
-  },
-  {
-    index: "3",
-    title: "Verify the result",
-    body: "Share the settled receipt with someone who never connected a wallet.",
-  },
-] as const;
-
-const LIMIT_CONTROLS = [
-  ["Approved agent", "The only key that may execute inside this mandate."],
-  ["Token / source account", "The mint and source token account payments can leave."],
-  ["Maximum per payment", "A single payment cannot exceed this amount."],
-  ["Total allowance", "All payments together cannot exceed this amount."],
-  ["Count", "Optional cap on how many payments may settle."],
-  ["Cooldown", "Optional wait between payments."],
-  ["Expiry", "The mandate stops new payments after this slot."],
-  ["Pause / revoke", "A wallet-approved action that stops future payments."],
 ] as const;
 
 const FAQ_ITEMS = [
@@ -74,49 +47,9 @@ function shortAddress(value: string) {
   return `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
 
-function IllustrativeReceiptCard({ compact = false }: { compact?: boolean }) {
-  return (
-    <article className={`landing-receipt${compact ? " is-compact" : ""}`} aria-label="Illustrative receipt">
-      <p className="landing-receipt-label">Illustrative receipt · no payment made</p>
-      <h3 className="landing-receipt-amount t-num">4.50 USDC</h3>
-      <p className="landing-receipt-lede">Payment receipt for an example mandate-checked transfer.</p>
-      <dl className="landing-receipt-evidence">
-        <div>
-          <dt>Allowed</dt>
-          <dd>The program accepted this payment under the mandate.</dd>
-        </div>
-        <div>
-          <dt>Paid</dt>
-          <dd>Settlement verified from the receipt on Solana.</dd>
-        </div>
-        <div>
-          <dt>Seller attestation</dt>
-          <dd>Missing. A seller can sign a statement that it served a specific response. It does not prove the buyer received or accepted the work.</dd>
-        </div>
-      </dl>
-      <details className="landing-receipt-mandate">
-        <summary>Current mandate</summary>
-        <dl>
-          <div>
-            <dt>Max per payment</dt>
-            <dd className="t-num">10 USDC</dd>
-          </div>
-          <div>
-            <dt>Total allowance</dt>
-            <dd className="t-num">100 USDC</dd>
-          </div>
-          <div>
-            <dt>Seller attestation</dt>
-            <dd>Missing</dd>
-          </div>
-        </dl>
-        <p>These limits are the current mandate shape, not a historical snapshot of a live payment.</p>
-      </details>
-    </article>
-  );
-}
-
 export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: LandingPageProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  useLandingMotion(rootRef);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const navId = useId();
@@ -138,7 +71,8 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
   }
 
   return (
-    <div className="site-shell cp-app landing">
+    <div ref={rootRef} className="site-shell cp-app landing">
+      <a className="landing-skip" href="#top">Skip to content</a>
       <header className="topbar page-width">
         <a className="brand" href="#top" aria-label="ChainPay home">
           <span className="brand-mark"><span /></span>
@@ -171,12 +105,12 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
         </div>
       </header>
 
-      <main id="top">
+      <main id="top" tabIndex={-1}>
         <section className="landing-hero page-width" aria-labelledby="landing-hero-heading">
           <div className="landing-hero-copy">
             <p className="landing-eyebrow">Policy payments · Solana Devnet</p>
             <h1 id="landing-hero-heading" className="t-mega">Give agents limits. <em>Not your keys.</em></h1>
-            <p className="t-body landing-hero-text">Approve a mandate. Let your agent pay within it. Open the receipt when you need proof.</p>
+            <p className="t-body landing-hero-text">Let agents get work done with a spending permission you define—and a receipt you can verify.</p>
             <div className="landing-hero-actions">
               <Button type="button" variant="primary" size="lg" label="Open dashboard" isDisabled={false} onClick={onOpenDashboard} />
               <Button variant="secondary" size="lg" label="See a receipt" isDisabled={false} href="#receipts" />
@@ -184,78 +118,27 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
             <p className="t-body-sm landing-hero-note">Your funds stay in your wallet. The mandate defines what the approved agent can spend.</p>
           </div>
           <div className="landing-hero-visual">
-            <IllustrativeReceiptCard compact />
+            <div className="hero-product-label"><span>YOUR AGENT’S NEXT PAYMENT</span><span>Illustrative example</span></div>
+            <PermissionExample />
+            <div className="hero-payment-slip"><span className="hero-slip-symbol" aria-hidden="true">↗</span><div><span>Research agent requests</span><strong>4.50 USDC</strong></div><span className="story-tag">For your review</span></div>
+            <p className="hero-product-caption">A little autonomy. A clear boundary.</p>
           </div>
         </section>
 
-        <section className="landing-section page-width" id="how-it-works" aria-labelledby="landing-flow-heading">
-          <p className="section-kicker">ONE EXAMPLE</p>
-          <h2 id="landing-flow-heading" className="t-xl">From a spend limit to a receipt.</h2>
-          <ol className="landing-flow">
-            {FLOW_STEPS.map((step) => (
-              <li key={step.index}>
-                <span className="landing-flow-index t-num">{step.index}</span>
-                <h3 className="t-title">{step.title}</h3>
-                <p className="t-body">{step.body}</p>
-              </li>
-            ))}
-          </ol>
-          <p className="t-body-sm landing-flow-example">
-            Example: a <span className="t-num">4.50 USDC</span> payment inside a mandate of{" "}
-            <span className="t-num">10 USDC</span> per payment and <span className="t-num">100 USDC</span> total.
-            Seller attestation is missing. Category or purpose is not an enforced policy field.
-          </p>
-        </section>
-
-        <section className="landing-section landing-section-soft" id="spend-limits" aria-labelledby="landing-limits-heading">
-          <div className="page-width">
-            <p className="section-kicker">SPEND LIMITS</p>
-            <h2 id="landing-limits-heading" className="t-xl">Set the boundary before the first payment.</h2>
-            <ul className="landing-limits">
-              {LIMIT_CONTROLS.map(([title, detail]) => (
-                <li key={title}>
-                  <strong>{title}</strong>
-                  <p className="t-body-sm">{detail}</p>
-                </li>
-              ))}
-            </ul>
-            <p className="t-body landing-limits-note">
-              New payments must satisfy the on-chain mandate. Revoking a mandate does not undo a settled payment.
-              Delegated execution uses the approved agent&apos;s signature within the mandate; not every payment needs a new owner signature.
-            </p>
-          </div>
-        </section>
-
-        <section className="landing-proof" id="receipts" aria-labelledby="landing-proof-heading">
-          <div className="page-width landing-proof-grid">
-            <div className="landing-proof-copy">
-              <p className="landing-kicker-light">PROOF</p>
-              <h2 id="landing-proof-heading" className="t-xl">A receipt someone else can understand.</h2>
-              <p className="landing-proof-lede">
-                The public reader needs amount, mint, recipient, settlement state and evidence before addresses and instruction names.
-              </p>
-              <ul className="landing-proof-points">
-                <li><strong>Allowed.</strong> The program accepted this payment under the mandate.</li>
-                <li><strong>Paid.</strong> Settlement verified from the receipt on Solana.</li>
-                <li><strong>Seller attestation.</strong> A seller can sign a statement that it served a specific response. It does not prove the buyer received or accepted the work.</li>
-              </ul>
-            </div>
-            <IllustrativeReceiptCard />
-          </div>
-        </section>
+        <PaymentStory onOpenDashboard={onOpenDashboard} />
 
         <section className="landing-section page-width" id="developers" aria-labelledby="landing-dev-heading">
           <p className="section-kicker">DEVELOPERS</p>
           <h2 id="landing-dev-heading" className="t-xl">Fits the agent workflow you already have.</h2>
           <p className="t-body landing-dev-intro">
-            MCP and the TypeScript SDK are the integration surfaces. Protocol compatibility is not live acceptance.
+            Connect through the TypeScript SDK or Model Context Protocol (MCP), which gives agents tools to prepare payments and inspect results. ChainPay keeps the spending rules on-chain.
           </p>
           <div className="landing-dev-links">
             <a href={MCP_DOCS_URL} target="_blank" rel="noreferrer">MCP docs</a>
             <a href={MCP_TOOLS_URL} target="_blank" rel="noreferrer">MCP tools</a>
             <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">GitHub repository</a>
           </div>
-          <div className="landing-status-grid">
+          <details className="landing-integration-details"><summary>Integration availability on Devnet</summary><div className="landing-status-grid">
             <article>
               <h3 className="t-title">Custom x402/1.0</h3>
               <p className="t-body-sm">A custom receipt-proof adapter exists. Proof is a signature plus receipt PDA, not a sponsored transaction.</p>
@@ -268,7 +151,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
               <h3 className="t-title">Managed signing</h3>
               <p className="t-body-sm">Optional delegated approved-agent setup in the dashboard. The owner still approves the mandate. This is not hosted key custody for visitors.</p>
             </article>
-          </div>
+          </div></details>
         </section>
 
         <section className="landing-section landing-close page-width" id="faq" aria-labelledby="landing-faq-heading">
@@ -283,8 +166,10 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
             ))}
           </div>
           <div className="landing-cta">
-            <h2 className="t-lg">Create your first mandate.</h2>
-            <Button type="button" variant="primary" size="lg" label="Open dashboard" isDisabled={false} onClick={onOpenDashboard} />
+            <p className="section-kicker">YOUR RULES. THEIR NEXT MOVE.</p>
+            <h2 className="t-lg">Put your first agent on a budget.</h2>
+            <p>Start on Solana Devnet. Connecting your wallet does not authorize spending.</p>
+            <Button type="button" variant="secondary" size="lg" label="Open dashboard" isDisabled={false} onClick={onOpenDashboard} />
           </div>
         </section>
       </main>
