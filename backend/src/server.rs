@@ -6,7 +6,7 @@ mod auth;
 use auth::Principal;
 use axum::Extension;
 use std::{
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -65,6 +65,10 @@ pub struct BackendConfig {
     pub rpc: RpcConfig,
     pub auth_token: String,
     pub allowed_origins: Vec<String>,
+    /// Number of reverse proxies in front of this process. 0 means the socket
+    /// peer is the client. Any value above 0 makes the rate-limit identity come
+    /// from `X-Forwarded-For` instead, counting that many hops from the right.
+    pub trusted_proxy_hops: usize,
 }
 
 #[derive(Debug, Error)]
@@ -75,6 +79,8 @@ pub enum ConfigError {
     UnsupportedCluster,
     #[error("invalid RPC timeout configuration: {0}")]
     InvalidDuration(String),
+    #[error("CHAINPAY_TRUSTED_PROXY_HOPS must be a non-negative integer")]
+    InvalidTrustedProxyHops,
     #[error("invalid status store configuration: {0}")]
     Storage(#[from] StorageError),
 }
@@ -95,6 +101,18 @@ impl BackendConfig {
 
         let confirmation_timeout = parse_duration_secs("CHAINPAY_CONFIRMATION_TIMEOUT_SECS", 30)?;
         let poll_interval = parse_duration_ms("CHAINPAY_CONFIRMATION_POLL_MS", 500)?;
+        let trusted_proxy_hops = std::env::var("CHAINPAY_TRUSTED_PROXY_HOPS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|_| ConfigError::InvalidTrustedProxyHops)
+            })
+            .transpose()?
+            .unwrap_or(0);
+
         let allowed_origins = std::env::var("CHAINPAY_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| "http://localhost:5173".to_owned())
             .split(',')
@@ -119,6 +137,7 @@ impl BackendConfig {
             },
             auth_token: std::env::var("CHAINPAY_HTTP_AUTH_TOKEN").unwrap_or_default(),
             allowed_origins,
+            trusted_proxy_hops,
         })
     }
 
@@ -331,20 +350,47 @@ async fn shutdown_signal() {
     }
 }
 
+/// Client IP taken from `X-Forwarded-For`, counting `hops` trusted proxies in
+/// from the right. Returns `None` when no proxy is declared, the header is
+/// absent or malformed, or the position does not hold a valid IP — callers fall
+/// back to the socket peer. Entries left of the position were appended by
+/// whoever spoke to the outermost proxy and carry no authority.
+fn forwarded_client_ip(headers: &axum::http::HeaderMap, hops: usize) -> Option<String> {
+    if hops == 0 {
+        return None;
+    }
+    let raw = headers.get("x-forwarded-for")?.to_str().ok()?;
+    let entries = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let index = entries.len().checked_sub(hops)?;
+    let candidate = entries.get(index)?;
+    candidate.parse::<IpAddr>().ok().map(|ip| ip.to_string())
+}
+
 async fn auth_middleware(
     State(state): State<BackendState>,
     mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    // Never trust a caller-supplied forwarding header as the rate-limit identity.
-    let peer = request
+    // Behind a reverse proxy the socket peer is the proxy for every caller, which
+    // collapses per-peer rate limits into one shared bucket. Only consult
+    // `X-Forwarded-For` when the deployment declares how many proxies sit in
+    // front, and then only the entry those proxies wrote. Everything to the left
+    // of it is caller-supplied and is never trusted.
+    let socket_peer = request
         .extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
-        .map(|value| value.0.ip().to_string())
+        .map(|value| value.0.ip().to_string());
+    let peer = forwarded_client_ip(request.headers(), state.config.trusted_proxy_hops)
+        .or(socket_peer)
         .unwrap_or_else(|| "unknown-peer".into());
-    request
-        .headers_mut()
-        .insert("x-chainpay-peer", peer.parse().unwrap());
+    request.headers_mut().insert(
+        "x-chainpay-peer",
+        HeaderValue::from_str(&peer).unwrap_or(HeaderValue::from_static("unknown-peer")),
+    );
     let path = request.uri().path();
     if request.method() == axum::http::Method::OPTIONS
         || matches!(
@@ -1770,6 +1816,45 @@ mod tests {
     use axum::Router;
     use ed25519_dalek::{Signer as _, SigningKey};
     use serde_json::json;
+
+    fn xff(value: &str) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_str(value).unwrap());
+        headers
+    }
+
+    #[test]
+    fn forwarded_peer_is_ignored_until_a_proxy_count_is_declared() {
+        // Default deployment: the socket peer is the client, so a caller-supplied
+        // header must never become the rate-limit identity.
+        assert_eq!(forwarded_client_ip(&xff("203.0.113.9"), 0), None);
+        assert_eq!(forwarded_client_ip(&axum::http::HeaderMap::new(), 1), None);
+    }
+
+    #[test]
+    fn forwarded_peer_counts_trusted_hops_from_the_right() {
+        // One trusted proxy (the Render edge): only the entry it appended counts.
+        // A caller that sends its own X-Forwarded-For lands to the left of it and
+        // cannot choose its own bucket.
+        assert_eq!(
+            forwarded_client_ip(&xff("198.51.100.7, 203.0.113.9"), 1).as_deref(),
+            Some("203.0.113.9"),
+        );
+        assert_eq!(
+            forwarded_client_ip(&xff("spoofed, 198.51.100.7, 203.0.113.9"), 2).as_deref(),
+            Some("198.51.100.7"),
+        );
+    }
+
+    #[test]
+    fn forwarded_peer_falls_back_when_the_header_cannot_be_trusted() {
+        // Too few entries for the declared hop count, or a non-IP at that
+        // position, means we have no trustworthy client identity: fall back to
+        // the socket peer rather than rate-limiting on attacker-chosen text.
+        assert_eq!(forwarded_client_ip(&xff("203.0.113.9"), 2), None);
+        assert_eq!(forwarded_client_ip(&xff("not-an-ip"), 1), None);
+        assert_eq!(forwarded_client_ip(&xff("  , , "), 1), None);
+    }
 
     #[test]
     fn deterministic_ids_are_stable_and_namespaced() {

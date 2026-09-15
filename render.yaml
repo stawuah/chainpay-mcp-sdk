@@ -9,6 +9,11 @@ services:
     envVars:
       - key: CHAINPAY_CLUSTER
         value: devnet
+      # Render serves `type: web` behind its edge proxy, so the socket peer is the
+      # proxy for every caller. Without this, per-peer auth rate limits collapse
+      # into one shared bucket and a single client can lock everyone out of login.
+      - key: CHAINPAY_TRUSTED_PROXY_HOPS
+        value: "1"
       - key: CHAINPAY_RPC_URL
         sync: false
       - key: CHAINPAY_PROGRAM_ID

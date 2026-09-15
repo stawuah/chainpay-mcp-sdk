@@ -95,7 +95,18 @@ pub(super) async fn login(
         return Err(ApiError::Unauthorized);
     }
     let now = now_ms();
-    if !state.store.auth_rate("login", now, 200).await? {
+    // The global bucket caps total verification work; the per-peer bucket stops a
+    // single caller from consuming it and locking every other owner out of login.
+    let peer = headers
+        .get("x-chainpay-peer")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown-peer");
+    if !state.store.auth_rate("login", now, 2_000).await?
+        || !state
+            .store
+            .auth_rate(&format!("login-peer:{peer}"), now, 20)
+            .await?
+    {
         return Err(ApiError::RateLimited);
     }
     let key = format!("challenge:{}", input.challenge_id);
