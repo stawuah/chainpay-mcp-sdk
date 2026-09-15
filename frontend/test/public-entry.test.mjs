@@ -92,6 +92,28 @@ test("AppShell does not statically import wallet connect or SDK client", async (
   assert.match(source, /lazy\(\(\) => import\("\.\/verify\/VerifyPage"\)\)/);
 });
 
+test("the animation libraries stay out of the every-route chunk", async () => {
+  // LandingPage is imported eagerly by AppShell, so a static `import { gsap }`
+  // in this hook puts gsap, ScrollTrigger and Lenis — about 120 kB — into a
+  // chunk that loads on every route, /verify/<pda> included. That page has no
+  // animation and exists for people with no wallet.
+  const source = await readFile(resolve(root, "landing/useLandingMotion.ts"), "utf8");
+
+  for (const bare of ['from "gsap"', 'from "gsap/ScrollTrigger"', 'from "lenis"']) {
+    const statik = new RegExp(`^\\s*import\\s+(?!type\\b)[^\\n]*${bare.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "m");
+    assert.equal(statik.test(source), false, `static import of ${bare} would ship it on every route`);
+  }
+
+  for (const lazy of ["gsap", "gsap/ScrollTrigger", "lenis"]) {
+    assert.match(source, new RegExp(`import\\("${lazy.replace("/", "\\/")}"\\)`));
+  }
+
+  // Unmounting before the chunk lands must not leave triggers and a ticker that
+  // nothing reverts.
+  assert.match(source, /if \(disposed \|\| !root\.current\) return;/);
+  assert.match(source, /media\?\.revert\(\)/);
+});
+
 test("the verify route renders without mounting WalletController", async () => {
   // /verify/<pda> is the page a finance reader opens with no wallet. Lazy-loading
   // WalletController is not enough if the shell mounts it on every route: the
