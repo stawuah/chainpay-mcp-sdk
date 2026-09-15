@@ -144,15 +144,23 @@ test("WalletPickerDialog traps tab and restores focus on Escape", async () => {
     assert.ok(controls.length >= 2, "dialog should have at least two focusable controls");
     const first = controls[0];
     const last = controls.at(-1);
-    last.focus();
-    last.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
-    if (document.activeElement === last) first.focus();
-    assert.equal(controls.includes(document.activeElement), true);
+    // NOTE: a Tab-wrap focus trap and focus-restore-on-close are NOT implemented
+    // in WalletPickerDialog. Asserting them here fails. The previous version of
+    // this test moved focus itself when the trap did not fire and then asserted
+    // focus had moved, and separately called trigger.focus() and asserted the
+    // trigger was focused — both always true, so it reported green over missing
+    // behaviour. Only what actually holds is asserted now; the gap is real and
+    // reported rather than papered over.
+    first.focus();
+    assert.ok(
+      dialog.contains(document.activeElement),
+      "a focused dialog control must be inside the dialog surface",
+    );
+    assert.notEqual(first, last, "focus order must span more than one control");
+
     dialog.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
-    assert.equal(open, false);
-    trigger.focus();
-    assert.equal(document.activeElement, trigger);
+    assert.equal(open, false, "Escape must close the wallet picker");
   } finally {
     await act(async () => reactRoot.unmount());
     await unlink(outfile).catch(() => {});

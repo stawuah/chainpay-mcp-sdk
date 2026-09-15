@@ -57,6 +57,18 @@ function Shell() {
     />
   );
 
+  // /verify/<pda> exists so a finance reader with no wallet can open a receipt.
+  // Mounting WalletController around every route pulled its chunk —
+  // @solana/web3.js and @wallet-standard — onto that page anyway. The landing
+  // keeps it, because it does offer a connect action; verify never signs.
+  if (currentRoute.kind === "verify") {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <Routes />
+      </Suspense>
+    );
+  }
+
   return (
     <Suspense fallback={currentRoute.kind === "landing" ? landingFallback : <RouteFallback />}>
       <WalletController>

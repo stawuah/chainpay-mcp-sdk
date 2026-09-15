@@ -41,7 +41,11 @@ export function Router({ children }: { children: ReactNode }) {
 
   const navigate = useCallback<NavigateFn>((route, options) => {
     const path = buildPath(route);
-    if (options?.replace) window.history.replaceState(window.history.state, "", path);
+    // Navigating to the path already showing is not a new history entry.
+    // Pushing one anyway meant clicking a tab N times cost N presses of Back to
+    // leave the page.
+    const samePath = path === window.location.pathname;
+    if (options?.replace || samePath) window.history.replaceState(window.history.state, "", path);
     else window.history.pushState(window.history.state, "", path);
     setCurrentRoute(route);
   }, []);
