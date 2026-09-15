@@ -499,7 +499,8 @@ impl StatusStore {
                                 .get(payment_id)
                                 .map(|payment| payment.mandate.clone())
                         });
-                        if mandate.is_some_and(|expected| linked_mandate.as_deref() != Some(expected))
+                        if mandate
+                            .is_some_and(|expected| linked_mandate.as_deref() != Some(expected))
                         {
                             return None;
                         }

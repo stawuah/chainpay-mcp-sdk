@@ -37,10 +37,10 @@ use tower_http::{
 
 use crate::{
     api::{
-        BackendConfigResponse, JsonRpcProxyRequest, ManagedPaymentSubmissionRequest,
-        ManagedSignerChallengeRequest, ManagedSignerChallengeResponse,
-        ManagedSignerProvisionRequest, PaymentRequestVerificationResponse,
-        ListX402PaymentsQuery, PaymentSubmissionRequest, PayshCatalogResponse,
+        BackendConfigResponse, JsonRpcProxyRequest, ListX402PaymentsQuery,
+        ManagedPaymentSubmissionRequest, ManagedSignerChallengeRequest,
+        ManagedSignerChallengeResponse, ManagedSignerProvisionRequest,
+        PaymentRequestVerificationResponse, PaymentSubmissionRequest, PayshCatalogResponse,
         SignedPaymentRequest, TransactionSubmissionRequest, TrustedSellerPublicConfig,
         X402JobListResponse, X402JobResponse, X402PaymentMetadata, X402ProofRequest,
     },
@@ -1258,15 +1258,17 @@ async fn list_x402_payments(
         .await?;
     let mut jobs = Vec::with_capacity(rows.len());
     for (record, mandate) in rows {
-        if !record.idempotency_key.starts_with(&format!("{}:", principal.wallet)) {
+        if !record
+            .idempotency_key
+            .starts_with(&format!("{}:", principal.wallet))
+        {
             continue;
         }
         if let Some(payment_id) = &record.payment_id {
             let Some(payment) = state.store.get_payment(payment_id).await? else {
                 continue;
             };
-            recovery::authorize_payment(&state, &principal, &payment, "list_x402_payments")
-                .await?;
+            recovery::authorize_payment(&state, &principal, &payment, "list_x402_payments").await?;
         }
         let (protocol, payable, amount) = classify_x402_challenge(&record.challenge);
         let error = record.error.clone().or_else(|| {
@@ -1295,9 +1297,27 @@ async fn list_x402_payments(
 }
 
 async fn fetch_paysh_catalog(
+    State(state): State<BackendState>,
     Extension(principal): Extension<Principal>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<PayshCatalogResponse>, ApiError> {
     auth::owner(&principal, &principal.wallet)?;
+    // The only outbound request this service makes on behalf of a caller. The
+    // catalog module caches, but a signed-in owner should still not be able to
+    // aim this at a third party in a loop.
+    let peer = headers
+        .get("x-chainpay-peer")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown-peer");
+    let now = now_ms();
+    if !state.store.auth_rate("paysh-catalog", now, 120).await?
+        || !state
+            .store
+            .auth_rate(&format!("paysh-catalog-peer:{peer}"), now, 20)
+            .await?
+    {
+        return Err(ApiError::RateLimited);
+    }
     let providers = catalog::fetch_paysh_catalog().await?;
     Ok(Json(PayshCatalogResponse {
         source: "pay.sh",
