@@ -61,7 +61,7 @@ test("legacy-only and version 0 advertisements keep v1 unverified", async () => 
   assert.equal(versioned.v1Advertisement, "unverified");
 });
 
-test("numeric 1 turns on v1 compile for that wallet without claiming Jupiter signed", async () => {
+test("a wallet advertising 1 is reported as advertised, not as a live v1 path", async () => {
   const caps = await capabilities();
   const report = caps.reportWalletCapabilities({
     source: "wallet-standard",
@@ -71,12 +71,22 @@ test("numeric 1 turns on v1 compile for that wallet without claiming Jupiter sig
     features: feature(["legacy", 0, 1]),
   });
   assert.deepEqual(report.advertisedVersions, ["legacy", "0", "1"]);
+
+  // What the wallet advertises is real evidence and is surfaced.
   assert.equal(report.v1Advertisement, "advertised");
-  assert.equal(report.productionTransactionFormat, 1);
+
+  // What ChainPay does with it is not. No production caller reaches
+  // sdk/src/transaction-v1.ts; the payment path serializes a legacy
+  // Transaction in sdk/src/solana.ts. Reporting "v1 compile is on" for a path
+  // that cannot emit v1 is the kind of shipped-capability claim PRODUCT.md
+  // rules out, and this assertion previously certified it.
+  assert.equal(report.productionTransactionFormat, "legacy");
+
   const copy = caps.describeWalletCapabilities(report);
   assert.match(copy.summary, /legacy, 0, 1/);
-  assert.match(copy.summary, /v1 compile is on/);
-  assert.match(copy.summary, /not a Jupiter signing test/);
+  assert.match(copy.summary, /advertises v1/);
+  assert.match(copy.summary, /still builds legacy transactions/);
+  assert.equal(/v1 compile is on/.test(copy.summary), false);
 });
 
 test("legacy injected wallets stay unverified even if a fixture advertises 1", async () => {

@@ -15,8 +15,19 @@ export type WalletCapabilityReport = {
   productionTransactionFormat: "legacy" | 1;
 };
 
-/** SDK v1 compile is on. Wallets that do not advertise 1 still get legacy. Jupiter has not signed. */
-export const V1_PRODUCTION_ENABLED = true;
+/**
+ * Whether any dashboard signing path actually compiles a v1 transaction.
+ *
+ * It does not. `sdk/src/transaction-v1.ts` can build one and is tested, but no
+ * production caller reaches it: the only serializer on the payment path is the
+ * hardcoded legacy `Transaction` in `sdk/src/solana.ts`. While that is true this
+ * stays false, so Settings reports the format the dashboard really uses.
+ *
+ * What the wallet advertises is reported separately as `v1Advertisement`, which
+ * is what this PR set out to surface. Flip this only together with a signing
+ * path that emits v1.
+ */
+export const V1_PRODUCTION_ENABLED = false;
 
 export type WalletCapabilitySnapshot = {
   name: string;
@@ -138,12 +149,16 @@ export function describeWalletCapabilities(report: WalletCapabilityReport) {
     .join(" · ");
   const productionLabel = report.productionTransactionFormat === 1
     ? "v1 compile on for this advertised wallet. Dashboard still signs legacy until that wallet path is used."
-    : "Legacy. v1 compile stays off until this wallet advertises 1.";
+    : report.v1Advertisement === "advertised"
+      ? "Legacy. This wallet advertises v1; no ChainPay signing path compiles v1 yet."
+      : "Legacy. v1 compile stays off until this wallet advertises 1.";
   const summary = report.source === "legacy-injected"
     ? `${report.name} connected through a legacy injected provider. Wallet Standard supportedTransactionVersions were not read. Transaction v1 is unverified. ChainPay still builds legacy transactions.`
     : report.productionTransactionFormat === 1
       ? `${identity} advertised transaction versions: ${versionsLabel}. SDK v1 compile is on for this wallet. ${chainLabel}. That is not a Jupiter signing test.`
-      : `${identity} advertised transaction versions: ${versionsLabel}. Transaction v1 is unverified. ${chainLabel}. ChainPay still builds legacy transactions.`;
+      : report.v1Advertisement === "advertised"
+        ? `${identity} advertised transaction versions: ${versionsLabel}. This wallet advertises v1, which is not a Jupiter signing test. ${chainLabel}. ChainPay still builds legacy transactions.`
+        : `${identity} advertised transaction versions: ${versionsLabel}. Transaction v1 is unverified. ${chainLabel}. ChainPay still builds legacy transactions.`;
   return {
     identity,
     versionsLabel,
