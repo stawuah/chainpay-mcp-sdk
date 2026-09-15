@@ -63,9 +63,9 @@
   margin-top: 32px;
 }
 
-.landing .landing-hero-actions .xds-button,
-.landing .landing-cta .xds-button,
-.landing .top-actions .xds-button {
+.landing .landing-hero-actions .astryx-button,
+.landing .landing-cta .astryx-button,
+.landing .top-actions .astryx-button {
   border-radius: 100px;
 }
 
@@ -245,8 +245,8 @@
     justify-items: stretch;
   }
 
-  .landing .landing-hero-actions .xds-button,
-  .landing .landing-cta .xds-button {
+  .landing .landing-hero-actions .astryx-button,
+  .landing .landing-cta .astryx-button {
     width: 100%;
   }
 
@@ -352,7 +352,7 @@
 .landing .landing-cta { background: var(--blue); color: white; padding: 64px; gap: 24px; }
 .landing .landing-cta :is(h2,p) { color: white; }
 .landing .landing-cta h2 { font-size: clamp(36px, 5vw, 64px); line-height: 1.1; max-width: 15ch; letter-spacing: -.055em; }
-.landing .landing-cta .xds-button { background: white; color: var(--blue); }
+.landing .landing-cta .astryx-button { background: white; color: var(--blue); }
 @media (max-width: 960px) {
  .landing .landing-hero { grid-template-columns: 1fr; max-width: 640px; padding-top: 56px; gap: 48px; }
  .landing .landing-hero h1 { max-width: 13ch; font-size: 64px; }
@@ -379,3 +379,34 @@
 @media (prefers-reduced-motion: reduce) {
  .landing *, .landing *::before, .landing *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
 }
+
+/* One persistent document, four scroll-controlled states. Original records stay
+   in reading order; the visual duplicate contains no interactive controls. */
+.story-morph { display: none; }
+@media (min-width: 1100px) and (min-height: 800px) and (prefers-reduced-motion: no-preference) {
+ .story-sequence.is-morphing { display: grid; grid-template-columns: 1fr 1fr; column-gap: 100px; align-items: start; }
+ .is-morphing .story-morph { display: block; grid-column: 2; grid-row: 1; position: relative; margin-top: 70px; padding: 24px; border-radius: 36px; background: var(--soft); }
+ .is-morphing .story-chapters { grid-column: 1; grid-row: 1; }
+ .is-morphing .story-chapter { display: flex; align-items: center; min-height: 85vh; padding: 80px 0; }
+ .is-morphing .story-chapter:last-child { min-height: 95vh; }
+ .is-morphing .story-stage { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+ .story-morph-label { display: flex; justify-content: space-between; gap: 16px; font-size: 10px; color: var(--body); padding: 0 4px 20px; }
+ .story-morph-frame { display: grid; border-radius: 24px; background: white; border: 1px solid var(--line); box-shadow: 0 18px 42px -24px #14213d35; }
+ .story-morph-state { grid-area: 1 / 1; align-self: start; pointer-events: none; }
+ .story-morph-state .story-document { border: 0; background: transparent; box-shadow: none; padding: 24px; }
+ .story-morph-progress { height: 3px; background: var(--line); border-radius: 3px; margin: 24px 4px 12px; overflow: hidden; }
+ .story-morph-progress > span { display: block; width: 100%; height: 100%; background: var(--blue); transform-origin: left; }
+ .story-morph-steps { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--body); padding: 0 4px; }
+}
+
+/* Explicit action palette: opaque surfaces, readable labels in every context. */
+.landing .astryx-button[data-variant="primary"] { background: var(--blue); color: #fff; }
+.landing .astryx-button[data-variant="secondary"] { background: var(--soft); color: #0045d8; }
+.landing .landing-cta .astryx-button { background: #fff; color: #0045d8; }
+.landing .landing-cta .astryx-button:focus-visible { outline: 3px solid white; outline-offset: 5px; }
+@media (hover: hover) and (pointer: fine) {
+ .landing .astryx-button[data-variant="primary"]:hover { background: #0045d8; color: white; }
+ .landing .astryx-button[data-variant="secondary"]:hover { background: #dbe7ff; color: #003bb8; }
+ .landing .landing-cta .astryx-button:hover { background: #eff4ff; color: #003bb8; }
+}
+.is-morphing > .pin-spacer { grid-column: 2; grid-row: 1; }

@@ -29,3 +29,8 @@ The check covers desktop and 390/320px layouts, receipt anchor navigation,
 reduced-motion teardown, menu Escape, CTA contrast, and dashboard navigation.
 Screenshots are written to `/tmp/chainpay-landing-*.png`. External requests are
 blocked; no wallet or payment is used.
+
+`node test/landing-motion.browser.mjs` additionally checks the desktop pinned
+sequence in both scroll directions, all four visible states, card viewport
+bounds, button text contrast (normal/hover/focus), and reduced-motion teardown.
+It uses the same Playwright override and local server on port 5189.

@@ -49,9 +49,16 @@ const chapters = [
 export function PaymentStory({ onOpenDashboard }: { onOpenDashboard: () => void }) {
   return <section id="how-it-works" className="payment-story" aria-labelledby="story-heading">
     <div className="story-intro page-width"><p className="section-kicker">FROM INTENT TO RECEIPT</p><h2 id="story-heading">One agent. One payment.<br /><span>You, in control throughout.</span></h2><p>Follow an illustrative 4.50 USDC payment from its first limit to its final record. No payment is made in this example.</p></div>
-    <div className="story-chapters page-width">{chapters.map(({id, number, label, title, body, detail, visual: Visual}) => <section id={id} className="story-chapter" key={id} aria-labelledby={`${id}-heading`}>
+    <div className="story-sequence page-width">
+      <div className="story-morph" aria-hidden="true">
+        <div className="story-morph-label"><span>RESEARCH AGENT</span><span>Illustrative example</span></div>
+        <div className="story-morph-frame">{chapters.map(({id, visual: Visual}) => <div className="story-morph-state" key={id}><Visual /></div>)}</div>
+        <div className="story-morph-progress"><span /></div>
+        <div className="story-morph-steps"><span>Permission</span><span>Payment</span><span>Receipt</span><span>Control</span></div>
+      </div>
+      <div className="story-chapters">{chapters.map(({id, number, label, title, body, detail, visual: Visual}) => <section id={id} className="story-chapter" key={id} aria-labelledby={`${id}-heading`}>
       <div className="story-copy"><p className="story-step"><span>{number}</span>{label}</p><h2 id={`${id}-heading`}>{title}</h2><p className="story-body">{body}</p><p className="story-detail">{detail}</p>{number === "04" && <Button variant="primary" label="Open dashboard" onClick={onOpenDashboard} />}</div>
       <div className={`story-stage story-stage-${number}`}><Visual /></div>
-    </section>)}</div>
+    </section>)}</div></div>
   </section>;
 }
