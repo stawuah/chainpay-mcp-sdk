@@ -16,7 +16,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderValue, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -40,9 +40,11 @@ use crate::{
         BackendConfigResponse, JsonRpcProxyRequest, ManagedPaymentSubmissionRequest,
         ManagedSignerChallengeRequest, ManagedSignerChallengeResponse,
         ManagedSignerProvisionRequest, PaymentRequestVerificationResponse,
-        PaymentSubmissionRequest, SignedPaymentRequest, TransactionSubmissionRequest,
-        TrustedSellerPublicConfig, X402PaymentMetadata, X402ProofRequest,
+        ListX402PaymentsQuery, PaymentSubmissionRequest, PayshCatalogResponse,
+        SignedPaymentRequest, TransactionSubmissionRequest, TrustedSellerPublicConfig,
+        X402JobListResponse, X402JobResponse, X402PaymentMetadata, X402ProofRequest,
     },
+    catalog::{self, CatalogError},
     delivery::TrustedSellerMapping,
     rpc::{LatestBlockhash, RpcAccount, RpcClient, RpcConfig, RpcError},
     signer::{PrivySignerProvider, SignerConfigError, SignerProviderError},
@@ -240,6 +242,8 @@ enum ApiError {
     SignerProvider(#[from] SignerProviderError),
     #[error("managed signer service is not configured")]
     ManagedSignerUnavailable,
+    #[error("catalog unavailable: {0}")]
+    Catalog(#[from] CatalogError),
 }
 
 impl IntoResponse for ApiError {
@@ -256,6 +260,7 @@ impl IntoResponse for ApiError {
             Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::SignerProvider(_) => StatusCode::BAD_GATEWAY,
             Self::ManagedSignerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Catalog(_) => StatusCode::BAD_GATEWAY,
         };
         let body = Json(json!({
             "error": self.to_string(),
@@ -336,7 +341,9 @@ pub fn build_router(state: BackendState) -> Router {
             "/v1/delivery-attestations/{receipt_address}",
             get(delivery_routes::get_delivery_attestation),
         )
+        .route("/v1/x402-payments", get(list_x402_payments))
         .route("/v1/x402-payments/proof", post(record_x402_proof))
+        .route("/v1/catalog/paysh", get(fetch_paysh_catalog))
         .route("/v1/transactions/submit", post(submit_transaction))
         .route("/v1/transactions/{transaction_id}", get(get_transaction))
         .route("/rpc", post(proxy_rpc))
@@ -1189,6 +1196,117 @@ async fn persist_payment(
     Ok(())
 }
 
+fn classify_x402_challenge(challenge: &Value) -> (String, bool, Option<String>) {
+    if challenge.get("x402Version").and_then(Value::as_u64) == Some(2) {
+        let amount = challenge
+            .get("accepts")
+            .and_then(Value::as_array)
+            .and_then(|accepts| accepts.first())
+            .and_then(|option| option.get("maxAmountRequired"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        return ("standard_x402_v2".into(), false, amount);
+    }
+    if challenge.get("version").and_then(Value::as_str) == Some("x402/1.0") {
+        let amount = challenge
+            .get("amount")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                challenge
+                    .get("accepts")
+                    .and_then(Value::as_array)
+                    .and_then(|accepts| accepts.first())
+                    .and_then(|option| option.get("amount"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
+        return ("chainpay_custom_x402".into(), true, amount);
+    }
+    if challenge.get("version").and_then(Value::as_str) == Some("mpp")
+        || challenge.get("mppVersion").is_some()
+    {
+        return ("mpp".into(), false, None);
+    }
+    ("unknown".into(), false, None)
+}
+
+fn x402_status_label(status: X402PaymentStatus) -> String {
+    match status {
+        X402PaymentStatus::Prepared => "prepared",
+        X402PaymentStatus::Submitted => "submitted",
+        X402PaymentStatus::Confirmed => "confirmed",
+        X402PaymentStatus::Verified => "verified",
+        X402PaymentStatus::Failed => "failed",
+    }
+    .into()
+}
+
+async fn list_x402_payments(
+    State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<ListX402PaymentsQuery>,
+) -> Result<Json<X402JobListResponse>, ApiError> {
+    auth::owner(&principal, &principal.wallet)?;
+    if let Some(mandate) = query.mandate.as_deref() {
+        validate_solana_address(mandate, "mandate")?;
+    }
+    let limit = query.limit.unwrap_or(50).min(100);
+    let rows = state
+        .store
+        .list_x402_for_owner(&principal.wallet, query.mandate.as_deref(), limit)
+        .await?;
+    let mut jobs = Vec::with_capacity(rows.len());
+    for (record, mandate) in rows {
+        if !record.idempotency_key.starts_with(&format!("{}:", principal.wallet)) {
+            continue;
+        }
+        if let Some(payment_id) = &record.payment_id {
+            let Some(payment) = state.store.get_payment(payment_id).await? else {
+                continue;
+            };
+            recovery::authorize_payment(&state, &principal, &payment, "list_x402_payments")
+                .await?;
+        }
+        let (protocol, payable, amount) = classify_x402_challenge(&record.challenge);
+        let error = record.error.clone().or_else(|| {
+            if !payable {
+                Some("x402_unsupported_sponsor".into())
+            } else {
+                None
+            }
+        });
+        jobs.push(X402JobResponse {
+            x402_payment_id: record.x402_payment_id,
+            resource: record.resource,
+            mandate,
+            amount,
+            status: x402_status_label(record.status),
+            protocol,
+            payable,
+            receipt_address: record.receipt_address,
+            transaction_signature: record.transaction_signature,
+            error,
+            created_at_ms: record.created_at_ms,
+            updated_at_ms: record.updated_at_ms,
+        });
+    }
+    Ok(Json(X402JobListResponse { jobs }))
+}
+
+async fn fetch_paysh_catalog(
+    Extension(principal): Extension<Principal>,
+) -> Result<Json<PayshCatalogResponse>, ApiError> {
+    auth::owner(&principal, &principal.wallet)?;
+    let providers = catalog::fetch_paysh_catalog().await?;
+    Ok(Json(PayshCatalogResponse {
+        source: "pay.sh",
+        estimate_only: true,
+        fetched_at_ms: now_ms(),
+        providers,
+    }))
+}
+
 async fn record_x402_proof(
     State(state): State<BackendState>,
     Extension(principal): Extension<Principal>,
@@ -1991,6 +2109,29 @@ mod tests {
             latest_blockhash(State(state)).await,
             Err(ApiError::RateLimited)
         ));
+    }
+
+    #[test]
+    fn classifies_custom_and_blocked_x402_challenges() {
+        let (protocol, payable, amount) = classify_x402_challenge(&json!({
+            "version": "x402/1.0",
+            "amount": "5000"
+        }));
+        assert_eq!(protocol, "chainpay_custom_x402");
+        assert!(payable);
+        assert_eq!(amount.as_deref(), Some("5000"));
+
+        let (protocol, payable, amount) = classify_x402_challenge(&json!({
+            "x402Version": 2,
+            "accepts": [{ "maxAmountRequired": "9000" }]
+        }));
+        assert_eq!(protocol, "standard_x402_v2");
+        assert!(!payable);
+        assert_eq!(amount.as_deref(), Some("9000"));
+
+        let (protocol, payable, _) = classify_x402_challenge(&json!({ "version": "mpp" }));
+        assert_eq!(protocol, "mpp");
+        assert!(!payable);
     }
 
     #[test]

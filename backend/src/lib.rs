@@ -1,6 +1,7 @@
 //! ChainPay backend orchestration boundary.
 
 pub mod api;
+pub mod catalog;
 pub mod delivery;
 pub mod rpc;
 pub mod server;

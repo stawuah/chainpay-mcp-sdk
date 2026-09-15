@@ -505,6 +505,24 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .assistant-side { display: grid; gap: 20px; }
 .assistant-side h2 { margin-top: 12px; font-size: 24px; font-weight: 400; }
 .assistant-side p { margin-top: 11px; color: var(--body); font-size: 13px; line-height: 1.6; }
+.x402-jobs-card { min-width: 0; }
+.x402-jobs-skeleton { min-height: 120px; margin-top: 12px; border-radius: 12px; }
+.x402-jobs-list { display: grid; gap: 12px; margin-top: 16px; }
+.x402-job-row { padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.x402-job-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.x402-job-heading h3 { margin-top: 8px; color: var(--ink); font-size: 14px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.x402-job-meta { display: grid; gap: 8px; margin-top: 12px; }
+.x402-job-meta span { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; }
+.x402-job-meta code { color: var(--ink); font: 11px var(--mono); overflow-wrap: anywhere; }
+.x402-blocked-note { color: #9a5b00 !important; }
+.x402-cycle-rail { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.x402-cycle-step { padding: 5px 8px; border-radius: 999px; background: #f4f6fb; color: var(--body); font: 500 10px var(--mono); }
+.x402-receipt-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; color: var(--blue); font-size: 12px; font-weight: 600; text-decoration: none; }
+.catalog-prefill-card { display: grid; gap: 10px; padding: 16px; margin-top: 18px; border: 1px dashed var(--line); border-radius: 14px; background: #fbfcff; }
+.catalog-prefill-card > p { color: var(--body); font-size: 12px; line-height: 1.55; }
+.catalog-prefill-row { display: grid; gap: 12px; }
+.catalog-prefill-skeleton { min-height: 44px; border-radius: 10px; }
+.catalog-prefill-note { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .full-button { width: 100%; margin-top: 20px; }
 .safety-card { display: flex; align-items: flex-start; gap: 13px; }
 .safety-card b { font-size: 13px; } .safety-card p { margin-top: 5px; }

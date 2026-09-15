@@ -476,6 +476,65 @@ impl StatusStore {
         }
     }
 
+    /// List x402 jobs for one owner wallet. Idempotency keys are `{wallet}:{user_key}`.
+    pub async fn list_x402_for_owner(
+        &self,
+        owner_wallet: &str,
+        mandate: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<(X402PaymentRecord, Option<String>)>, StorageError> {
+        let prefix = format!("{owner_wallet}:");
+        let limit = limit.clamp(1, 100) as usize;
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let state = state.read().await;
+                let mut rows: Vec<(X402PaymentRecord, Option<String>)> = state
+                    .x402_payments
+                    .values()
+                    .filter(|record| record.idempotency_key.starts_with(&prefix))
+                    .filter_map(|record| {
+                        let linked_mandate = record.payment_id.as_ref().and_then(|payment_id| {
+                            state
+                                .payments
+                                .get(payment_id)
+                                .map(|payment| payment.mandate.clone())
+                        });
+                        if mandate.is_some_and(|expected| linked_mandate.as_deref() != Some(expected))
+                        {
+                            return None;
+                        }
+                        Some((record.clone(), linked_mandate))
+                    })
+                    .collect();
+                rows.sort_by(|left, right| right.0.updated_at_ms.cmp(&left.0.updated_at_ms));
+                rows.truncate(limit);
+                Ok(rows)
+            }
+            StorageBackend::Postgres(pool) => {
+                let rows = if let Some(mandate) = mandate {
+                    sqlx::query(X402_LIST_FOR_OWNER_WITH_MANDATE)
+                        .bind(format!("{prefix}%"))
+                        .bind(mandate)
+                        .bind(limit as i64)
+                        .fetch_all(pool)
+                        .await?
+                } else {
+                    sqlx::query(X402_LIST_FOR_OWNER)
+                        .bind(format!("{prefix}%"))
+                        .bind(limit as i64)
+                        .fetch_all(pool)
+                        .await?
+                };
+                rows.into_iter()
+                    .map(|row| {
+                        let mandate = row.try_get::<Option<String>, _>("mandate")?;
+                        Ok((x402_from_row(row)?, mandate))
+                    })
+                    .collect()
+            }
+        }
+    }
+
     pub async fn find_x402_by_idempotency(
         &self,
         key: &str,
@@ -903,6 +962,35 @@ const X402_SELECT_BY_IDEMPOTENCY: &str = r#"
     FROM x402_payments WHERE idempotency_key = $1
 "#;
 
+const X402_LIST_FOR_OWNER: &str = r#"
+    SELECT x.x402_payment_id, x.idempotency_key, x.resource, x.payment_id,
+           x.receipt_address, x.transaction_signature, x.status, x.challenge, x.proof,
+           x.response_status, x.error,
+           (EXTRACT(EPOCH FROM x.created_at) * 1000)::BIGINT AS created_at_ms,
+           (EXTRACT(EPOCH FROM x.updated_at) * 1000)::BIGINT AS updated_at_ms,
+           p.mandate
+    FROM x402_payments x
+    LEFT JOIN payments p ON p.payment_id = x.payment_id
+    WHERE x.idempotency_key LIKE $1 ESCAPE '\'
+    ORDER BY x.updated_at DESC
+    LIMIT $2
+"#;
+
+const X402_LIST_FOR_OWNER_WITH_MANDATE: &str = r#"
+    SELECT x.x402_payment_id, x.idempotency_key, x.resource, x.payment_id,
+           x.receipt_address, x.transaction_signature, x.status, x.challenge, x.proof,
+           x.response_status, x.error,
+           (EXTRACT(EPOCH FROM x.created_at) * 1000)::BIGINT AS created_at_ms,
+           (EXTRACT(EPOCH FROM x.updated_at) * 1000)::BIGINT AS updated_at_ms,
+           p.mandate
+    FROM x402_payments x
+    INNER JOIN payments p ON p.payment_id = x.payment_id
+    WHERE x.idempotency_key LIKE $1 ESCAPE '\'
+      AND p.mandate = $2
+    ORDER BY x.updated_at DESC
+    LIMIT $3
+"#;
+
 const MANAGED_SIGNER_CHALLENGE_SELECT_BY_ID: &str = r#"
     SELECT challenge_id, owner_wallet, mandate_pda, message, expires_at_ms,
            consumed_at_ms, created_at_ms
@@ -1241,6 +1329,96 @@ mod tests {
                 .payment_id,
             "payment-1"
         );
+    }
+
+    #[tokio::test]
+    async fn lists_x402_jobs_for_one_owner_and_mandate() {
+        let store = StatusStore::in_memory();
+        let owner = "owner-wallet";
+        let other = "other-wallet";
+        let mandate_a = "mandate-a";
+        let mandate_b = "mandate-b";
+
+        store
+            .put_payment(PaymentRecord {
+                payment_id: "payment-a".into(),
+                idempotency_key: "invoice-a".into(),
+                mandate: mandate_a.into(),
+                invoice_hash: "00".repeat(32),
+                receipt_address: None,
+                agent: None,
+                mint: None,
+                recipient: None,
+                amount: None,
+                token_program: None,
+                signing_mode: SigningMode::Human,
+                signature: None,
+                slot: None,
+                status: PaymentStatus::Prepared,
+                error: None,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .await
+            .unwrap();
+        store
+            .put_payment(PaymentRecord {
+                payment_id: "payment-b".into(),
+                idempotency_key: "invoice-b".into(),
+                mandate: mandate_b.into(),
+                invoice_hash: "11".repeat(32),
+                receipt_address: None,
+                agent: None,
+                mint: None,
+                recipient: None,
+                amount: None,
+                token_program: None,
+                signing_mode: SigningMode::Human,
+                signature: None,
+                slot: None,
+                status: PaymentStatus::Prepared,
+                error: None,
+                created_at_ms: 2,
+                updated_at_ms: 2,
+            })
+            .await
+            .unwrap();
+
+        for (wallet, payment_id, suffix, updated_at_ms) in [
+            (owner, "payment-a", "a", 10_u64),
+            (owner, "payment-b", "b", 20_u64),
+            (other, "payment-a", "c", 30_u64),
+        ] {
+            store
+                .put_x402(X402PaymentRecord {
+                    x402_payment_id: format!("x402-{suffix}"),
+                    idempotency_key: format!("{wallet}:job-{suffix}"),
+                    resource: format!("https://example/{suffix}"),
+                    payment_id: Some(payment_id.into()),
+                    receipt_address: None,
+                    transaction_signature: None,
+                    status: X402PaymentStatus::Prepared,
+                    challenge: serde_json::json!({"version":"x402/1.0","amount":"1000"}),
+                    proof: None,
+                    response_status: None,
+                    error: None,
+                    created_at_ms: updated_at_ms,
+                    updated_at_ms,
+                })
+                .await
+                .unwrap();
+        }
+
+        let owner_jobs = store.list_x402_for_owner(owner, None, 10).await.unwrap();
+        assert_eq!(owner_jobs.len(), 2);
+        assert_eq!(owner_jobs[0].0.x402_payment_id, "x402-b");
+
+        let filtered = store
+            .list_x402_for_owner(owner, Some(mandate_a), 10)
+            .await
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].1.as_deref(), Some(mandate_a));
     }
 
     #[tokio::test]

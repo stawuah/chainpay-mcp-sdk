@@ -115,6 +115,49 @@ pub struct X402ProofRequest {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListX402PaymentsQuery {
+    #[serde(default)]
+    pub mandate: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct X402JobResponse {
+    pub x402_payment_id: String,
+    pub resource: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mandate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    pub status: String,
+    pub protocol: String,
+    pub payable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct X402JobListResponse {
+    pub jobs: Vec<X402JobResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PayshCatalogResponse {
+    pub source: &'static str,
+    pub estimate_only: bool,
+    pub fetched_at_ms: u64,
+    pub providers: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaymentRequestPayload {
     pub version: u8,
