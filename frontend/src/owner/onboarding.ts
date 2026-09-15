@@ -21,7 +21,14 @@ export const OWNER_SETUP_STEPS = [
     label: "Approve in wallet",
     detail: "The wallet transaction creates the on-chain mandate. That is the financial approval.",
   },
+  {
+    key: "connect-agent",
+    label: "Connect an agent",
+    detail: "Pair an MCP client or use the dashboard assistant. The mandate sets the spend limit; pairing controls who may call payment tools.",
+  },
 ] as const;
+
+export const OWNER_SETUP_PATH_SUMMARY = "Connect wallet → Sign in → Review mandate → Approve in wallet → Connect an agent.";
 
 export const LOGIN_VS_APPROVAL = "Sign in is a login message. Mandate approval is a separate wallet transaction.";
 

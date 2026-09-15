@@ -3,7 +3,7 @@ import { PendingSettlements } from "../settlement";
 import { useRoute } from "../routing/useRoute";
 import { useWallet } from "../wallet/context";
 import { Button } from "@astryxdesign/core/Button";
-import { FIRST_MANDATE_TITLE, LOGIN_VS_APPROVAL, OWNER_SETUP_STEPS } from "../owner/onboarding";
+import { FIRST_MANDATE_TITLE, LOGIN_VS_APPROVAL, OWNER_SETUP_PATH_SUMMARY, OWNER_SETUP_STEPS } from "../owner/onboarding";
 import { buildStablecoinOptions } from "../owner/runtime";
 
 const Dashboard = lazy(() => import("./Dashboard"));
@@ -23,7 +23,7 @@ function ConnectPrompt() {
       <section className="page-width owner-connect-prompt" style={{ padding: "64px 0" }}>
         <span className="section-kicker">OWNER WORKSPACE</span>
         <h1 className="t-xl">{FIRST_MANDATE_TITLE}.</h1>
-        <p className="t-body">Connect wallet → Sign in → Review mandate → Approve in wallet. {LOGIN_VS_APPROVAL} Navigation does not keep an in-memory session.</p>
+        <p className="t-body">{OWNER_SETUP_PATH_SUMMARY} {LOGIN_VS_APPROVAL} Navigation does not keep an in-memory session.</p>
         <ol className="owner-setup-path connect-prompt-path">
           {OWNER_SETUP_STEPS.map((step, index) => (
             <li className="owner-setup-step" key={step.key}>

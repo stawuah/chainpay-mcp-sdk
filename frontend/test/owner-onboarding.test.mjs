@@ -42,7 +42,14 @@ function installDom() {
 test("empty overview copy names the first-mandate path and distinguishes login from approval", async () => {
   const onboarding = await loadModule("owner/onboarding.ts");
   assert.equal(onboarding.FIRST_MANDATE_TITLE, "Set up your first mandate");
-  assert.deepEqual(onboarding.OWNER_SETUP_STEPS.map((step) => step.label), ["Connect wallet", "Sign in", "Review mandate", "Approve in wallet"]);
+  assert.deepEqual(onboarding.OWNER_SETUP_STEPS.map((step) => step.label), [
+    "Connect wallet",
+    "Sign in",
+    "Review mandate",
+    "Approve in wallet",
+    "Connect an agent",
+  ]);
+  assert.match(onboarding.OWNER_SETUP_PATH_SUMMARY, /Connect an agent/);
   assert.match(onboarding.LOGIN_VS_APPROVAL, /login message/i);
   assert.match(onboarding.LOGIN_VS_APPROVAL, /wallet transaction/i);
   assert.equal(onboarding.EMPTY_OWNER_ACTIVITY, "No payments for this wallet yet.");
@@ -140,12 +147,13 @@ test("slot estimates are labeled estimated and never treat 216000 slots as a day
 
 test("Dashboard empty overview and settings no longer invent this wallet's payments or fake prefs", async () => {
   const dashboard = await readFile(join(srcRoot, "dashboard/Dashboard.tsx"), "utf8");
+  const emptyOverview = await readFile(join(srcRoot, "owner/EmptyOwnerOverview.tsx"), "utf8");
   assert.equal(dashboard.includes("Verified Devnet baselines"), false);
   assert.equal(dashboard.includes("216_000"), false);
   assert.equal(dashboard.includes("216000"), false);
   assert.match(dashboard, /FIRST_MANDATE_TITLE/);
   assert.match(dashboard, /EmptyOwnerOverview/);
-  assert.match(dashboard, /No payments for this wallet yet/);
+  assert.match(emptyOverview, /EMPTY_OWNER_ACTIVITY/);
   assert.match(dashboard, /Owned mandate/);
   assert.match(dashboard, /allowPayments/);
   assert.match(dashboard, /Permit payments within this mandate/);
@@ -202,6 +210,7 @@ test("EmptyOwnerOverview renders the setup path without a live wallet transactio
     assert.match(text, /Sign in/);
     assert.match(text, /Review mandate/);
     assert.match(text, /Approve in wallet/);
+    assert.match(text, /Connect an agent/);
     assert.match(text, /login message/);
     assert.match(text, /No payments for this wallet yet/);
     assert.equal(text.includes("Verified Devnet"), false);

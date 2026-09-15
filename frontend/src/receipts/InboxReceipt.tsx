@@ -7,10 +7,12 @@ export function LoadedReceiptCard({
   receiptPda,
   shareMode = "public",
   onShare,
+  preparedInRequests = false,
 }: {
   receiptPda: string;
   shareMode?: "public" | "dashboard";
   onShare?: () => void;
+  preparedInRequests?: boolean;
 }) {
   const [state, setState] = useState<PublicReceiptPageState>({ kind: "loading", receiptPda });
 
@@ -26,7 +28,14 @@ export function LoadedReceiptCard({
   }, [receiptPda]);
 
   if (state.kind === "verified") {
-    return <ReceiptCard receipt={state.receipt} shareMode={shareMode} onShare={onShare} />;
+    return (
+      <ReceiptCard
+        receipt={state.receipt}
+        shareMode={shareMode}
+        onShare={onShare}
+        preparedInRequests={preparedInRequests || shareMode === "dashboard"}
+      />
+    );
   }
 
   return (

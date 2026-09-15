@@ -14,9 +14,8 @@ export const DASHBOARD_NAV_ITEMS: DashboardNavItem[] = [
   { id: "payments", label: "Payments", icon: "↗", group: "workspace" },
   { id: "agents", label: "Agents", icon: "⌁", group: "workspace" },
   { id: "receipts", label: "Receipts", icon: "▤", group: "workspace" },
-  { id: "assistant", label: "AI inbox", icon: "◉", group: "workspace" },
-  { id: "tools", label: "Tools", icon: "⌘", group: "tools" },
-  { id: "connect-mcp", label: "Connect MCP", icon: "＋", group: "tools" },
+  { id: "assistant", label: "Requests", icon: "◉", group: "workspace" },
+  { id: "tools", label: "Developer tools", icon: "⌘", group: "tools" },
   { id: "protocol", label: "Protocol", icon: "⚖", group: "admin" },
   { id: "settings", label: "Settings", icon: "⚙", group: "admin" },
 ];
@@ -25,7 +24,10 @@ export function dashboardNavItems(group: DashboardNavItem["group"]) {
   return DASHBOARD_NAV_ITEMS.filter((item) => item.group === group);
 }
 
+/** Sidebar-visible tabs. `/app/connect-mcp` remains a compatibility route only. */
+export const SIDEBAR_DASHBOARD_TABS = DASHBOARD_TABS.filter((tab) => tab !== "connect-mcp");
+
 export function dashboardNavCoversAllTabs() {
   const ids = DASHBOARD_NAV_ITEMS.map((item) => item.id);
-  return DASHBOARD_TABS.every((tab) => ids.includes(tab)) && ids.length === DASHBOARD_TABS.length;
+  return SIDEBAR_DASHBOARD_TABS.every((tab) => ids.includes(tab)) && ids.length === SIDEBAR_DASHBOARD_TABS.length;
 }

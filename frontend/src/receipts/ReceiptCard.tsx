@@ -51,10 +51,12 @@ export function ReceiptCard({
   receipt,
   onShare,
   shareMode = "public",
+  preparedInRequests = false,
 }: {
   receipt: ReceiptView;
   onShare?: () => void;
   shareMode?: "public" | "dashboard";
+  preparedInRequests?: boolean;
 }) {
   const [shareMessage, setShareMessage] = useState("");
   const amount = amountLabel(receipt.amount);
@@ -90,6 +92,9 @@ export function ReceiptCard({
         </div>
         <span className="receipt-card-network">Solana Devnet</span>
       </div>
+      {preparedInRequests && shareMode === "dashboard" && (
+        <p className="receipt-prepared-note">Prepared in Requests. Private invoice text and attachments stay in your authenticated request history.</p>
+      )}
       <div className="receipt-stamps">
         {stamps.map((stamp) => (
           <div className={`receipt-stamp receipt-stamp-${stamp.tone}`} key={stamp.key} data-stamp={stamp.key} data-tone={stamp.tone}>

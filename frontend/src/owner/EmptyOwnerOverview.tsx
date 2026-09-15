@@ -12,8 +12,11 @@ export type EmptyOwnerOverviewProps = {
   signedIn: boolean;
   signingIn: boolean;
   signInError: string;
+  mandateApproved?: boolean;
+  agentPaired?: boolean;
   onSignIn: () => void;
   onReviewMandate: () => void;
+  onConnectAgent?: () => void;
   demoReceiptHref?: string | null;
 };
 
@@ -24,6 +27,9 @@ export function EmptyOwnerOverview({
   signInError,
   onSignIn,
   onReviewMandate,
+  onConnectAgent,
+  mandateApproved = false,
+  agentPaired = false,
   demoReceiptHref,
 }: EmptyOwnerOverviewProps) {
   return (
@@ -36,7 +42,10 @@ export function EmptyOwnerOverview({
       </div>
       <ol className="owner-setup-path" aria-label="First mandate path">
         {OWNER_SETUP_STEPS.map((step, index) => {
-          const complete = (step.key === "connect" && walletConnected) || (step.key === "signin" && signedIn);
+          const complete = (step.key === "connect" && walletConnected)
+            || (step.key === "signin" && signedIn)
+            || (step.key === "approve" && mandateApproved)
+            || (step.key === "connect-agent" && agentPaired);
           return (
             <li className={complete ? "owner-setup-step is-complete" : "owner-setup-step"} key={step.key}>
               <span className="owner-setup-index" aria-hidden="true">{index + 1}</span>
@@ -66,6 +75,15 @@ export function EmptyOwnerOverview({
           isDisabled={false}
           onClick={onReviewMandate}
         />
+        {mandateApproved && onConnectAgent && (
+          <Button
+            type="button"
+            variant="secondary"
+            label="Connect an agent"
+            isDisabled={agentPaired}
+            onClick={onConnectAgent}
+          />
+        )}
       </div>
       {signInError && <p className="builder-error" role="alert"><b>Sign in failed</b><span>{signInError}</span></p>}
       <p className="owner-activity-empty">{EMPTY_OWNER_ACTIVITY}</p>

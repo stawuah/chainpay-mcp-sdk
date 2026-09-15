@@ -59,14 +59,23 @@ function installDom() {
   return dom;
 }
 
-test("dashboard nav lists every /app tab including protocol", async () => {
-  const paths = await loadModule("routing/paths.ts");
+test("dashboard nav lists every sidebar tab including protocol", async () => {
   const navSource = await readFile(join(srcRoot, "dashboard/nav.ts"), "utf8");
-  for (const tab of paths.DASHBOARD_TABS) {
+  const pathsSource = await readFile(join(srcRoot, "routing/paths.ts"), "utf8");
+  const tabsMatch = pathsSource.match(/export const DASHBOARD_TABS = \[([\s\S]*?)\]/);
+  assert.ok(tabsMatch, "DASHBOARD_TABS definition missing");
+  const sidebarTabs = tabsMatch[1]
+    .match(/"([^"]+)"/g)
+    ?.map((entry) => entry.slice(1, -1))
+    .filter((tab) => tab !== "connect-mcp") ?? [];
+  for (const tab of sidebarTabs) {
     assert.match(navSource, new RegExp(`id: "${tab}"`));
   }
   assert.match(navSource, /id: "protocol"/);
   assert.match(navSource, /dashboardNavCoversAllTabs/);
+  assert.match(navSource, /SIDEBAR_DASHBOARD_TABS/);
+  assert.match(navSource, /connect-mcp/);
+  assert.equal(navSource.includes('id: "connect-mcp"'), false);
 });
 
 test("Dashboard source uses published Astryx inventory primitives", async () => {
@@ -151,9 +160,10 @@ test("DashboardNav renders all ten destinations and protocol", async () => {
       }));
     });
     const labels = [...host.querySelectorAll("button")].map((button) => button.textContent ?? "");
-    for (const label of ["Overview", "Mandates", "Payments", "Agents", "Receipts", "AI inbox", "Tools", "Connect MCP", "Protocol", "Settings", "Back to site"]) {
+    for (const label of ["Overview", "Mandates", "Payments", "Agents", "Receipts", "Requests", "Developer tools", "Protocol", "Settings", "Back to site"]) {
       assert.ok(labels.some((text) => text.includes(label)), `missing ${label}`);
     }
+    assert.equal(labels.some((text) => text.includes("Connect MCP")), false);
     const protocol = [...host.querySelectorAll("button")].find((button) => /Protocol/.test(button.textContent ?? ""));
     await act(async () => { protocol.click(); });
     assert.deepEqual(selected, ["protocol"]);
