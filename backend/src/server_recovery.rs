@@ -158,6 +158,28 @@ fn deterministic_failure(error: &RpcError) -> bool {
             }
     )
 }
+/// Failures raised before any byte of the transaction left this process. These
+/// are the only errors where non-transmission is *proven* rather than assumed,
+/// so they are the only ones allowed to return a reservation to Prepared.
+///
+/// `RpcError::Busy` comes from `try_acquire` on the in-flight semaphore
+/// (`rpc/mod.rs`), which runs ahead of the HTTP request. This is the opposite of
+/// the ambiguity `docs/settlement-recovery.md` guards against: there we must not
+/// assume a request never arrived, here we know it never left.
+fn provably_unsent(error: &RpcError) -> bool {
+    matches!(error, RpcError::Busy)
+}
+
+/// Return a reservation to Prepared so `known_unsent` re-sends the identical
+/// signed bytes on the next attempt. The signature stays on the record as an
+/// audit trail; it is recomputed from the same transaction when the retry runs.
+fn unsent_record(mut record: PaymentRecord, error: &RpcError) -> PaymentRecord {
+    record.status = PaymentStatus::Prepared;
+    record.error = Some(error.to_string());
+    record.updated_at_ms = now_ms();
+    record
+}
+
 pub(super) fn known_unsent(record: &PaymentRecord) -> bool {
     record.status == PaymentStatus::Prepared
 }
@@ -167,6 +189,9 @@ pub(super) async fn classify_send(
     record: PaymentRecord,
     error: &RpcError,
 ) -> Result<PaymentRecord, ApiError> {
+    if provably_unsent(error) {
+        return Ok(unsent_record(record, error));
+    }
     let Some(signature) = record.signature.clone() else {
         return Ok(payment_error(record, error));
     };
@@ -197,6 +222,13 @@ pub(super) async fn classify_transaction_send(
     record: TransactionRecord,
     error: &RpcError,
 ) -> Result<TransactionRecord, ApiError> {
+    if provably_unsent(error) {
+        let mut record = record;
+        record.status = PaymentStatus::Prepared;
+        record.error = Some(error.to_string());
+        record.updated_at_ms = now_ms();
+        return Ok(record);
+    }
     let Some(signature) = record.signature.clone() else {
         return Ok(transaction_error(record, error));
     };
@@ -721,6 +753,59 @@ mod tests {
             .unwrap();
         (state, principal, request)
     }
+    #[tokio::test]
+    async fn rpc_backpressure_returns_the_reservation_to_prepared() {
+        // `RpcError::Busy` is raised by `try_acquire` before the HTTP request is
+        // built, so the transaction provably never left the process. Leaving the
+        // record Submitted would make `known_unsent` false and strand the payment
+        // behind a signature that does not exist on chain: every retry of
+        // POST /v1/payments would return the stale record without ever sending.
+        let (state, _, request) = fixture();
+        let mut record = initial(&request, SigningMode::Human).unwrap();
+        record.signature = Some(signature(&request.signed_transaction).unwrap());
+        record.status = PaymentStatus::Submitted;
+
+        let classified = classify_send(&state, record, &RpcError::Busy)
+            .await
+            .unwrap();
+
+        assert_eq!(classified.status, PaymentStatus::Prepared);
+        assert!(
+            known_unsent(&classified),
+            "a retry must re-send the same bytes"
+        );
+        assert!(classified.signature.is_some(), "the audit trail survives");
+    }
+
+    #[tokio::test]
+    async fn ambiguous_send_failures_still_stay_submitted() {
+        // The opposite case, guarding the fix above from over-reaching: an error
+        // raised after the request left us is ambiguous, and
+        // docs/settlement-recovery.md forbids treating it as unsent.
+        let (state, _, request) = fixture();
+        let mut record = initial(&request, SigningMode::Human).unwrap();
+        record.signature = Some(signature(&request.signed_transaction).unwrap());
+        record.status = PaymentStatus::Submitted;
+
+        let classified = classify_send(
+            &state,
+            record,
+            &RpcError::Remote {
+                method: "sendTransaction".to_owned(),
+                message: "node is unhealthy".to_owned(),
+                code: -32005,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(classified.status, PaymentStatus::Submitted);
+        assert!(
+            !known_unsent(&classified),
+            "never re-send on an ambiguous outcome"
+        );
+    }
+
     async fn claims(store: StatusStore) {
         let (mut state, principal, mut request) = fixture();
         state.store = store;
