@@ -10,7 +10,8 @@
     "test": "node --test test/*.test.mjs",
     "test:permission-browser": "node test/permission-details.browser.mjs",
     "test:landing-browser": "node test/landing.browser.mjs",
-    "test:landing-motion-browser": "node test/landing-motion.browser.mjs"
+    "test:landing-motion-browser": "node test/landing-motion.browser.mjs",
+    "test:owner-onboarding-browser": "node test/owner-onboarding.browser.mjs"
   },
   "dependencies": {
     "@astryxdesign/core": "0.6.1",
@@ -33,6 +34,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "esbuild": "^0.28.1",
     "jsdom": "^30.0.1",
+    "playwright": "^1.49.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   },

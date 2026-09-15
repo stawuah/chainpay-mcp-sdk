@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { configureSession, setSessionWallet } from "../session";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { getWallets } from "@wallet-standard/app";
+import { configureSession, hasReadySession, subscribeSession, setSessionWallet } from "../session";
 import { BACKEND_URL, MCP_URL, PROGRAM_ID, DEVNET_USDC_MINT, DEVNET_PYUSD_TOKEN_2022_MINT } from "../config/public";
 import {
   connectChainPayWallet,
@@ -15,6 +16,8 @@ type Mandate = NonNullable<WalletContextValue["mandate"]>;
 export default function WalletController({ children }: { children: ReactNode }) {
   const [walletConnection, setWalletConnection] = useState<ChainPayWallet | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const connectionInFlight = useRef(false);
+  const signedIn = useSyncExternalStore(subscribeSession, hasReadySession, () => false);
   const [switchingWalletAccount, setSwitchingWalletAccount] = useState(false);
   const accountSwitchInProgress = useRef(false);
   const walletLoadGeneration = useRef(0);
@@ -23,6 +26,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
   const [walletConnectionError, setWalletConnectionError] = useState("");
   const [mandateAddress, setMandateAddress] = useState("");
   const [mandate, setMandate] = useState<WalletContextValue["mandate"]>(null);
+  const selectedMandateAddress = useRef<string | undefined>(undefined);
   const [mandates, setMandates] = useState<WalletContextValue["mandates"]>([]);
   const [protocolConfig, setProtocolConfig] = useState<WalletContextValue["protocolConfig"]>(null);
   const [registeredAssets, setRegisteredAssets] = useState<WalletContextValue["registeredAssets"]>([]);
@@ -50,7 +54,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
 
     const [configState, toolsState, assetsState] = await Promise.allSettled([
       chainpayClient.getConfig(),
-      runtime.mcpRequest<{ tools: WalletContextValue["mcpTools"] }>("tools/list"),
+      hasReadySession() ? runtime.mcpRequest<{ tools: WalletContextValue["mcpTools"] }>("tools/list", undefined, undefined, "passive") : Promise.resolve({ tools: [] }),
       chainpayClient.getSupportedAssets(),
     ]);
     if (loadGeneration !== walletLoadGeneration.current) return;
@@ -101,10 +105,11 @@ export default function WalletController({ children }: { children: ReactNode }) 
       ?? null;
     setMandates(nextMandates);
     setMandate(selectedMandate);
+    selectedMandateAddress.current = selectedMandate?.address;
     setMandateAddress(selectedMandate?.address ?? legacyAddress);
 
     const mcpState = await Promise.allSettled([
-      runtime.callMcpTool("get_mandate", { address: selectedMandate?.address ?? legacyAddress }),
+      hasReadySession() ? runtime.mcpRequest<WalletContextValue["mcpResult"]>("tools/call", { name: "get_mandate", arguments: { address: selectedMandate?.address ?? legacyAddress } }, undefined, "passive") : Promise.resolve(null),
     ]);
     if (loadGeneration !== walletLoadGeneration.current) return;
     if (mcpState[0]?.status === "fulfilled") {
@@ -126,6 +131,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     walletLoadGeneration.current += 1;
     setMandateAddress("");
     setMandate(null);
+    selectedMandateAddress.current = undefined;
     setMandates([]);
     setProtocolConfig(null);
     setRegisteredAssets([]);
@@ -141,6 +147,22 @@ export default function WalletController({ children }: { children: ReactNode }) 
     clearWalletScopedState();
   }, [clearWalletScopedState]);
 
+  const refreshWalletOptions = useCallback(() => {
+    setWalletOptions(getChainPayWalletOptions(window.solana, window.phantom?.solana));
+  }, []);
+
+  useEffect(() => {
+    refreshWalletOptions();
+    const registry = getWallets();
+    const unregister = registry.on("register", refreshWalletOptions);
+    const unremove = registry.on("unregister", refreshWalletOptions);
+    return () => { unregister(); unremove(); };
+  }, [refreshWalletOptions]);
+
+  useEffect(() => {
+    if (signedIn && wallet) void loadWalletState(wallet, selectedMandateAddress.current);
+  }, [signedIn, wallet, loadWalletState]);
+
   const requestWalletConnection = useCallback(() => {
     if (wallet || connecting) return;
     setWalletConnectionError("");
@@ -149,7 +171,8 @@ export default function WalletController({ children }: { children: ReactNode }) 
   }, [connecting, wallet]);
 
   const connectWallet = useCallback(async (optionId: string) => {
-    if (wallet || connecting) return;
+    if (wallet || connectionInFlight.current) return;
+    connectionInFlight.current = true;
     setConnecting(true);
     setWalletConnectionError("");
     try {
@@ -161,6 +184,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     } catch (cause) {
       setWalletConnectionError(cause instanceof Error ? cause.message : "Wallet connection failed.");
     } finally {
+      connectionInFlight.current = false;
       setConnecting(false);
     }
   }, [connecting, loadWalletState, wallet]);
@@ -250,6 +274,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
       : undefined,
     signMessage: walletConnection?.signMessage,
     requestWalletConnection,
+    refreshWalletOptions,
     connectWallet,
     setWalletPickerOpen,
     changeConnectedAccount,
@@ -260,6 +285,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     },
     selectMandate: (nextMandate) => {
       setMandate(nextMandate);
+      selectedMandateAddress.current = nextMandate.address;
       setMandateAddress(nextMandate.address);
     },
     callMcp: async (name, args) => {
@@ -284,6 +310,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     protocolConfig,
     registeredAssets,
     requestWalletConnection,
+    refreshWalletOptions,
     switchingWalletAccount,
     wallet,
     walletConnection,
@@ -303,6 +330,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
           error={walletConnectionError}
           onSelect={(optionId) => void connectWallet(optionId)}
           onOpenChange={setWalletPickerOpen}
+          onRefresh={refreshWalletOptions}
         />
       </PublicWalletProvider>
     </WalletContextProvider>

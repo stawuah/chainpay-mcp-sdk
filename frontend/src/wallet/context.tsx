@@ -70,6 +70,7 @@ export type WalletContextValue = {
   signTransaction?: (transaction: Transaction) => Promise<Transaction>;
   signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
   requestWalletConnection: () => void;
+  refreshWalletOptions: () => void;
   connectWallet: (optionId: string) => Promise<void>;
   setWalletPickerOpen: (open: boolean) => void;
   changeConnectedAccount: () => Promise<void>;
@@ -99,6 +100,7 @@ const disconnected: WalletContextValue = {
   integrationStatus: "idle",
   integrationError: "",
   requestWalletConnection: () => {},
+  refreshWalletOptions: () => {},
   connectWallet: async () => {},
   setWalletPickerOpen: () => {},
   changeConnectedAccount: async () => {},

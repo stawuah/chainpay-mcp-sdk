@@ -175,6 +175,7 @@ test("EmptyOwnerOverview renders the setup path without a live wallet transactio
     platform: "browser",
     jsx: "automatic",
     outfile,
+    loader: { ".css": "empty" },
     external: ["react", "react-dom", "react/jsx-runtime"],
     plugins: [{
       name: "astryx-button-stub",
@@ -192,21 +193,22 @@ test("EmptyOwnerOverview renders the setup path without a live wallet transactio
   const host = document.body.appendChild(document.createElement("div"));
   const reactRoot = createRoot(host);
   let reviewed = 0;
+  let signedIn = 0;
+  const props = {
+    walletConnected: true,
+    signedIn: false,
+    signingIn: false,
+    signInError: "",
+    onSignIn: () => { signedIn += 1; },
+    onReviewMandate: () => { reviewed += 1; },
+    demoReceiptHref: null,
+  };
   try {
     await act(async () => {
-      reactRoot.render(createElement(EmptyOwnerOverview, {
-        walletConnected: true,
-        signedIn: false,
-        signingIn: false,
-        signInError: "",
-        onSignIn: () => {},
-        onReviewMandate: () => { reviewed += 1; },
-        demoReceiptHref: null,
-      }));
+      reactRoot.render(createElement(EmptyOwnerOverview, props));
     });
     const text = host.textContent ?? "";
-    assert.match(text, /Set up your first mandate/);
-    assert.match(text, /Connect wallet/);
+    assert.match(text, /Your wallet is connected/);
     assert.match(text, /Sign in/);
     assert.match(text, /Review mandate/);
     assert.match(text, /Approve in wallet/);
@@ -214,6 +216,15 @@ test("EmptyOwnerOverview renders the setup path without a live wallet transactio
     assert.match(text, /login message/);
     assert.match(text, /No payments for this wallet yet/);
     assert.equal(text.includes("Verified Devnet"), false);
+    assert.equal(host.querySelectorAll("button").length, 1, "only the current setup action is offered");
+    assert.equal(signedIn, 0, "render never requests a signature");
+    assert.equal(reviewed, 0);
+    assert.match(host.querySelector('[aria-current="step"]').textContent, /Wallet/);
+    await act(async () => { host.querySelector("button").click(); });
+    assert.equal(signedIn, 1, "sign-in requires the user's action");
+    await act(async () => { reactRoot.render(createElement(EmptyOwnerOverview, { ...props, signedIn: true })); });
+    assert.match(host.querySelector('[aria-current="step"]').textContent, /Limits/);
+    assert.equal(reviewed, 0, "sign-in does not open or approve a mandate");
     const review = [...host.querySelectorAll("button")].find((button) => /Review mandate/i.test(button.textContent ?? ""));
     assert.ok(review);
     await act(async () => { review.click(); });

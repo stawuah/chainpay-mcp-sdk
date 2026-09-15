@@ -306,7 +306,7 @@ export function buildMcpClientConfig(serverUrl: string, token?: string) {
 }
 
 export async function fetchMcpConnections(wallet: string): Promise<AgentConnection[]> {
-  const response = await authorizedFetch(mcpConnectionsUrl(wallet));
+  const response = await authorizedFetch(mcpConnectionsUrl(wallet), {}, undefined, "passive");
   const payload = await response.json() as { connections?: ServerAgentConnection[]; error?: string };
   if (!response.ok) throw new Error(payload.error ?? `MCP connections request failed (${response.status})`);
   return (payload.connections ?? []).map((connection) => ({ ...connection, mandates: connectionScopeDetails(connection.scope).count }));
@@ -335,12 +335,12 @@ export async function revokeMcpConnection(wallet: string, id: string) {
   }
 }
 
-export async function mcpRequest<T>(method: string, params?: Record<string, unknown>, binding?: WalletBinding): Promise<T> {
+export async function mcpRequest<T>(method: string, params?: Record<string, unknown>, binding?: WalletBinding, mode: "interactive" | "passive" = "interactive"): Promise<T> {
   const response = await authorizedFetch(MCP_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
-  }, binding);
+  }, binding, mode);
   const payload = await response.json() as { result?: T; error?: { message?: string } };
   if (!response.ok || payload.error) throw new Error(payload.error?.message ?? `MCP request failed (${response.status})`);
   return payload.result as T;

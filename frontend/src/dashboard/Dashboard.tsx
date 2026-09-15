@@ -41,7 +41,7 @@ import {
   preparedRequestReceiptAddresses,
   purchaseCardFromInboxItem,
 } from "../owner/purchaseCard";
-import { configuredDemoReceiptPath, FIRST_MANDATE_TITLE, LOGIN_VS_APPROVAL, OWNER_SETUP_PATH_SUMMARY } from "../owner/onboarding";
+import { configuredDemoReceiptPath, FIRST_MANDATE_TITLE, LOGIN_VS_APPROVAL } from "../owner/onboarding";
 import { PurchaseCard } from "./PurchaseCard";
 import { describeWalletCapabilities, type WalletCapabilityReport } from "../wallet/capabilities";
 import { estimatedSlotsForDays, mandateExpiryLabel, parseExpirySlot } from "../owner/slotEstimate";
@@ -208,6 +208,7 @@ export function Dashboard({
   const voiceRecognition = useRef<SpeechRecognitionLike | null>(null);
   const [mandateDecimals, setMandateDecimals] = useState<number | null>(null);
   const [connections, setConnections] = useState<AgentConnection[]>([]);
+  const [connectionStatus, setConnectionStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [dangerStatus, setDangerStatus] = useState("");
   const ownerSignIn = useOwnerSignIn();
   const [mandateCreateOpen, setMandateCreateOpen] = useState(Boolean(mandateBuilder));
@@ -346,6 +347,8 @@ export function Dashboard({
 
   useEffect(() => {
     let active = true;
+    if (ownerSignIn.status !== "ready") { setConnections([]); setConnectionStatus("idle"); return; }
+    setConnectionStatus("loading");
     const refreshConnections = async () => {
       try {
         const nextConnections = await fetchMcpConnections(wallet);
@@ -353,8 +356,9 @@ export function Dashboard({
           ...connection,
           mandates: connectionScopeDetails(connection.scope).count,
         })));
+        if (active) setConnectionStatus("ready");
       } catch {
-        // MCP telemetry is optional; the rest of the dashboard remains usable.
+        if (active) setConnectionStatus("error");
       }
     };
     void refreshConnections();
@@ -363,7 +367,7 @@ export function Dashboard({
       active = false;
       window.clearInterval(interval);
     };
-  }, [wallet]);
+  }, [wallet, ownerSignIn.status]);
 
   function updateAgentInboxItem(id: string, patch: Partial<AgentInboxItem>) {
     setAgentInbox((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
@@ -835,9 +839,16 @@ export function Dashboard({
             </div>
           </header>
           <div className="dashboard-page">
-          <div className="dashboard-heading"><div><span className="section-kicker">{tab === "mandates" ? "POLICY CONTROL" : tab === "assistant" ? "PAYMENT REQUESTS" : agentsTabActive ? "AGENT ACCESS" : "CONTROL CENTER"}</span><h1 className="t-xl">{tab === "assistant" ? "Requests." : tab === "protocol" ? "Protocol setup." : tab === "mandates" ? "Spending permissions." : tab === "payments" ? "Route a payment." : agentsTabActive ? "Agents." : tab === "receipts" ? "Receipts." : tab === "tools" ? "Developer tools." : tab === "settings" ? "Settings." : mandates.length === 0 ? `${FIRST_MANDATE_TITLE}.` : "Good to see you."}</h1><p>{tab === "assistant" ? "Bring an invoice or payment request here. ChainPay verifies it against your mandate and shows what the agent is buying before wallet approval." : tab === "protocol" ? "Initialize the protocol asset list from the authority wallet." : tab === "mandates" ? (mandateCreateOpen ? "Create a policy for an agent to follow before a payment can be signed." : "A mandate is an on-chain spending permission. Review the rules your agent must follow before paying.") : tab === "payments" ? "Check the request, then approve the payment in your wallet." : agentsTabActive ? "Pair an external MCP client or use the dashboard assistant. Your mandate sets the spend limit; pairing controls who may call payment tools." : tab === "receipts" ? "Preview, verify, and send durable proof for every confirmed settlement." : tab === "tools" ? "The exact tools agents can call. Nothing else is exposed." : tab === "settings" ? "Solana Devnet status, wallet controls, and account actions." : mandates.length === 0 ? OWNER_SETUP_PATH_SUMMARY : "Live purchases from your agent, checked against the mandate you already approved."}</p></div>{tab === "overview" || tab === "mandates" ? (mandateCreateOpen ? <Button type="button" variant="secondary" className="refresh-button" label="← Back to mandates" isDisabled={false} onClick={() => setMandateCreateOpen(false)} /> : <Button type="button" variant="primary" className="overview-new-mandate" label={mandates.length === 0 ? FIRST_MANDATE_TITLE : "＋ New mandate"} isDisabled={false} onClick={openMandateCreate} />) : <Button type="button" variant="secondary" className="refresh-button" label="↻ Refresh" isDisabled={integrationStatus === "loading"} onClick={() => void onRefresh()} />}</div>
+          <div className="dashboard-heading"><div><span className="section-kicker">{tab === "mandates" ? "POLICY CONTROL" : tab === "assistant" ? "PAYMENT REQUESTS" : agentsTabActive ? "AGENT ACCESS" : "CONTROL CENTER"}</span><h1 className="t-xl">{tab === "assistant" ? "Requests." : tab === "protocol" ? "Protocol setup." : tab === "mandates" ? "Spending permissions." : tab === "payments" ? "Route a payment." : agentsTabActive ? "Agents." : tab === "receipts" ? "Receipts." : tab === "tools" ? "Developer tools." : tab === "settings" ? "Settings." : mandates.length === 0 ? `${FIRST_MANDATE_TITLE}.` : "Good to see you."}</h1><p>{tab === "assistant" ? "Bring an invoice or payment request here. ChainPay verifies it against your mandate and shows what the agent is buying before wallet approval." : tab === "protocol" ? "Initialize the protocol asset list from the authority wallet." : tab === "mandates" ? (mandateCreateOpen ? "Create a policy for an agent to follow before a payment can be signed." : "A mandate is an on-chain spending permission. Review the rules your agent must follow before paying.") : tab === "payments" ? "Check the request, then approve the payment in your wallet." : agentsTabActive ? "Pair an external MCP client or use the dashboard assistant. Your mandate sets the spend limit; pairing controls who may call payment tools." : tab === "receipts" ? "Preview, verify, and send durable proof for every confirmed settlement." : tab === "tools" ? "The exact tools agents can call. Nothing else is exposed." : tab === "settings" ? "Solana Devnet status, wallet controls, and account actions." : mandates.length === 0 ? "Connect your wallet, set your limits, then give your agent access." : "Live purchases from your agent, checked against the mandate you already approved."}</p></div>{tab === "overview" && mandates.length === 0 ? null : tab === "overview" || tab === "mandates" ? (mandateCreateOpen ? <Button type="button" variant="secondary" className="refresh-button" label="← Back to mandates" isDisabled={false} onClick={() => setMandateCreateOpen(false)} /> : <Button type="button" variant="primary" className="overview-new-mandate" label={mandates.length === 0 ? FIRST_MANDATE_TITLE : "＋ New mandate"} isDisabled={false} onClick={openMandateCreate} />) : <Button type="button" variant="secondary" className="refresh-button" label="↻ Refresh" isDisabled={integrationStatus === "loading"} onClick={() => void onRefresh()} />}</div>
 
-          <div className="integration-strip"><span className={`connection-dot ${integrationStatus}`} /> <b>{integrationStatus === "loading" ? "Syncing" : integrationStatus === "error" ? "Needs attention" : "Connected"}</b><span>Network · Solana Devnet</span><span className="integration-divider" /><b>PAYMENT TOOLS</b><span>{mcpTools.length ? `${mcpTools.length} available` : "Loading"}</span><span className="integration-divider" /><b>AGENTS</b><span>{connections.length ? `${liveConnectionCount} live · ${connections.length} paired` : "None paired"}</span>{integrationError && <small title={integrationError}>Check connection</small>}</div>
+          {ownerSignIn.status !== "ready" && (mandates.length > 0 || tab !== "overview") && (
+            <div className="cp-workspace-signin">
+              <div><strong>Sign in to your workspace</strong><p>A login message opens agent tools. Spending approval is separate.</p></div>
+              <Button type="button" variant="secondary" label={ownerSignIn.status === "signing" ? "Waiting for login message…" : "Sign in"} isDisabled={ownerSignIn.status === "signing"} onClick={() => void ownerSignIn.signIn()} />
+              {ownerSignIn.error && <p role="alert">{ownerSignIn.error}</p>}
+            </div>
+          )}
+          <div className="integration-strip"><span className={`connection-dot ${integrationStatus}`} /> <b>{integrationStatus === "loading" ? "Syncing" : integrationStatus === "error" ? "Needs attention" : "Connected"}</b><span>Network · Solana Devnet</span><span className="integration-divider" /><b>PAYMENT TOOLS</b><span>{ownerSignIn.status !== "ready" ? "Sign in to load" : mcpTools.length ? `${mcpTools.length} available` : integrationStatus === "loading" ? "Loading" : "Unavailable"}</span><span className="integration-divider" /><b>AGENTS</b><span>{ownerSignIn.status !== "ready" ? "Sign in to load" : connectionStatus === "error" ? "Unable to refresh" : connectionStatus === "loading" ? "Loading" : connections.length ? `${liveConnectionCount} live · ${connections.length} paired` : "None paired"}</span>{integrationError && <small title={integrationError}>Check connection</small>}</div>
 
           <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} inbox={agentInbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} attachments={agentAttachments} attachmentError={attachmentError} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} mandate={mandate} selectedMandateAddress={mandate?.address} onAsk={() => void askChainPay()} onVoice={startVoice} onLoadDemoInvoice={() => void loadDemoPaymentRequest()} onApprove={approveAgentRequest} onAddAttachments={addAgentAttachments} onRemoveAttachment={removeAgentAttachment} onOpenReceipts={() => selectTab("receipts")} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} createOpen={mandateCreateOpen} onCreateOpenChange={setMandateCreateOpen} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onOpenPayments={() => selectTab("payments")} onRefresh={onRefresh} /> : tab === "payments" ? <PaymentPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} stablecoinOptions={stablecoinOptions} onSelectMandate={onSelectMandate} onCallMcp={onCallMcp} onAskAgent={(message) => void askChainPay(message)} onRefresh={onRefresh} /> : agentsTabActive ? <AgentsTabPanel serverUrl={MCP_URL} wallet={wallet} mandates={mandates} stablecoinOptions={stablecoinOptions} connections={connections} hostedAssistantStatus={hostedAssistantStatus} connectDialogInitiallyOpen={tab === "connect-mcp"} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} onCreateMandate={openMandateCreate} onOpenAssistant={() => selectTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} preparedReceiptAddresses={preparedReceiptAddresses} onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "settings" ? <SettingsPanel wallet={wallet} walletName={walletName} walletCapabilities={walletCapabilities} activeMandateCount={mandates.filter((value) => value.status === "active").length} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} onChangeWallet={onChangeWallet} /> : (
             <>
@@ -850,6 +861,7 @@ export function Dashboard({
                   mandateApproved={mandateApproved}
                   agentPaired={agentPaired}
                   onSignIn={() => void ownerSignIn.signIn()}
+                  onChangeWallet={onChangeWallet}
                   onReviewMandate={openMandateCreate}
                   onConnectAgent={() => selectTab("agents")}
                   demoReceiptHref={demoReceiptHref}

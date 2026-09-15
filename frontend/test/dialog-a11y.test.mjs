@@ -75,6 +75,7 @@ async function bundleDialog(entry, outfile) {
     platform: "browser",
     jsx: "automatic",
     outfile,
+    loader: { ".svg": "dataurl", ".css": "empty" },
     external: ["react", "react-dom", "react/jsx-runtime"],
   });
 }
@@ -134,6 +135,7 @@ test("WalletPickerDialog traps tab and restores focus on Escape", async () => {
         connecting: false,
         error: "",
         onSelect: () => {},
+        onRefresh: () => {},
         onOpenChange: (next) => { open = next; },
       }));
     });

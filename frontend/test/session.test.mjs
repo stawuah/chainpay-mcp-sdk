@@ -84,3 +84,49 @@ test("expired credentials require a fresh login; a 401 is not silently retried",
   await f.authorizedFetch("https://mcp.example/inbox");
   assert.equal(f.calls.filter(c => c.url.includes("/challenge")).length, 3);
 });
+
+test("passive workspace refresh never signs in or retries a canceled login", async t => {
+  let signatures = 0;
+  let decline = true;
+  const f = await fixture(t, { signMessage: async () => {
+    signatures++;
+    if (decline) throw new Error("Declined");
+    return new Uint8Array(64);
+  } });
+  const passive = () => f.authorizedFetch("https://mcp.example/inbox", {}, undefined, "passive");
+  await assert.rejects(passive(), /Sign in to refresh/);
+  assert.equal(f.calls.length, 0);
+  await assert.rejects(f.ensureSessionReady(), /Declined/);
+  await Promise.all([assert.rejects(passive(), /Sign in to refresh/), assert.rejects(passive(), /Sign in to refresh/)]);
+  assert.equal(signatures, 1);
+  decline = false;
+  await f.ensureSessionReady();
+  assert.equal(f.hasReadySession(), true);
+  assert.equal((await passive()).status, 200);
+  assert.equal(signatures, 2);
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + 120000;
+    assert.equal(f.hasReadySession(), false);
+    await assert.rejects(passive(), /Sign in to refresh/);
+    assert.equal(signatures, 2);
+  } finally { Date.now = originalNow; }
+});
+
+test("session subscribers observe login, rejection and owner changes", async t => {
+  const f = await fixture(t);
+  const observed = [];
+  const unsubscribe = f.subscribeSession(() => observed.push(f.hasReadySession()));
+  t.after(unsubscribe);
+  await f.ensureSessionReady();
+  assert.equal(observed.at(-1), true);
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (url, init) => String(url).endsWith("/inbox") ? new Response("{}", { status: 401 }) : previous(url, init);
+  await f.authorizedFetch("https://mcp.example/inbox", {}, undefined, "passive");
+  assert.equal(observed.at(-1), false);
+  globalThis.fetch = previous;
+  await f.ensureSessionReady();
+  assert.equal(observed.at(-1), true);
+  f.setSessionWallet(null);
+  assert.equal(observed.at(-1), false);
+});

@@ -1,7 +1,7 @@
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
-import { Arrow } from "./marks";
+import { WalletChoices } from "./WalletChoices";
 
 export type WalletPickerOption = {
   id: string;
@@ -17,6 +17,7 @@ export type WalletPickerDialogProps = {
   error: string;
   onSelect: (optionId: string) => void;
   onOpenChange: (open: boolean) => void;
+  onRefresh: () => void;
 };
 
 export function WalletPickerDialog({
@@ -26,6 +27,7 @@ export function WalletPickerDialog({
   error,
   onSelect,
   onOpenChange,
+  onRefresh,
 }: WalletPickerDialogProps) {
   return (
     <Dialog isOpen={isOpen} onOpenChange={onOpenChange} purpose="info" width={440}>
@@ -34,39 +36,8 @@ export function WalletPickerDialog({
         header={<DialogHeader title="Choose a wallet" onOpenChange={onOpenChange} />}
         content={
           <LayoutContent>
-            <p>ChainPay uses Wallet Standard so you choose the wallet and account that signs. No wallet is selected automatically.</p>
-            <div className="wallet-picker-list">
-              {wallets.map((option) => (
-                <Button
-                  key={option.id}
-                  type="button"
-                  variant="secondary"
-                  label={option.name}
-                  isDisabled={connecting}
-                  width="100%"
-                  className="wallet-picker-option"
-                  onClick={() => onSelect(option.id)}
-                  icon={
-                    <span className="wallet-picker-icon">
-                      {option.icon ? <img src={option.icon} alt="" /> : option.name.slice(0, 1).toUpperCase()}
-                    </span>
-                  }
-                  endContent={<Arrow />}
-                />
-              ))}
-              {wallets.length === 0 && (
-                <div className="wallet-picker-empty">
-                  <b>No compatible Solana wallet found</b>
-                  <p>Install or unlock a Wallet Standard wallet such as Phantom, Backpack, or Solflare, then reopen this list.</p>
-                </div>
-              )}
-            </div>
-            {error && (
-              <div className="builder-error" role="alert">
-                <b>Connection failed</b>
-                <span>{error}</span>
-              </div>
-            )}
+            <p>Choose the wallet you want to use. Connecting does not authorize spending.</p>
+            <WalletChoices wallets={wallets} connecting={connecting} error={error} onSelect={onSelect} onRefresh={onRefresh} />
           </LayoutContent>
         }
         footer={

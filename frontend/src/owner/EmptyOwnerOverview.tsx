@@ -2,10 +2,10 @@ import { Button } from "@astryxdesign/core/Button";
 import {
   DEMO_RECEIPT_LINK_LABEL,
   EMPTY_OWNER_ACTIVITY,
-  FIRST_MANDATE_TITLE,
   LOGIN_VS_APPROVAL,
-  OWNER_SETUP_STEPS,
 } from "./onboarding";
+import { SetupProgress } from "./SetupProgress";
+import "./owner-welcome.css";
 
 export type EmptyOwnerOverviewProps = {
   walletConnected: boolean;
@@ -15,6 +15,7 @@ export type EmptyOwnerOverviewProps = {
   mandateApproved?: boolean;
   agentPaired?: boolean;
   onSignIn: () => void;
+  onChangeWallet?: () => void;
   onReviewMandate: () => void;
   onConnectAgent?: () => void;
   demoReceiptHref?: string | null;
@@ -26,66 +27,56 @@ export function EmptyOwnerOverview({
   signingIn,
   signInError,
   onSignIn,
+  onChangeWallet,
   onReviewMandate,
   onConnectAgent,
   mandateApproved = false,
   agentPaired = false,
   demoReceiptHref,
 }: EmptyOwnerOverviewProps) {
+  const current = !signedIn ? 0 : mandateApproved ? 2 : 1;
   return (
-    <section className="dashboard-card owner-setup-card" aria-labelledby="owner-setup-title">
-      <div className="dashboard-card-heading">
-        <div>
-          <span className="section-kicker">GET STARTED</span>
-          <h2 id="owner-setup-title">{FIRST_MANDATE_TITLE}</h2>
-        </div>
-      </div>
-      <ol className="owner-setup-path" aria-label="First mandate path">
-        {OWNER_SETUP_STEPS.map((step, index) => {
-          const complete = (step.key === "connect" && walletConnected)
-            || (step.key === "signin" && signedIn)
-            || (step.key === "approve" && mandateApproved)
-            || (step.key === "connect-agent" && agentPaired);
-          return (
-            <li className={complete ? "owner-setup-step is-complete" : "owner-setup-step"} key={step.key}>
-              <span className="owner-setup-index" aria-hidden="true">{index + 1}</span>
-              <div>
-                <strong>{step.label}</strong>
-                <p>{step.detail}</p>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-      <p className="owner-setup-distinction">{LOGIN_VS_APPROVAL}</p>
+    <section className="dashboard-card owner-setup-card cp-owner-scene" aria-labelledby="owner-setup-title">
+      <SetupProgress current={current} />
+      <div className="cp-owner-scene-current" key={current}>
+        <h2 id="owner-setup-title">{!signedIn ? "Your wallet is connected." : mandateApproved ? "Give your agent access." : "Set your spending limits."}</h2>
+        <p className="cp-owner-scene-copy">{!signedIn
+          ? "Sign in with a login message to open your workspace. This does not authorize spending."
+          : mandateApproved
+            ? "Your mandate is approved. Connect an agent to use it, with the access you choose."
+            : "Choose your agent, token, allowance and expiry. You’ll review the exact limits before approving anything in your wallet."}</p>
       <div className="owner-setup-actions">
         {!signedIn && (
           <Button
             type="button"
-            variant="secondary"
+            variant="primary"
             label={signingIn ? "Waiting for login message…" : "Sign in"}
             isDisabled={signingIn || !walletConnected}
             onClick={onSignIn}
           />
         )}
-        <Button
+        {!signedIn && onChangeWallet && <Button type="button" variant="secondary" label="Change wallet" isDisabled={signingIn} onClick={onChangeWallet} />}
+        {signedIn && !mandateApproved && <Button
           type="button"
           variant="primary"
           label="Review mandate"
           isDisabled={false}
           onClick={onReviewMandate}
-        />
-        {mandateApproved && onConnectAgent && (
+        />}
+        {signedIn && mandateApproved && onConnectAgent && (
           <Button
             type="button"
-            variant="secondary"
+            variant="primary"
             label="Connect an agent"
             isDisabled={agentPaired}
             onClick={onConnectAgent}
           />
         )}
       </div>
+      </div>
       {signInError && <p className="builder-error" role="alert"><b>Sign in failed</b><span>{signInError}</span></p>}
+      <div className="cp-owner-scene-next"><strong>Up next</strong><span>{!signedIn ? "Review mandate → Approve in wallet → Connect an agent" : mandateApproved ? "Choose your agent’s access" : "Approve in wallet → Connect an agent"}</span></div>
+      <p className="owner-setup-distinction">{LOGIN_VS_APPROVAL}</p>
       <p className="owner-activity-empty">{EMPTY_OWNER_ACTIVITY}</p>
       {demoReceiptHref && (
         <p className="owner-demo-link">
