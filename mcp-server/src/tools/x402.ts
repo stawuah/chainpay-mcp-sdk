@@ -11,44 +11,31 @@ import type { ChainPayMcpContext } from "./context.js";
 import {
   materializeUnsignedTransaction,
   serializeTransaction,
+  hex32,
   solanaAddress,
   tokenProgram as parseTokenProgram,
   toolResult,
-  unsignedInteger,
 } from "./common.js";
 import { requireObject } from "./payment-input.js";
+import {
+  CUSTOM_PROTOCOL,
+  CUSTOM_PROTOCOL_LABEL,
+  customReceiptProofDocument,
+  parsePaymentRequiredDocument,
+  parsePaymentRequiredFromResponse,
+  unsupportedSponsorResult,
+  type CustomChallengeOption,
+} from "./x402-protocol.js";
 
 const MAX_RESOURCE_BODY_BYTES = 1_048_576;
 const RESOURCE_TIMEOUT_MS = 10_000;
 
-type X402Challenge = {
-  network?: unknown;
-  scheme?: unknown;
-  asset?: unknown;
-  mint?: unknown;
-  payTo?: unknown;
-  recipient?: unknown;
-  amount?: unknown;
-  maxAmountRequired?: unknown;
-  resource?: unknown;
-  nonce?: unknown;
-  expiresAtSlot?: unknown;
-  tokenProgram?: unknown;
-};
-
-type NormalizedX402Challenge = {
-  network: "solana-devnet";
-  scheme: "exact";
-  mint: string;
-  recipient: string;
-  amount: string;
+type NormalizedX402Challenge = CustomChallengeOption & {
   tokenProgram: "spl-token" | "token-2022";
-  resource: string;
   nonce: string;
   invoiceHash: string;
   paymentId: string;
   signatureReference: string;
-  expiresAtSlot?: string;
 };
 
 function resourceUrl(value: unknown): string {
@@ -116,46 +103,6 @@ async function limitedResponseBody(response: Response): Promise<{ text: string; 
   }
 }
 
-function parseHeaderJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    try {
-      return JSON.parse(Buffer.from(value, "base64").toString("utf8"));
-    } catch {
-      throw new Error("x402 payment-required header is neither JSON nor base64 JSON");
-    }
-  }
-}
-
-function challengeOptions(value: unknown): X402Challenge[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-  const object = value as Record<string, unknown>;
-  if (Array.isArray(object.accepts)) {
-    return object.accepts.filter((item): item is X402Challenge => Boolean(item) && typeof item === "object" && !Array.isArray(item));
-  }
-  if (object.paymentRequired) return challengeOptions(object.paymentRequired);
-  return [object as X402Challenge];
-}
-
-function selectChallenge(value: unknown): X402Challenge {
-  const options = challengeOptions(value);
-  const selected = options.find((option) => {
-    const network = typeof option.network === "string" ? option.network : "solana-devnet";
-    const scheme = typeof option.scheme === "string" ? option.scheme : "exact";
-    return (network === "devnet" || network === "solana-devnet") && scheme === "exact";
-  });
-  if (!selected) throw new Error("x402 response has no Solana Devnet exact payment option");
-  return selected;
-}
-
-async function challengeFromResponse(response: Response, body: { text: string; parsed?: unknown }): Promise<X402Challenge> {
-  const header = response.headers.get("x-payment-required") ?? response.headers.get("payment-required");
-  const source = header ? parseHeaderJson(header) : body.parsed;
-  if (!source) throw new Error("HTTP 402 response did not include payment requirements");
-  return selectChallenge(source);
-}
-
 async function normalizedTokenProgram(
   context: ChainPayMcpContext,
   mint: string,
@@ -175,50 +122,30 @@ async function normalizedTokenProgram(
   return registered;
 }
 
-async function normalizeChallenge(
+async function normalizeCustomChallenge(
   context: ChainPayMcpContext,
-  challenge: X402Challenge,
+  option: CustomChallengeOption,
   expectedResource?: string,
 ): Promise<NormalizedX402Challenge> {
-  const network = typeof challenge.network === "string" ? challenge.network : "solana-devnet";
-  if (network !== "devnet" && network !== "solana-devnet") {
-    throw new Error("Only Solana Devnet x402 challenges are enabled");
-  }
-  const scheme = typeof challenge.scheme === "string" ? challenge.scheme : "exact";
-  if (scheme !== "exact") throw new Error("Only the x402 exact scheme is enabled");
-  const mint = solanaAddress(challenge.asset ?? challenge.mint, "asset");
-  const recipient = solanaAddress(challenge.payTo ?? challenge.recipient, "payTo");
-  const amountValue = challenge.amount ?? challenge.maxAmountRequired;
-  const amount = typeof amountValue === "number" ? String(amountValue) : amountValue;
-  if (typeof amount !== "string" || amount.trim() === "") throw new Error("x402 challenge amount is required");
-  unsignedInteger(amount, "amount");
-  const resource = resourceUrl(challenge.resource ?? expectedResource);
+  const resource = resourceUrl(option.resource);
   if (expectedResource && resource !== expectedResource) {
     throw new Error("x402 challenge resource does not match the requested resource URL");
   }
-  const tokenProgram = await normalizedTokenProgram(context, mint, challenge.tokenProgram);
-  const expiresAtSlot = challenge.expiresAtSlot === undefined
-    ? undefined
-    : unsignedInteger(challenge.expiresAtSlot, "expiresAtSlot").toString();
+  const tokenProgram = await normalizedTokenProgram(context, option.mint, option.tokenProgram);
   const references = await deriveX402PaymentReferences({
-    mint,
-    recipient,
-    amount,
+    mint: option.mint,
+    recipient: option.recipient,
+    amount: option.amount,
     resource,
     tokenProgram,
-    ...(typeof challenge.nonce === "string" && challenge.nonce.trim() ? { nonce: challenge.nonce.trim() } : {}),
-    ...(expiresAtSlot ? { expiresAtSlot } : {}),
+    ...(option.nonce ? { nonce: option.nonce } : {}),
+    ...(option.expiresAtSlot ? { expiresAtSlot: option.expiresAtSlot } : {}),
   });
   return {
-    network: "solana-devnet",
-    scheme: "exact",
-    mint,
-    recipient,
-    amount,
-    tokenProgram,
+    ...option,
     resource,
+    tokenProgram,
     ...references,
-    ...(expiresAtSlot ? { expiresAtSlot } : {}),
   };
 }
 
@@ -233,9 +160,9 @@ async function prepareChallenge(
   }
   return context.client.preparePayment({
     mandate,
-    invoiceHash: hexBytes(challenge.invoiceHash),
-    paymentId: hexBytes(challenge.paymentId),
-    signatureReference: hexBytes(challenge.signatureReference),
+    invoiceHash: hex32(challenge.invoiceHash, "invoiceHash"),
+    paymentId: hex32(challenge.paymentId, "paymentId"),
+    signatureReference: hex32(challenge.signatureReference, "signatureReference"),
     mint: challenge.mint,
     recipient: challenge.recipient,
     amount: BigInt(challenge.amount),
@@ -364,18 +291,17 @@ function verifyReceipt(receipt: PaymentReceipt | null, challenge: NormalizedX402
 }
 
 function proofHeader(signature: string, receiptAddress: string): string {
-  return JSON.stringify({
-    version: "x402/1.0",
-    scheme: "exact",
-    network: "solana-devnet",
-    payload: { signature, receiptPDA: receiptAddress },
-  });
+  return JSON.stringify(customReceiptProofDocument(signature, receiptAddress));
 }
 
 export async function prepareX402Payment(context: ChainPayMcpContext, args: Record<string, unknown>) {
   const mandate = solanaAddress(args.mandate, "mandate");
   const agent = solanaAddress(args.agent, "agent");
-  const challenge = await normalizeChallenge(context, selectChallenge(requireObject(args.challenge)));
+  const detected = parsePaymentRequiredDocument(requireObject(args.challenge));
+  if (detected.kind === "standard-v2") {
+    return toolResult(unsupportedSponsorResult(detected.option), true);
+  }
+  const challenge = await normalizeCustomChallenge(context, detected.option);
   const prepared = await prepareChallenge(context, challenge, mandate, agent);
   if (!prepared.preflight.valid) {
     return toolResult({ action: "x402_rejected_by_preflight", challenge, receiptAddress: prepared.receiptAddress, preflight: prepared.preflight }, true);
@@ -388,7 +314,7 @@ export async function prepareX402Payment(context: ChainPayMcpContext, args: Reco
     capabilityProfile: prepared.capabilityProfile,
     transaction: serializeTransaction(prepared.transaction),
     unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction),
-    message: "Sign outside ChainPay, then call execute_x402_payment with resource, mandate, agent, and signedTransaction.",
+    message: "Custom ChainPay x402/1.0 receipt-proof challenge is ready. Sign outside ChainPay, then call execute_x402_payment with resource, mandate, agent, and signedTransaction.",
   });
 }
 
@@ -413,7 +339,12 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
     }, !initial.ok);
   }
 
-  const challenge = await normalizeChallenge(context, await challengeFromResponse(initial, initialBody), resource);
+  const detected = parsePaymentRequiredFromResponse(initial.headers, initialBody, resource);
+  if (detected.kind === "standard-v2") {
+    resourceUrl(detected.option.resource);
+    return toolResult(unsupportedSponsorResult(detected.option), true);
+  }
+  const challenge = await normalizeCustomChallenge(context, detected.option, resource);
   const prepared = await prepareChallenge(context, challenge, mandate, agent);
   if (!prepared.preflight.valid) {
     return toolResult({ action: "x402_rejected_by_preflight", challenge, receiptAddress: prepared.receiptAddress, preflight: prepared.preflight }, true);
@@ -429,7 +360,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
       capabilityProfile: prepared.capabilityProfile,
       transaction: serializeTransaction(prepared.transaction),
       unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction),
-      message: "The live resource returned HTTP 402. Sign this transaction outside ChainPay and call execute_x402_payment again with signedTransaction.",
+      message: "The live resource returned a custom ChainPay x402/1.0 receipt-proof challenge. Sign this transaction outside ChainPay and call execute_x402_payment again with signedTransaction.",
     });
   }
   if (signingMode === "delegated" && signedTransaction) {
@@ -452,7 +383,8 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
 }
 
 async function deliverX402(context: ChainPayMcpContext, resource: string, challenge: NormalizedX402Challenge, receiptAddress: string, mandate: string, agent: string, settlement: Record<string, unknown>, idempotencyKey: string) {
-  const receipt = verifyReceipt(await context.client.getPayment(receiptAddress), challenge, { receiptAddress }, mandate, agent);
+  const labeled = labelStoredChallenge(challenge);
+  const receipt = verifyReceipt(await context.client.getPayment(receiptAddress), labeled, { receiptAddress }, mandate, agent);
   const signature = settlement.signature as string;
   const proof = proofHeader(signature, receiptAddress);
   const proofObject = JSON.parse(proof) as Record<string, unknown>;
@@ -471,13 +403,14 @@ async function deliverX402(context: ChainPayMcpContext, resource: string, challe
       action: "x402_settled_resource_rejected",
       status: "confirmed",
       resource,
-      challenge,
+      challenge: labeled,
       settlement,
       receipt,
       proof: proofObject,
+      proofKind: labeled.proofKind,
       httpStatus: retried.status,
       resourceResponse: resourceBody.parsed ?? resourceBody.text,
-      message: "The payment is confirmed on-chain, but the resource rejected the proof retry.",
+      message: "The custom ChainPay x402/1.0 payment is confirmed on-chain, but the resource rejected the receipt-proof retry. Resume execute_x402_payment with paymentId; do not settle again.",
     }, true);
   }
   return toolResult({
@@ -485,10 +418,11 @@ async function deliverX402(context: ChainPayMcpContext, resource: string, challe
     status: "confirmed",
     signingMode: settlement.signing_mode,
     resource,
-    challenge,
+    challenge: labeled,
     settlement,
     receipt,
     proof: proofObject,
+    proofKind: labeled.proofKind,
     httpStatus: retried.status,
     resourceResponse: resourceBody.parsed ?? resourceBody.text,
   });
@@ -502,11 +436,16 @@ async function resumeX402Payment(context: ChainPayMcpContext, paymentId: string)
   const payment=saved.payment;
   if (payment.status!=="confirmed") return toolResult({action:payment.status==="failed"?"x402_payment_failed":"x402_payment_pending",status:payment.status,settlement:payment,continuation:{tool:"execute_x402_payment",arguments:{paymentId}},message:"Resume this paymentId; no new preparation or approval is needed."},payment.status==="failed");
   if (saved.challenge.resource!==saved.resource || typeof payment.signature!=="string" || typeof payment.receipt_address!=="string" || typeof payment.mandate!=="string" || typeof payment.agent!=="string") throw new Error("Stored x402 settlement context is incomplete");
-  return deliverX402(context,resourceUrl(saved.resource),saved.challenge,payment.receipt_address,payment.mandate,payment.agent,payment,saved.idempotency_key);
+  return deliverX402(context,resourceUrl(saved.resource),labelStoredChallenge(saved.challenge),payment.receipt_address,payment.mandate,payment.agent,payment,saved.idempotency_key);
 }
 
-function hexBytes(value: string): Uint8Array {
-  const bytes = new Uint8Array(32);
-  for (let index = 0; index < 32; index += 1) bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
-  return bytes;
+function labelStoredChallenge(challenge: NormalizedX402Challenge): NormalizedX402Challenge {
+  return {
+    ...challenge,
+    protocol: challenge.protocol ?? CUSTOM_PROTOCOL,
+    protocolLabel: challenge.protocolLabel ?? CUSTOM_PROTOCOL_LABEL,
+    proofKind: challenge.proofKind ?? "settled-receipt-pda",
+    network: challenge.network ?? "solana-devnet",
+    scheme: challenge.scheme ?? "exact",
+  };
 }

@@ -35,14 +35,19 @@ exact fields that the user must provide before it can quote, prepare, or settle
 a payment. `prepare_payment` returns a policy-checked transaction plan; the
 connected wallet signs it only after the user reviews the request in the web
 UI.
-`prepare_x402_payment` normalizes an x402 exact challenge into the same
-policy-checked flow. `execute_x402_payment` requires an explicit `signingMode`.
-Human mode returns or relays a browser-signed transaction. Delegated mode sends
-the unsigned wire transaction to Axum, which validates it, asks the
-mandate-bound Privy wallet to sign, revalidates the unchanged message, submits
-it, verifies the finalized receipt PDA, and retries the resource with an
-`X-PAYMENT` proof. The x402 adapter does not custody keys or operate a hosted
-facilitator.
+`prepare_x402_payment` and `execute_x402_payment` detect protocol from document
+shape, not header name. The supported rail is ChainPay's custom `x402/1.0`
+receipt-proof flow: `network` is `solana-devnet`, `payTo` is a recipient token
+account, and proof is `{signature, receiptPDA}`. Standard x402 v2
+`PAYMENT-REQUIRED` (`x402Version: 2`, CAIP-2
+`solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`) is recognized and returned as
+`x402_unsupported_sponsor` before wallet preparation, signing, or settlement.
+ChainPay does not operate a standard sponsor or facilitator; a custom receipt
+proof is not a partially signed sponsored transaction. `execute_x402_payment`
+requires an explicit `signingMode`. Human mode returns or relays a
+browser-signed custom settlement. Delegated mode sends the unsigned wire
+transaction to Axum. After Paid, resume with `paymentId` retries the original
+resource only.
 
 `execute_payment` performs SDK preflight first and requires an explicit
 `signingMode`. In `human` mode it returns a base64 unsigned transaction, recent
@@ -224,5 +229,8 @@ Hosted x402 fetches require exact trusted merchant origins in
 `CHAINPAY_X402_ALLOWED_ORIGINS` (comma-separated). HTTPS is required. The explicit
 `CHAINPAY_X402_ALLOW_HTTP=true` development option only permits localhost or
 loopback HTTP merchants. Redirects remain blocked and responses bounded.
-This adapter's receipt-PDA proof is a ChainPay-specific x402 flow; it does not
-claim standard sponsor-partially-signed x402 transaction interoperability.
+This adapter's receipt-PDA proof is ChainPay's custom `x402/1.0` flow. It is
+labeled as such in tool results. Standard x402 v2 exact SVM (sponsor
+countersign of a partially signed transaction) is parsed and rejected as
+`x402_unsupported_sponsor`. Header aliases (`PAYMENT-REQUIRED`,
+`X-Payment-Required`) never select the protocol by themselves.

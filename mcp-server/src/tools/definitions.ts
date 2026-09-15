@@ -258,24 +258,13 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "prepare_x402_payment",
-    description: "Normalize a Solana x402 challenge and prepare a mandate-checked payment transaction.",
+    description: "Detect a custom ChainPay x402/1.0 receipt-proof challenge (network solana-devnet, payTo is a recipient token account) and prepare a mandate-checked payment. Standard x402 v2 PAYMENT-REQUIRED (x402Version 2, CAIP-2 solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1) is recognized and returned as x402_unsupported_sponsor before wallet or settlement. ChainPay does not operate a standard sponsor/facilitator.",
     inputSchema: {
       type: "object",
       properties: {
         challenge: {
           type: "object",
-          description: "x402 exact payment challenge",
-          properties: {
-            network: { type: "string" },
-            scheme: { type: "string", enum: ["exact"] },
-            asset: { type: "string" },
-            payTo: { type: "string" },
-            amount: { type: "string" },
-            resource: { type: "string" },
-            nonce: { type: "string" },
-            tokenProgram: { type: "string", enum: ["spl-token", "token-2022"] },
-          },
-          required: ["asset", "payTo", "amount", "resource"],
+          description: "Custom x402/1.0 envelope or accept option (version x402/1.0, network solana-devnet), or a standard x402 v2 PaymentRequired document (x402Version 2). Protocol is detected from document shape, not header name.",
           additionalProperties: true,
         },
         mandate: { type: "string" },
@@ -288,7 +277,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "execute_x402_payment",
-    description: "Run the live x402 GET/402 flow, prepare an externally signed ChainPay settlement, verify its receipt, and retry the resource with proof.",
+    description: "Fetch a live 402, detect custom ChainPay x402/1.0 vs standard x402 v2 from document shape, settle only the custom receipt-proof rail, and retry the original resource with an x402/1.0 signature+receiptPDA proof. Standard v2 returns x402_unsupported_sponsor before signing. Resume with paymentId retries delivery only; it does not create a new settlement.",
     inputSchema: {
       type: "object",
       properties: {
