@@ -143,6 +143,7 @@ export type PaymentReceipt = {
   amount: bigint;
   agent: Address;
   executedAtSlot: bigint;
+  /** Replay lock from settle. Not seller delivery and not the transaction signature. */
   signatureReference: Uint8Array;
   status: PaymentStatus;
   onChainStatus: number;

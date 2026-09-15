@@ -1,6 +1,7 @@
 export * from "./accounts.js";
 export * from "./client.js";
 export * from "./constants.js";
+export * from "./delivery.js";
 export * from "./encoding.js";
 export * from "./mandate.js";
 export * from "./payment.js";

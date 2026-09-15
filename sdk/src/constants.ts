@@ -38,3 +38,5 @@ export const RECEIPT_SEED = "receipt";
 export const ASSET_SEED = "asset";
 
 export const RECEIPT_STATUS_SETTLED = 1;
+export const RECEIPT_ACCOUNT_LENGTH = 282;
+export const MANDATE_ACCOUNT_LENGTH = 235;
