@@ -1,4 +1,4 @@
-import type { ChainPayWallet } from "./wallet";
+import type { ChainPayWallet } from "./wallet/connect";
 
 let wallet: ChainPayWallet | null = null;
 let backend = "";
