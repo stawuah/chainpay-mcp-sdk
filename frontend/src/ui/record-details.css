@@ -1,0 +1,54 @@
+.cp-record-panel {
+  border-radius: 24px 0 0 24px !important;
+  border: 1px solid #dbe2ef;
+  box-shadow: -20px 0 70px rgb(20 33 61 / 12%);
+  color: #14213d;
+  background: #fff;
+}
+.cp-record-panel .mandate-detail-card { border: 0; padding: 0; margin: 0; box-shadow: none; }
+.cp-record-panel .mandate-detail-heading { display: block; }
+.cp-record-panel .mandate-detail-heading-actions { margin-top: 16px; }
+.cp-record-panel .mandate-detail-grid { grid-template-columns: minmax(0, 1fr); }
+.cp-record-panel .mandate-detail-grid strong,
+.cp-record-panel .mandate-detail-value { font-size: 14px; }
+.cp-record-panel .mandate-detail-grid > div > span { font: 500 12px var(--font-family-body); text-transform: none; }
+.cp-record-panel .mandate-detail-note { font-size: 13px; line-height: 1.6; }
+.cp-record-full-link { display: inline-flex; min-height: 44px; align-items: center; color: #0052ff; text-underline-offset: 4px; margin-bottom: 12px; }
+.cp-record-page { max-width: 960px; margin-inline: auto; }
+.cp-record-page > h2 { font-size: 32px; letter-spacing: -.035em; margin-top: 24px; }
+.cp-record-page > h2:focus { outline: none; }
+.cp-record-missing { padding-block: 32px; line-height: 1.6; }
+.cp-permission-summary { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; margin: 20px 0; }
+.cp-permission-summary > div { padding: 18px; background: #eff4ff; border-radius: 16px; min-width: 0; }
+.cp-permission-summary span { display: block; font-size: 12px; color: #56647d; margin-bottom: 8px; }
+.cp-permission-summary strong { font-size: 21px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.cp-record-consequences { line-height: 1.6; font-size: 13px; margin-top: 18px; color: #56647d; }
+.cp-app .dashboard-main { background: #f7f9fc; }
+.cp-app .dashboard-sidebar { background: #fff; border-inline-end: 1px solid #dbe2ef; }
+.cp-app .dashboard-card { border-radius: 24px; }
+.cp-app .mandate-table th { background: #fafbfe; }
+.cp-app .mandate-table td { padding-block: 20px; }
+.cp-app .mandate-agent-cell strong { font-size: 14px; }
+.cp-app .mandate-amount-line { flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.cp-app .mandate-table-actions .xds-button { min-width: 76px; }
+.cp-app .mandate-table tbody tr:focus-visible { outline: 3px solid #0052ff; outline-offset: -3px; }
+@media (max-width: 680px) {
+  .cp-record-panel { width: 100vw !important; max-width: 100vw !important; border-radius: 0 !important; border: 0; }
+  .cp-permission-summary { grid-template-columns: 1fr; }
+  .cp-record-panel .mandate-detail-actions { align-items: stretch; }
+  .cp-record-panel .mandate-detail-actions > button { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cp-record-panel { animation: none !important; transition: none !important; }
+}
+
+.cp-app .mandate-table-status.expired { color: #56647d; background: #f0f2f6; }
+.cp-app .mandate-table-status.expired .mandate-status-check { color: #56647d; background: transparent; }
+
+.cp-record-header h2:focus { outline: none; }
+.cp-record-agent { margin-top: 18px; display: grid; gap: 8px; overflow-wrap: anywhere; font-size: 13px; }
+.cp-record-agent span { color: #56647d; }
+.cp-record-agent strong { font-family: var(--font-family-code); font-weight: 400; }
+.cp-record-technical { margin-top: 20px; }
+.cp-record-technical > summary { min-height: 44px; cursor: pointer; font-size: 13px; padding-block: 12px; }
+@media (max-width:680px) { .cp-record-panel { padding-bottom: env(safe-area-inset-bottom); } }

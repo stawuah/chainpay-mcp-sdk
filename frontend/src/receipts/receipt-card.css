@@ -124,3 +124,13 @@
   .receipt-current-mandate dl,
   .receipt-technical dl { grid-template-columns: 1fr; }
 }
+
+.receipt-brand { margin: 0 0 16px; color: var(--blue); font-weight: 600; }
+.receipt-summary { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 8px 16px; margin: 20px 0; }
+.receipt-summary dt { color: var(--body); font-size: 12px; }
+.receipt-summary dd { margin: 0; color: var(--ink); font: 500 12px/1.45 var(--mono); overflow-wrap: anywhere; }
+.receipt-public-url { margin: 16px 0 0; color: var(--body); font-size: 12px; overflow-wrap: anywhere; }
+.receipt-public-url a { color: var(--blue); }
+@media (max-width: 720px) {
+  .receipt-summary { grid-template-columns: 1fr; }
+}

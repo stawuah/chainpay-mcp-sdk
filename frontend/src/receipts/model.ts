@@ -136,7 +136,7 @@ export function sellerStamp(seller: SellerStatementState): ReceiptStamp {
   }
   return {
     key: "seller",
-    label: "Seller statement absent",
+    label: "No seller statement",
     detail: "A seller can sign a statement that it served a specific response. None is published for this receipt.",
     tone: "neutral",
   };

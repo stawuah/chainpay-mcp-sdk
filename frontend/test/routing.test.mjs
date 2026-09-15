@@ -45,3 +45,14 @@ test("maps legacy microsite hashes and preserves ordinary anchors", () => {
   assert.equal(history.replaced, "/#how-it-works");
   assert.equal(legacy.applyLegacyHashRedirect({ hash: "#activity", pathname: "/" }, history), false);
 });
+
+test("permission details round-trip without changing legacy routes", () => {
+  const address = "PdaAddress1111111111111111111111111111";
+  const route = { kind: "app", tab: "mandates", mandateDetail: address };
+  assert.equal(paths.buildPath(route), `/app/mandates/${address}`);
+  assert.deepEqual(paths.parsePathname(paths.buildPath(route)), route);
+  assert.deepEqual(paths.parsePathname("/app/mandates/new"), { kind: "app", tab: "mandates", mandateBuilder: true });
+  assert.deepEqual(paths.parsePathname("/app/mandates/a/b"), { kind: "app", tab: "overview" });
+  assert.deepEqual(paths.parsePathname("/app/mandates/%ZZ"), { kind: "app", tab: "mandates", mandateDetail: "%ZZ" });
+  assert.deepEqual(paths.parsePathname("/app/mandates/a%2Fb"), { kind: "app", tab: "mandates", mandateDetail: "a/b" });
+});

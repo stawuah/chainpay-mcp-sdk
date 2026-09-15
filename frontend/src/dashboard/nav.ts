@@ -5,14 +5,14 @@ export type DashboardNavItem = {
   id: DashboardTab;
   label: string;
   icon: string;
-  group: "workspace" | "tools" | "admin";
+  group: "workspace" | "tools" | "admin" | "agents";
 };
 
 export const DASHBOARD_NAV_ITEMS: DashboardNavItem[] = [
   { id: "overview", label: "Overview", icon: "⌂", group: "workspace" },
-  { id: "mandates", label: "Mandates", icon: "◇", group: "workspace" },
-  { id: "payments", label: "Payments", icon: "↗", group: "workspace" },
   { id: "agents", label: "Agents", icon: "⌁", group: "workspace" },
+  { id: "mandates", label: "Spending permissions", icon: "◇", group: "workspace" },
+  { id: "payments", label: "Payments", icon: "↗", group: "workspace" },
   { id: "receipts", label: "Receipts", icon: "▤", group: "workspace" },
   { id: "assistant", label: "Requests", icon: "◉", group: "workspace" },
   { id: "tools", label: "Developer tools", icon: "⌘", group: "tools" },

@@ -54,19 +54,19 @@ export function DashboardNav({ tab, approvalCount = 0, toolCount = 0, onSelect, 
           <NavButton
             key={item.id}
             item={item}
-            current={tab === item.id}
+            current={tab === item.id || (item.id === "agents" && tab === "connect-mcp")}
             endLabel={item.id === "assistant" && approvalCount > 0 ? String(approvalCount) : undefined}
             onSelect={onSelect}
           />
         ))}
       </nav>
       <div className="sidebar-separator" />
-      <div className="sidebar-label">AGENT TOOLS</div>
+      <div className="sidebar-label">DEVELOPER</div>
       {dashboardNavItems("tools").map((item) => (
         <NavButton
           key={item.id}
           item={item}
-          current={tab === item.id}
+          current={tab === item.id || (item.id === "agents" && tab === "connect-mcp")}
           endLabel={item.id === "tools" ? String(toolCount || 4) : undefined}
           onSelect={onSelect}
         />
@@ -77,7 +77,7 @@ export function DashboardNav({ tab, approvalCount = 0, toolCount = 0, onSelect, 
         <NavButton
           key={item.id}
           item={item}
-          current={tab === item.id}
+          current={tab === item.id || (item.id === "agents" && tab === "connect-mcp")}
           muted={item.id === "settings"}
           onSelect={onSelect}
         />

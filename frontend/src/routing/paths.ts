@@ -15,7 +15,7 @@ export type DashboardTab = (typeof DASHBOARD_TABS)[number];
 
 export type AppRoute =
   | { kind: "landing" }
-  | { kind: "app"; tab: DashboardTab; mandateBuilder?: boolean }
+  | { kind: "app"; tab: DashboardTab; mandateBuilder?: boolean; mandateDetail?: string }
   | { kind: "verify"; receiptPda: string };
 
 export function isDashboardTab(value: string): value is DashboardTab {
@@ -31,6 +31,14 @@ export function parsePathname(pathname: string): AppRoute {
   if (normalized.startsWith("/app/")) {
     const rest = normalized.slice("/app/".length);
     if (rest === "mandates/new") return { kind: "app", tab: "mandates", mandateBuilder: true };
+    if (/^mandates\/[^/]+$/.test(rest)) {
+      const encoded = rest.slice("mandates/".length);
+      try {
+        return { kind: "app", tab: "mandates", mandateDetail: decodeURIComponent(encoded) };
+      } catch {
+        return { kind: "app", tab: "mandates", mandateDetail: encoded };
+      }
+    }
     const tab = rest.split("/")[0] ?? "";
     if (isDashboardTab(tab) && rest === tab) return { kind: "app", tab };
     return { kind: "app", tab: "overview" };
@@ -56,6 +64,7 @@ export function buildPath(route: AppRoute): string {
     return route.receiptPda ? `/verify/${encodeURIComponent(route.receiptPda)}` : "/verify";
   }
   if (route.mandateBuilder && route.tab === "mandates") return "/app/mandates/new";
+  if (route.mandateDetail && route.tab === "mandates") return `/app/mandates/${encodeURIComponent(route.mandateDetail)}`;
   return `/app/${route.tab}`;
 }
 

@@ -6,7 +6,9 @@ import { PublicKey, type Transaction } from "@solana/web3.js";
 import solWalletImage from "../assets/your-sol.jpg";
 import usdcWalletImage from "../assets/your-usdc.jpg";
 import pyusdWalletImage from "../assets/yourpyusd.png";
-import type { DashboardTab } from "../routing/paths";
+import { buildPath, type DashboardTab } from "../routing/paths";
+import { useRoute } from "../routing/useRoute";
+import { RecordDetails } from "../ui/RecordDetails";
 import { InboxReceipt, LoadedReceiptCard } from "../receipts/InboxReceipt";
 import { receiptViewFromSettledPayment, tokenLabelForMint } from "../receipts/load";
 import { amountLabel, publicReceiptPath } from "../receipts/model";
@@ -68,7 +70,6 @@ import {
   type AgentInboxItem,
   type ApprovalStatus,
   type ProtocolConfig,
-  type MandateTableStatus,
   type MandateAction,
   type AgentConnection,
   type ManagedSigner,
@@ -833,7 +834,7 @@ export function Dashboard({
             </div>
           </header>
           <div className="dashboard-page">
-          <div className="dashboard-heading"><div><span className="section-kicker">{tab === "mandates" ? "POLICY CONTROL" : tab === "assistant" ? "PAYMENT REQUESTS" : agentsTabActive ? "AGENT ACCESS" : "CONTROL CENTER"}</span><h1 className="t-xl">{tab === "assistant" ? "Requests." : tab === "protocol" ? "Protocol setup." : tab === "mandates" ? "Mandates." : tab === "payments" ? "Route a payment." : agentsTabActive ? "Agents." : tab === "receipts" ? "Receipts." : tab === "tools" ? "Developer tools." : tab === "settings" ? "Settings." : mandates.length === 0 ? `${FIRST_MANDATE_TITLE}.` : "Good to see you."}</h1><p>{tab === "assistant" ? "Bring an invoice or payment request here. ChainPay verifies it against your mandate and shows what the agent is buying before wallet approval." : tab === "protocol" ? "Initialize the protocol asset list from the authority wallet." : tab === "mandates" ? (mandateCreateOpen ? "Create a policy for an agent to follow before a payment can be signed." : "Review the spending rules an agent must follow before a payment can be signed.") : tab === "payments" ? "Check the request, then approve the payment in your wallet." : agentsTabActive ? "Pair an external MCP client or use the dashboard assistant. Your mandate sets the spend limit; pairing controls who may call payment tools." : tab === "receipts" ? "Preview, verify, and send durable proof for every confirmed settlement." : tab === "tools" ? "The exact tools agents can call. Nothing else is exposed." : tab === "settings" ? "Solana Devnet status, wallet controls, and account actions." : mandates.length === 0 ? OWNER_SETUP_PATH_SUMMARY : "Live purchases from your agent, checked against the mandate you already approved."}</p></div>{tab === "overview" || tab === "mandates" ? (mandateCreateOpen ? <Button type="button" variant="secondary" className="refresh-button" label="← Back to mandates" isDisabled={false} onClick={() => setMandateCreateOpen(false)} /> : <Button type="button" variant="primary" className="overview-new-mandate" label={mandates.length === 0 ? FIRST_MANDATE_TITLE : "＋ New mandate"} isDisabled={false} onClick={openMandateCreate} />) : <Button type="button" variant="secondary" className="refresh-button" label="↻ Refresh" isDisabled={integrationStatus === "loading"} onClick={() => void onRefresh()} />}</div>
+          <div className="dashboard-heading"><div><span className="section-kicker">{tab === "mandates" ? "POLICY CONTROL" : tab === "assistant" ? "PAYMENT REQUESTS" : agentsTabActive ? "AGENT ACCESS" : "CONTROL CENTER"}</span><h1 className="t-xl">{tab === "assistant" ? "Requests." : tab === "protocol" ? "Protocol setup." : tab === "mandates" ? "Spending permissions." : tab === "payments" ? "Route a payment." : agentsTabActive ? "Agents." : tab === "receipts" ? "Receipts." : tab === "tools" ? "Developer tools." : tab === "settings" ? "Settings." : mandates.length === 0 ? `${FIRST_MANDATE_TITLE}.` : "Good to see you."}</h1><p>{tab === "assistant" ? "Bring an invoice or payment request here. ChainPay verifies it against your mandate and shows what the agent is buying before wallet approval." : tab === "protocol" ? "Initialize the protocol asset list from the authority wallet." : tab === "mandates" ? (mandateCreateOpen ? "Create a policy for an agent to follow before a payment can be signed." : "A mandate is an on-chain spending permission. Review the rules your agent must follow before paying.") : tab === "payments" ? "Check the request, then approve the payment in your wallet." : agentsTabActive ? "Pair an external MCP client or use the dashboard assistant. Your mandate sets the spend limit; pairing controls who may call payment tools." : tab === "receipts" ? "Preview, verify, and send durable proof for every confirmed settlement." : tab === "tools" ? "The exact tools agents can call. Nothing else is exposed." : tab === "settings" ? "Solana Devnet status, wallet controls, and account actions." : mandates.length === 0 ? OWNER_SETUP_PATH_SUMMARY : "Live purchases from your agent, checked against the mandate you already approved."}</p></div>{tab === "overview" || tab === "mandates" ? (mandateCreateOpen ? <Button type="button" variant="secondary" className="refresh-button" label="← Back to mandates" isDisabled={false} onClick={() => setMandateCreateOpen(false)} /> : <Button type="button" variant="primary" className="overview-new-mandate" label={mandates.length === 0 ? FIRST_MANDATE_TITLE : "＋ New mandate"} isDisabled={false} onClick={openMandateCreate} />) : <Button type="button" variant="secondary" className="refresh-button" label="↻ Refresh" isDisabled={integrationStatus === "loading"} onClick={() => void onRefresh()} />}</div>
 
           <div className="integration-strip"><span className={`connection-dot ${integrationStatus}`} /> <b>{integrationStatus === "loading" ? "Syncing" : integrationStatus === "error" ? "Needs attention" : "Connected"}</b><span>Network · Solana Devnet</span><span className="integration-divider" /><b>PAYMENT TOOLS</b><span>{mcpTools.length ? `${mcpTools.length} available` : "Loading"}</span><span className="integration-divider" /><b>AGENTS</b><span>{connections.length ? `${liveConnectionCount} live · ${connections.length} paired` : "None paired"}</span>{integrationError && <small title={integrationError}>Check connection</small>}</div>
 
@@ -879,18 +880,16 @@ export function Dashboard({
   );
 }
 
-function mandateTableStatus(status: Mandate["status"]): MandateTableStatus {
-  if (status === "paused") return "paused";
-  if (status === "revoked" || status === "expired") return "revoked";
-  return "active";
-}
+type MandateTableStatus = Mandate["status"];
+function mandateTableStatus(status: Mandate["status"]): MandateTableStatus { return status; }
 
 function mandateStatusLabel(status: MandateTableStatus) {
   return status[0].toUpperCase() + status.slice(1);
 }
 
-function MandatesPanel({
+export function MandatesPanel({
   wallet,
+  loadStatus = "ready",
   walletSigner,
   walletMessageSigner,
   mandates,
@@ -906,6 +905,7 @@ function MandatesPanel({
   onRefresh,
 }: {
   wallet: string;
+  loadStatus?: "idle" | "loading" | "ready" | "error";
   walletSigner?: (transaction: Transaction) => Promise<Transaction>;
   walletMessageSigner?: (message: Uint8Array) => Promise<Uint8Array>;
   mandates: Mandate[];
@@ -924,28 +924,87 @@ function MandatesPanel({
   const [mandateSearch, setMandateSearch] = useState("");
   const [actionInFlight, setActionInFlight] = useState<MandateAction | null>(null);
   const [actionError, setActionError] = useState("");
+  const [revokeTarget, setRevokeTarget] = useState<Mandate | null>(null);
+  const [actionAddress, setActionAddress] = useState("");
+  const actionLock = useRef(false);
   const [currentSlot, setCurrentSlot] = useState<bigint | null>(null);
   const { estimate: slotEstimate } = useSlotEstimate();
   const [decimalsByMint, setDecimalsByMint] = useState<Record<string, number>>({});
-  const [expandedMandateAddress, setExpandedMandateAddress] = useState<string | null>(mandate?.address ?? null);
+  const { currentRoute, navigate } = useRoute();
+  const fullDetailAddress = currentRoute.kind === "app" && currentRoute.tab === "mandates" ? currentRoute.mandateDetail : undefined;
+  const [expandedMandateAddress, setExpandedMandateAddress] = useState<string | null>(null);
+  const recordAddress = fullDetailAddress ?? expandedMandateAddress;
+  const listPosition = useRef<{ windowY: number; mainY: number } | null>(null);
+  const wasFullPage = useRef(false);
+  const openingControl = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (wasFullPage.current && !fullDetailAddress && listPosition.current) {
+      const position = listPosition.current;
+      const frame = requestAnimationFrame(() => {
+        window.scrollTo(0, position.windowY);
+        const main = document.querySelector(".dashboard-main");
+        if (main) main.scrollTop = position.mainY;
+        openingControl.current?.focus({ preventScroll: true });
+      });
+      wasFullPage.current = false;
+      return () => cancelAnimationFrame(frame);
+    }
+    wasFullPage.current = Boolean(fullDetailAddress);
+  }, [fullDetailAddress]);
+  useEffect(() => {
+    setExpandedMandateAddress(null);
+    setRevokeTarget(null);
+    setActionError("");
+    setFilter("all");
+    setMandateSearch("");
+    listPosition.current = null;
+    openingControl.current = null;
+    const saved = window.history.state?.chainpayPermissionPreview;
+    if (saved && saved.wallet !== wallet) window.history.replaceState(null, "", window.location.href);
+  }, [wallet]);
+  useEffect(() => {
+    const syncPreview = () => {
+      const saved = window.history.state?.chainpayPermissionPreview;
+      setExpandedMandateAddress(saved?.wallet === wallet && window.location.pathname.replace(/\/$/, "") === "/app/mandates" ? saved.address : null);
+    };
+    syncPreview();
+    window.addEventListener("popstate", syncPreview);
+    return () => window.removeEventListener("popstate", syncPreview);
+  }, [wallet]);
+  function openRecord(value: Mandate, control: HTMLElement) {
+    openingControl.current = control;
+    listPosition.current = { windowY: window.scrollY, mainY: document.querySelector(".dashboard-main")?.scrollTop ?? 0 };
+    control.focus({ preventScroll: true });
+    onSelectMandate(value);
+    window.history.pushState({ chainpayPermissionPreview: { wallet, address: value.address } }, "", window.location.href);
+    setExpandedMandateAddress(value.address);
+  }
+  function closeRecord() {
+    setExpandedMandateAddress(null);
+    if (fullDetailAddress) {
+      if (listPosition.current) window.history.back();
+      else navigate({ kind: "app", tab: "mandates" }, { replace: true });
+    } else if (window.history.state?.chainpayPermissionPreview?.wallet === wallet) window.history.back();
+  }
+  function openFullRecord() {
+    if (!expandedMandate) return;
+    setExpandedMandateAddress(null);
+    navigate({ kind: "app", tab: "mandates", mandateDetail: expandedMandate.address }, { replace: true });
+  }
   const normalizedSearch = mandateSearch.trim().toLowerCase();
   const filteredMandates = mandates.filter((value) => {
-    const statusMatches = filter === "all" || mandateTableStatus(value.status) === filter;
+    const statusMatches = value.owner === wallet && (filter === "all" || mandateTableStatus(value.status) === filter);
     const searchMatches = !normalizedSearch || [value.address, value.approvedAgent, value.allowedMint].some((field) => field.toLowerCase().includes(normalizedSearch));
     return statusMatches && searchMatches;
   });
   const visibleMandates = filteredMandates.slice(0, MAX_MANDATES_VISIBLE);
-  const expandedMandate = expandedMandateAddress ? mandates.find((value) => value.address === expandedMandateAddress) ?? null : null;
+  const expandedMandate = recordAddress ? mandates.find((value) => value.address === recordAddress && value.owner === wallet) ?? null : null;
   const expandedMandateStatus = expandedMandate ? mandateTableStatus(expandedMandate.status) : null;
   const expandedMandateAsset = expandedMandate ? stablecoinOptions.find((option) => option.mint === expandedMandate.allowedMint) : null;
   const expandedMandateDecimals = expandedMandate ? decimalsByMint[expandedMandate.allowedMint] : undefined;
   const expandedMandateExpiry = expandedMandate
     ? mandateExpiryLabel(expandedMandate.expiresAtSlot, currentSlot, slotEstimate)
     : "";
-
-  useEffect(() => {
-    if (mandate?.address) setExpandedMandateAddress(mandate.address);
-  }, [mandate?.address]);
 
   useEffect(() => {
     let active = true;
@@ -973,6 +1032,10 @@ function MandatesPanel({
   }, [mandates.map((value) => value.allowedMint).join(",")]);
 
   async function handleMandateAction(action: MandateAction, targetMandate: Mandate) {
+    if (actionLock.current) return;
+    if (targetMandate.owner !== wallet) { setActionError("Connect the permission’s owner wallet before changing it."); return; }
+    actionLock.current = true;
+    setActionAddress(targetMandate.address);
     setActionError("");
     setActionInFlight(action);
     try {
@@ -980,6 +1043,7 @@ function MandatesPanel({
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      actionLock.current = false;
       setActionInFlight(null);
     }
   }
@@ -1013,6 +1077,7 @@ function MandatesPanel({
       `Already spent: ${formatTokenAmount(expandedMandate.amountSpent, expandedMandateDecimals ?? null)}`,
       `Payments used: ${expandedMandate.paymentCount.toString()}${expandedMandate.maxPaymentCount === 0n ? " (no payment-count limit)" : ` of ${expandedMandate.maxPaymentCount.toString()}`}`,
       `Expires: ${expandedMandateExpiry}`,
+      `Cooldown slots: ${expandedMandate.cooldownSlots.toString()}${expandedMandate.cooldownSlots === 0n ? " (no cooldown)" : ""}`,
     ].join("\n"));
   }
 
@@ -1038,6 +1103,7 @@ function MandatesPanel({
 
   return (
     <section className="mandates-panel" aria-labelledby="mandate-table-title">
+      <div hidden={Boolean(fullDetailAddress)}>
       <div className="mandate-filter-controls"><div className="mandate-filter-bar">
         <RadioList
           label="Filter mandates"
@@ -1050,8 +1116,9 @@ function MandatesPanel({
           <RadioListItem value="active" label="Active" />
           <RadioListItem value="paused" label="Paused" />
           <RadioListItem value="revoked" label="Revoked" />
+          <RadioListItem value="expired" label="Expired" />
         </RadioList>
-      </div><div className="mandate-search-group"><TextInput label="Search mandate ID" isLabelHidden value={mandateSearch} onChange={setMandateSearch} onEnter={() => { if (searchedMandate) useMandateForPayment(searchedMandate); }} placeholder="Search mandate ID…" /><span className="mandate-search-icon" aria-hidden="true">⌕</span>{searchedMandate && <Button type="button" variant="secondary" className="mandate-search-action" label="Pay with mandate" isDisabled={false} onClick={() => useMandateForPayment(searchedMandate)} />}</div></div>
+      </div><div className="mandate-search-group"><TextInput label="Search mandate ID" isLabelHidden value={mandateSearch} onChange={setMandateSearch} onEnter={() => { if (searchedMandate && document.activeElement instanceof HTMLElement) openRecord(searchedMandate, document.activeElement); }} placeholder="Search mandate ID…" /><span className="mandate-search-icon" aria-hidden="true">⌕</span>{searchedMandate && <Button type="button" variant="secondary" className="mandate-search-action" label="Inspect permission" isDisabled={false} onClick={(event) => openRecord(searchedMandate, event.currentTarget)} />}</div></div>
       <div className="mandate-list-meta" aria-live="polite">
         <span>Showing {visibleMandates.length} of {filteredMandates.length} {filter === "all" ? "mandates" : `${filter} mandates`}</span>
         {filteredMandates.length > visibleMandates.length && <span>Showing the first {MAX_MANDATES_VISIBLE}. Use the filters to narrow the list.</span>}
@@ -1081,7 +1148,7 @@ function MandatesPanel({
                 const selected = mandate?.address === value.address;
                 const expiry = mandateExpiryLabel(value.expiresAtSlot, currentSlot, slotEstimate);
                 return (
-                  <TableRow key={value.address} className={selected ? "is-selected" : undefined} onClick={() => { onSelectMandate(value); setExpandedMandateAddress(value.address); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelectMandate(value); setExpandedMandateAddress(value.address); } }} tabIndex={0} aria-expanded={expandedMandateAddress === value.address}>
+                  <TableRow key={value.address} className={selected ? "is-selected" : undefined} onClick={(event) => { openRecord(value, event.currentTarget); }} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openRecord(value, event.currentTarget); } }} tabIndex={0} aria-label={`Inspect spending permission ${value.address}`} aria-expanded={expandedMandateAddress === value.address}>
                     <TableCell data-label="Agent">
                       <div className="mandate-agent-cell">
                         <span className="mandate-agent-avatar">{value.approvedAgent.slice(0, 2)}</span>
@@ -1093,15 +1160,15 @@ function MandatesPanel({
                       <div className="mandate-token-cell"><strong>{selectedAsset?.label ?? shortAddress(value.allowedMint)}</strong><small>{selectedAsset?.detail ?? (value.tokenProgram === "token-2022" ? "Token-2022" : "Classic SPL Token")}</small></div>
                     </TableCell>
                     <TableCell data-label="Amount" className="mandate-amount-cell">
-                      <div className="mandate-amount-line"><strong>{decimals === undefined ? "—" : `$${formatTokenAmount(value.amountSpent, decimals)}`}</strong><span>/ {decimals === undefined ? "—" : `$${formatTokenAmount(value.totalLimit, decimals)}`}</span></div>
+                      <div className="mandate-amount-line"><strong>{formatTokenAmount(value.amountSpent, decimals ?? null)}</strong><span>/ {formatTokenAmount(value.totalLimit, decimals ?? null)} {selectedAsset?.label ?? "tokens"}</span></div>
                       <div className="mandate-spend-bar" aria-label={`${progress}% of mandate spend used`}><span style={{ width: `${progress}%` }} /></div>
                     </TableCell>
                     <TableCell data-label="Status"><span className={`mandate-table-status ${status}`}><span className="mandate-status-check">✓</span>{mandateStatusLabel(status)}</span></TableCell>
                     <TableCell data-label="Actions" className="mandate-table-actions">
-                      {status !== "revoked" ? <>
-                        <IconButton type="button" variant="ghost" className="mandate-icon-button" label={status === "paused" ? "Resume mandate" : "Pause mandate"} isDisabled={actionInFlight !== null} icon={<span>{actionInFlight === (status === "paused" ? "resume" : "pause") ? "…" : status === "paused" ? "▶" : "Ⅱ"}</span>} onClick={(event) => { event.stopPropagation(); void handleMandateAction(status === "paused" ? "resume" : "pause", value); }} />
-                        <IconButton type="button" variant="destructive" className="mandate-icon-button danger" label="Revoke mandate" isDisabled={actionInFlight !== null} icon={<span>⌫</span>} onClick={(event) => { event.stopPropagation(); void handleMandateAction("revoke", value); }} />
+                      {(status === "active" || status === "paused") ? <>
+                        <Button type="button" variant="secondary" label={status === "paused" ? "Resume" : "Pause"} isDisabled={actionInFlight !== null} onClick={(event) => { event.stopPropagation(); void handleMandateAction(status === "paused" ? "resume" : "pause", value); }} />
                       </> : <span className="mandate-no-actions">—</span>}
+                      {actionInFlight && actionAddress === value.address && <small role="status">Waiting for wallet or confirmation…</small>}
                     </TableCell>
                   </TableRow>
                 );
@@ -1112,12 +1179,30 @@ function MandatesPanel({
           </Table>
         </div>
       </div>
+      </div>
+      <RecordDetails open={Boolean(expandedMandateAddress)} fullPage={Boolean(fullDetailAddress)} title="Spending permission" onClose={closeRecord}
+        fullPageHref={expandedMandate ? buildPath({ kind: "app", tab: "mandates", mandateDetail: expandedMandate.address }) : undefined} onOpenFullPage={openFullRecord}>
+      {recordAddress && !expandedMandate && <div className="cp-record-missing" role="status" aria-busy={loadStatus === "loading" || loadStatus === "idle"}><h3>{loadStatus === "loading" || loadStatus === "idle" ? "Loading permission…" : loadStatus === "error" ? "Unable to load permission" : "Permission unavailable"}</h3><p>{loadStatus === "loading" || loadStatus === "idle" ? "Reading the current wallet’s permissions." : loadStatus === "error" ? "The permission list could not be refreshed. Try again before drawing a conclusion about this address." : "This permission is not in the current wallet’s loaded records. Check the address and wallet, or refresh the list."}</p><Button type="button" variant="secondary" label="Refresh permissions" isDisabled={loadStatus === "loading"} onClick={() => void onRefresh()} /></div>}
       {expandedMandate && <article className="dashboard-card mandate-detail-card" aria-labelledby="mandate-detail-title">
         <div className="mandate-detail-heading">
-          <div><span className="section-kicker">MANDATE DETAILS</span><h2 id="mandate-detail-title">{expandedMandateAsset?.label ?? "Selected mandate"}</h2><p>Review this policy and copy the details the AI needs before routing a payment.</p></div>
-          <div className="mandate-detail-heading-actions"><span className={`mandate-table-status ${expandedMandateStatus}`}><span className="mandate-status-check">✓</span>{expandedMandate.status === "expired" ? "Expired" : mandateStatusLabel(expandedMandateStatus ?? "revoked")}</span><IconButton type="button" variant="ghost" label="Close mandate details" icon={<span>×</span>} onClick={() => setExpandedMandateAddress(null)} /></div>
+          <div><span className="section-kicker">MANDATE DETAILS</span><h2 id="mandate-detail-title">{expandedMandateAsset?.label ?? "Selected mandate"}</h2><p>Review the current on-chain limits for this agent.</p></div>
+          <div className="mandate-detail-heading-actions"><span className={`mandate-table-status ${expandedMandateStatus}`}><span className="mandate-status-check">✓</span>{expandedMandate.status === "expired" ? "Expired" : mandateStatusLabel(expandedMandateStatus ?? "revoked")}</span></div>
+        </div>
+        <p className="cp-record-agent"><span>Approved agent</span><strong>{expandedMandate.approvedAgent}</strong></p>
+        {expandedMandateDecimals === undefined && <p className="cp-record-consequences">Showing exact base units until token decimals are available.</p>}
+        <div className="cp-permission-summary">
+          <div><span>Per-payment limit</span><strong>{formatTokenAmount(expandedMandate.maxPerPayment, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
+          <div><span>Remaining allowance</span><strong>{formatTokenAmount(expandedMandate.totalLimit > expandedMandate.amountSpent ? expandedMandate.totalLimit - expandedMandate.amountSpent : 0n, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
         </div>
         <div className="mandate-detail-grid">
+          <div><span>Maximum per payment</span><strong>{formatTokenAmount(expandedMandate.maxPerPayment, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
+          <div><span>Total spending limit</span><strong>{formatTokenAmount(expandedMandate.totalLimit, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
+          <div><span>Already spent</span><strong>{formatTokenAmount(expandedMandate.amountSpent, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
+          <div><span>Payment count</span><strong>{expandedMandate.paymentCount.toString()}{expandedMandate.maxPaymentCount === 0n ? " · No limit" : ` of ${expandedMandate.maxPaymentCount.toString()}`}</strong></div>
+          <div><span>Cooldown</span><strong>{expandedMandate.cooldownSlots.toString()} slots<small>{expandedMandate.cooldownSlots === 0n ? "No cooldown" : "Minimum slots between payments"}</small></strong></div>
+          <div><span>Expiry</span><strong>{expandedMandateExpiry}<small>Slot {expandedMandate.expiresAtSlot.toString()}</small></strong></div>
+        </div>
+        <details className="cp-record-technical"><summary>Technical identifiers and source account</summary><div className="mandate-detail-grid">
           <div><span>Mandate address</span><button type="button" className="mandate-detail-value" onClick={() => copyValue(expandedMandate.address)} title="Copy mandate address">{expandedMandate.address} ⧉</button></div>
           <div><span>Approved agent</span><button type="button" className="mandate-detail-value" onClick={() => copyValue(expandedMandate.approvedAgent)} title="Copy approved agent">{expandedMandate.approvedAgent} ⧉</button></div>
           <div><span>Owner</span><button type="button" className="mandate-detail-value" onClick={() => copyValue(expandedMandate.owner)} title="Copy owner address">{expandedMandate.owner} ⧉</button></div>
@@ -1126,21 +1211,31 @@ function MandatesPanel({
           <div><span>Token type</span><strong>{expandedMandate.tokenProgram === "token-2022" ? "Token-2022" : "Classic SPL Token"}</strong></div>
           <div><span>{expandedMandateAsset?.label ?? "Token"} account</span><button type="button" className="mandate-detail-value" onClick={() => copyValue(expandedMandate.sourceTokenAccount)} title={`Copy your ${expandedMandateAsset?.label ?? "token"} transfer account`}>{expandedMandate.sourceTokenAccount} ⧉</button><small>Your {expandedMandateAsset?.label ?? "token"} account for transferring funds</small></div>
           <div><span>Recipient rule</span><strong>{expandedMandate.legacyAllowedRecipient ?? "Chosen for each payment"}<small>{expandedMandate.legacyAllowedRecipient ? "Fixed recipient" : "Paste the recipient wallet address; ChainPay resolves its token account"}</small></strong></div>
-          <div><span>Maximum per payment</span><strong>{expandedMandateDecimals === undefined ? "Loading amount…" : formatTokenAmount(expandedMandate.maxPerPayment, expandedMandateDecimals)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
-          <div><span>Total spending limit</span><strong>{expandedMandateDecimals === undefined ? "Loading amount…" : formatTokenAmount(expandedMandate.totalLimit, expandedMandateDecimals)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
-          <div><span>Already spent</span><strong>{expandedMandateDecimals === undefined ? "Loading amount…" : formatTokenAmount(expandedMandate.amountSpent, expandedMandateDecimals)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
-          <div><span>Payment count</span><strong>{expandedMandate.paymentCount.toString()}{expandedMandate.maxPaymentCount === 0n ? " · No limit" : ` of ${expandedMandate.maxPaymentCount.toString()}`}</strong></div>
-          <div><span>Expiry</span><strong>{expandedMandateExpiry}<small>Slot {expandedMandate.expiresAtSlot.toString()}</small></strong></div>
-        </div>
+        </div></details>
+        {actionInFlight && actionAddress === expandedMandate.address && <p role="status">Waiting for wallet or confirmation. Current permission settings remain visible until confirmed.</p>}
+        <p className="cp-record-consequences">Pause, resume and revoke affect future execution. They do not cancel a submitted payment or invalidate an earlier receipt.</p>
         <div className="mandate-detail-actions">
+          {(expandedMandate.status === "active" || expandedMandate.status === "paused") && <>
+            <Button type="button" variant="secondary" label={expandedMandate.status === "paused" ? "Resume permission" : "Pause permission"} isDisabled={actionInFlight !== null} onClick={() => void handleMandateAction(expandedMandate.status === "paused" ? "resume" : "pause", expandedMandate)} />
+            <Button type="button" variant="destructive" label="Revoke permission" isDisabled={actionInFlight !== null} onClick={() => setRevokeTarget(expandedMandate)} />
+          </>}
           <Button type="button" variant="secondary" label="Copy details for AI" isDisabled={false} onClick={copyExpandedMandateDetails} />
           {expandedMandate.status === "active" && expandedMandate.approvedAgent === wallet && <Button type="button" variant="primary" label="Use this mandate for payment" isDisabled={false} onClick={() => useMandateForPayment(expandedMandate)} />}
-          {expandedMandate.status === "active" && expandedMandate.approvedAgent !== wallet && <span className="mandate-detail-note">This is an automatic-payment mandate. Axum validates every payment before the secure provider wallet signs it; the owner wallet does not receive a popup for each payment.</span>}
+          {expandedMandate.status === "active" && expandedMandate.approvedAgent !== wallet && <span className="mandate-detail-note">This permission names a different payment signer. Use the configured agent connection. Automatic-payment availability depends on that signer’s setup.</span>}
           {expandedMandate.status === "paused" && <span className="mandate-detail-note">This mandate is paused. Resume it before using it for payment.</span>}
           {(expandedMandate.status === "revoked" || expandedMandate.status === "expired") && <span className="mandate-detail-note">This mandate cannot be used for new payments.</span>}
         </div>
       </article>}
       {actionError && <p className="mandate-action-error" role="alert">{actionError}</p>}
+      </RecordDetails>
+      {!recordAddress && actionError && <p className="mandate-action-error" role="alert">{actionError}</p>}
+      <ConfirmDialog open={Boolean(revokeTarget)} title="Revoke this spending permission?"
+        description={`This stops future payments through permission ${revokeTarget?.address ?? ""}. It cannot be resumed. Already-submitted payments and earlier receipts are unchanged. Continue to your wallet to approve revocation.`}
+        confirmLabel="Continue to wallet" onClose={() => setRevokeTarget(null)} onConfirm={() => {
+          const target = revokeTarget;
+          setRevokeTarget(null);
+          if (target) void handleMandateAction("revoke", target);
+        }} />
     </section>
   );
 }
@@ -1367,7 +1462,7 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
         <p className="builder-intro">ChainPay checks the mandate, policy, and transaction before asking your wallet to approve this payment.</p>
         <div className="payment-mandate-picker">
           <div className="payment-mandate-picker-heading"><div><span className="soft-label">AVAILABLE MANDATES</span><strong>Choose the active policy the agent will use</strong></div><span className="payment-mandate-count">{paymentMandates.length}{allPaymentMandates.length > MAX_PAYMENT_MANDATES ? ` of ${allPaymentMandates.length}` : ""} active</span></div>
-          {allPaymentMandates.length > MAX_PAYMENT_MANDATES && <p className="payment-mandate-limit">Payments show the first {MAX_PAYMENT_MANDATES} active mandates. Manage all mandates from the Mandates page.</p>}
+          {allPaymentMandates.length > MAX_PAYMENT_MANDATES && <p className="payment-mandate-limit">Payments show the first {MAX_PAYMENT_MANDATES} active mandates. Manage all mandates from Spending permissions.</p>}
           <div className="payment-mandate-options">
             <RadioList label="Choose the active mandate" isLabelHidden value={selectedPaymentMandate.address} onChange={selectPaymentMandate}>
               {paymentMandates.map((candidate) => {
