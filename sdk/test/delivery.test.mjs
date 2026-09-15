@@ -109,6 +109,33 @@ test("signs and verifies a trusted seller statement", async () => {
   assert.equal(verified.payload.statement, "chainpay.response-served");
 });
 
+test("refuses to verify without a trusted seller mapping", async () => {
+  // Without a mapping the only remaining check is that the payload is signed by
+  // the key the payload itself names, which any anonymous poster satisfies with
+  // a throwaway keypair. A caller who forgets the mapping must get a refusal,
+  // not a self-signed statement stamped valid for someone else's receipt.
+  const impostor = Keypair.generate();
+  const forged = await signDeliveryAttestation(
+    fixturePayload({ seller: impostor.publicKey.toBase58() }),
+    impostor.secretKey,
+  );
+
+  const unbound = await verifyDeliveryAttestation(forged);
+  assert.equal(unbound.valid, false);
+  assert.equal(unbound.code, "unknown_seller");
+
+  // Supplying the other bindings without a mapping is still not enough.
+  const stillUnbound = await verifyDeliveryAttestation(forged, {
+    programId: DEFAULT_PROGRAM_ID,
+    receipt: {
+      address: DELIVERY_FIXTURE_RECEIPT_ADDRESS,
+      recipientTokenAccount: Keypair.generate().publicKey.toBase58(),
+    },
+  });
+  assert.equal(stillUnbound.valid, false);
+  assert.equal(stillUnbound.code, "unknown_seller");
+});
+
 test("rejects invalid signature, hash format, and unknown sellers", async () => {
   const seller = Keypair.fromSeed(Buffer.from(DELIVERY_FIXTURE_SELLER_SEED));
   const envelope = await signDeliveryAttestation(fixturePayload(), seller.secretKey);

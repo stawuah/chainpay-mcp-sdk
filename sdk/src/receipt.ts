@@ -64,7 +64,7 @@ export type TokenAmountDisplay = {
 
 export type MintDecimalsRead =
   | { ok: true; decimals: number }
-  | { ok: false; reason: "unsupported_owner" | "truncated" | "missing" };
+  | { ok: false; reason: "unsupported_owner" | "truncated" | "not_a_mint" | "missing" };
 
 export type CurrentMandateRead =
   | { status: "present"; mandate: Mandate }
@@ -131,6 +131,13 @@ export function hexToBytes(value: string, name: string): Uint8Array {
  * Read mint decimals only after confirming the account owner is a supported
  * token program. Callers must not inspect the decimals byte first.
  */
+/** SPL Mint account length. Token-2022 mints pad to 165 and then tag themselves. */
+const MINT_LEN = 82;
+/** Offset of the Token-2022 `account_type` discriminator. */
+const ACCOUNT_TYPE_OFFSET = 165;
+/** `account_type` value meaning Mint. A token account is 2. */
+const ACCOUNT_TYPE_MINT = 1;
+
 export function readVerifiedMintDecimals(
   account: { owner: Address; data: Uint8Array | Buffer } | null | undefined,
 ): MintDecimalsRead {
@@ -141,6 +148,14 @@ export function readVerifiedMintDecimals(
   }
   const data = accountBytes(account.data);
   if (data.length <= 44) return { ok: false, reason: "truncated" };
+  // `data[44]` is the decimals byte of an SPL Mint, but a 165-byte token account
+  // is owned by the same programs and would put part of its `owner` pubkey at
+  // that offset, yielding an arbitrary 0-255 as decimals and a confidently wrong
+  // amount. Accept only a base mint (exactly 82 bytes) or a Token-2022 mint,
+  // which pads to 165 and tags `account_type = 1` at offset 165.
+  const isBaseMint = data.length === MINT_LEN;
+  const isExtendedMint = data.length > ACCOUNT_TYPE_OFFSET && data[ACCOUNT_TYPE_OFFSET] === ACCOUNT_TYPE_MINT;
+  if (!isBaseMint && !isExtendedMint) return { ok: false, reason: "not_a_mint" };
   return { ok: true, decimals: data[44] };
 }
 

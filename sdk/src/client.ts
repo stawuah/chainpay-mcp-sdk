@@ -297,10 +297,14 @@ export class ChainPayClient {
         },
         { programId: this.programId, requireSettled: false, transactionSignature },
       );
-      if (!result.valid) throw new Error(result.reason);
-      return result.receipt;
+      // The getProgramAccounts filter is dataSize plus a memcmp on the mandate;
+      // it does not check the receipt discriminator. Any program-owned 282-byte
+      // account matching those bytes lands here, and a partially initialized or
+      // future account type would otherwise reject the whole Promise.all and
+      // empty an owner's entire history. Skip the row, keep the rest.
+      return result.valid ? result.receipt : null;
     }));
-    return receipts.sort((left, right) => (
+    return receipts.filter((receipt): receipt is PaymentReceipt => receipt !== null).sort((left, right) => (
       left.executedAtSlot === right.executedAtSlot
         ? right.address.localeCompare(left.address)
         : left.executedAtSlot > right.executedAtSlot ? -1 : 1

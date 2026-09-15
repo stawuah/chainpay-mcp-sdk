@@ -252,7 +252,20 @@ export async function verifyDeliveryAttestation(
   }
 
   try {
-    if (options.trustedSellers) {
+    // Fail closed on identity. Without a trusted-seller mapping the only thing
+    // left to check is that the payload is signed by the key the payload itself
+    // names, which any anonymous poster can satisfy with a throwaway keypair.
+    // Every caller in this repo already passes a mapping; this stops the next
+    // one from accidentally accepting a self-signed statement.
+    if (!options.trustedSellers) {
+      return validationError(
+        "A trusted seller mapping is required to verify a delivery attestation.",
+        "unknown_seller",
+        parsed.payload,
+      );
+    }
+
+    {
       const trustError = trustedSellerAllows(parsed.payload, options.trustedSellers);
       if (trustError) return validationError(trustError, "unknown_seller", parsed.payload);
       if (

@@ -9,6 +9,7 @@ import {
   RECEIPT_STATUS_SETTLED,
   SPL_TOKEN_PROGRAM_ID,
   SYSTEM_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   assemblePublicReceiptProof,
   decodeCurrentMandateFields,
   deriveReceiptAddress,
@@ -182,19 +183,49 @@ test("formats exact amounts and withholds UI decimals until mint owner is verifi
   assert.equal(formatExactTokenAmount(123n, 2).display, "1.23");
   assert.equal(formatExactTokenAmount(100n, 0).display, "100");
 
-  const owned = Buffer.alloc(45, 9);
+  // A real SPL mint is exactly 82 bytes with decimals at offset 44.
+  const owned = Buffer.alloc(82, 9);
   owned[44] = 6;
   assert.deepEqual(readVerifiedMintDecimals({ owner: SPL_TOKEN_PROGRAM_ID, data: owned }), {
     ok: true,
     decimals: 6,
   });
 
-  const impostor = Buffer.alloc(45, 6);
+  // Token-2022 mints pad to 165 and tag account_type = 1 at offset 165.
+  const extended = Buffer.alloc(200, 9);
+  extended[44] = 9;
+  extended[165] = 1;
+  assert.deepEqual(readVerifiedMintDecimals({ owner: TOKEN_2022_PROGRAM_ID, data: extended }), {
+    ok: true,
+    decimals: 9,
+  });
+
+  const impostor = Buffer.alloc(82, 6);
   impostor[44] = 6;
   assert.deepEqual(readVerifiedMintDecimals({ owner: SYSTEM_PROGRAM_ID, data: impostor }), {
     ok: false,
     reason: "unsupported_owner",
   });
+
+  // A 165-byte token account is owned by the same program and has part of its
+  // `owner` pubkey at offset 44. Reading that byte as decimals would print a
+  // confidently wrong amount on a public proof card, so it must be refused.
+  const tokenAccount = Buffer.alloc(165, 7);
+  tokenAccount[44] = 200;
+  assert.deepEqual(readVerifiedMintDecimals({ owner: SPL_TOKEN_PROGRAM_ID, data: tokenAccount }), {
+    ok: false,
+    reason: "not_a_mint",
+  });
+
+  // Token-2022 tags a token account as 2, which is equally not a mint.
+  const extendedTokenAccount = Buffer.alloc(200, 7);
+  extendedTokenAccount[44] = 200;
+  extendedTokenAccount[165] = 2;
+  assert.deepEqual(
+    readVerifiedMintDecimals({ owner: TOKEN_2022_PROGRAM_ID, data: extendedTokenAccount }),
+    { ok: false, reason: "not_a_mint" },
+  );
+
   assert.equal(formatExactTokenAmount(1_000_000n, null).display, "1000000");
 });
 
