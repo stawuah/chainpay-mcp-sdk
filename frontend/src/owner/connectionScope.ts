@@ -24,6 +24,7 @@ export type ScopedMandate = {
   address: string;
   owner: string;
   status: string;
+  approvedAgent: string;
 };
 
 export function ownedMandateAddresses(mandates: ScopedMandate[], owner: string) {
@@ -38,13 +39,28 @@ export function assertOwnedMandate(mandateAddress: string, ownedAddresses: strin
   }
 }
 
-export function buildConnectionScope(mandateAddress: string, ownedAddresses: string[], allowPayments: boolean) {
+export function buildConnectionScope(
+  mandateAddress: string,
+  ownedMandates: ScopedMandate[],
+  allowPayments: boolean,
+) {
   const trimmed = mandateAddress.trim();
-  assertOwnedMandate(trimmed, ownedAddresses);
+  assertOwnedMandate(trimmed, ownedMandates.map((mandate) => mandate.address));
+  const mandate = ownedMandates.find((candidate) => candidate.address === trimmed);
+  if (!mandate?.approvedAgent) {
+    throw new Error("This mandate has no approved agent yet. Approve one before connecting.");
+  }
   return JSON.stringify({
     version: 1,
     mandates: [trimmed],
-    agents: {},
+    // The MCP server pins scope.agents[mandate] against the mandate's current
+    // approvedAgent (mcp-server/src/authorization.ts). An empty map made that
+    // comparison `undefined !== <agent>`, so every mandate-scoped tool threw
+    // "Mandate agent changed" and no connection this dialog created could ever
+    // call one. Recording the agent is also what makes the check meaningful:
+    // if the owner later approves a different agent, the connection stops
+    // working until they reconnect, which is the intended behaviour.
+    agents: { [trimmed]: mandate.approvedAgent },
     tools: [
       ...CONNECTION_READ_TOOLS,
       ...(allowPayments ? CONNECTION_PAYMENT_TOOLS : []),

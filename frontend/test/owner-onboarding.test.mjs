@@ -63,18 +63,64 @@ test("mandate review keeps exact token amounts and rejects extra decimals", asyn
 
 test("connection scope is limited to owned mandates and allowPayments is explicit", async () => {
   const scope = await loadModule("owner/connectionScope.ts");
-  const owned = scope.ownedMandateAddresses([
-    { address: "owner-mandate", owner: "owner-a", status: "active" },
-    { address: "other-mandate", owner: "owner-b", status: "active" },
-    { address: "revoked-mandate", owner: "owner-a", status: "revoked" },
-  ], "owner-a");
+  const all = [
+    { address: "owner-mandate", owner: "owner-a", status: "active", approvedAgent: "agent-a" },
+    { address: "other-mandate", owner: "owner-b", status: "active", approvedAgent: "agent-b" },
+    { address: "revoked-mandate", owner: "owner-a", status: "revoked", approvedAgent: "agent-a" },
+  ];
+  const owned = scope.ownedMandateAddresses(all, "owner-a");
   assert.deepEqual(owned, ["owner-mandate"]);
-  const readOnly = JSON.parse(scope.buildConnectionScope("owner-mandate", owned, false));
+  const ownedMandates = all.filter((mandate) => owned.includes(mandate.address));
+
+  const readOnly = JSON.parse(scope.buildConnectionScope("owner-mandate", ownedMandates, false));
   assert.deepEqual(readOnly.mandates, ["owner-mandate"]);
   assert.equal(readOnly.tools.includes("execute_payment"), false);
-  const withPay = JSON.parse(scope.buildConnectionScope("owner-mandate", owned, true));
+
+  // mcp-server/src/authorization.ts pins scope.agents[mandate] against the
+  // mandate's current approvedAgent. An empty map made that comparison
+  // `undefined !== "agent-a"`, so every mandate-scoped tool threw and no
+  // connection this dialog created could call one. The old version of this test
+  // asserted the scope was correct without ever looking at `agents`.
+  assert.deepEqual(readOnly.agents, { "owner-mandate": "agent-a" });
+
+  const withPay = JSON.parse(scope.buildConnectionScope("owner-mandate", ownedMandates, true));
   assert.equal(withPay.tools.includes("execute_payment"), true);
-  assert.throws(() => scope.buildConnectionScope("other-mandate", owned, true), /another owner's mandate/);
+  assert.deepEqual(withPay.agents, { "owner-mandate": "agent-a" });
+
+  assert.throws(
+    () => scope.buildConnectionScope("other-mandate", ownedMandates, true),
+    /another owner's mandate/,
+  );
+
+  // A mandate with no approved agent cannot produce a usable scope, so say so
+  // rather than minting a connection that fails on first use.
+  assert.throws(
+    () => scope.buildConnectionScope("owner-mandate", [
+      { address: "owner-mandate", owner: "owner-a", status: "active", approvedAgent: "" },
+    ], false),
+    /no approved agent/,
+  );
+});
+
+test("an out-of-range expiry slot is refused and never throws while rendering", async () => {
+  const slots = await loadModule("owner/slotEstimate.ts");
+
+  // The field is free text now, so a mistyped digit is one keystroke away.
+  assert.throws(() => slots.parseExpirySlot("99999999999999"), /too far in the future/);
+  assert.equal(slots.parseExpirySlot("484791192"), 484791192n);
+  assert.equal(slots.parseExpirySlot(String(slots.MAX_EXPIRY_SLOT)), slots.MAX_EXPIRY_SLOT);
+
+  // A mandate created before this bound existed, or by any other client, must
+  // still render. Formatting an Invalid Date throws RangeError, and with no
+  // ErrorBoundary anywhere in frontend/src that blanks the dashboard on every
+  // load for the owner who holds that mandate.
+  const estimate = { secondsPerSlot: 0.4, slotsPerDay: 216000, estimated: true };
+  assert.equal(slots.estimatedExpiryDate(10n ** 30n, 1n, 0.4), null);
+  assert.doesNotThrow(() => slots.mandateExpiryLabel(10n ** 30n, 1n, estimate));
+  assert.match(slots.mandateExpiryLabel(10n ** 30n, 1n, estimate), /^Estimated slot /);
+
+  // The ordinary case still produces a date.
+  assert.match(slots.mandateExpiryLabel(484_791_192n, 484_000_000n, estimate), /^Estimated \w+ \d+, \d{4} · slot /);
 });
 
 test("slot estimates are labeled estimated and never treat 216000 slots as a day", async () => {

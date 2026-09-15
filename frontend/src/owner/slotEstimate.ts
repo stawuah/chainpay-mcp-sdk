@@ -26,19 +26,42 @@ export function estimatedSlotsForDays(days: number, estimate: SlotDurationEstima
   return BigInt(slots);
 }
 
+/**
+ * Upper bound for a hand-entered expiry slot. Solana produces roughly 216,000
+ * slots a day, so this is on the order of a century out — far past any real
+ * mandate, and low enough that the derived date stays inside the range
+ * Intl.DateTimeFormat will accept.
+ */
+export const MAX_EXPIRY_SLOT = 10_000_000_000n;
+
 export function parseExpirySlot(value: string): bigint {
   const normalized = value.trim();
   if (!/^\d+$/.test(normalized)) {
     throw new Error("Enter the exact expiry slot as a whole number.");
   }
-  return BigInt(normalized);
+  const slot = BigInt(normalized);
+  // This field used to be a bounded dropdown. As free text a mistyped digit
+  // creates a real on-chain mandate whose expiry date then lands outside the
+  // range Date can represent, and formatting an Invalid Date throws a
+  // RangeError on every dashboard render. There is no ErrorBoundary in this
+  // app, so that blanks the whole page for that owner, permanently.
+  if (slot > MAX_EXPIRY_SLOT) {
+    throw new Error("That expiry slot is too far in the future. Check the number and try again.");
+  }
+  return slot;
 }
 
 export function estimatedExpiryDate(expiresAtSlot: bigint, currentSlot: bigint, secondsPerSlot: number) {
   if (expiresAtSlot <= currentSlot) return null;
   const secondsUntilExpiry = Number(expiresAtSlot - currentSlot) * secondsPerSlot;
   if (!Number.isFinite(secondsUntilExpiry) || secondsUntilExpiry <= 0) return null;
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(Date.now() + secondsUntilExpiry * 1000));
+  // Belt and braces: a mandate created before the bound above existed, or by
+  // any other client, must degrade to "slot N" rather than throw here. Number
+  // isFinite is not enough — Date clamps at +-8.64e15 ms and Intl throws on the
+  // Invalid Date that results.
+  const expiry = new Date(Date.now() + secondsUntilExpiry * 1000);
+  if (Number.isNaN(expiry.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(expiry);
 }
 
 export function mandateExpiryLabel(

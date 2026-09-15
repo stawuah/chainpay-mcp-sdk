@@ -2100,6 +2100,7 @@ function AiConnectionFlow() {
 
 function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, connections, onConnected, onRevoked, onCreateMandate }: { serverUrl: string; wallet: string; mandates: Mandate[]; stablecoinOptions: StablecoinOption[]; connections: AgentConnection[]; onConnected: (connection: AgentConnection) => void; onRevoked: (id: string) => Promise<void>; onCreateMandate: () => void }) {
   const ownedAddresses = ownedMandateAddresses(mandates, wallet);
+  const ownedMandates = mandates.filter((mandate) => ownedAddresses.includes(mandate.address));
   const mandateOptions = mandates
     .filter((mandate) => ownedAddresses.includes(mandate.address))
     .map((mandate) => ({
@@ -2143,7 +2144,7 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
     setError("");
     try {
       const createdAgentName = agentName.trim();
-      const result = await registerMcpConnection(wallet, createdAgentName, buildConnectionScope(scope, ownedAddresses, allowPayments));
+      const result = await registerMcpConnection(wallet, createdAgentName, buildConnectionScope(scope, ownedMandates, allowPayments));
       onConnected({ ...result.connection, mandates: 1 });
       setConnectionId(result.connection.id);
       setConnectionName(createdAgentName);

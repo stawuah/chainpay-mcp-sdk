@@ -416,6 +416,65 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn proxy_pins_the_performance_sample_window_and_refuses_other_methods() {
+        // `/rpc` is unauthenticated (it is in the middleware's public allowlist),
+        // so anything reachable through it is reachable by anyone. The onboarding
+        // slot estimate needs getRecentPerformanceSamples; nobody needs to choose
+        // how many samples the backend asks an upstream RPC for.
+        use std::sync::{Arc, Mutex};
+
+        let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().fallback(axum::routing::any(
+            move |axum::Json(body): axum::Json<Value>| {
+                let recorder = recorder.clone();
+                async move {
+                    recorder
+                        .lock()
+                        .unwrap()
+                        .push(body.get("params").cloned().unwrap_or(json!(null)));
+                    axum::Json(json!({"jsonrpc": "2.0", "id": 1, "result": []}))
+                }
+            },
+        ));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let rpc = RpcClient::new(RpcConfig {
+            url: format!("http://{address}"),
+            ..RpcConfig::default()
+        })
+        .unwrap();
+
+        rpc.forward_proxy(JsonRpcProxyRequest {
+            jsonrpc: "2.0".to_owned(),
+            id: json!(1),
+            method: "getRecentPerformanceSamples".to_owned(),
+            params: Some(json!([100_000])),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            &[json!([1])],
+            "a caller-supplied sample window must be replaced, not forwarded"
+        );
+
+        assert!(matches!(
+            rpc.forward_proxy(JsonRpcProxyRequest {
+                jsonrpc: "2.0".to_owned(),
+                id: json!(2),
+                method: "getRecentPrioritizationFees".to_owned(),
+                params: None,
+            })
+            .await,
+            Err(RpcError::UnsupportedProxyMethod(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn transport_error_removes_rpc_url_credentials() {
         let error = reqwest::Client::new()
             .get("http://fixture-user:fixture-secret@127.0.0.1:1/?api-key=fixture-key")
