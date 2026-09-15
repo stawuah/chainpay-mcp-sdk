@@ -292,6 +292,8 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: "object",
       properties: {
+        paymentId: { type: "string", description: "Resume an existing settlement and its original merchant delivery; no new approval" },
+        signingMode: { type: "string", enum: ["human", "delegated"] },
         resource: { type: "string", description: "HTTPS x402-gated resource URL" },
         mandate: { type: "string" },
         agent: { type: "string" },
@@ -300,7 +302,7 @@ export const TOOL_DEFINITIONS = [
           description: "Optional base64 transaction signed outside ChainPay; omit on the first call",
         },
       },
-      required: ["resource", "mandate", "agent", "signingMode"],
+      anyOf: [{ required: ["paymentId"] }, { required: ["resource", "mandate", "agent", "signingMode"] }],
       additionalProperties: false,
     },
   },

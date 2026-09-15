@@ -435,14 +435,16 @@ pub(super) fn owner(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use solana_message::{
         Message, MessageHeader, VersionedMessage, compiled_instruction::CompiledInstruction, v0, v1,
     };
 
-    fn fixture(version: u8) -> (VersionedTransaction, PaymentSubmissionRequest, SigningKey) {
+    pub(in crate::server) fn fixture(
+        version: u8,
+    ) -> (VersionedTransaction, PaymentSubmissionRequest, SigningKey) {
         let mut seed = [0; 32];
         getrandom::fill(&mut seed).unwrap();
         let signer = SigningKey::from_bytes(&seed);

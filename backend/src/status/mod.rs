@@ -30,6 +30,7 @@ pub struct PaymentRecord {
     #[serde(default)]
     pub recipient: Option<String>,
     #[serde(default)]
+    #[serde(with = "optional_decimal")]
     pub amount: Option<u64>,
     #[serde(default)]
     pub token_program: Option<String>,
@@ -117,4 +118,21 @@ pub struct X402PaymentRecord {
     pub error: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+}
+
+mod optional_decimal {
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(value) => serializer.serialize_some(&value.to_string()),
+            None => serializer.serialize_none(),
+        }
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|value| value.parse().map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }

@@ -1,3 +1,4 @@
+import { submitSettlement } from "./settlement-submit.js";
 import {
   SPL_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -251,7 +252,7 @@ async function relaySignedPayment(
   signedTransaction: string,
 ): Promise<Record<string, unknown>> {
   if (!context.backendUrl) throw new Error("CHAINPAY_BACKEND_URL must be configured to relay a signed x402 transaction");
-  const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/payments`, {
+  const response = await submitSettlement(context, `${context.backendUrl.replace(/\/$/, "")}/v1/payments`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -276,9 +277,7 @@ async function relaySignedPayment(
   });
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) throw new Error(`Axum rejected x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
-  if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
-    throw new Error(`x402 settlement was not confirmed: ${JSON.stringify(payload)}`);
-  }
+
   return payload;
 }
 
@@ -293,7 +292,7 @@ async function relayManagedPayment(
     throw new Error("Delegated x402 requires CHAINPAY_BACKEND_URL and a verified caller session or scoped connection");
   }
   const unsigned = await materializeUnsignedTransaction(context.client, prepared.transaction);
-  const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/managed-payments`, {
+  const response = await submitSettlement(context, `${context.backendUrl.replace(/\/$/, "")}/v1/managed-payments`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -318,9 +317,7 @@ async function relayManagedPayment(
   });
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) throw new Error(`Axum rejected delegated x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
-  if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
-    throw new Error(`delegated x402 settlement was not confirmed: ${JSON.stringify(payload)}`);
-  }
+
   return payload;
 }
 
@@ -353,7 +350,7 @@ async function persistX402Proof(
   }
 }
 
-function verifyReceipt(receipt: PaymentReceipt | null, challenge: NormalizedX402Challenge, prepared: PreparedPayment, mandate: string, agent: string): PaymentReceipt {
+function verifyReceipt(receipt: PaymentReceipt | null, challenge: NormalizedX402Challenge, prepared: Pick<PreparedPayment, "receiptAddress">, mandate: string, agent: string): PaymentReceipt {
   if (!receipt) throw new Error("confirmed x402 settlement has no on-chain receipt PDA");
   if (receipt.status !== "confirmed") throw new Error("x402 receipt is not settled");
   if (receipt.address !== prepared.receiptAddress) throw new Error("x402 receipt address mismatch");
@@ -396,6 +393,7 @@ export async function prepareX402Payment(context: ChainPayMcpContext, args: Reco
 }
 
 export async function executeX402Payment(context: ChainPayMcpContext, args: Record<string, unknown>) {
+  if (typeof args.paymentId === "string") return resumeX402Payment(context, args.paymentId);
   const resource = resourceUrl(args.resource);
   const mandate = solanaAddress(args.mandate, "mandate");
   const agent = solanaAddress(args.agent, "agent");
@@ -446,13 +444,20 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   const settlement = signingMode === "delegated"
     ? await relayManagedPayment(context, challenge, prepared, mandate, agent)
     : await relaySignedPayment(context, challenge, prepared, mandate, agent, signedTransaction);
-  const receipt = verifyReceipt(await context.client.getPayment(prepared.receiptAddress), challenge, prepared, mandate, agent);
+  if (settlement.status !== "confirmed" || typeof settlement.signature !== "string") {
+    return toolResult({ action: settlement.status === "failed" ? "x402_payment_failed" : "x402_payment_pending", status: settlement.status, resource, challenge, settlement, receiptAddress: prepared.receiptAddress,
+      continuation: { tool: "execute_x402_payment", arguments: { paymentId: settlement.payment_id } }, message: "Resume execute_x402_payment with paymentId to check settlement and deliver the original resource; do not request another approval." }, settlement.status === "failed");
+  }
+  return deliverX402(context, resource, challenge, prepared.receiptAddress, mandate, agent, settlement, `x402:${mandate}:${challenge.invoiceHash}`);
+}
+
+async function deliverX402(context: ChainPayMcpContext, resource: string, challenge: NormalizedX402Challenge, receiptAddress: string, mandate: string, agent: string, settlement: Record<string, unknown>, idempotencyKey: string) {
+  const receipt = verifyReceipt(await context.client.getPayment(receiptAddress), challenge, { receiptAddress }, mandate, agent);
   const signature = settlement.signature as string;
-  const proof = proofHeader(signature, prepared.receiptAddress);
+  const proof = proofHeader(signature, receiptAddress);
   const proofObject = JSON.parse(proof) as Record<string, unknown>;
   const retried = await fetchResource(resource, proof);
   const resourceBody = await limitedResponseBody(retried);
-  const idempotencyKey = `x402:${mandate}:${challenge.invoiceHash}`;
   await persistX402Proof(
     context,
     idempotencyKey,
@@ -478,7 +483,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   return toolResult({
     action: "x402_verified",
     status: "confirmed",
-    signingMode,
+    signingMode: settlement.signing_mode,
     resource,
     challenge,
     settlement,
@@ -487,6 +492,17 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
     httpStatus: retried.status,
     resourceResponse: resourceBody.parsed ?? resourceBody.text,
   });
+}
+
+async function resumeX402Payment(context: ChainPayMcpContext, paymentId: string) {
+  if (!/^payment_[a-f0-9]{64}$/.test(paymentId) || !context.backendUrl) throw new Error("A valid existing paymentId and backend are required");
+  const response=await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/payments/${paymentId}/x402`, {headers:context.backendAuthToken?{Authorization:`Bearer ${context.backendAuthToken}`}:{},signal:AbortSignal.timeout(20_000)});
+  if (!response.ok) throw new Error(`Existing x402 operation unavailable (${response.status})`);
+  const saved=await response.json() as {payment:Record<string,unknown>;resource:string;challenge:NormalizedX402Challenge;idempotency_key:string};
+  const payment=saved.payment;
+  if (payment.status!=="confirmed") return toolResult({action:payment.status==="failed"?"x402_payment_failed":"x402_payment_pending",status:payment.status,settlement:payment,continuation:{tool:"execute_x402_payment",arguments:{paymentId}},message:"Resume this paymentId; no new preparation or approval is needed."},payment.status==="failed");
+  if (saved.challenge.resource!==saved.resource || typeof payment.signature!=="string" || typeof payment.receipt_address!=="string" || typeof payment.mandate!=="string" || typeof payment.agent!=="string") throw new Error("Stored x402 settlement context is incomplete");
+  return deliverX402(context,resourceUrl(saved.resource),saved.challenge,payment.receipt_address,payment.mandate,payment.agent,payment,saved.idempotency_key);
 }
 
 function hexBytes(value: string): Uint8Array {

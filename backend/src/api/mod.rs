@@ -97,7 +97,7 @@ pub struct ManagedPaymentSubmissionRequest {
     pub x402: Option<X402PaymentMetadata>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct X402PaymentMetadata {
     pub resource: String,

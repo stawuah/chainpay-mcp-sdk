@@ -1,6 +1,7 @@
 //! Solana JSON-RPC submission and confirmation boundary.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
+use tokio::sync::Semaphore;
 
 use reqwest::Client;
 use serde::{Deserialize, de::DeserializeOwned};
@@ -43,12 +44,18 @@ impl Default for RpcConfig {
 
 #[derive(Debug, Error)]
 pub enum RpcError {
+    #[error("RPC capacity is busy; retry the existing operation later")]
+    Busy,
     #[error("Solana RPC request failed: {0}")]
     Http(reqwest::Error),
     #[error("Solana RPC returned an invalid response: {0}")]
     Decode(#[from] serde_json::Error),
     #[error("Solana RPC rejected {method}: {message}")]
-    Remote { method: String, message: String },
+    Remote {
+        method: String,
+        message: String,
+        code: i64,
+    },
     #[error("transaction {signature} failed: {message}")]
     TransactionFailed { signature: String, message: String },
     #[error("timed out waiting for transaction {signature} to finalize")]
@@ -88,6 +95,7 @@ pub struct RpcAccount {
 
 #[derive(Debug, Clone)]
 pub struct RpcClient {
+    in_flight: Arc<Semaphore>,
     http: Client,
     config: RpcConfig,
 }
@@ -147,7 +155,11 @@ impl RpcClient {
             .user_agent("chainpay-backend/0.1")
             .timeout(Duration::from_secs(20))
             .build()?;
-        Ok(Self { http, config })
+        Ok(Self {
+            http,
+            config,
+            in_flight: Arc::new(Semaphore::new(32)),
+        })
     }
 
     pub fn config(&self) -> &RpcConfig {
@@ -215,6 +227,20 @@ impl RpcClient {
             ]),
         )
         .await
+    }
+
+    pub async fn blockhash_valid(&self, blockhash: &str) -> Result<bool, RpcError> {
+        #[derive(Deserialize)]
+        struct Valid {
+            value: bool,
+        }
+        Ok(self
+            .call::<Valid>(
+                "isBlockhashValid",
+                json!([blockhash,{"commitment":"finalized"}]),
+            )
+            .await?
+            .value)
     }
 
     pub async fn signature_status(
@@ -295,6 +321,7 @@ impl RpcClient {
     }
 
     async fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T, RpcError> {
+        let _permit = self.in_flight.try_acquire().map_err(|_| RpcError::Busy)?;
         const MAX_ATTEMPTS: usize = 4;
 
         let mut response = {
@@ -315,7 +342,11 @@ impl RpcClient {
                 let status = response.status();
                 let retryable =
                     status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
-                if status.is_success() || !retryable || attempt + 1 >= MAX_ATTEMPTS {
+                if method == "sendTransaction"
+                    || status.is_success()
+                    || !retryable
+                    || attempt + 1 >= MAX_ATTEMPTS
+                {
                     break response.error_for_status()?;
                 }
 
@@ -342,6 +373,7 @@ impl RpcClient {
                 .unwrap_or_default();
             return Err(RpcError::Remote {
                 method: method.to_owned(),
+                code: error.code,
                 message: format!("{} [{}]{}", error.message, error.code, data),
             });
         }
@@ -377,6 +409,18 @@ mod tests {
             .unwrap_err();
         let safe = RpcError::from(error).to_string();
         assert!(!safe.contains("fixture-secret") && !safe.contains("fixture-key"));
+    }
+
+    #[tokio::test]
+    async fn shared_in_flight_capacity_rejects_without_queueing() {
+        let rpc = RpcClient::new(RpcConfig::default()).unwrap();
+        let permits = rpc.in_flight.acquire_many(32).await.unwrap();
+        assert!(matches!(
+            rpc.clone().latest_blockhash().await,
+            Err(RpcError::Busy)
+        ));
+        drop(permits);
+        assert_eq!(rpc.in_flight.available_permits(), 32);
     }
 
     #[test]

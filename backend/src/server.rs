@@ -1,3 +1,5 @@
+#[path = "server_recovery.rs"]
+mod recovery;
 #[path = "server_transactions.rs"]
 mod transactions;
 use transactions::owner as validate_owner_transaction;
@@ -212,6 +214,8 @@ impl BackendState {
 enum ApiError {
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("operation conflict: {0}")]
+    Conflict(String),
     #[error("unauthorized")]
     Unauthorized,
     #[error("forbidden: {0}")]
@@ -234,10 +238,12 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Rpc(RpcError::Busy) => StatusCode::TOO_MANY_REQUESTS,
             Self::Rpc(_) => StatusCode::BAD_GATEWAY,
             Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::SignerProvider(_) => StatusCode::BAD_GATEWAY,
@@ -294,6 +300,22 @@ pub fn build_router(state: BackendState) -> Router {
         .route("/v1/rpc/latest-blockhash", get(latest_blockhash))
         .route("/v1/payments", post(submit_payment))
         .route("/v1/payments/{payment_id}", get(get_payment))
+        .route(
+            "/v1/payments/{payment_id}/x402",
+            get(recovery::x402_context),
+        )
+        .route(
+            "/v1/payments/{payment_id}/recover",
+            post(recovery::recover_payment),
+        )
+        .route(
+            "/v1/transactions/{transaction_id}/recover",
+            post(recovery::recover_transaction),
+        )
+        .route(
+            "/v1/operations/cancel-unstarted",
+            post(recovery::cancel_unstarted),
+        )
         .route(
             "/v1/receipts/{receipt_address}",
             get(get_payment_by_receipt),
@@ -580,6 +602,9 @@ async fn verify_payment_request(
 async fn latest_blockhash(
     State(state): State<BackendState>,
 ) -> Result<Json<BlockhashResponse>, ApiError> {
+    if !state.store.auth_rate("public-rpc", now_ms(), 600).await? {
+        return Err(ApiError::RateLimited);
+    }
     let blockhash = state.rpc.latest_blockhash().await?;
     Ok(Json(to_blockhash_response(blockhash)))
 }
@@ -659,13 +684,22 @@ async fn get_payment(
     Extension(principal): Extension<Principal>,
     Path(payment_id): Path<String>,
 ) -> Result<Json<PaymentRecord>, ApiError> {
-    let record = state
-        .store
-        .get_payment(&payment_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    auth::mandate(&state, &principal, &record.mandate, "get_payment").await?;
-    Ok(Json(record))
+    let record = match state.store.get_payment(&payment_id).await? {
+        Some(record) => record,
+        None => {
+            let (owner, _, initial) = state
+                .store
+                .operation_record(&payment_id)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+            if owner != principal.wallet {
+                return Err(ApiError::Unauthorized);
+            }
+            serde_json::from_value(initial).map_err(|_| ApiError::NotFound)?
+        }
+    };
+    recovery::authorize_payment(&state, &principal, &record, "get_payment").await?;
+    Ok(Json(recovery::payment(&state, record).await?))
 }
 
 async fn get_payment_by_receipt(
@@ -679,8 +713,8 @@ async fn get_payment_by_receipt(
         .find_payment_by_receipt(&receipt_address)
         .await?
         .ok_or(ApiError::NotFound)?;
-    auth::mandate(&state, &principal, &record.mandate, "get_payment").await?;
-    Ok(Json(record))
+    recovery::authorize_payment(&state, &principal, &record, "get_payment").await?;
+    Ok(Json(recovery::payment(&state, record).await?))
 }
 
 async fn get_transaction(
@@ -689,24 +723,29 @@ async fn get_transaction(
     Path(transaction_id): Path<String>,
 ) -> Result<Json<TransactionRecord>, ApiError> {
     auth::owner(&principal, &principal.wallet)?;
-    let owner = state
-        .store
-        .get_auth(
-            &format!("transaction-owner:{transaction_id}"),
-            now_ms(),
-            false,
-        )
-        .await?
-        .ok_or(ApiError::Unauthorized)?;
-    if owner.as_str() != Some(&principal.wallet) {
+    let reservation = state.store.operation_record(&transaction_id).await?;
+    let owner = match &reservation {
+        Some((owner, _, _)) => owner.clone(),
+        None => state
+            .store
+            .get_auth(
+                &format!("transaction-owner:{transaction_id}"),
+                now_ms(),
+                false,
+            )
+            .await?
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .ok_or(ApiError::Unauthorized)?,
+    };
+    if owner != principal.wallet {
         return Err(ApiError::Unauthorized);
     }
-    state
-        .store
-        .get_transaction(&transaction_id)
-        .await?
-        .map(Json)
-        .ok_or(ApiError::NotFound)
+    let record = match state.store.get_transaction(&transaction_id).await? {
+        Some(r) => r,
+        None => serde_json::from_value(reservation.ok_or(ApiError::NotFound)?.2)
+            .map_err(|_| ApiError::NotFound)?,
+    };
+    Ok(Json(recovery::transaction(&state, record).await?))
 }
 
 async fn create_managed_signer_challenge(
@@ -808,15 +847,10 @@ async fn provision_managed_signer(
     )?;
 
     if challenge.consumed_at_ms.is_some() {
-        let existing = state
-            .store
-            .find_managed_signer_by_mandate(&challenge.mandate_pda)
-            .await?
-            .filter(|record| record.owner_wallet == challenge.owner_wallet)
-            .ok_or_else(|| {
-                ApiError::BadRequest("managed signer challenge was already consumed".to_owned())
-            })?;
-        return Ok(Json(existing));
+        return Ok(Json(
+            recovery::recover_provision(&state, &challenge.owner_wallet, &challenge.mandate_pda)
+                .await?,
+        ));
     }
     let now = now_ms();
     if challenge.expires_at_ms < now {
@@ -847,9 +881,19 @@ async fn provision_managed_signer(
         return Ok(Json(existing));
     }
 
-    let provisioned = provider
-        .provision(&challenge.owner_wallet, &challenge.mandate_pda)
-        .await?;
+    let operation_id = deterministic_id(
+        "provision",
+        &format!("{}:{}", challenge.owner_wallet, challenge.mandate_pda),
+    );
+    let (won,_,_,_)=state.store.claim_operation(&operation_id,&challenge.owner_wallet,json!({"mandate":challenge.mandate_pda}),json!({"challenge":challenge.challenge_id,"provider_request_reference":crate::signer::external_id(&challenge.owner_wallet,&challenge.mandate_pda)})).await?;
+    if !won {
+        return Ok(Json(
+            recovery::recover_provision(&state, &challenge.owner_wallet, &challenge.mandate_pda)
+                .await?,
+        ));
+    }
+
+    let provisioned = provider.provision(&challenge.owner_wallet, &challenge.mandate_pda).await.map_err(|_|ApiError::Conflict(format!("Signer provisioning outcome is uncertain. Reconcile provider reference {} before retrying; no second wallet will be requested.",crate::signer::external_id(&challenge.owner_wallet,&challenge.mandate_pda))))?;
     let signer = ManagedSignerRecord {
         signer_id: format!("signer_{}", random_hex_32()?),
         owner_wallet: challenge.owner_wallet,
@@ -877,55 +921,90 @@ async fn submit_managed_payment(
         .signer_provider
         .as_ref()
         .ok_or(ApiError::ManagedSignerUnavailable)?;
-    auth::mandate(
-        &state,
-        &principal,
-        &request.mandate,
-        if request.x402.is_some() {
-            "execute_x402_payment"
-        } else {
-            "execute_payment"
-        },
-    )
-    .await?;
     let amount = request
         .amount
         .ok_or_else(|| ApiError::BadRequest("amount is required".to_owned()))?;
     let payment = PaymentSubmissionRequest {
-        idempotency_key: format!(
-            "{}:{}:{}",
-            principal.wallet, request.mandate, request.idempotency_key
-        ),
-        mandate: request.mandate,
-        invoice_hash: request.invoice_hash,
-        receipt_address: request.receipt_address,
+        idempotency_key: format!("{}:{}", principal.wallet, request.idempotency_key),
+        mandate: request.mandate.clone(),
+        invoice_hash: request.invoice_hash.clone(),
+        receipt_address: request.receipt_address.clone(),
         signed_transaction: request.unsigned_transaction.clone(),
         agent: Some(request.agent.clone()),
-        mint: Some(request.mint),
-        recipient: request.recipient,
+        mint: Some(request.mint.clone()),
+        recipient: request.recipient.clone(),
         amount: Some(amount),
-        token_program: Some(request.token_program),
-        x402: request.x402,
+        token_program: Some(request.token_program.clone()),
+        x402: request.x402.clone(),
     };
     validate_managed_payment_request(
         &request.unsigned_transaction,
         &payment,
         &state.config.program_id,
     )?;
-    validate_live_payment(&state, &payment).await?;
-    if let Some(existing) = state
-        .store
-        .find_payment_by_idempotency(&payment.idempotency_key)
-        .await?
+    if let Some(existing) =
+        recovery::existing_payment(&state, &principal, &payment, SigningMode::Delegated).await?
     {
-        if existing.signing_mode != SigningMode::Delegated {
-            return Err(ApiError::BadRequest(
-                "idempotency key is already used by a human-signed payment".to_owned(),
-            ));
-        }
+        return resume_managed_payment(&state, provider, &principal, &request, payment, existing)
+            .await;
+    }
+    auth::mandate(
+        &state,
+        &principal,
+        &payment.mandate,
+        if payment.x402.is_some() {
+            "execute_x402_payment"
+        } else {
+            "execute_payment"
+        },
+    )
+    .await?;
+    validate_live_payment(&state, &payment).await?;
+    let (won, record) =
+        recovery::reserve_payment(&state, &principal, &payment, SigningMode::Delegated).await?;
+    if !won {
+        return resume_managed_payment(&state, provider, &principal, &request, payment, record)
+            .await;
+    }
+    persist_payment(&state, &record, payment.x402.as_ref()).await?;
+    sign_and_settle_managed(&state, provider, &request, payment, record).await
+}
+
+async fn resume_managed_payment(
+    state: &BackendState,
+    provider: &PrivySignerProvider,
+    principal: &Principal,
+    request: &ManagedPaymentSubmissionRequest,
+    payment: PaymentSubmissionRequest,
+    existing: PaymentRecord,
+) -> Result<Json<PaymentRecord>, ApiError> {
+    let existing = recovery::payment(state, existing).await?;
+    if !recovery::known_unsent(&existing) || existing.signature.is_some() {
         return Ok(Json(existing));
     }
+    auth::mandate(
+        state,
+        principal,
+        &payment.mandate,
+        if payment.x402.is_some() {
+            "execute_x402_payment"
+        } else {
+            "execute_payment"
+        },
+    )
+    .await?;
+    validate_live_payment(state, &payment).await?;
+    persist_payment(state, &existing, payment.x402.as_ref()).await?;
+    sign_and_settle_managed(state, provider, request, payment, existing).await
+}
 
+async fn sign_and_settle_managed(
+    state: &BackendState,
+    provider: &PrivySignerProvider,
+    request: &ManagedPaymentSubmissionRequest,
+    payment: PaymentSubmissionRequest,
+    record: PaymentRecord,
+) -> Result<Json<PaymentRecord>, ApiError> {
     let mut signer = state
         .store
         .find_managed_signer_by_public_key(&request.agent)
@@ -942,7 +1021,6 @@ async fn submit_managed_payment(
         ));
     }
     verify_managed_mandate(&state.rpc, &signer, &payment, &state.config.program_id).await?;
-
     let signed_transaction = provider
         .sign_transaction(&signer.provider_wallet_id, &request.unsigned_transaction)
         .await?;
@@ -957,12 +1035,15 @@ async fn submit_managed_payment(
         signer.updated_at_ms = now_ms();
         state.store.put_managed_signer(signer).await?;
     }
-
-    let payment = PaymentSubmissionRequest {
-        signed_transaction,
-        ..payment
-    };
-    settle_payment(&state, payment, SigningMode::Delegated).await
+    settle_payment(
+        state,
+        PaymentSubmissionRequest {
+            signed_transaction,
+            ..payment
+        },
+        record,
+    )
+    .await
 }
 
 async fn submit_payment(
@@ -970,6 +1051,29 @@ async fn submit_payment(
     Extension(principal): Extension<Principal>,
     Json(request): Json<PaymentSubmissionRequest>,
 ) -> Result<Json<PaymentRecord>, ApiError> {
+    validate_payment_request(&request, &state.config.program_id)?;
+    let mut request = request;
+    request.idempotency_key = format!("{}:{}", principal.wallet, request.idempotency_key);
+    if let Some(existing) =
+        recovery::existing_payment(&state, &principal, &request, SigningMode::Human).await?
+    {
+        if recovery::known_unsent(&existing) {
+            auth::mandate(
+                &state,
+                &principal,
+                &request.mandate,
+                if request.x402.is_some() {
+                    "execute_x402_payment"
+                } else {
+                    "execute_payment"
+                },
+            )
+            .await?;
+            validate_live_payment(&state, &request).await?;
+            return settle_payment(&state, request, existing).await;
+        }
+        return Ok(Json(existing));
+    }
     auth::mandate(
         &state,
         &principal,
@@ -981,92 +1085,44 @@ async fn submit_payment(
         },
     )
     .await?;
-    validate_payment_request(&request, &state.config.program_id)?;
     validate_live_payment(&state, &request).await?;
-    let mut request = request;
-    request.idempotency_key = format!(
-        "{}:{}:{}",
-        principal.wallet, request.mandate, request.idempotency_key
-    );
-    settle_payment(&state, request, SigningMode::Human).await
+    let (won, record) =
+        recovery::reserve_payment(&state, &principal, &request, SigningMode::Human).await?;
+    if !won {
+        if recovery::known_unsent(&record) {
+            return settle_payment(&state, request, record).await;
+        }
+        return Ok(Json(recovery::payment(&state, record).await?));
+    }
+    settle_payment(&state, request, record).await
 }
 
 async fn settle_payment(
     state: &BackendState,
     request: PaymentSubmissionRequest,
-    signing_mode: SigningMode,
+    mut record: PaymentRecord,
 ) -> Result<Json<PaymentRecord>, ApiError> {
-    let x402 = request.x402.clone();
-    if let Some(existing) = state
-        .store
-        .find_payment_by_idempotency(&request.idempotency_key)
-        .await?
-    {
-        return Ok(Json(existing));
-    }
-
-    let now = now_ms();
-    let payment_id = deterministic_id("payment", &request.idempotency_key);
-    let mut record = PaymentRecord {
-        payment_id,
-        idempotency_key: request.idempotency_key.clone(),
-        mandate: request.mandate,
-        invoice_hash: request.invoice_hash,
-        receipt_address: request.receipt_address,
-        agent: request.agent,
-        mint: request.mint,
-        recipient: Some(request.recipient.clone()),
-        amount: request.amount,
-        token_program: request.token_program,
-        signing_mode,
-        signature: None,
-        slot: None,
-        status: PaymentStatus::Prepared,
-        error: None,
-        created_at_ms: now,
-        updated_at_ms: now,
-    };
-    persist_payment(&state, &record, x402.as_ref()).await?;
-
-    let signature = match state
+    record.signature = Some(recovery::signature(&request.signed_transaction)?);
+    record.status = PaymentStatus::Submitted;
+    record.updated_at_ms = now_ms();
+    persist_payment(state, &record, request.x402.as_ref()).await?;
+    if let Err(error) = state
         .rpc
         .send_transaction(&request.signed_transaction)
         .await
     {
-        Ok(signature) => signature,
-        Err(error) => {
-            record = fail_payment(record, error.to_string());
-            persist_payment(&state, &record, x402.as_ref()).await?;
-            return Ok(Json(record));
-        }
-    };
-    record.signature = Some(signature.clone());
-    record.status = PaymentStatus::Submitted;
-    record.updated_at_ms = now_ms();
-    persist_payment(&state, &record, x402.as_ref()).await?;
-
-    match state.rpc.wait_for_finalized(&signature).await {
-        Ok(status) => {
-            match verify_finalized_receipt(&state.rpc, &record, &state.config.program_id).await {
-                Ok(()) => {
-                    record.status = PaymentStatus::Confirmed;
-                    record.slot = status.slot;
-                    record.updated_at_ms = now_ms();
-                }
-                Err(error) => {
-                    record = fail_payment(
-                        record,
-                        format!("finalized transaction receipt verification failed: {error}"),
-                    );
-                }
-            }
-        }
-        Err(error) => {
-            record = fail_payment(record, error.to_string());
-        }
+        record = recovery::classify_send(state, record, &error).await?;
+        persist_payment(state, &record, request.x402.as_ref()).await?;
+        return Ok(Json(
+            state
+                .store
+                .get_payment(&record.payment_id)
+                .await?
+                .unwrap_or(record),
+        ));
     }
-    persist_payment(&state, &record, x402.as_ref()).await?;
-    Ok(Json(record))
+    // The durable signature remains authoritative even if the RPC response is lost.
+    Ok(Json(recovery::payment(state, record).await?))
 }
 
 async fn persist_payment(
@@ -1118,10 +1174,7 @@ async fn record_x402_proof(
     }
     let mut record = state
         .store
-        .find_x402_by_idempotency(&format!(
-            "{}:{}:{}",
-            principal.wallet, request.mandate, request.idempotency_key
-        ))
+        .find_x402_by_idempotency(&format!("{}:{}", principal.wallet, request.idempotency_key))
         .await?
         .ok_or(ApiError::NotFound)?;
     if !matches!(
@@ -1137,7 +1190,10 @@ async fn record_x402_proof(
         .get_payment(record.payment_id.as_deref().ok_or(ApiError::NotFound)?)
         .await?
         .ok_or(ApiError::NotFound)?;
-    auth::mandate(&state, &principal, &payment.mandate, "execute_x402_payment").await?;
+    if payment.mandate != request.mandate {
+        return Err(recovery::conflict());
+    }
+    recovery::authorize_payment(&state, &principal, &payment, "execute_x402_payment").await?;
     record.proof = Some(request.proof);
     record.response_status = Some(request.response_status);
     record.error = request.error;
@@ -1148,7 +1204,13 @@ async fn record_x402_proof(
     };
     record.updated_at_ms = now_ms();
     state.store.put_x402(record.clone()).await?;
-    Ok(Json(record))
+    Ok(Json(
+        state
+            .store
+            .find_x402_by_idempotency(&record.idempotency_key)
+            .await?
+            .unwrap_or(record),
+    ))
 }
 
 async fn submit_transaction(
@@ -1163,6 +1225,107 @@ async fn submit_transaction(
         "signed_transaction",
     )?;
     validate_owner_transaction(&transaction, &principal.wallet, &state.config.program_id)?;
+    let key = format!("{}:{}", principal.wallet, request.idempotency_key);
+    let id = deterministic_id("transaction", &key);
+    let mut receipts = Vec::new();
+    if transaction.message.instructions()[0]
+        .data
+        .starts_with(&[86, 4, 7, 7, 120, 139, 232, 139])
+    {
+        for mut payment in
+            transactions::batch_payment_requests(&transaction, &state.config.program_id)?
+        {
+            payment.signed_transaction = request.signed_transaction.clone();
+            // Timestamps and operational IDs are not part of immutable batch intent.
+            let mut receipt = recovery::initial(&payment, SigningMode::Human)?;
+            receipt.created_at_ms = 0;
+            receipt.updated_at_ms = 0;
+            receipts.push(receipt);
+        }
+    }
+    let intent = json!({"message":hex_encode(&Sha256::digest(transaction.message.serialize())),"receipts":receipts});
+    if let Some((owner, bound, initial)) = state.store.operation_record(&id).await? {
+        if owner != principal.wallet {
+            return Err(ApiError::Unauthorized);
+        }
+        if bound != intent {
+            return Err(recovery::conflict());
+        }
+        let record = match state.store.get_transaction(&id).await? {
+            Some(r) => r,
+            None => serde_json::from_value(initial).map_err(|_| recovery::conflict())?,
+        };
+        return Ok(Json(recovery::transaction(&state, record).await?));
+    }
+    if state.store.get_transaction(&id).await?.is_some() {
+        return Err(ApiError::Conflict(
+            "Legacy transaction has no authenticated intent reservation; use its status endpoint"
+                .into(),
+        ));
+    }
+    validate_owner_live(&state, &principal, &transaction).await?;
+    let now = now_ms();
+    let mut record = TransactionRecord {
+        transaction_id: id,
+        idempotency_key: key,
+        signature: Some(recovery::signature(&request.signed_transaction)?),
+        slot: None,
+        status: PaymentStatus::Submitted,
+        error: Some("Reserved; submission outcome pending".into()),
+        created_at_ms: now,
+        updated_at_ms: now,
+    };
+    let (won, owner, bound, initial) = state
+        .store
+        .claim_operation(
+            &record.transaction_id,
+            &principal.wallet,
+            intent.clone(),
+            json!(record),
+        )
+        .await?;
+    if owner != principal.wallet || bound != intent {
+        return Err(recovery::conflict());
+    }
+    if !won {
+        let existing = match state.store.get_transaction(&record.transaction_id).await? {
+            Some(r) => r,
+            None => serde_json::from_value(initial).map_err(|_| recovery::conflict())?,
+        };
+        return Ok(Json(recovery::transaction(&state, existing).await?));
+    }
+    state
+        .store
+        .put_auth(
+            &format!("transaction-owner:{}", record.transaction_id),
+            json!(principal.wallet),
+            i64::MAX as u64,
+        )
+        .await?;
+    state.store.put_transaction(record.clone()).await?;
+    if let Err(error) = state
+        .rpc
+        .send_transaction(&request.signed_transaction)
+        .await
+    {
+        record = recovery::classify_transaction_send(&state, record, &error).await?;
+        state.store.put_transaction(record.clone()).await?;
+        return Ok(Json(
+            state
+                .store
+                .get_transaction(&record.transaction_id)
+                .await?
+                .unwrap_or(record),
+        ));
+    }
+    Ok(Json(recovery::transaction(&state, record).await?))
+}
+
+async fn validate_owner_live(
+    state: &BackendState,
+    principal: &Principal,
+    transaction: &VersionedTransaction,
+) -> Result<(), ApiError> {
     let first = &transaction.message.instructions()[0];
     if first.data.starts_with(&[86, 4, 7, 7, 120, 139, 232, 139]) {
         for (position, payment) in
@@ -1214,66 +1377,7 @@ async fn submit_transaction(
             ));
         }
     }
-    let mut request = request;
-    request.idempotency_key = format!("{}:{}", principal.wallet, request.idempotency_key);
-    if let Some(existing) = state
-        .store
-        .find_transaction_by_idempotency(&request.idempotency_key)
-        .await?
-    {
-        return Ok(Json(existing));
-    }
-
-    let now = now_ms();
-    let mut record = TransactionRecord {
-        transaction_id: deterministic_id("transaction", &request.idempotency_key),
-        idempotency_key: request.idempotency_key.clone(),
-        signature: None,
-        slot: None,
-        status: PaymentStatus::Prepared,
-        error: None,
-        created_at_ms: now,
-        updated_at_ms: now,
-    };
-    state
-        .store
-        .put_auth(
-            &format!("transaction-owner:{}", record.transaction_id),
-            json!(principal.wallet),
-            i64::MAX as u64,
-        )
-        .await?;
-    state.store.put_transaction(record.clone()).await?;
-
-    let signature = match state
-        .rpc
-        .send_transaction(&request.signed_transaction)
-        .await
-    {
-        Ok(signature) => signature,
-        Err(error) => {
-            record = fail_transaction(record, error.to_string());
-            state.store.put_transaction(record.clone()).await?;
-            return Ok(Json(record));
-        }
-    };
-    record.signature = Some(signature.clone());
-    record.status = PaymentStatus::Submitted;
-    record.updated_at_ms = now_ms();
-    state.store.put_transaction(record.clone()).await?;
-
-    match state.rpc.wait_for_finalized(&signature).await {
-        Ok(status) => {
-            record.status = PaymentStatus::Confirmed;
-            record.slot = status.slot;
-            record.updated_at_ms = now_ms();
-        }
-        Err(error) => {
-            record = fail_transaction(record, error.to_string());
-        }
-    }
-    state.store.put_transaction(record.clone()).await?;
-    Ok(Json(record))
+    Ok(())
 }
 
 fn validate_payment_request(
@@ -1773,20 +1877,6 @@ fn decode_transaction(encoded: &str) -> Result<Vec<u8>, ApiError> {
         })
 }
 
-fn fail_payment(mut record: PaymentRecord, error: String) -> PaymentRecord {
-    record.status = PaymentStatus::Failed;
-    record.error = Some(error);
-    record.updated_at_ms = now_ms();
-    record
-}
-
-fn fail_transaction(mut record: TransactionRecord, error: String) -> TransactionRecord {
-    record.status = PaymentStatus::Failed;
-    record.error = Some(error);
-    record.updated_at_ms = now_ms();
-    record
-}
-
 fn deterministic_id(prefix: &str, input: &str) -> String {
     let digest = Sha256::digest(input.as_bytes());
     format!("{prefix}_{}", hex_encode(&digest))
@@ -1854,6 +1944,25 @@ mod tests {
         assert_eq!(forwarded_client_ip(&xff("203.0.113.9"), 2), None);
         assert_eq!(forwarded_client_ip(&xff("not-an-ip"), 1), None);
         assert_eq!(forwarded_client_ip(&xff("  , , "), 1), None);
+    }
+
+    #[tokio::test]
+    async fn latest_blockhash_shares_public_rpc_quota() {
+        let state = BackendState::new(BackendConfig::from_env().unwrap(), StatusStore::in_memory())
+            .unwrap();
+        for _ in 0..600 {
+            assert!(
+                state
+                    .store
+                    .auth_rate("public-rpc", now_ms(), 600)
+                    .await
+                    .unwrap()
+            );
+        }
+        assert!(matches!(
+            latest_blockhash(State(state)).await,
+            Err(ApiError::RateLimited)
+        ));
     }
 
     #[test]

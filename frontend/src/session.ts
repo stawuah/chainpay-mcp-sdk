@@ -40,9 +40,25 @@ async function signIn() {
   }
   session = result;
 }
-export async function authorizedFetch(input: string, init: RequestInit = {}): Promise<Response> {
+export async function authorizedFetch(input: string, init: RequestInit = {}, expected?: WalletBinding): Promise<Response> {
   const url = new URL(input, location.href);
   if (!allowedOrigins.has(url.origin)) throw new Error("Refusing to send a wallet session to another service");
+  let active: NonNullable<typeof session>;
+  try { active = await ensureSessionReady(); } catch (error) { throw new RequestNotSentError(error instanceof Error ? error.message : String(error)); }
+  if (expected && (expected.wallet !== active.wallet || expected.generation !== generation)) throw new RequestNotSentError("Wallet changed before submission; request was not sent");
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${active.token}`);
+  const revision = generation;
+  const response = await fetch(input, { ...init, headers });
+  if (revision !== generation || wallet?.address !== active.wallet) throw new Error("Wallet changed while the request was pending. Refresh with the intended wallet.");
+  if (response.status === 401 && session === active) session = null;
+  return response;
+}
+
+export function sessionWalletAddress(): string | null { return wallet?.address ?? null; }
+
+export class RequestNotSentError extends Error {}
+export async function ensureSessionReady() {
   if (!session || session.expires_at_ms <= Date.now() + 5_000) {
     if (!pending) {
       const attempt = signIn();
@@ -53,11 +69,11 @@ export async function authorizedFetch(input: string, init: RequestInit = {}): Pr
   }
   const active = session;
   if (!active || active.wallet !== wallet?.address) throw new Error("Sign in with your current wallet");
-  const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${active.token}`);
-  const revision = generation;
-  const response = await fetch(input, { ...init, headers });
-  if (revision !== generation || wallet?.address !== active.wallet) throw new Error("Wallet changed while the request was pending. Refresh with the intended wallet.");
-  if (response.status === 401 && session === active) session = null;
-  return response;
+  return active;
+}
+
+export type WalletBinding = { wallet: string; generation: number };
+export function sessionBinding(): WalletBinding {
+  if (!wallet) throw new RequestNotSentError("Connect the original wallet");
+  return { wallet: wallet.address, generation };
 }

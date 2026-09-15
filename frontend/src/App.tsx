@@ -1,4 +1,5 @@
-import { authorizedFetch, configureSession, setSessionWallet } from "./session";
+import { beginSettlement, awaitSettlement, useSettlementFormStatus, settlementPendingEvent, settlementTerminalEvent, type Operation, PendingSettlementError, isPendingSettlement, forgetUnsentOperation, rejectBeforeSubmission, guardPendingApprovals, PendingSettlements, type Settlement } from "./settlement";
+import { authorizedFetch, RequestNotSentError, type WalletBinding, configureSession, setSessionWallet } from "./session";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChainPayClient, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveVersionedMandateAddress, toWeb3Transaction } from "@chainpay/sdk";
 import type { ChainPayInstruction, Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, SupportedAsset, TokenProgram } from "@chainpay/sdk";
@@ -188,7 +189,7 @@ type AgentInboxItem = {
   requirements?: AgentRequirements;
   error?: string;
 };
-type ApprovalStatus = "idle" | "signing" | "success" | "error";
+type ApprovalStatus = "idle" | "signing" | "pending" | "success" | "error";
 type ProtocolConfig = {
   address?: string;
   authority: string;
@@ -345,19 +346,31 @@ async function revokeMcpConnection(wallet: string, id: string) {
   }
 }
 
-async function mcpRequest<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+async function mcpRequest<T>(method: string, params?: Record<string, unknown>, binding?: WalletBinding): Promise<T> {
   const response = await authorizedFetch(MCP_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
-  });
+  }, binding);
   const payload = await response.json() as { result?: T; error?: { message?: string } };
   if (!response.ok || payload.error) throw new Error(payload.error?.message ?? `MCP request failed (${response.status})`);
   return payload.result as T;
 }
 
 async function callMcpTool(name: string, args: Record<string, unknown>) {
-  return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
+  if (name !== "execute_payment" || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
+  const operation = await beginSettlement(BACKEND_URL, "payments", `${String(args.mandate)}:${String(args.invoiceHash)}`, typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
+  let result: McpToolResponse;
+  try { result = await mcpRequest<McpToolResponse>("tools/call", { name, arguments: args }, operation); }
+  catch (error) {
+    if (error instanceof RequestNotSentError) { forgetUnsentOperation(operation); throw error; }
+    result = { structuredContent: await awaitSettlement(operation, undefined, 0) };
+  }
+  const first = result.structuredContent as Settlement | undefined;
+  if (result.isError && ["rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String((result.structuredContent as { action?: string })?.action))) { rejectBeforeSubmission(operation); return result; }
+  if (result.isError && [400, 401, 403, 404, 422].includes(Number((result.structuredContent as { httpStatus?: number })?.httpStatus))) { rejectBeforeSubmission(operation); return result; }
+  const settled = await awaitSettlement(operation, first?.payment_id === operation.id ? first : undefined);
+  return { ...result, isError: false, structuredContent: { ...(result.structuredContent as Record<string, unknown>), ...settled, receiptAddress: settled.receipt_address ?? (result.structuredContent as { receiptAddress?: string })?.receiptAddress } };
 }
 
 const AGENT_INBOX_STORAGE_KEY = "chainpay.ai-inbox.v1";
@@ -671,26 +684,28 @@ function preparedTransactionFromAgentApproval(approval: AgentApproval): Prepared
 
 async function submitSignedTransaction(idempotencyKey: string, signedTransaction: Uint8Array) {
   if (!BACKEND_URL) throw new Error("VITE_CHAINPAY_BACKEND_URL is not configured.");
-  const response = await authorizedFetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/transactions/submit`, {
+  const operation = await beginSettlement(BACKEND_URL, "transactions", idempotencyKey, Buffer.from(signedTransaction).toString("base64"));
+  let response: Response;
+  try {
+    response = await authorizedFetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/transactions/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       idempotency_key: idempotencyKey,
       signed_transaction: Buffer.from(signedTransaction).toString("base64"),
     }),
-  });
-  const payload = await response.json() as {
-    status?: string;
-    signature?: string;
-    error?: string;
-  };
-  if (!response.ok || payload.status === "failed") {
-    throw new Error(payload.error ?? `Backend transaction submission failed (${response.status})`);
+  }, operation);
+  } catch (error) {
+    if (error instanceof RequestNotSentError) { forgetUnsentOperation(operation); throw error; }
+    return awaitSettlement(operation, undefined, 0);
   }
-  if (payload.status !== "confirmed" || !payload.signature) {
-    throw new Error("Axum did not return a finalized transaction signature.");
+  const payload = await response.json() as Settlement;
+  if (!response.ok) {
+    if ([400, 401, 403, 404, 422].includes(response.status)) rejectBeforeSubmission(operation);
+    if ([400, 401, 403, 404, 422].includes(response.status)) throw new Error(payload.error ?? "Request rejected before submission");
+    return awaitSettlement(operation, undefined, 0);
   }
-  return payload;
+  return awaitSettlement(operation, payload);
 }
 
 type ManagedSigner = {
@@ -1695,10 +1710,10 @@ function App() {
 
   if (wallet) {
     return (
-      <Dashboard
+      <><PendingSettlements wallet={wallet} /><Dashboard
         wallet={wallet}
         walletName={walletConnection?.name ?? "Solana wallet"}
-        walletSigner={walletConnection?.signTransaction}
+        walletSigner={walletConnection ? async (transaction) => { await guardPendingApprovals(wallet, transaction, PROGRAM_ID); return walletConnection.signTransaction(transaction); } : undefined}
         walletMessageSigner={walletConnection?.signMessage}
         mandateAddress={mandate?.address}
         mandate={mandate}
@@ -1720,7 +1735,7 @@ function App() {
           setMcpResult(result);
           return result;
         }}
-      />
+      /></>
     );
   }
 
@@ -2016,6 +2031,23 @@ function Dashboard({
   const [agentAttachments, setAgentAttachments] = useState<AgentAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [approvalStatuses, setApprovalStatuses] = useState<Record<string, ApprovalStatus>>({});
+  useEffect(() => {
+    const pending = (event: Event) => {
+      if ((event as CustomEvent<Operation>).detail.wallet !== wallet) return;
+      setApprovalStatuses((current) => Object.fromEntries(Object.entries(current).map(([id,status]) => [id,status === "signing" ? "pending" : status])));
+    };
+    const settled = (event: Event) => {
+      const operation = (event as CustomEvent<Operation>).detail;
+      if (operation.wallet !== wallet || operation.status !== "confirmed") return;
+      const result = operation.result;
+      if (result?.receipt_address && result.signature) setAgentInbox((current) => current.map((item) => item.approval?.receiptAddress === result.receipt_address ? { ...item, approval: undefined, stage: "receipt_ready", response: "The original payment is finalized. Its receipt is ready.", outcome: { kind: "payment_settled", signature: result.signature!, receiptAddress: result.receipt_address!, status: "confirmed" } } : item));
+      void onRefresh();
+    };
+    window.addEventListener(settlementPendingEvent, pending);
+    window.addEventListener(settlementTerminalEvent, settled);
+    return () => { window.removeEventListener(settlementPendingEvent, pending); window.removeEventListener(settlementTerminalEvent, settled); };
+  }, [wallet, onRefresh]);
+
   const [approvalErrors, setApprovalErrors] = useState<Record<string, string>>({});
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [walletAssets, setWalletAssets] = useState<WalletAssetSummary[]>([]);
@@ -2439,7 +2471,7 @@ function Dashboard({
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setApprovalStatuses((current) => ({ ...current, [inboxId]: "error" }));
+      setApprovalStatuses((current) => ({ ...current, [inboxId]: isPendingSettlement(error) ? "pending" : "error" }));
       setApprovalErrors((current) => ({ ...current, [inboxId]: message }));
       updateAgentInboxItem(inboxId, { stage: "waiting_for_approval", error: message });
     }
@@ -2931,7 +2963,8 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
   const [mintDecimals, setMintDecimals] = useState<number | null>(null);
   const [prepared, setPrepared] = useState<PreparedPayment | null>(null);
   const [mcpPreflight, setMcpPreflight] = useState("");
-  const [status, setStatus] = useState<"idle" | "preparing" | "ready" | "signing" | "success" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "preparing" | "ready" | "signing" | "pending" | "success" | "error">("idle");
+  useSettlementFormStatus(wallet, setStatus);
   const [error, setError] = useState("");
   const [signature, setSignature] = useState("");
   const [receipt, setReceipt] = useState<PaymentReceipt | null>(null);
@@ -3061,7 +3094,7 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
         setStatus("ready");
       }
     } catch (cause) {
-      setStatus("error");
+      setStatus(isPendingSettlement(cause) ? "pending" : "error");
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
@@ -3111,7 +3144,7 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
       setStatus("success");
       await onRefresh();
     } catch (cause) {
-      setStatus("error");
+      setStatus(isPendingSettlement(cause) ? "pending" : "error");
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
@@ -3305,7 +3338,8 @@ function BatchPaymentsPanel({ wallet, walletSigner, mandates, stablecoinOptions,
   const [items, setItems] = useState<BatchCsvPayment[]>([]);
   const [entries, setEntries] = useState<BatchPaymentEntry[]>([]);
   const [fileName, setFileName] = useState("");
-  const [status, setStatus] = useState<"idle" | "checking" | "ready" | "signing" | "success" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "checking" | "ready" | "signing" | "pending" | "success" | "error">("idle");
+  useSettlementFormStatus(wallet, setStatus);
   const [error, setError] = useState("");
   const [batchPrepared, setBatchPrepared] = useState<PreparedTransaction | null>(null);
   const [signature, setSignature] = useState("");
@@ -3462,7 +3496,7 @@ function BatchPaymentsPanel({ wallet, walletSigner, mandates, stablecoinOptions,
       setBatchPrepared(transaction);
       setStatus("ready");
     } catch (cause) {
-      setStatus("error");
+      setStatus(isPendingSettlement(cause) ? "pending" : "error");
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
@@ -3489,7 +3523,7 @@ function BatchPaymentsPanel({ wallet, walletSigner, mandates, stablecoinOptions,
         // Settlement has already finalized. A later dashboard refresh must not change its result.
       }
     } catch (cause) {
-      setStatus("error");
+      setStatus(isPendingSettlement(cause) ? "pending" : "error");
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
@@ -3498,7 +3532,7 @@ function BatchPaymentsPanel({ wallet, walletSigner, mandates, stablecoinOptions,
     <section className="dashboard-card batch-payments-panel" aria-labelledby="batch-payments-title">
       <div className="dashboard-card-heading">
         <div><span className="section-kicker">CSV BATCH SETTLEMENT</span><h2 id="batch-payments-title">Review once. Settle together.</h2></div>
-        <span className={`state-pill ${status === "ready" || status === "success" ? "ok" : status === "error" ? "failed" : ""}`}><i /> {status === "checking" ? "Checking" : status === "ready" ? "Ready" : status === "signing" ? "Approving" : status === "success" ? "Settled" : "Import CSV"}</span>
+        <span className={`state-pill ${status === "ready" || status === "success" ? "ok" : status === "error" ? "failed" : ""}`}><i /> {status === "checking" ? "Checking" : status === "ready" ? "Ready" : status === "pending" ? "Pending settlement" : status === "signing" ? "Approving" : status === "success" ? "Settled" : "Import CSV"}</span>
       </div>
       <p className="builder-intro">Import up to {MAX_ATOMIC_BATCH_PAYMENTS} policy-backed payments. ChainPay checks every row, derives each receipt, and submits the valid batch as one atomic Solana transaction after one wallet approval.</p>
       <div className="batch-template-note"><span className="soft-label">CSV COLUMNS</span><code>mandate_address, invoice, amount, recipient, required_token, receipt_address, token_program</code><small>Only the first four columns are required. A supplied receipt address is verified against ChainPay’s derived receipt PDA.</small></div>
@@ -3999,7 +4033,7 @@ function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimal
       displayAmount = `${amount} base units`;
     }
   }
-  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Approve payment" : "Approve this mandate once"}</h3></div><span className={`state-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "Review the amount, recipient, and policy checks below. Approve in your wallet to complete the payment." : "The AI prepared this spending policy. Approve it once; future policy-compliant payments can settle without another wallet prompt."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b><code>{displayAmount}</code></span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<button className="button button-dark full-button" onClick={() => void onApprove()} disabled={status === "signing" || status === "success"}>{status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Approve payment in wallet" : "Approve wallet once"} <Arrow /></button></div>;
+  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Approve payment" : "Approve this mandate once"}</h3></div><span className={`state-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "pending" ? "Pending settlement" : status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "Review the amount, recipient, and policy checks below. Approve in your wallet to complete the payment." : "The AI prepared this spending policy. Approve it once; future policy-compliant payments can settle without another wallet prompt."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b><code>{displayAmount}</code></span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<button className="button button-dark full-button" onClick={() => void onApprove()} disabled={status === "signing" || status === "pending" || status === "success"}>{status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Approve payment in wallet" : "Approve wallet once"} <Arrow /></button></div>;
 }
 
 function AgentsPanel({ connections, onConnect, onOpenAssistant }: { connections: AgentConnection[]; onConnect: () => void; onOpenAssistant: () => void }) {
@@ -4137,7 +4171,8 @@ function ProtocolPanel({ wallet, walletSigner, config, onCreated }: ProtocolPane
   const [slots, setSlots] = useState([DEVNET_USDC_MINT, "", ""]);
   const [assets, setAssets] = useState<AssetSnapshot[]>([]);
   const [prepared, setPrepared] = useState<PreparedTransaction | null>(null);
-  const [status, setStatus] = useState<"idle" | "building" | "ready" | "signing" | "success" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "building" | "ready" | "signing" | "pending" | "success" | "error">("idle");
+  useSettlementFormStatus(wallet, setStatus);
   const [error, setError] = useState("");
   const [signature, setSignature] = useState("");
 
@@ -4197,7 +4232,7 @@ function ProtocolPanel({ wallet, walletSigner, config, onCreated }: ProtocolPane
       setPrepared(nextPrepared);
       setStatus("ready");
     } catch (cause) {
-      setStatus("error");
+      setStatus(isPendingSettlement(cause) ? "pending" : "error");
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
@@ -4215,7 +4250,7 @@ function ProtocolPanel({ wallet, walletSigner, config, onCreated }: ProtocolPane
       setStatus("success");
       await onCreated();
     } catch (cause) {
-      setStatus("error");
+      setStatus(isPendingSettlement(cause) ? "pending" : "error");
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
@@ -4282,7 +4317,8 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
   const [managedSignerStatus, setManagedSignerStatus] = useState<"idle" | "provisioning" | "ready" | "error">("idle");
   const [stablecoin, setStablecoin] = useState(defaultStablecoin.value);
   const [prepared, setPrepared] = useState<PreparedMandate | null>(null);
-  const [status, setStatus] = useState<"idle" | "building" | "ready" | "signing" | "success" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "building" | "ready" | "signing" | "pending" | "success" | "error">("idle");
+  useSettlementFormStatus(wallet, setStatus);
   const [error, setError] = useState("");
   const [signature, setSignature] = useState("");
   const [pdaCopied, setPdaCopied] = useState(false);
@@ -4529,7 +4565,7 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
       setPrepared(nextPrepared);
       setStatus("ready");
     } catch (cause) {
-      setStatus("error");
+      setStatus(isPendingSettlement(cause) ? "pending" : "error");
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
@@ -4553,7 +4589,7 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
       setPdaCopied(false);
       await onCreated(prepared.mandateAddress);
     } catch (cause) {
-      setStatus("error");
+      setStatus(isPendingSettlement(cause) ? "pending" : "error");
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
@@ -4600,7 +4636,7 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
         {prepared ? <>
           <div className="mandate-summary"><div><span>Payment approval</span><strong>{signingMode === "human" ? "Confirm each payment" : "Automatic within limits"}</strong></div><div><span>Connected wallet</span><strong className="mono">{shortAddress(wallet)}</strong></div><div><span>Payment signer</span><strong className="mono">{shortAddress(form.approvedAgent)}</strong></div><div><span>Stablecoin</span><strong>{selectedStablecoin.label} <small>{selectedStablecoin.detail}</small></strong></div><div><span>Recipient</span><strong>Chosen per payment</strong></div><div><span>Max per payment</span><strong>{form.maxPerPayment}</strong></div><div><span>Total spend limit</span><strong>{form.totalLimit}</strong></div><div><span>Expires in</span><strong>{form.expiresInDays} days</strong></div></div>
           <details className="technical-details"><summary>Transaction details</summary><div className="review-list"><div><span>Mandate address</span><strong className="mono">{shortAddress(prepared.mandateAddress)}</strong></div><div><span>Policy actions</span><strong>{prepared.transaction.instructions.map((instruction) => instruction.name).join(" + ")}</strong></div><div><span>Wallet</span><strong className="mono">{shortAddress(wallet)}</strong></div></div><div className="state-box"><p>After wallet approval, Axum submits this transaction directly and verifies finalized chain state.</p></div></details>
-          <button className="button button-dark full-button" onClick={() => void signAndCreate()} disabled={status === "signing" || status === "success"}>{status === "signing" ? "Waiting for wallet…" : status === "success" ? "Mandate created" : "Approve & create mandate"} <Arrow /></button>
+          <button className="button button-dark full-button" onClick={() => void signAndCreate()} disabled={status === "signing" || status === "pending" || status === "success"}>{status === "signing" ? "Waiting for wallet…" : status === "success" ? "Mandate created" : "Approve & create mandate"} <Arrow /></button>
           {signature && <div className="mandate-created-callout"><div className="mandate-created-heading"><span>✓</span><div><b>Mandate created on Devnet</b><small>{signingMode === "human" ? "Your policy is ready for a wallet-approved payment." : "Your policy is ready for autonomous agent payments inside its limits."}</small></div></div><div className="mandate-pda-row"><div><span>Mandate PDA</span><strong>{prepared.mandateAddress}</strong></div><button type="button" className="button button-secondary-light button-small" onClick={copyMandatePda}>{pdaCopied ? "Copied" : "Copy PDA"}</button></div><div className="mandate-created-actions"><a href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`} target="_blank" rel="noreferrer">View transaction <Arrow /></a>{signingMode === "human" && <button type="button" className="button button-primary button-small" onClick={onOpenPayments}>Pay with this mandate <Arrow /></button>}</div></div>}
         </> : <div className="review-empty"><div className="empty-icon">◇</div><p>Review the mandate before signing.</p></div>}
       </div>

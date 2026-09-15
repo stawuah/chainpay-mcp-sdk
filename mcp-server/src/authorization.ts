@@ -53,6 +53,9 @@ export async function authorizeTool(context: ChainPayMcpContext, name: string, a
     if (args[field] !== undefined && args[field] !== principal.wallet) throw new AuthorizationError("Wallet differs from verified owner");
   }
   if (["list_mandates", "find_compatible_mandate", "create_mandate"].includes(name)) args.owner = principal.wallet;
+  // Existing-operation resume is authorized again by Axum against the stored
+  // owner and mandate. It never prepares or signs a new payment.
+  if (name === "execute_x402_payment" && typeof args.paymentId === "string") return;
   let address = name === "get_mandate" && typeof args.address === "string" ? args.address : typeof args.mandate === "string" ? args.mandate : typeof args.mandateAddress === "string" ? args.mandateAddress : undefined;
   if (!address && typeof args.receiptAddress === "string") {
     const receipt = await context.client.getPayment(args.receiptAddress);

@@ -35,6 +35,7 @@ pub enum StorageError {
 
 #[derive(Debug, Default)]
 struct MemoryState {
+    operations: HashMap<String, (String, serde_json::Value, serde_json::Value)>,
     auth: HashMap<String, (serde_json::Value, u64)>,
     payments: HashMap<String, PaymentRecord>,
     transactions: HashMap<String, TransactionRecord>,
@@ -85,6 +86,64 @@ impl StatusStore {
         Ok(Self {
             backend: StorageBackend::Postgres(pool),
         })
+    }
+
+    /// Returns the original reservation and whether this caller alone owns the effect.
+    pub async fn claim_operation(
+        &self,
+        id: &str,
+        owner: &str,
+        intent: serde_json::Value,
+        initial: serde_json::Value,
+    ) -> Result<(bool, String, serde_json::Value, serde_json::Value), StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                let won = !state.operations.contains_key(id);
+                let record =
+                    state
+                        .operations
+                        .entry(id.into())
+                        .or_insert((owner.into(), intent, initial));
+                Ok((won, record.0.clone(), record.1.clone(), record.2.clone()))
+            }
+            StorageBackend::Postgres(pool) => {
+                let won = sqlx::query("INSERT INTO operation_claims (operation_id,owner_wallet,intent,initial_record) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
+                    .bind(id).bind(owner).bind(Json(intent)).bind(Json(initial)).execute(pool).await?.rows_affected() == 1;
+                let row = sqlx::query("SELECT owner_wallet,intent,initial_record FROM operation_claims WHERE operation_id=$1").bind(id).fetch_one(pool).await?;
+                Ok((
+                    won,
+                    row.get("owner_wallet"),
+                    row.get::<Json<serde_json::Value>, _>("intent").0,
+                    row.get::<Json<serde_json::Value>, _>("initial_record").0,
+                ))
+            }
+        }
+    }
+
+    pub async fn operation_record(
+        &self,
+        id: &str,
+    ) -> Result<Option<(String, serde_json::Value, serde_json::Value)>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => Ok(state.read().await.operations.get(id).cloned()),
+            StorageBackend::Postgres(pool) => Ok(sqlx::query("SELECT owner_wallet,intent,initial_record FROM operation_claims WHERE operation_id=$1").bind(id).fetch_optional(pool).await?.map(|r| (r.get("owner_wallet"),r.get::<Json<serde_json::Value>,_>("intent").0,r.get::<Json<serde_json::Value>,_>("initial_record").0))),
+        }
+    }
+
+    pub async fn operation_owner(&self, id: &str) -> Result<Option<String>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                Ok(state.read().await.operations.get(id).map(|r| r.0.clone()))
+            }
+            StorageBackend::Postgres(pool) => Ok(sqlx::query(
+                "SELECT owner_wallet FROM operation_claims WHERE operation_id=$1",
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+            .map(|r| r.get("owner_wallet"))),
+        }
     }
 
     pub async fn auth_rate(
@@ -258,11 +317,14 @@ impl StatusStore {
     pub async fn put_payment(&self, record: PaymentRecord) -> Result<(), StorageError> {
         match &self.backend {
             StorageBackend::Memory(state) => {
-                state
-                    .write()
-                    .await
-                    .payments
-                    .insert(record.payment_id.clone(), record);
+                let mut state = state.write().await;
+                if state.payments.get(&record.payment_id).is_some_and(|old| {
+                    matches!(old.status, PaymentStatus::Confirmed | PaymentStatus::Failed)
+                        || (old.updated_at_ms > record.updated_at_ms)
+                }) {
+                    return Ok(());
+                }
+                state.payments.insert(record.payment_id.clone(), record);
                 Ok(())
             }
             StorageBackend::Postgres(pool) => {
@@ -294,6 +356,7 @@ impl StatusStore {
                         status = EXCLUDED.status,
                         error = EXCLUDED.error,
                         updated_at_ms = EXCLUDED.updated_at_ms
+                    WHERE payments.status NOT IN ('confirmed','failed') AND payments.updated_at_ms <= EXCLUDED.updated_at_ms
                     "#,
                 )
                 .bind(&record.payment_id)
@@ -363,9 +426,18 @@ impl StatusStore {
     pub async fn put_transaction(&self, record: TransactionRecord) -> Result<(), StorageError> {
         match &self.backend {
             StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                if state
+                    .transactions
+                    .get(&record.transaction_id)
+                    .is_some_and(|old| {
+                        matches!(old.status, PaymentStatus::Confirmed | PaymentStatus::Failed)
+                            || (old.updated_at_ms > record.updated_at_ms)
+                    })
+                {
+                    return Ok(());
+                }
                 state
-                    .write()
-                    .await
                     .transactions
                     .insert(record.transaction_id.clone(), record);
                 Ok(())
@@ -384,6 +456,7 @@ impl StatusStore {
                         status = EXCLUDED.status,
                         error = EXCLUDED.error,
                         updated_at_ms = EXCLUDED.updated_at_ms
+                    WHERE transactions.status NOT IN ('confirmed','failed') AND transactions.updated_at_ms <= EXCLUDED.updated_at_ms
                     "#,
                 )
                 .bind(&record.transaction_id)
@@ -423,12 +496,38 @@ impl StatusStore {
         }
     }
 
-    pub async fn put_x402(&self, record: X402PaymentRecord) -> Result<(), StorageError> {
+    pub async fn put_x402(&self, mut record: X402PaymentRecord) -> Result<(), StorageError> {
         match &self.backend {
             StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                if state
+                    .x402_payments
+                    .get(&record.x402_payment_id)
+                    .is_some_and(|old| {
+                        matches!(old.status, X402PaymentStatus::Verified)
+                            || (old.updated_at_ms > record.updated_at_ms)
+                    })
+                {
+                    return Ok(());
+                }
+                if let Some(old) = state.x402_payments.get(&record.x402_payment_id) {
+                    if matches!(
+                        old.status,
+                        X402PaymentStatus::Confirmed | X402PaymentStatus::Failed
+                    ) && matches!(
+                        record.status,
+                        X402PaymentStatus::Prepared | X402PaymentStatus::Submitted
+                    ) {
+                        return Ok(());
+                    }
+                    if record.proof.is_none() {
+                        record.proof = old.proof.clone();
+                    }
+                    if record.response_status.is_none() {
+                        record.response_status = old.response_status;
+                    }
+                }
                 state
-                    .write()
-                    .await
                     .x402_payments
                     .insert(record.x402_payment_id.clone(), record);
                 Ok(())
@@ -452,10 +551,11 @@ impl StatusStore {
                         transaction_signature = EXCLUDED.transaction_signature,
                         status = EXCLUDED.status,
                         challenge = EXCLUDED.challenge,
-                        proof = EXCLUDED.proof,
-                        response_status = EXCLUDED.response_status,
+                        proof = COALESCE(EXCLUDED.proof,x402_payments.proof),
+                        response_status = COALESCE(EXCLUDED.response_status,x402_payments.response_status),
                         error = EXCLUDED.error,
                         updated_at = EXCLUDED.updated_at
+                    WHERE x402_payments.status <> 'verified' AND NOT (x402_payments.status IN ('confirmed','failed') AND EXCLUDED.status IN ('prepared','submitted')) AND x402_payments.updated_at <= EXCLUDED.updated_at
                     "#,
                 )
                 .bind(&record.x402_payment_id)
