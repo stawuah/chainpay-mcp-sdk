@@ -2268,3 +2268,28 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
   .case-feedback-message > div:first-child { grid-template-columns: 36px minmax(0, 1fr); }
   .case-feedback-message em { grid-column: 2; justify-self: start; }
 }
+
+/*
+ * Dashboard surface refinements from the record-detail design pass.
+ *
+ * These are app-wide rules and previously lived in ui/record-details.css, which
+ * is imported by RecordDetails.tsx. That meant importing one panel component
+ * restyled the whole dashboard — background, sidebar, card radius and the
+ * mandate table — for every route that pulled it in. The intent was always
+ * app-level, so they belong here.
+ *
+ * The literals below are the landing palette (landing.css:294), not the tokens
+ * declared at the top of this file. Kept as-is to preserve the design exactly;
+ * unifying the two palettes is a design decision, not a mechanical swap.
+ */
+.cp-app .dashboard-main { background: #f7f9fc; }
+.cp-app .dashboard-sidebar { background: var(--canvas); border-inline-end: 1px solid #dbe2ef; }
+.cp-app .dashboard-card { border-radius: var(--radius-container, 24px); }
+.cp-app .mandate-table th { background: #fafbfe; }
+.cp-app .mandate-table td { padding-block: 20px; }
+.cp-app .mandate-agent-cell strong { font-size: 14px; }
+.cp-app .mandate-amount-line { flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.cp-app .mandate-table-actions .xds-button { min-width: 76px; }
+.cp-app .mandate-table tbody tr:focus-visible { outline: 3px solid var(--blue); outline-offset: -3px; }
+.cp-app .mandate-table-status.expired { color: #56647d; background: #f0f2f6; }
+.cp-app .mandate-table-status.expired .mandate-status-check { color: #56647d; background: transparent; }
