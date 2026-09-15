@@ -1,272 +1,97 @@
-# ChainPay universal MCP server
+# ChainPay MCP server
 
-This server exposes ChainPay as a standard MCP tool provider over JSON-RPC
-stdio, so MCP-capable LLM clients can discover and call the same payment tools:
+Discover payment tools, inspect mandates, prepare transactions, and read receipts
+through stdio or HTTP. **Start with [Connect an agent](../docs/guides/connect-an-agent.md)**
+for a read-only first result, client configuration, and scoped authorization.
 
-- `get_mandate`
-- `get_protocol_config`
-- `get_asset`
-- `get_supported_assets`
-- `list_mandates`
-- `find_compatible_mandate`
-- `create_mandate`
-- `create_demo_payment_request`
-- `update_mandate`
-- `check_payment_requirements`
-- `prepare_payment`
-- `quote_payment_request`
-- `quote_payment`
-- `verify_payment_request`
-- `prepare_x402_payment`
-- `execute_x402_payment`
-- `execute_payment`
-- `get_payment`
-- `wait_for_payment`
-- `pause_mandate`
-- `revoke_mandate`
+## Run locally
 
-The server accepts only public addresses, payment identifiers, and amounts. It
-never accepts seed phrases or private keys. `create_mandate`, `pause_mandate`,
-and `revoke_mandate` return transactions that must be reviewed and signed by
-the owner wallet. `check_payment_requirements` is the required requirements
-stage. It checks limits, token and asset-registry support, recipient, expiry,
-and mandate/request policy. If details are missing, the assistant returns the
-exact fields that the user must provide before it can quote, prepare, or settle
-a payment. `prepare_payment` returns a policy-checked transaction plan; the
-connected wallet signs it only after the user reviews the request in the web
-UI.
-`prepare_x402_payment` and `execute_x402_payment` detect protocol from document
-shape, not header name. The supported rail is ChainPay's custom `x402/1.0`
-receipt-proof flow: `network` is `solana-devnet`, `payTo` is a recipient token
-account, and proof is `{signature, receiptPDA}`. Standard x402 v2
-`PAYMENT-REQUIRED` (`x402Version: 2`, CAIP-2
-`solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`) is recognized and returned as
-`x402_unsupported_sponsor` before wallet preparation, signing, or settlement.
-ChainPay does not operate a standard sponsor or facilitator; a custom receipt
-proof is not a partially signed sponsored transaction. `execute_x402_payment`
-requires an explicit `signingMode`. Human mode returns or relays a
-browser-signed custom settlement. Delegated mode sends the unsigned wire
-transaction to Axum. After Paid, resume with `paymentId` retries the original
-resource only.
-
-`execute_payment` performs SDK preflight first and requires an explicit
-`signingMode`. In `human` mode it returns a base64 unsigned transaction, recent
-blockhash, and last valid block height for review, or relays a supplied
-browser-signed transaction. In `delegated` mode it never accepts a supplied
-signature: it sends the unsigned transaction to Axum's authenticated managed
-payment endpoint. MCP never loads or accepts a wallet private key or Privy
-credential.
-
-Build and run it locally:
+From the repository root:
 
 ```bash
-# From the repository root:
-npm run check:mcp
-npm --prefix sdk run test
-npm --prefix mcp-server run test
-npm --prefix sdk run build
+npm ci --include=dev --ignore-scripts
 npm --prefix mcp-server run build
-CHAINPAY_RPC_URL=https://api.devnet.solana.com \
-CHAINPAY_BACKEND_URL=http://127.0.0.1:8080 \
 node mcp-server/dist/server.js
 ```
 
-If your shell is already in `mcp-server/`, use the local aliases instead:
+The build also builds the local SDK. For HTTP, run
+`node mcp-server/dist/http.js` with the environment below. From this component
+directory, `./start-http.sh` builds and starts HTTP automatically.
 
-```bash
-npm run check:mcp
-npm run test
-npm run test:sdk
-```
+## Host the HTTP service
 
-`npm run check` from `mcp-server/` delegates to the full workspace check.
-
-## Hosted HTTP MCP
-
-The server also exposes a developer documentation preview at `/` (and `/docs`),
-the ChainPay logo at `/logo.svg`, MCP Streamable HTTP at `/mcp`, a health
-endpoint at `/healthz`, a browser-friendly read-only tool catalog at `/tools`,
-the dashboard's AI assistant at `/agent/chat`, and PostgreSQL-backed inbox
-history at `/inbox?wallet=<address>`. The assistant uses the
-server-side `OPENROUTER_API_KEY` through OpenRouter's OpenAI-compatible Chat
-Completions API and can inspect requests, verify signed demo invoices, find a
-compatible mandate, quote a payment, and prepare an approval transaction. An
-external approved-agent signer can sign that transaction locally and return
-only the signed transaction for relay. HTTP agent connections, hashed bearer
-tokens, tool-call activity, and chat history persist in PostgreSQL; production
-startup refuses to fall back to memory when `DATABASE_URL` is absent. Owner
-wallet approval remains explicit.
-
-## MCP protocol subset (2026-07-28)
-
-Verified 2026-09-15 against the official dated schema and Streamable HTTP
-binding:
-
-- [schema/2026-07-28](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts)
-- [server/discover](https://modelcontextprotocol.io/specification/2026-07-28/server/discover)
-- [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
-- [stdio](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio)
-
-This is a tested subset, not blanket MCP conformance and not MCP OAuth.
-Current-version requests carry `io.modelcontextprotocol/protocolVersion` and
-`clientCapabilities` in `params._meta`. They do not need `initialize`.
-Results use `resultType: "complete"` and server identity under `result._meta`.
-`server/discover` and `tools/list` advertise only `{ "tools": {} }` plus
-`ttlMs` / `cacheScope`. The server does not implement subscriptions, resources,
-prompts, or multi-round-trip requests.
-
-HTTP current-version POST requires `MCP-Protocol-Version`, `Mcp-Method`, and
-`Mcp-Name` for `tools/call`. Header mismatches return JSON-RPC `-32020`.
-Unsupported versions return `-32022` with `{ supported, requested }`.
-`Mcp-Session-Id` and `Last-Event-ID` are ignored; the server does not mint
-protocol sessions or resume streams. Current-version GET or DELETE on `/mcp`
-returns 405. Headerless dashboard `tools/list` / `tools/call` requests remain
-a ChainPay compatibility path, not proof of a full legacy handshake.
-
-Legacy `2025-06-18` and `2024-11-05` keep `initialize` / `ping` and the older
-result shape. Legacy GET on `/mcp` is a comment keepalive only. Wallet
-sessions and scoped connections stay application authentication from PR-01
-and never become protocol capability or OAuth evidence.
-
-The HTTP process supports POST JSON-RPC requests, so a remote MCP client can
-use a URL such as:
-
-```json
-{
-  "mcpServers": {
-    "ChainPay": {
-      "url": "https://payments.example.com/mcp"
-    }
-  }
-}
-```
-
-Run the HTTP server locally from this directory:
-
-```bash
-./start-http.sh
-```
-
-The script builds the SDK and MCP server automatically. Override defaults when
-needed:
-
-```bash
-CHAINPAY_HTTP_PORT=4000 CHAINPAY_HTTP_AUTH_TOKEN=change-me \
-CHAINPAY_BACKEND_URL=http://127.0.0.1:8080 ./start-http.sh
-```
-
-For a hosted deployment, deploy the repository root, not only
-`mcp-server/`: the MCP package currently consumes the local `sdk/` workspace.
-The included root `Dockerfile` builds both packages and starts
-`node mcp-server/dist/http.js` on port `3000`. Configure the platform with:
+Deploy the repository root: this package consumes the local SDK workspace.
+The root [Dockerfile](../Dockerfile) and [Render blueprint](../render.yaml)
+provide deployment entry points.
 
 ```text
-Build command: npm ci --include=dev --ignore-scripts && npm --prefix sdk run build && npm --prefix mcp-server run build
-Start command: node mcp-server/dist/http.js
+Build: npm ci --include=dev --ignore-scripts && npm --prefix mcp-server run build
+Start: node mcp-server/dist/http.js
 Health check: /healthz
 ```
 
-Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, `CHAINPAY_BACKEND_URL`,
-`DATABASE_URL`, and explicit `CHAINPAY_ALLOWED_ORIGINS` in the host environment.
-Set `OPENROUTER_API_KEY` and `CHAINPAY_AI_PROVIDER=openrouter` to enable the
-assistant. Private traffic requires a wallet session or scoped connection;
-shared service tokens and blank-token configurations cannot authorize callers.
-Use HTTPS for hosted endpoints. See PR01 caller authorization below.
+| Setting | Purpose |
+| --- | --- |
+| `CHAINPAY_RPC_URL` | Solana RPC; use the intended Devnet endpoint |
+| `CHAINPAY_PROGRAM_ID` | Program to read and build against |
+| `CHAINPAY_BACKEND_URL` | Axum relay and authentication service |
+| `DATABASE_URL` | PostgreSQL for connections, inbox, and activity; required in production |
+| `CHAINPAY_ALLOWED_ORIGINS` | Explicit allowed browser origins |
+| `CHAINPAY_HTTP_PORT` | Local HTTP port override |
+| `CHAINPAY_AI_PROVIDER=openrouter`, `OPENROUTER_API_KEY` | Optional inbox assistant provider |
+| `CHAINPAY_X402_ALLOWED_ORIGINS` | Exact trusted HTTPS merchant origins, comma-separated |
 
-Render is also supported through the root [render.yaml](../render.yaml)
-Blueprint. In Render, choose **New → Blueprint**, connect this repository, and
-provide the `CHAINPAY_RPC_URL` and explicit allowed frontend origins
-when prompted. Render will use `/healthz` for health checks and expose the MCP
-endpoint at `https://<service-name>.onrender.com/mcp`.
+Use HTTPS when hosted. Production startup refuses an in-memory fallback if the
+database is missing. Tokens are hashed at rest. The assistant invokes the same
+caller permission checks as external clients.
 
-To smoke-test the MCP protocol without an MCP client, run this from the
-repository root after building. The first two lines are current-version
-requests; the last two are the preserved legacy handshake:
+Private HTTP calls use the caller's owner-session or scoped-connection bearer
+token, which MCP forwards to Axum. Shared service tokens do not authorize an
+owner. Stdio private calls use `CHAINPAY_BACKEND_URL` plus
+`CHAINPAY_CALLER_TOKEN`. See the [authentication steps](../docs/guides/connect-an-agent.md#3-authorize-private-reads)
+and [configuration reference](../docs/reference/configuration.md) in the repository docs.
+
+## Routes
+
+| Route | Access and purpose |
+| --- | --- |
+| `GET /`, `/docs` | Public documentation preview |
+| `GET /healthz` | Public service health |
+| `GET /tools` | Public schemas from the tool registry; executes nothing |
+| `POST /mcp` | JSON-RPC; discovery/public reads available without a token, private tools authorized per caller |
+| `GET`, `POST /connections`; `DELETE /connections/:id` | Owner-session connection management |
+| `GET /inbox`, `POST /agent/chat` | Owner-session history and assistant |
+| `GET /logo.svg`, `/og-image.png` | Public documentation assets |
+
+The [protocol reference](../docs/guides/connect-an-agent.md#protocol-reference)
+describes supported versions, headers, discovery, and transport limitations.
+The hosted page generates its tool catalog directly from
+[src/tools/definitions.ts](src/tools/definitions.ts).
+
+## Payment boundary
+
+Owner management returns owner-signed transaction plans. `execute_payment` and
+new `execute_x402_payment` operations require explicit `human` or `delegated`
+signing mode. Human mode prepares or relays externally signed transactions;
+delegated mode sends unsigned wires to Axum's mandate-bound provider signer.
+MCP never accepts a private key or provider credential.
+
+The x402 adapter supports ChainPay's custom `x402/1.0` receipt proof. Standard v2
+is recognized and rejected before signing. See the
+[custom x402 boundary](../docs/guides/connect-an-agent.md#custom-x402-boundary).
+Code and fixture tests do not prove that a running deployment or signer provider
+has accepted the complete flow.
+
+## Verify changes
+
+From the repository root:
 
 ```bash
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":"discover-1","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1.0"}}}}' \
-  '{"jsonrpc":"2.0","id":"list-1","method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"manual-test","version":"1.0"}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"ping"}' \
-  | CHAINPAY_RPC_URL=https://api.devnet.solana.com node mcp-server/dist/server.js
+npm run check:mcp
+npm --prefix mcp-server run test
 ```
 
-An MCP client can launch the development command with:
+From this directory, `npm run check:mcp` and `npm run test` are aliases;
+`npm run check` delegates to the full workspace check.
 
-```json
-{
-  "mcpServers": {
-    "chainpay": {
-      "command": "node",
-      "args": ["/absolute/path/to/umbral/mcp-server/dist/server.js"],
-      "env": {
-        "CHAINPAY_RPC_URL": "https://api.devnet.solana.com"
-      }
-    }
-  }
-}
-```
-
-For a hosted MCP client, use the deployed ChainPay endpoint directly:
-
-```json
-{
-  "mcpServers": {
-    "chainpay": {
-      "url": "https://chainpay-mcp.onrender.com/mcp"
-    }
-  }
-}
-```
-
-Safe payment demo prompt:
-
-```text
-Create a valid Devnet PYUSD demo invoice, verify its merchant signature, find
-my compatible mandate, quote it, prepare the payment, and stop for my wallet
-approval. Do not sign or submit anything yourself.
-```
-
-Paste the configuration into your MCP client settings. The config location
-belongs to the client, not to this repository; Claude Desktop and Cursor each
-have their own MCP settings.
-
-After deployment, replace `YOUR-HOST.example.com` with the HTTPS hostname and
-keep the `/mcp` suffix. The health check is the same hostname with `/healthz`.
-To inspect the deployed tool definitions directly in a browser, open the same
-hostname with `/tools`. This endpoint returns the same schemas exposed by
-MCP's `tools/list` method and does not execute tools or submit transactions.
-
-## PR01 caller authorization
-
-Private HTTP routes require an owner wallet session from Axum or an active
-scoped connection. `/connections` registration/list/revoke, `/inbox`, and
-`/agent/chat` require an owner session and derive the wallet from it. Supplying
-another wallet address returns 403 before inbox persistence or model work.
-Each MCP request has its own context; nested chat tools pass the same central
-permission check. No empty-token or shared-service-token bypass exists.
-
-Register connections after wallet login, selecting an owned mandate and an
-explicit list of permitted tool names. The `scope` field is a JSON string:
-`{"version":1,"mandates":["<mandate>"],"tools":["get_mandate"],"agents":{}}`.
-The server fills `agents` from the on-chain approved agents. Agent connections
-cannot invoke owner-management tools. Existing `Unscoped` connections must be
-reconnected. Copy the returned bearer token into the MCP client configuration;
-it is displayed once and stored hashed. Public documentation, health and tool
-catalog remain available without a token.
-
-For stdio private calls, configure `CHAINPAY_BACKEND_URL` and
-`CHAINPAY_CALLER_TOKEN` with the actual owner session/scoped connection token.
-`CHAINPAY_BACKEND_AUTH_TOKEN` and `CHAINPAY_HTTP_AUTH_TOKEN` are not caller
-identities. HTTP forwards each caller's credential to Axum automatically.
-
-Hosted x402 fetches require exact trusted merchant origins in
-`CHAINPAY_X402_ALLOWED_ORIGINS` (comma-separated). HTTPS is required. The explicit
-`CHAINPAY_X402_ALLOW_HTTP=true` development option only permits localhost or
-loopback HTTP merchants. Redirects remain blocked and responses bounded.
-This adapter's receipt-PDA proof is ChainPay's custom `x402/1.0` flow. It is
-labeled as such in tool results. Standard x402 v2 exact SVM (sponsor
-countersign of a partially signed transaction) is parsed and rejected as
-`x402_unsupported_sponsor`. Header aliases (`PAYMENT-REQUIRED`,
-`X-Payment-Required`) never select the protocol by themselves.
+[All documentation](../docs/README.md) · [SDK](../sdk/README.md)

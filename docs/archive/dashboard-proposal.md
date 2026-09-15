@@ -1,3 +1,5 @@
+> **Historical document.** Preserved from the pre-documentation-cleanup fork (2026-09-15). Claims and commands below may be obsolete. Use the [current docs](../README.md), [architecture](../reference/architecture.md), and [implementation status](../project/implementation-status.md). The [product scope](../scope.md) remains authoritative.
+
 # ChainPay Dashboard — Page-by-Page UI/UX Spec
 
 For an AI (or a human) building these pages against `ChainPayFlow.jsx` and

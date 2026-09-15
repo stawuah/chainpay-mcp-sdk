@@ -1,8 +1,14 @@
 # ChainPay Devnet operations
 
+Run commands below from the repository root after `npm ci --ignore-scripts`. These utilities
+serve different purposes; service health, historical proof reads, and new
+settlement acceptance are separate checks.
+
 ## Read-only regression verification
 
-Run the production baseline check before and after settlement-path changes:
+Install the SPL Token CLI (`spl-token` on PATH) and provide a reachable Devnet
+RPC. Run the historical Devnet baseline check before and after settlement-path
+changes:
 
 ```sh
 npm run verify:devnet
@@ -13,22 +19,30 @@ verifies the deployed ChainPay program, USDC and PYUSD mint owners, enabled
 asset PDAs, known confirmed settlements, and the current PYUSD transfer-fee and
 transfer-hook configuration. It never loads a signer or submits a transaction.
 
-## Live service communication verification
+## Legacy live-stack verifier
 
-After starting Axum, HTTP MCP, the independent x402 merchant, and Neon, run:
+`npm run verify:stack` runs `verify-live-stack.mjs`. It reads backend health,
+Solana state, MCP tools, and PostgreSQL schema, and presents a known historical
+receipt to a merchant. It never submits a payment.
 
-```sh
-CHAINPAY_BACKEND_URL=https://backend.example.com \
-CHAINPAY_MCP_URL=https://mcp.example.com/mcp \
-CHAINPAY_X402_RESOURCE_URL=https://merchant.example.com/data \
-DATABASE_URL='postgresql://...' \
-npm run verify:stack
-```
+**Compatibility limitation:** its private `get_payment` calls use fixed receipt
+addresses and the legacy `CHAINPAY_HTTP_AUTH_TOKEN` environment variable. The
+current services require an actual owner/scoped caller credential with access
+to each mandate. A deployment service token cannot satisfy that requirement.
+The database assertions cover migration `0005` and selected older tables; they
+do not validate all current migrations. A failure here can therefore mean an
+outdated test assumption, not a broken service.
 
-The verifier requires real service endpoints. It follows Axum and MCP reads to
-Devnet, presents a known finalized receipt to the merchant to prove the merchant
-can read chain state, and queries the actual Neon schema. It does not use a
-local settlement server or broadcast a transaction.
+Use the current [acceptance runbook](../docs/project/local-e2e-testing.md) for
+service and caller-aware checks. If maintaining the verifier, its inputs are
+`CHAINPAY_BACKEND_URL`, `CHAINPAY_MCP_URL` (including `/mcp`),
+`CHAINPAY_X402_RESOURCE_URL`, and `DATABASE_URL`. Optional legacy credential
+variables are `CHAINPAY_BACKEND_AUTH_TOKEN` and `CHAINPAY_HTTP_AUTH_TOKEN`;
+do not populate them with a shared deployment secret to bypass caller auth.
+
+The merchant probe can return `200` if the historical proof matches the current
+challenge. A configured merchant may then publish its response-served statement;
+use a merchant with publication disabled for a strictly read-only test.
 
 ## Devnet bootstrap
 
@@ -44,7 +58,9 @@ Each transaction is submitted directly to Devnet and must reach finalized
 status before the script continues. The script requires an explicit signer path
 and never creates, prints, or stores a private key in the repository.
 
-Run it with a funded Devnet authority:
+This is a **chain-writing operation**, not a setup or documentation check. Only
+run after the authority has explicitly approved bootstrap, with a funded Devnet
+authority:
 
 ```sh
 CHAINPAY_KEYPAIR=/absolute/path/to/devnet-authority.json npm run bootstrap:devnet
@@ -71,13 +87,13 @@ than accepting caller-supplied extra accounts.
 
 ## Render keep-alive
 
-The root render.yaml now declares a Render Cron service named
-chainpay-keep-alive. After the Blueprint is deployed, Render runs
+The root `render.yaml` declares a Render Cron service named
+`chainpay-keep-alive`. After the Blueprint is deployed, Render runs
 scripts/keep-alive.mjs every minute and pings the public frontend, backend
 health endpoint, and MCP health endpoint automatically.
 
-The service uses Render's starter cron plan, which has a paid minimum charge.
-The schedule is in UTC. Override CHAINPAY_FRONTEND_URL,
+The blueprint specifies the `starter` cron plan. Review current Render pricing
+before provisioning it. The schedule is in UTC. Override CHAINPAY_FRONTEND_URL,
 CHAINPAY_BACKEND_URL, CHAINPAY_MCP_URL, or
 CHAINPAY_KEEPALIVE_TIMEOUT_SECONDS in the Render service environment when
 using different public URLs.
