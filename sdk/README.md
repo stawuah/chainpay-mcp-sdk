@@ -58,4 +58,3 @@ is not treated as decoder support. Existing transaction construction stays
 legacy unless `compileV1TransactionBytes` is called with explicit compute-unit
 and loaded-accounts budgets. A generated-mock send on local Agave 4.2.2 is not
 Jupiter acceptance. Public Devnet `requestAirdrop` returned 429 on 2026-09-15.
-
