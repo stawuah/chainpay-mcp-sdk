@@ -15,3 +15,11 @@ export * from "./types.js";
 export * from "./x402.js";
 
 export { decodeSupportedTransaction } from "./transaction-reader.js";
+export {
+  DEFAULT_TRANSACTION_VERSION,
+  V1_COMPUTE_UNIT_LIMIT,
+  V1_LOADED_ACCOUNTS_DATA_SIZE_LIMIT,
+  compileV1TransactionBytes,
+  systemTransferInstruction,
+} from "./transaction-v1.js";
+export type { ProductionTransactionVersion, V1CompileOptions } from "./transaction-v1.js";

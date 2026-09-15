@@ -55,4 +55,7 @@ legacy/v0/v1. It bounds wire size and checks canonical transaction **and message
 bytes. The demo merchant requests base64 with `maxSupportedTransactionVersion: 1`
 and passes the returned bytes through this decoder. Raising an RPC flag alone
 is not treated as decoder support. Existing transaction construction stays
-legacy; no production v1 builder was introduced.
+legacy unless `compileV1TransactionBytes` is called with explicit compute-unit
+and loaded-accounts budgets. A generated-mock send on local Agave 4.2.2 is not
+Jupiter acceptance. Public Devnet `requestAirdrop` returned 429 on 2026-09-15.
+

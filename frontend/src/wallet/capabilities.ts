@@ -12,8 +12,11 @@ export type WalletCapabilityReport = {
   v1Advertisement: "advertised" | "unverified";
   devnetChain: "advertised" | "other-solana" | "unverified";
   chains: string[];
-  productionTransactionFormat: "legacy";
+  productionTransactionFormat: "legacy" | 1;
 };
+
+/** SDK v1 compile is on. Wallets that do not advertise 1 still get legacy. Jupiter has not signed. */
+export const V1_PRODUCTION_ENABLED = true;
 
 export type WalletCapabilitySnapshot = {
   name: string;
@@ -108,7 +111,7 @@ export function reportWalletCapabilities(snapshot: WalletCapabilitySnapshot): Wa
     v1Advertisement: advertisedVersions.includes("1") ? "advertised" : "unverified",
     devnetChain: devnetChainStatus(chains),
     chains,
-    productionTransactionFormat: "legacy",
+    productionTransactionFormat: V1_PRODUCTION_ENABLED && advertisedVersions.includes("1") ? 1 : "legacy",
   };
 }
 
@@ -123,7 +126,7 @@ export function describeWalletCapabilities(report: WalletCapabilityReport) {
       ? report.advertisedVersions.join(", ")
       : "Not advertised";
   const v1Label = report.v1Advertisement === "advertised"
-    ? "Advertised. That is not a signed Devnet test."
+    ? "Advertised. A mock Devnet send is not a Jupiter signature."
     : "Unverified";
   const chainLabel = report.devnetChain === "advertised"
     ? "solana:devnet advertised"
@@ -133,17 +136,20 @@ export function describeWalletCapabilities(report: WalletCapabilityReport) {
   const identity = [report.name, report.productVersion ? `product ${report.productVersion}` : null, report.standardVersion ? `Wallet Standard ${report.standardVersion}` : null]
     .filter((value): value is string => Boolean(value))
     .join(" · ");
+  const productionLabel = report.productionTransactionFormat === 1
+    ? "v1 compile on for this advertised wallet. Dashboard still signs legacy until that wallet path is used."
+    : "Legacy. v1 compile stays off until this wallet advertises 1.";
   const summary = report.source === "legacy-injected"
     ? `${report.name} connected through a legacy injected provider. Wallet Standard supportedTransactionVersions were not read. Transaction v1 is unverified. ChainPay still builds legacy transactions.`
-    : report.v1Advertisement === "advertised"
-      ? `${identity} advertised transaction versions: ${versionsLabel}. That advertisement is not a signed Devnet test. ${chainLabel}. ChainPay still builds legacy transactions.`
+    : report.productionTransactionFormat === 1
+      ? `${identity} advertised transaction versions: ${versionsLabel}. SDK v1 compile is on for this wallet. ${chainLabel}. That is not a Jupiter signing test.`
       : `${identity} advertised transaction versions: ${versionsLabel}. Transaction v1 is unverified. ${chainLabel}. ChainPay still builds legacy transactions.`;
   return {
     identity,
     versionsLabel,
     v1Label,
     chainLabel,
-    productionLabel: "Legacy. v1 production is off.",
+    productionLabel,
     summary,
   };
 }

@@ -38,7 +38,7 @@ test("missing advertisement is unverified and never enables v1 production", asyn
   assert.match(copy.summary, /Not advertised/);
   assert.match(copy.summary, /v1 is unverified/);
   assert.match(copy.summary, /still builds legacy/);
-  assert.equal(copy.productionLabel, "Legacy. v1 production is off.");
+  assert.equal(copy.productionLabel, "Legacy. v1 compile stays off until this wallet advertises 1.");
 });
 
 test("legacy-only and version 0 advertisements keep v1 unverified", async () => {
@@ -61,7 +61,7 @@ test("legacy-only and version 0 advertisements keep v1 unverified", async () => 
   assert.equal(versioned.v1Advertisement, "unverified");
 });
 
-test("numeric 1 is advertised but is not a signing test", async () => {
+test("numeric 1 turns on v1 compile for that wallet without claiming Jupiter signed", async () => {
   const caps = await capabilities();
   const report = caps.reportWalletCapabilities({
     source: "wallet-standard",
@@ -72,11 +72,11 @@ test("numeric 1 is advertised but is not a signing test", async () => {
   });
   assert.deepEqual(report.advertisedVersions, ["legacy", "0", "1"]);
   assert.equal(report.v1Advertisement, "advertised");
-  assert.equal(report.productionTransactionFormat, "legacy");
+  assert.equal(report.productionTransactionFormat, 1);
   const copy = caps.describeWalletCapabilities(report);
-  assert.match(copy.v1Label, /not a signed Devnet test/);
   assert.match(copy.summary, /legacy, 0, 1/);
-  assert.doesNotMatch(copy.summary, /accepted|production ready|signs v1/i);
+  assert.match(copy.summary, /v1 compile is on/);
+  assert.match(copy.summary, /not a Jupiter signing test/);
 });
 
 test("legacy injected wallets stay unverified even if a fixture advertises 1", async () => {
