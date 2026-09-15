@@ -2,8 +2,9 @@ import { lazy, Suspense } from "react";
 import { PendingSettlements } from "../settlement";
 import { useRoute } from "../routing/useRoute";
 import { useWallet } from "../wallet/context";
+import { Button } from "@astryxdesign/core/Button";
+import { FIRST_MANDATE_TITLE, LOGIN_VS_APPROVAL, OWNER_SETUP_STEPS } from "../owner/onboarding";
 import { buildStablecoinOptions } from "../owner/runtime";
-import { Arrow } from "../ui/marks";
 
 const Dashboard = lazy(() => import("./Dashboard"));
 
@@ -19,13 +20,22 @@ function ConnectPrompt() {
   const { connecting, requestWalletConnection } = useWallet();
   return (
     <main className="dashboard-app cp-app">
-      <section className="page-width" style={{ padding: "64px 0" }}>
+      <section className="page-width owner-connect-prompt" style={{ padding: "64px 0" }}>
         <span className="section-kicker">OWNER WORKSPACE</span>
-        <h1 className="t-xl">Connect the owner wallet.</h1>
-        <p className="t-body">This route stays available after refresh. Sign in again to load mandates and receipts. Navigation does not keep an in-memory session.</p>
-        <button className="button button-primary" onClick={requestWalletConnection}>
-          {connecting ? "Connecting…" : "Connect wallet"} <Arrow />
-        </button>
+        <h1 className="t-xl">{FIRST_MANDATE_TITLE}.</h1>
+        <p className="t-body">Connect wallet → Sign in → Review mandate → Approve in wallet. {LOGIN_VS_APPROVAL} Navigation does not keep an in-memory session.</p>
+        <ol className="owner-setup-path connect-prompt-path">
+          {OWNER_SETUP_STEPS.map((step, index) => (
+            <li className="owner-setup-step" key={step.key}>
+              <span className="owner-setup-index" aria-hidden="true">{index + 1}</span>
+              <div>
+                <strong>{step.label}</strong>
+                <p>{step.detail}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <Button type="button" variant="primary" label={connecting ? "Connecting…" : "Connect wallet"} isDisabled={connecting} onClick={requestWalletConnection} />
       </section>
     </main>
   );

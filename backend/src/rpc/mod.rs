@@ -309,6 +309,7 @@ impl RpcClient {
             "getProgramAccounts",
             "getLatestBlockhash",
             "getMultipleAccounts",
+            "getRecentPerformanceSamples",
             "getSignaturesForAddress",
             "getSignatureStatuses",
             "getSlot",
@@ -320,7 +321,12 @@ impl RpcClient {
             return Err(RpcError::UnsupportedProxyMethod(request.method));
         }
 
-        let params = request.params.unwrap_or_else(|| json!([]));
+        // One sample only — never forward an unbounded performance-sample window.
+        let params = if request.method == "getRecentPerformanceSamples" {
+            json!([1])
+        } else {
+            request.params.unwrap_or_else(|| json!([]))
+        };
         let result: Value = self.call(&request.method, params).await?;
         Ok(json!({
             "jsonrpc": "2.0",

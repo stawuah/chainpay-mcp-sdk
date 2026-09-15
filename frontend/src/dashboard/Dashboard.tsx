@@ -11,8 +11,21 @@ import { InboxReceipt, LoadedReceiptCard } from "../receipts/InboxReceipt";
 import { receiptViewFromSettledPayment, tokenLabelForMint } from "../receipts/load";
 import { amountLabel, publicReceiptPath } from "../receipts/model";
 import { sharePublicReceipt, shareStatusCopy } from "../receipts/share";
+import { Button } from "@astryxdesign/core/Button";
+import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { Selector } from "@astryxdesign/core/Selector";
+import { TextInput } from "@astryxdesign/core/TextInput";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Arrow, Shield, shortAddress } from "../ui/marks";
+import { reviewExactAmount } from "../owner/amounts";
+import { buildConnectionScope, ownedMandateAddresses } from "../owner/connectionScope";
+import { EmptyOwnerOverview } from "../owner/EmptyOwnerOverview";
+import { configuredDemoReceiptPath, FIRST_MANDATE_TITLE, LOGIN_VS_APPROVAL } from "../owner/onboarding";
+import { estimatedSlotsForDays, mandateExpiryLabel, parseExpirySlot } from "../owner/slotEstimate";
+import { useOwnerSignIn } from "../owner/useOwnerSignIn";
+import { useSlotEstimate } from "../owner/useSlotEstimate";
 import {
   AGENT_URL,
   BACKEND_URL,
@@ -87,10 +100,7 @@ import {
   buildMcpClientConfig,
 } from "../owner/runtime";
 
-const verifiedDevnetActivity = [
-  ["USDC payment", "6Uut…vgZ", "0.01 USDC", "Finalized", "Slot 484791192", "settled", "6vvJgRXdneFkrqxgvedbkCCGqw4SUqTLvYcEgHsKnbzfZX28uWmQrt3U6ToJGmByf7AxK224Uxz8jSczAVi8x7D"],
-  ["PYUSD payment", "6Uut…vgZ", "0.01 PYUSD", "Finalized", "Slot 484803984", "settled", "3yRhnwna13r5SDUsBf2LJdgqGRro7XAGZtaPHbAARfMLbCmQyFS8BWXdyK6qdtpZ48mpc2srvt2UU7LZ63vBLc7"],
-] as const;
+const demoReceiptHref = configuredDemoReceiptPath(import.meta.env.VITE_CHAINPAY_DEMO_RECEIPT_PDA);
 
 export type DashboardProps = {
   wallet: string;
@@ -175,6 +185,7 @@ export function Dashboard({
   const [mandateDecimals, setMandateDecimals] = useState<number | null>(null);
   const [connections, setConnections] = useState<AgentConnection[]>([]);
   const [dangerStatus, setDangerStatus] = useState("");
+  const ownerSignIn = useOwnerSignIn();
   const [mandateCreateOpen, setMandateCreateOpen] = useState(Boolean(mandateBuilder));
   useEffect(() => {
     setMandateCreateOpen(Boolean(mandateBuilder));
@@ -805,17 +816,29 @@ export function Dashboard({
             </div>
           </header>
           <div className="dashboard-page">
-          <div className="dashboard-heading"><div><span className="section-kicker">{tab === "mandates" ? "POLICY CONTROL" : tab === "assistant" ? "AI ORCHESTRATION" : "CONTROL CENTER"}</span><h1 className="t-xl">{tab === "assistant" ? "AI inbox." : tab === "protocol" ? "Protocol setup." : tab === "mandates" ? "Mandates." : tab === "payments" ? "Route a payment." : tab === "agents" ? "Agents." : tab === "receipts" ? "Receipts." : tab === "tools" ? "Tools." : tab === "connect-mcp" ? "Connect MCP." : tab === "settings" ? "Settings." : "Good to see you."}</h1><p>{tab === "assistant" ? "Bring an invoice or payment request here. The AI checks it against your mandate and leaves only the final wallet approval for you." : tab === "protocol" ? "Initialize the protocol asset list from the authority wallet." : tab === "mandates" ? (mandateCreateOpen ? "Create a policy for an agent to follow before a payment can be signed." : "Review the spending rules an agent must follow before a payment can be signed.") : tab === "payments" ? "Check the request, then approve the payment in your wallet." : tab === "agents" ? "Agents connected to ChainPay and the scopes they hold." : tab === "receipts" ? "Preview, verify, and send durable proof for every confirmed settlement." : tab === "tools" ? "The exact tools agents can call. Nothing else is exposed." : tab === "connect-mcp" ? "One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. It never gets your wallet key." : tab === "settings" ? "Network, wallet, notifications, and account controls." : "Your agent permissions and settlement activity at a glance."}</p></div>{tab === "overview" || tab === "mandates" ? (mandateCreateOpen ? <button className="refresh-button btn btn-secondary-light" onClick={() => setMandateCreateOpen(false)}>← Back to mandates</button> : <button className="button button-primary overview-new-mandate" onClick={openMandateCreate}>＋ New mandate</button>) : <button className="refresh-button btn btn-secondary-light" onClick={() => void onRefresh()} disabled={integrationStatus === "loading"}>↻ Refresh</button>}</div>
+          <div className="dashboard-heading"><div><span className="section-kicker">{tab === "mandates" ? "POLICY CONTROL" : tab === "assistant" ? "AI ORCHESTRATION" : "CONTROL CENTER"}</span><h1 className="t-xl">{tab === "assistant" ? "AI inbox." : tab === "protocol" ? "Protocol setup." : tab === "mandates" ? "Mandates." : tab === "payments" ? "Route a payment." : tab === "agents" ? "Agents." : tab === "receipts" ? "Receipts." : tab === "tools" ? "Tools." : tab === "connect-mcp" ? "Connect MCP." : tab === "settings" ? "Settings." : mandates.length === 0 ? `${FIRST_MANDATE_TITLE}.` : "Good to see you."}</h1><p>{tab === "assistant" ? "Bring an invoice or payment request here. The AI checks it against your mandate and leaves only the final wallet approval for you." : tab === "protocol" ? "Initialize the protocol asset list from the authority wallet." : tab === "mandates" ? (mandateCreateOpen ? "Create a policy for an agent to follow before a payment can be signed." : "Review the spending rules an agent must follow before a payment can be signed.") : tab === "payments" ? "Check the request, then approve the payment in your wallet." : tab === "agents" ? "Agents connected to ChainPay and the scopes they hold." : tab === "receipts" ? "Preview, verify, and send durable proof for every confirmed settlement." : tab === "tools" ? "The exact tools agents can call. Nothing else is exposed." : tab === "connect-mcp" ? "One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. It never gets your wallet key." : tab === "settings" ? "Solana Devnet status, wallet controls, and account actions." : mandates.length === 0 ? "Connect wallet → Sign in → Review mandate → Approve in wallet." : "Your agent permissions and settlement activity at a glance."}</p></div>{tab === "overview" || tab === "mandates" ? (mandateCreateOpen ? <button className="refresh-button btn btn-secondary-light" onClick={() => setMandateCreateOpen(false)}>← Back to mandates</button> : <button className="button button-primary overview-new-mandate" onClick={openMandateCreate}>{mandates.length === 0 ? FIRST_MANDATE_TITLE : "＋ New mandate"}</button>) : <button className="refresh-button btn btn-secondary-light" onClick={() => void onRefresh()} disabled={integrationStatus === "loading"}>↻ Refresh</button>}</div>
 
           <div className="integration-strip"><span className={`connection-dot ${integrationStatus}`} /> <b>{integrationStatus === "loading" ? "Syncing" : integrationStatus === "error" ? "Needs attention" : "Connected"}</b><span>Network · Solana Devnet</span><span className="integration-divider" /><b>PAYMENT TOOLS</b><span>{mcpTools.length ? `${mcpTools.length} available` : "Loading"}</span><span className="integration-divider" /><b>AGENTS</b><span>{connections.length ? `${connections.length} connected` : "None connected"}</span>{integrationError && <small title={integrationError}>Check connection</small>}</div>
 
-          <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} inbox={agentInbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} attachments={agentAttachments} attachmentError={attachmentError} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} onAsk={() => void askChainPay()} onVoice={startVoice} onLoadDemoInvoice={() => void loadDemoPaymentRequest()} onApprove={approveAgentRequest} onAddAttachments={addAgentAttachments} onRemoveAttachment={removeAgentAttachment} onOpenReceipts={() => selectTab("receipts")} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} createOpen={mandateCreateOpen} onCreateOpenChange={setMandateCreateOpen} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onOpenPayments={() => selectTab("payments")} onRefresh={onRefresh} /> : tab === "payments" ? <PaymentPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} stablecoinOptions={stablecoinOptions} onSelectMandate={onSelectMandate} onCallMcp={onCallMcp} onAskAgent={(message) => void askChainPay(message)} onRefresh={onRefresh} /> : tab === "agents" ? <AgentsPanel connections={connections} onConnect={() => selectTab("connect-mcp")} onOpenAssistant={() => selectTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "connect-mcp" ? <ConnectMcpPanel serverUrl={MCP_URL} wallet={wallet} connections={connections} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} /> : tab === "settings" ? <SettingsPanel wallet={wallet} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} onChangeWallet={onChangeWallet} /> : (
+          <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} inbox={agentInbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} attachments={agentAttachments} attachmentError={attachmentError} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} onAsk={() => void askChainPay()} onVoice={startVoice} onLoadDemoInvoice={() => void loadDemoPaymentRequest()} onApprove={approveAgentRequest} onAddAttachments={addAgentAttachments} onRemoveAttachment={removeAgentAttachment} onOpenReceipts={() => selectTab("receipts")} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} createOpen={mandateCreateOpen} onCreateOpenChange={setMandateCreateOpen} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onOpenPayments={() => selectTab("payments")} onRefresh={onRefresh} /> : tab === "payments" ? <PaymentPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} stablecoinOptions={stablecoinOptions} onSelectMandate={onSelectMandate} onCallMcp={onCallMcp} onAskAgent={(message) => void askChainPay(message)} onRefresh={onRefresh} /> : tab === "agents" ? <AgentsPanel connections={connections} onConnect={() => selectTab("connect-mcp")} onOpenAssistant={() => selectTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "connect-mcp" ? <ConnectMcpPanel serverUrl={MCP_URL} wallet={wallet} mandates={mandates} stablecoinOptions={stablecoinOptions} connections={connections} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} onCreateMandate={openMandateCreate} /> : tab === "settings" ? <SettingsPanel wallet={wallet} activeMandateCount={mandates.filter((value) => value.status === "active").length} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} onChangeWallet={onChangeWallet} /> : (
             <>
-              <section className="dashboard-stat-grid"><div className="dashboard-stat"><span className="soft-label">ACTIVE MANDATES</span><strong>{mandates.filter((value) => value.status === "active").length}</strong><small>{mandates.length ? `${mandates.length} policy account${mandates.length === 1 ? "" : "s"} found on-chain` : "No mandates found for this wallet"}</small></div><div className="dashboard-stat"><span className="soft-label">SELECTED SPEND</span><strong>{spent}</strong><small>{mandateDecimals === null ? "Reading token decimals" : "Selected mandate · Devnet"}</small></div><div className="dashboard-stat"><span className="soft-label">PENDING PAYMENTS</span><strong>0</strong><small>Nothing waiting for approval</small></div><div className="dashboard-stat"><span className="soft-label">AGENTS CONNECTED</span><strong>{connections.length}</strong><small>{connections.length ? "Scoped MCP access" : "Connect an agent to begin"}</small></div></section>
-
-              <section className="dashboard-overview overview-agent-section"><OverviewAssistant prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} onAsk={() => void askChainPay()} onVoice={startVoice} /></section>
-
-              <section className="dashboard-card activity-feed-card"><div className="dashboard-card-heading"><div><span className="section-kicker">ACTIVITY</span><h2>Verified Devnet baselines</h2></div><span className="chip chip-muted">Finalized receipts</span></div><div className="dashboard-feed">{verifiedDevnetActivity.map((item) => <a className="dashboard-feed-row" href={`https://explorer.solana.com/tx/${item[6]}?cluster=devnet`} target="_blank" rel="noreferrer" key={item[6]}><span className={`activity-avatar ${item[5]}`}>↗</span><span><strong>{item[0]}</strong><small>{item[1]} · {item[4]}</small></span><b>{item[2]}</b><span className={`table-status ${item[5]}`}><i />{item[3]}</span></a>)}</div></section>
+              {mandates.length === 0 ? (
+                <EmptyOwnerOverview
+                  walletConnected
+                  signedIn={ownerSignIn.status === "ready"}
+                  signingIn={ownerSignIn.status === "signing"}
+                  signInError={ownerSignIn.error}
+                  onSignIn={() => void ownerSignIn.signIn()}
+                  onReviewMandate={openMandateCreate}
+                  demoReceiptHref={demoReceiptHref}
+                />
+              ) : (
+                <>
+                  <section className="dashboard-stat-grid"><div className="dashboard-stat"><span className="soft-label">ACTIVE MANDATES</span><strong>{mandates.filter((value) => value.status === "active").length}</strong><small>{`${mandates.length} policy account${mandates.length === 1 ? "" : "s"} found on-chain`}</small></div><div className="dashboard-stat"><span className="soft-label">SELECTED SPEND</span><strong className="mono">{spent}</strong><small>{mandateDecimals === null ? "Reading token decimals" : "Selected mandate · Devnet"}</small></div><div className="dashboard-stat"><span className="soft-label">PENDING PAYMENTS</span><strong>0</strong><small>Nothing waiting for approval</small></div><div className="dashboard-stat"><span className="soft-label">AGENTS CONNECTED</span><strong>{connections.length}</strong><small>{connections.length ? "Scoped MCP access" : "Connect an agent to begin"}</small></div></section>
+                  <section className="dashboard-overview overview-agent-section"><OverviewAssistant prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} onAsk={() => void askChainPay()} onVoice={startVoice} /></section>
+                  <section className="dashboard-card activity-feed-card"><div className="dashboard-card-heading"><div><span className="section-kicker">ACTIVITY</span><h2>This wallet</h2></div></div><p className="owner-activity-empty">No payments for this wallet yet.</p>{demoReceiptHref && <p className="owner-demo-link"><span>Separate demo evidence</span><a href={demoReceiptHref}>View demo receipt</a></p>}</section>
+                </>
+              )}
             </>
           )}</div>
           </div>
@@ -833,13 +856,6 @@ function mandateTableStatus(status: Mandate["status"]): MandateTableStatus {
 
 function mandateStatusLabel(status: MandateTableStatus) {
   return status[0].toUpperCase() + status.slice(1);
-}
-
-function mandateExpiryDate(expiresAtSlot: bigint, currentSlot: bigint | null) {
-  if (currentSlot === null || expiresAtSlot <= currentSlot) return null;
-  const secondsUntilExpiry = Number(expiresAtSlot - currentSlot) * 0.4;
-  if (!Number.isFinite(secondsUntilExpiry)) return null;
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(Date.now() + secondsUntilExpiry * 1000));
 }
 
 function MandatesPanel({
@@ -878,6 +894,7 @@ function MandatesPanel({
   const [actionInFlight, setActionInFlight] = useState<MandateAction | null>(null);
   const [actionError, setActionError] = useState("");
   const [currentSlot, setCurrentSlot] = useState<bigint | null>(null);
+  const { estimate: slotEstimate } = useSlotEstimate();
   const [decimalsByMint, setDecimalsByMint] = useState<Record<string, number>>({});
   const [expandedMandateAddress, setExpandedMandateAddress] = useState<string | null>(mandate?.address ?? null);
   const normalizedSearch = mandateSearch.trim().toLowerCase();
@@ -891,11 +908,9 @@ function MandatesPanel({
   const expandedMandateStatus = expandedMandate ? mandateTableStatus(expandedMandate.status) : null;
   const expandedMandateAsset = expandedMandate ? stablecoinOptions.find((option) => option.mint === expandedMandate.allowedMint) : null;
   const expandedMandateDecimals = expandedMandate ? decimalsByMint[expandedMandate.allowedMint] : undefined;
-  const expandedMandateExpiry = expandedMandate && currentSlot !== null && expandedMandate.expiresAtSlot <= currentSlot
-    ? "Expired"
-    : expandedMandate
-      ? mandateExpiryDate(expandedMandate.expiresAtSlot, currentSlot) ?? `Slot ${expandedMandate.expiresAtSlot.toString()}`
-      : "";
+  const expandedMandateExpiry = expandedMandate
+    ? mandateExpiryLabel(expandedMandate.expiresAtSlot, currentSlot, slotEstimate)
+    : "";
 
   useEffect(() => {
     if (mandate?.address) setExpandedMandateAddress(mandate.address);
@@ -1032,7 +1047,7 @@ function MandatesPanel({
                 const decimals = decimalsByMint[value.allowedMint];
                 const progress = value.totalLimit > 0n ? Math.min(100, Number((value.amountSpent * 100n) / value.totalLimit)) : 0;
                 const selected = mandate?.address === value.address;
-                const expiry = mandateExpiryDate(value.expiresAtSlot, currentSlot);
+                const expiry = mandateExpiryLabel(value.expiresAtSlot, currentSlot, slotEstimate);
                 return (
                   <tr key={value.address} className={selected ? "is-selected" : undefined} onClick={() => { onSelectMandate(value); setExpandedMandateAddress(value.address); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelectMandate(value); setExpandedMandateAddress(value.address); } }} tabIndex={0} aria-expanded={expandedMandateAddress === value.address}>
                     <td data-label="Agent">
@@ -1041,7 +1056,7 @@ function MandatesPanel({
                         <span><strong>{mandateDisplayName(value, mandates, stablecoinOptions)}{selected ? " · Selected" : ""}</strong><small className="mono">Agent {shortAddress(value.approvedAgent)} · Mandate {shortAddress(value.address)}</small></span>
                       </div>
                     </td>
-                    <td data-label="Date"><div className="mandate-date-cell"><strong>{mandateCreatedLabel(value)}</strong><small className="mono">{expiry ? `Expires ${expiry}` : `Expiry slot ${value.expiresAtSlot.toString()}`}</small></div></td>
+                    <td data-label="Date"><div className="mandate-date-cell"><strong>{mandateCreatedLabel(value)}</strong><small className="mono">{expiry}</small></div></td>
                     <td data-label="Token type">
                       <div className="mandate-token-cell"><strong>{selectedAsset?.label ?? shortAddress(value.allowedMint)}</strong><small>{selectedAsset?.detail ?? (value.tokenProgram === "token-2022" ? "Token-2022" : "Classic SPL Token")}</small></div>
                     </td>
@@ -2083,7 +2098,15 @@ function AiConnectionFlow() {
   </div>;
 }
 
-function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoked }: { serverUrl: string; wallet: string; connections: AgentConnection[]; onConnected: (connection: AgentConnection) => void; onRevoked: (id: string) => Promise<void> }) {
+function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, connections, onConnected, onRevoked, onCreateMandate }: { serverUrl: string; wallet: string; mandates: Mandate[]; stablecoinOptions: StablecoinOption[]; connections: AgentConnection[]; onConnected: (connection: AgentConnection) => void; onRevoked: (id: string) => Promise<void>; onCreateMandate: () => void }) {
+  const ownedAddresses = ownedMandateAddresses(mandates, wallet);
+  const mandateOptions = mandates
+    .filter((mandate) => ownedAddresses.includes(mandate.address))
+    .map((mandate) => ({
+      value: mandate.address,
+      label: mandateDisplayName(mandate, mandates, stablecoinOptions),
+      description: shortAddress(mandate.address),
+    }));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [agentName, setAgentName] = useState("");
@@ -2097,10 +2120,21 @@ function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoke
   const [configCopied, setConfigCopied] = useState(false);
   const config = buildMcpClientConfig(serverUrl, connectionToken || undefined);
 
+  const ownedKey = ownedAddresses.join(",");
+  useEffect(() => {
+    if (scope && !ownedKey.split(",").includes(scope)) setScope("");
+  }, [ownedKey, scope]);
+
   function copyConfig() {
     copyValue(config);
     setConfigCopied(true);
     window.setTimeout(() => setConfigCopied(false), 2200);
+  }
+
+  function closeDialog() {
+    setAllowPayments(false);
+    setDialogOpen(false);
+    setError("");
   }
 
   async function createConnection() {
@@ -2109,13 +2143,13 @@ function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoke
     setError("");
     try {
       const createdAgentName = agentName.trim();
-      const result = await registerMcpConnection(wallet, createdAgentName, JSON.stringify({ version: 1, mandates: [scope.trim()], agents: {}, tools: ["get_protocol_config", "get_asset", "get_supported_assets", "get_mandate", "list_mandates", "find_compatible_mandate", "quote_payment", "quote_payment_request", "prepare_payment", "check_payment_requirements", "verify_payment_request", "get_payment", "wait_for_payment", ...(allowPayments ? ["execute_payment", "prepare_x402_payment", "execute_x402_payment"] : [])] }));
+      const result = await registerMcpConnection(wallet, createdAgentName, buildConnectionScope(scope, ownedAddresses, allowPayments));
       onConnected({ ...result.connection, mandates: 1 });
       setConnectionId(result.connection.id);
       setConnectionName(createdAgentName);
       setConnectionToken(result.token);
       setConfigCopied(false);
-      (setAllowPayments(false), setDialogOpen(false));
+      closeDialog();
       setAgentName("");
       setScope("");
     } catch (cause) {
@@ -2128,25 +2162,63 @@ function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoke
   return <section className="page-panel connect-panel">
     <AiConnectionFlow />
     <div className="dashboard-card connection-config-card"><div className="dashboard-card-heading"><div><span className="section-kicker">CONNECTION CONFIG</span><h2>One MCP endpoint</h2></div><span className="mcp-badge"><span /> MCP · Devnet</span></div><p className="builder-intro">Copy the endpoint into any MCP-compatible AI. Create a named connection to issue a private bearer token and let the AI discover the full ChainPay payment flow.</p><div className="copy-row"><span className="mono">{serverUrl}</span><button className="btn-icon" onClick={() => copyValue(serverUrl)} aria-label="Copy server URL">⧉</button></div>{connectionToken && <div className="token-once"><div className="token-once-heading"><span className="status-pill"><i /> Connection ready</span><span className="chip chip-blue">{connectionName}</span></div><p>Copy the secure config now. The bearer token authenticates this client; the on-chain mandate still enforces mint, amount, recipient, expiry, and total limits.</p></div>}<div className="config-code-wrap"><button className="button button-secondary-light copy-config" onClick={copyConfig}>{configCopied ? "Copied" : connectionToken ? "Copy secure config" : "Copy config"}</button><pre className="schema-block">{config}</pre></div></div>
-    <div className="dashboard-card connected-clients-card"><div className="dashboard-card-heading"><div><span className="section-kicker">CONNECTED CLIENTS</span><h2>Agent connections</h2></div><button className="button button-primary" onClick={() => (setAllowPayments(false), setDialogOpen(true))}>New connection <Arrow /></button></div>{connections.length ? <div className="connection-list">{connections.map((connection) => <div className="connection-row" key={connection.id}><div><strong>{connection.agentName}</strong><small className="mono">Owner · {shortAddress(connection.wallet)}</small></div><span className="chip chip-muted">{connectionScopeDetails(connection.scope).label}</span><span className="t-body-sm">{connectionSeenLabel(connection.lastSeenAt)}</span><button className="btn-icon" onClick={() => setRevokeId(connection.id)} aria-label={`Revoke ${connection.agentName}`}>×</button><div className="connection-tools">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span>No tools called yet.</span>}</div></div>)}</div> : <div className="page-empty compact-empty"><p>No agents connected yet.</p><button className="button button-primary" onClick={() => (setAllowPayments(false), setDialogOpen(true))}>New connection <Arrow /></button></div>}</div>
-    {dialogOpen && <div className="app-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) (setAllowPayments(false), setDialogOpen(false)); }}><div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby="connection-dialog-title"><div className="app-dialog-heading"><span className="section-kicker">NEW CONNECTION</span><h2 id="connection-dialog-title">Pair an agent</h2></div><p>Give this client one endpoint and a private bearer token. It can coordinate policy checks and payment requests, but it never receives your wallet key.</p><label className="field"><span>Agent name</span><input autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="Invoice agent" /></label><label className="field"><span>Mandate address</span><input value={scope} onChange={(event) => setScope(event.target.value)} placeholder="Owned mandate address" required /></label><label><input type="checkbox" checked={allowPayments} onChange={(event) => setAllowPayments(event.target.checked)} /> Permit payments within this mandate</label>{error && <p className="builder-error"><b>Connection failed</b><span>{error}</span></p>}<div className="app-dialog-actions"><button className="button button-secondary-light" onClick={() => (setAllowPayments(false), setDialogOpen(false))}>Cancel</button><button className="button button-primary" onClick={() => void createConnection()} disabled={!agentName.trim() || !scope.trim() || creating}>{creating ? "Creating…" : "Create connection"} <Arrow /></button></div></div></div>}
+    <div className="dashboard-card connected-clients-card"><div className="dashboard-card-heading"><div><span className="section-kicker">CONNECTED CLIENTS</span><h2>Agent connections</h2></div><Button type="button" variant="primary" label="New connection" isDisabled={false} onClick={() => { setAllowPayments(false); setDialogOpen(true); }} /></div>{connections.length ? <div className="connection-list">{connections.map((connection) => <div className="connection-row" key={connection.id}><div><strong>{connection.agentName}</strong><small className="mono">Owner · {shortAddress(connection.wallet)}</small></div><span className="chip chip-muted">{connectionScopeDetails(connection.scope).label}</span><span className="t-body-sm">{connectionSeenLabel(connection.lastSeenAt)}</span><button className="btn-icon" onClick={() => setRevokeId(connection.id)} aria-label={`Revoke ${connection.agentName}`}>×</button><div className="connection-tools">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span>No tools called yet.</span>}</div></div>)}</div> : <div className="page-empty compact-empty"><p>No agents connected yet.</p><Button type="button" variant="primary" label="New connection" isDisabled={false} onClick={() => { setAllowPayments(false); setDialogOpen(true); }} /></div>}</div>
+    <Dialog isOpen={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); }} purpose="form" width={480}>
+      <Layout
+        height="auto"
+        header={<DialogHeader title="Pair an agent" onOpenChange={(open) => { if (!open) closeDialog(); }} />}
+        content={
+          <LayoutContent>
+            <div className="connection-form">
+              <p>Give this client one endpoint and a private bearer token. Scope it to one of your mandates. Payment execution stays off unless you enable it.</p>
+              <TextInput label="Agent name" value={agentName} onChange={setAgentName} placeholder="Invoice agent" />
+              {mandateOptions.length ? (
+                <Selector
+                  label="Owned mandate"
+                  value={scope}
+                  onChange={setScope}
+                  options={mandateOptions}
+                  description="Connections can only use a mandate this wallet owns."
+                />
+              ) : (
+                <p className="builder-error"><b>No owned mandate</b><span>Create a mandate first. You cannot type another owner’s address.</span></p>
+              )}
+              <CheckboxInput
+                label="Permit payments within this mandate"
+                description="Off by default. The agent can read and prepare payments. This permission is required before it can execute them."
+                value={allowPayments}
+                onChange={setAllowPayments}
+              />
+              {error && <p className="builder-error"><b>Connection failed</b><span>{error}</span></p>}
+            </div>
+          </LayoutContent>
+        }
+        footer={
+          <LayoutFooter>
+            <Button type="button" variant="secondary" label="Cancel" isDisabled={creating} onClick={closeDialog} />
+            {mandateOptions.length ? (
+              <Button type="button" variant="primary" label={creating ? "Creating…" : "Create connection"} isDisabled={!agentName.trim() || !scope.trim() || creating} onClick={() => void createConnection()} />
+            ) : (
+              <Button type="button" variant="primary" label="Create a mandate" isDisabled={false} onClick={() => { closeDialog(); onCreateMandate(); }} />
+            )}
+          </LayoutFooter>
+        }
+      />
+    </Dialog>
     <ConfirmDialog open={Boolean(revokeId)} title="Revoke this connection?" description="This agent will no longer be able to call ChainPay tools with this connection." confirmLabel="Revoke connection" onClose={() => setRevokeId(null)} onConfirm={() => { const id = revokeId; setRevokeId(null); if (id) void onRevoked(id).then(() => { if (id === connectionId) { setConnectionId(""); setConnectionName(""); setConnectionToken(""); } }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} />
   </section>;
 }
 
-function SettingsPanel({ wallet, dangerStatus, onRevokeAll, onDisconnect, onChangeWallet }: { wallet: string; dangerStatus: string; onRevokeAll: () => void; onDisconnect: () => void; onChangeWallet: () => void }) {
+function SettingsPanel({ wallet, activeMandateCount, dangerStatus, onRevokeAll, onDisconnect, onChangeWallet }: { wallet: string; activeMandateCount: number; dangerStatus: string; onRevokeAll: () => void; onDisconnect: () => void; onChangeWallet: () => void }) {
   const [section, setSection] = useState<"general" | "notifications" | "danger">("general");
-  const [network, setNetwork] = useState("Devnet");
-  const [webhook, setWebhook] = useState("");
-  const [emailAlerts, setEmailAlerts] = useState(true);
   const [confirmAction, setConfirmAction] = useState<"revoke" | "disconnect" | null>(null);
   return <section className="page-panel settings-panel">
     <div className="settings-tabs" role="tablist">{(["general", "notifications", "danger"] as const).map((item) => <button className={section === item ? "cp-tab active" : "cp-tab"} key={item} onClick={() => setSection(item)} role="tab" aria-selected={section === item}>{item === "general" ? "General" : item === "notifications" ? "Notifications" : "Danger zone"}</button>)}</div>
-    {section === "general" && <div className="dashboard-card settings-card"><label className="field"><span>Network</span><select value={network} onChange={(event) => setNetwork(event.target.value)}><option>Devnet</option><option>Mainnet-beta</option></select></label><div className="settings-value"><span>Connected wallet</span><div className="copy-row"><span className="mono">{wallet}</span><button className="btn-icon" onClick={() => copyValue(wallet)} aria-label="Copy wallet address">⧉</button></div></div><div className="settings-wallet-action"><div><strong>Use a different wallet</strong><p>Leave this wallet’s dashboard and choose another browser wallet or account. Existing mandates stay on-chain.</p></div><button className="button button-secondary-light" onClick={onChangeWallet}>Change wallet</button></div></div>}
-    {section === "notifications" && <div className="dashboard-card settings-card"><label className="field"><span>Webhook URL</span><input value={webhook} onChange={(event) => setWebhook(event.target.value)} placeholder="https://" /></label><div className="settings-actions"><button className="button button-secondary-light" onClick={() => setWebhook(webhook.trim())}>Save</button></div><div className="switch-row"><span><strong>Email alerts</strong><small>Email me when a mandate nears its limit.</small></span><button className={emailAlerts ? "toggle-switch on" : "toggle-switch"} onClick={() => setEmailAlerts((value) => !value)} role="switch" aria-checked={emailAlerts}><span /></button></div></div>}
-    {section === "danger" && <div className="dashboard-card settings-card danger-card"><div className="danger-row"><div><strong>Revoke all mandates</strong><p>This immediately revokes every active mandate.</p></div><button className="button button-secondary-light danger-action" onClick={() => setConfirmAction("revoke")}>Revoke all</button></div><div className="danger-row"><div><strong>Disconnect wallet</strong><p>Return to the public ChainPay landing page.</p></div><button className="button button-secondary-light danger-action" onClick={() => setConfirmAction("disconnect")}>Disconnect</button></div>{dangerStatus && <p className="settings-status">{dangerStatus}</p>}</div>}
-    <ConfirmDialog open={confirmAction === "revoke"} title="Revoke every active mandate?" description="This immediately revokes every active mandate. Agents will not be able to request payments until you create new ones." confirmLabel="Revoke all mandates" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onRevokeAll(); }} />
-    <ConfirmDialog open={confirmAction === "disconnect"} title="Disconnect this wallet?" description="You will leave the connected dashboard and return to the public site. Unsigned transactions will be discarded." confirmLabel="Disconnect wallet" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onDisconnect(); }} />
+    {section === "general" && <div className="dashboard-card settings-card"><div className="settings-value"><span>Network</span><div><strong>Solana Devnet</strong><p className="settings-unavailable">This dashboard talks to Solana Devnet. The network cannot be switched here.</p></div></div><div className="settings-value"><span>Connected wallet</span><div className="copy-row"><span className="mono">{wallet}</span><button className="btn-icon" onClick={() => copyValue(wallet)} aria-label="Copy wallet address">⧉</button></div></div><div className="settings-wallet-action"><div><strong>Use a different wallet</strong><p>Leave this wallet’s dashboard and choose another browser wallet or account. Existing mandates stay on-chain.</p></div><Button type="button" variant="secondary" label="Change wallet" isDisabled={false} onClick={onChangeWallet} /></div></div>}
+    {section === "notifications" && <div className="dashboard-card settings-card"><div className="settings-unavailable-card"><strong>Notifications unavailable</strong><p>There is no webhook or email delivery in this build. Nothing here can be saved.</p></div></div>}
+    {section === "danger" && <div className="dashboard-card settings-card danger-card"><div className="danger-row"><div><strong>Revoke all mandates</strong><p>{activeMandateCount === 0 ? "There are no active mandates to revoke." : `This asks your wallet to approve revoke instructions for ${activeMandateCount} active mandate${activeMandateCount === 1 ? "" : "s"}. Settled payments stay on-chain.`}</p></div><Button type="button" variant="secondary" label="Revoke all" isDisabled={activeMandateCount === 0} onClick={() => setConfirmAction("revoke")} /></div><div className="danger-row"><div><strong>Disconnect wallet</strong><p>Return to the public ChainPay landing page. This does not revoke mandates.</p></div><Button type="button" variant="secondary" label="Disconnect" isDisabled={false} onClick={() => setConfirmAction("disconnect")} /></div>{dangerStatus && <p className="settings-status">{dangerStatus}</p>}</div>}
+    <ConfirmDialog open={confirmAction === "revoke"} title="Revoke every active mandate?" description={`${activeMandateCount} active mandate${activeMandateCount === 1 ? "" : "s"} will require a wallet-approved revoke transaction. Agents will not be able to request new payments until you create new mandates.`} confirmLabel="Revoke all mandates" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onRevokeAll(); }} />
+    <ConfirmDialog open={confirmAction === "disconnect"} title="Disconnect this wallet?" description="You will leave the connected dashboard and return to the public site. Unsigned transactions will be discarded. Existing mandates stay on-chain." confirmLabel="Disconnect wallet" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onDisconnect(); }} />
   </section>;
 }
 
@@ -2286,6 +2358,7 @@ type MandateForm = {
   maxPerPayment: string;
   totalLimit: string;
   expiresInDays: string;
+  expiresAtSlot: string;
   maxPaymentCount: string;
   cooldownSlots: string;
   tokenProgram: TokenProgram;
@@ -2306,10 +2379,14 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
     maxPerPayment: "10",
     totalLimit: "11",
     expiresInDays: "7",
+    expiresAtSlot: "",
     maxPaymentCount: "0",
     cooldownSlots: "0",
     tokenProgram: defaultStablecoin.tokenProgram,
   });
+  const { estimate: slotEstimate, status: slotEstimateStatus } = useSlotEstimate();
+  const [currentSlot, setCurrentSlot] = useState<bigint | null>(null);
+  const [slotEdited, setSlotEdited] = useState(false);
   const [signingMode, setSigningMode] = useState<"human" | "delegated">("human");
   const [mandateNonce, setMandateNonce] = useState(() => createMandateNonce());
   const [managedSigner, setManagedSigner] = useState<ManagedSigner | null>(null);
@@ -2383,6 +2460,24 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
     });
     return () => { active = false; };
   }, [form.allowedMint]);
+
+  useEffect(() => {
+    let active = true;
+    void chainpayClient.getCurrentSlot().then((slot) => {
+      if (active) setCurrentSlot(slot);
+    }).catch(() => {
+      if (active) setCurrentSlot(null);
+    });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (slotEdited || !currentSlot || !slotEstimate) return;
+    const extra = estimatedSlotsForDays(Number(form.expiresInDays), slotEstimate);
+    if (extra === null) return;
+    const nextSlot = (currentSlot + extra).toString();
+    setForm((current) => current.expiresAtSlot === nextSlot ? current : { ...current, expiresAtSlot: nextSlot });
+  }, [currentSlot, form.expiresInDays, slotEdited, slotEstimate]);
 
   function updateField(field: keyof MandateForm, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -2529,16 +2624,17 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
       )) {
         throw new Error("Set up the secure automatic-payment signer for this mandate first.");
       }
-      const days = Number(form.expiresInDays);
-      if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("Choose an expiry between 1 and 365 days.");
-      const currentSlot = await chainpayClient.getCurrentSlot();
+      const expirySlot = parseExpirySlot(form.expiresAtSlot);
+      const latestSlot = await chainpayClient.getCurrentSlot();
+      setCurrentSlot(latestSlot);
+      if (expirySlot <= latestSlot) throw new Error("The expiry slot must be after the current cluster slot.");
       const input = {
         approvedAgent: form.approvedAgent.trim(),
         sourceTokenAccount: form.sourceTokenAccount.trim(),
         allowedMint: form.allowedMint.trim(),
         maxPerPayment: parseTokenAmount(form.maxPerPayment, mintDecimals),
         totalLimit: parseTokenAmount(form.totalLimit, mintDecimals),
-        expiresAtSlot: currentSlot + BigInt(days) * 216_000n,
+        expiresAtSlot: expirySlot,
         maxPaymentCount: BigInt(form.maxPaymentCount),
         cooldownSlots: BigInt(form.cooldownSlots),
         tokenProgram: form.tokenProgram,
@@ -2610,32 +2706,71 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
           <span className="network-chip"><i /> Devnet</span>
         </div>
         <p className="builder-intro">Choose the asset, spending limits, and whether your wallet approves every payment or lets ChainPay pay automatically inside those limits.</p>
-        <div className="mandate-mode-selector" role="group" aria-label="Payment signing mode">
-          <button type="button" className={signingMode === "human" ? "is-selected" : ""} onClick={() => selectSigningMode("human")}><strong>Approve each payment</strong><small>Your connected wallet confirms every payment.</small></button>
-          <button type="button" className={signingMode === "delegated" ? "is-selected" : ""} onClick={() => selectSigningMode("delegated")}><strong>Automatic payments</strong><small>ChainPay pays automatically, but only inside this mandate.</small></button>
+        <p className="owner-setup-distinction">{LOGIN_VS_APPROVAL} Reviewing this form does not spend funds.</p>
+        <div className="mandate-mode-selector" role="radiogroup" aria-label="Payment signing mode">
+          <button type="button" role="radio" aria-checked={signingMode === "human"} className={signingMode === "human" ? "is-selected" : ""} onClick={() => selectSigningMode("human")}><strong>Approve each payment</strong><small>Human signing: your connected wallet confirms every payment.</small></button>
+          <button type="button" role="radio" aria-checked={signingMode === "delegated"} className={signingMode === "delegated" ? "is-selected" : ""} onClick={() => selectSigningMode("delegated")}><strong>Automatic payments</strong><small>Delegated signing: you approve the mandate once. Later payments use the provisioned signer inside these limits — not a fresh owner signature each time.</small></button>
         </div>
         <div className="builder-grid simple-mandate-grid">
-          <label className="field field-wide"><span>Payment approval</span><input value={signingMode === "human" ? wallet : managedSigner?.public_key ?? "Set up automatic payments below"} readOnly /><small>{signingMode === "human" ? "Payments will ask for confirmation in your connected wallet." : "Your wallet approves the spending rules once. ChainPay can then pay only within them."}</small></label>
-          <label className="field field-wide"><span>Stablecoin</span><select value={stablecoin} onChange={(event) => updateStablecoin(event.target.value)}>{stablecoinOptions.length === 0 && <option value="">No enabled registry assets</option>}{stablecoinOptions.map((option) => <option value={option.value} key={option.value}>{option.label} · {option.detail}</option>)}</select></label>
-          <label className="field"><span>Max per payment</span><input inputMode="decimal" value={form.maxPerPayment} onChange={(event) => updateField("maxPerPayment", event.target.value)} placeholder="10" /></label>
-          <label className="field"><span>Total spend limit</span><input inputMode="decimal" value={form.totalLimit} onChange={(event) => updateField("totalLimit", event.target.value)} placeholder="11" /></label>
-          <label className="field field-wide"><span>Expires in</span><select value={form.expiresInDays} onChange={(event) => updateField("expiresInDays", event.target.value)}><option value="1">1 day</option><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></label>
+          <TextInput className="field-wide" label="Payment approval" value={signingMode === "human" ? wallet : managedSigner?.public_key ?? "Set up automatic payments below"} isReadOnly description={signingMode === "human" ? "Payments will ask for confirmation in your connected wallet." : "Your wallet approves the spending rules once. ChainPay can then pay only within them."} />
+          <Selector
+            className="field-wide"
+            label="Stablecoin"
+            value={stablecoin}
+            onChange={updateStablecoin}
+            options={stablecoinOptions.length ? stablecoinOptions.map((option) => ({ value: option.value, label: `${option.label} · ${option.detail}` })) : [{ value: "", label: "No enabled registry assets" }]}
+          />
+          <TextInput label="Max per payment" value={form.maxPerPayment} onChange={(value) => updateField("maxPerPayment", value)} placeholder="10" description="Exact token amount. Extra decimal places are rejected." />
+          <TextInput label="Total spend limit" value={form.totalLimit} onChange={(value) => updateField("totalLimit", value)} placeholder="11" description="Exact token amount. Extra decimal places are rejected." />
+          <Selector
+            className="field-wide"
+            label="Expires in"
+            value={form.expiresInDays}
+            onChange={(value) => { setSlotEdited(false); updateField("expiresInDays", value); }}
+            options={[
+              { value: "1", label: "1 day" },
+              { value: "7", label: "7 days" },
+              { value: "30", label: "30 days" },
+              { value: "90", label: "90 days" },
+            ]}
+            description={slotEstimateStatus === "unavailable"
+              ? "Slot duration estimate unavailable. Enter the exact expiry slot below."
+              : "Day length is estimated from one recent cluster performance sample. Review the exact slot before approval."}
+          />
+          <TextInput
+            className="field-wide"
+            label="Exact expiry slot"
+            value={form.expiresAtSlot}
+            onChange={(value) => { setSlotEdited(true); updateField("expiresAtSlot", value); }}
+            placeholder={currentSlot ? (currentSlot + 1n).toString() : "Current slot unavailable"}
+            description={slotEstimate
+              ? `Estimated from one getRecentPerformanceSamples result. Current slot ${currentSlot?.toString() ?? "unavailable"}.`
+              : "Enter the exact expiry slot. Estimates are unavailable until a performance sample can be read."}
+          />
         </div>
+        <details className="technical-details mandate-advanced-limits">
+          <summary>Advanced limits</summary>
+          <div className="builder-grid simple-mandate-grid">
+            <TextInput label="Maximum payment count" value={form.maxPaymentCount} onChange={(value) => updateField("maxPaymentCount", value)} description="0 means no payment-count limit." />
+            <TextInput label="Cooldown slots" value={form.cooldownSlots} onChange={(value) => updateField("cooldownSlots", value)} description="Minimum slots between payments. 0 means no cooldown." />
+          </div>
+        </details>
         {signingMode === "delegated" && <div className="account-setup-row"><div><span>Secure automatic-payment wallet</span><small>{managedSignerStatus === "ready" ? "Created by ChainPay" : managedSignerStatus === "provisioning" ? "Waiting for wallet authorization" : "Needs setup"}</small></div><button className="inline-action" type="button" onClick={() => void setupManagedSigner()} disabled={managedSignerStatus === "provisioning" || managedSignerStatus === "ready"}>{managedSignerStatus === "provisioning" ? "Setting up…" : managedSignerStatus === "ready" ? "Ready" : "Set up securely"}</button></div>}
         {signingMode === "delegated" && managedSigner && <div className="success-box"><span>✓</span><div><b>Automatic-payment wallet ready</b><button type="button" className="copy-id" onClick={() => copyValue(managedSigner.public_key)}>Send Devnet SOL for transaction fees to {shortAddress(managedSigner.public_key)} ⧉</button></div></div>}
         <div className="account-identity-card"><div><span>Connected owner wallet</span><strong>{wallet}</strong></div><div><span>{selectedStablecoin.label} source token account</span><strong>{form.sourceTokenAccount || "Select an enabled mint"}</strong></div>{signingMode === "delegated" && <div><span>Automatic-payment wallet</span><strong>{managedSigner?.public_key ?? "Not created yet"}</strong></div>}<small>Your {selectedStablecoin.label} stays in your token account. The automatic-payment wallet holds only Devnet SOL for fees and can spend tokens only through this mandate.</small></div>
         <div className="account-setup-row"><div><span>Source token account</span><small>{accountSetup === "ready" ? "Ready" : accountSetup === "working" ? "Checking token account" : "Needs setup"}</small></div><button className="inline-action" type="button" onClick={() => void setupWalletTokenAccount()} disabled={accountSetup === "working"}>{accountSetup === "working" ? "Checking…" : accountSetup === "ready" ? "Ready" : "Prepare token account"}</button></div>
         {accountSetup === "ready" && <div className="success-box"><span>✓</span><div><b>{accountSignature ? "Source token account prepared" : "Source token account ready"}</b><a href={accountSignature ? `https://explorer.solana.com/tx/${accountSignature}?cluster=devnet` : `https://explorer.solana.com/address/${form.sourceTokenAccount}?cluster=devnet`} target="_blank" rel="noreferrer">{accountSignature ? "View account transaction" : "View token account"} <Arrow /></a></div></div>}
-        <div className="builder-actions"><button className="button button-primary" onClick={() => void buildPreview()} disabled={status === "building" || status === "signing" || (signingMode === "delegated" && managedSignerStatus !== "ready")}>{status === "building" ? "Reviewing…" : "Review mandate"} <Arrow /></button><span className="builder-safety"><Shield /> {signingMode === "human" ? "Wallet approval per payment" : "Mandate-limited automation"}</span></div>
+        <div className="builder-actions"><Button type="button" variant="primary" label={status === "building" ? "Reviewing…" : "Review mandate"} isDisabled={status === "building" || status === "signing" || (signingMode === "delegated" && managedSignerStatus !== "ready")} onClick={() => void buildPreview()} /><span className="builder-safety"><Shield /> {signingMode === "human" ? "Wallet approval per payment" : "Mandate-limited automation"}</span></div>
         {error && <div className="builder-error"><b>Needs attention</b><span>{error}</span></div>}
       </div>
 
       <div className="dashboard-card review-card mandate-review-card">
         <div className="dashboard-card-heading"><div><span className="section-kicker">REVIEW</span><h2>{prepared ? "Ready for approval" : "Your mandate"}</h2></div><span className={`state-pill ${prepared ? "ok" : ""}`}><i /> {prepared ? "Ready to approve" : "Waiting"}</span></div>
         {prepared ? <>
-          <div className="mandate-summary"><div><span>Payment approval</span><strong>{signingMode === "human" ? "Confirm each payment" : "Automatic within limits"}</strong></div><div><span>Connected wallet</span><strong className="mono">{shortAddress(wallet)}</strong></div><div><span>Payment signer</span><strong className="mono">{shortAddress(form.approvedAgent)}</strong></div><div><span>Stablecoin</span><strong>{selectedStablecoin.label} <small>{selectedStablecoin.detail}</small></strong></div><div><span>Recipient</span><strong>Chosen per payment</strong></div><div><span>Max per payment</span><strong>{form.maxPerPayment}</strong></div><div><span>Total spend limit</span><strong>{form.totalLimit}</strong></div><div><span>Expires in</span><strong>{form.expiresInDays} days</strong></div></div>
+          <p className="owner-setup-distinction">This review is not a login. Approving in your wallet is the financial action that creates the mandate.</p>
+          <div className="mandate-summary"><div><span>Payment approval</span><strong>{signingMode === "human" ? "Human signing · confirm each payment" : "Delegated signing · automatic within limits"}</strong></div><div><span>Connected wallet</span><strong className="mono">{shortAddress(wallet)}</strong></div><div><span>Payment signer</span><strong className="mono">{shortAddress(form.approvedAgent)}</strong></div><div><span>Stablecoin</span><strong>{selectedStablecoin.label} <small>{selectedStablecoin.detail}</small></strong></div><div><span>Recipient</span><strong>Chosen per payment</strong></div><div><span>Max per payment</span><strong className="mono">{mintDecimals === null ? form.maxPerPayment : reviewExactAmount(form.maxPerPayment, mintDecimals)}</strong></div><div><span>Total spend limit</span><strong className="mono">{mintDecimals === null ? form.totalLimit : reviewExactAmount(form.totalLimit, mintDecimals)}</strong></div><div><span>Expires</span><strong className="mono">{slotEstimate ? `Estimated · slot ${form.expiresAtSlot}` : `Slot ${form.expiresAtSlot}`}</strong></div><div><span>Payment count / cooldown</span><strong className="mono">{form.maxPaymentCount === "0" ? "No count limit" : form.maxPaymentCount} · {form.cooldownSlots === "0" ? "No cooldown" : `${form.cooldownSlots} slots`}</strong></div></div>
           <details className="technical-details"><summary>Transaction details</summary><div className="review-list"><div><span>Mandate address</span><strong className="mono">{shortAddress(prepared.mandateAddress)}</strong></div><div><span>Policy actions</span><strong>{prepared.transaction.instructions.map((instruction) => instruction.name).join(" + ")}</strong></div><div><span>Wallet</span><strong className="mono">{shortAddress(wallet)}</strong></div></div><div className="state-box"><p>After wallet approval, Axum submits this transaction directly and verifies finalized chain state.</p></div></details>
-          <button className="button button-dark full-button" onClick={() => void signAndCreate()} disabled={status === "signing" || status === "pending" || status === "success"}>{status === "signing" ? "Waiting for wallet…" : status === "success" ? "Mandate created" : "Approve & create mandate"} <Arrow /></button>
+          <Button type="button" variant="primary" label={status === "signing" ? "Waiting for wallet…" : status === "success" ? "Mandate created" : "Approve & create mandate"} isDisabled={status === "signing" || status === "pending" || status === "success"} onClick={() => void signAndCreate()} />
           {signature && <div className="mandate-created-callout"><div className="mandate-created-heading"><span>✓</span><div><b>Mandate created on Devnet</b><small>{signingMode === "human" ? "Your policy is ready for a wallet-approved payment." : "Your policy is ready for autonomous agent payments inside its limits."}</small></div></div><div className="mandate-pda-row"><div><span>Mandate PDA</span><strong>{prepared.mandateAddress}</strong></div><button type="button" className="button button-secondary-light button-small" onClick={copyMandatePda}>{pdaCopied ? "Copied" : "Copy PDA"}</button></div><div className="mandate-created-actions"><a href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`} target="_blank" rel="noreferrer">View transaction <Arrow /></a>{signingMode === "human" && <button type="button" className="button button-primary button-small" onClick={onOpenPayments}>Pay with this mandate <Arrow /></button>}</div></div>}
         </> : <div className="review-empty"><div className="empty-icon">◇</div><p>Review the mandate before signing.</p></div>}
       </div>
