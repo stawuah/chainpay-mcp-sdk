@@ -113,7 +113,9 @@ impl DeliveryError {
         match self {
             Self::UnsupportedVersion => "Unsupported delivery attestation version".to_owned(),
             Self::UnknownField(field) => format!("Unknown delivery attestation field: {field}"),
-            Self::UnknownEnvelopeField(field) => format!("Unknown delivery envelope field: {field}"),
+            Self::UnknownEnvelopeField(field) => {
+                format!("Unknown delivery envelope field: {field}")
+            }
             Self::NotObject(kind) => format!("{kind} must be an object"),
             Self::Invalid(reason) => (*reason).to_owned(),
         }
@@ -140,7 +142,10 @@ pub fn parse_delivery_payload(value: &Value) -> Result<DeliveryAttestationPayloa
         Some(Value::Number(number)) if number.as_u64() == Some(u64::from(DELIVERY_VERSION)) => {}
         _ => return Err(DeliveryError::UnsupportedVersion),
     }
-    if let Some(key) = object.keys().find(|key| !PAYLOAD_KEYS.contains(&key.as_str())) {
+    if let Some(key) = object
+        .keys()
+        .find(|key| !PAYLOAD_KEYS.contains(&key.as_str()))
+    {
         return Err(DeliveryError::UnknownField(key.clone()));
     }
     if object.get("statement").and_then(Value::as_str) != Some(DELIVERY_STATEMENT) {
@@ -149,52 +154,42 @@ pub fn parse_delivery_payload(value: &Value) -> Result<DeliveryAttestationPayloa
     if object.get("cluster").and_then(Value::as_str) != Some(DELIVERY_CLUSTER) {
         return Err(DeliveryError::Invalid("Unsupported delivery cluster"));
     }
-    let content_hash = object
-        .get("contentHash")
-        .and_then(Value::as_str)
-        .ok_or(DeliveryError::Invalid(
-            "contentHash must be 64-char lowercase SHA-256 hex",
-        ))?;
+    let content_hash =
+        object
+            .get("contentHash")
+            .and_then(Value::as_str)
+            .ok_or(DeliveryError::Invalid(
+                "contentHash must be 64-char lowercase SHA-256 hex",
+            ))?;
     if !is_lowercase_sha256(content_hash) {
         return Err(DeliveryError::Invalid(
             "contentHash must be 64-char lowercase SHA-256 hex",
         ));
     }
-    let served_at = object
-        .get("servedAt")
-        .and_then(Value::as_str)
-        .ok_or(DeliveryError::Invalid(
-            "servedAt must be a canonical UTC ISO-8601 timestamp",
-        ))?;
+    let served_at =
+        object
+            .get("servedAt")
+            .and_then(Value::as_str)
+            .ok_or(DeliveryError::Invalid(
+                "servedAt must be a canonical UTC ISO-8601 timestamp",
+            ))?;
     if !is_canonical_utc_iso(served_at) {
         return Err(DeliveryError::Invalid(
             "servedAt must be a canonical UTC ISO-8601 timestamp",
         ));
     }
-    let program_id = canonicalize_address(
-        object
-            .get("programId")
-            .and_then(Value::as_str)
-            .ok_or(DeliveryError::Invalid(
+    let program_id = canonicalize_address(object.get("programId").and_then(Value::as_str).ok_or(
+        DeliveryError::Invalid("programId, receiptAddress, and seller must be Solana addresses"),
+    )?)?;
+    let receipt_address =
+        canonicalize_address(object.get("receiptAddress").and_then(Value::as_str).ok_or(
+            DeliveryError::Invalid(
                 "programId, receiptAddress, and seller must be Solana addresses",
-            ))?,
-    )?;
-    let receipt_address = canonicalize_address(
-        object
-            .get("receiptAddress")
-            .and_then(Value::as_str)
-            .ok_or(DeliveryError::Invalid(
-                "programId, receiptAddress, and seller must be Solana addresses",
-            ))?,
-    )?;
-    let seller = canonicalize_address(
-        object
-            .get("seller")
-            .and_then(Value::as_str)
-            .ok_or(DeliveryError::Invalid(
-                "programId, receiptAddress, and seller must be Solana addresses",
-            ))?,
-    )?;
+            ),
+        )?)?;
+    let seller = canonicalize_address(object.get("seller").and_then(Value::as_str).ok_or(
+        DeliveryError::Invalid("programId, receiptAddress, and seller must be Solana addresses"),
+    )?)?;
     Ok(DeliveryAttestationPayload {
         version: DELIVERY_VERSION,
         statement: DELIVERY_STATEMENT.to_owned(),
@@ -232,7 +227,9 @@ pub fn parse_delivery_envelope(value: &Value) -> Result<SignedDeliveryAttestatio
     })
 }
 
-pub fn canonical_delivery_payload(payload: &DeliveryAttestationPayload) -> Result<String, DeliveryError> {
+pub fn canonical_delivery_payload(
+    payload: &DeliveryAttestationPayload,
+) -> Result<String, DeliveryError> {
     let parsed = parse_delivery_payload(&serde_json::json!({
         "version": payload.version,
         "statement": payload.statement,
@@ -274,7 +271,8 @@ pub fn verify_delivery_attestation(
             };
         }
     };
-    if let Some(reason) = trusted_seller_reason(&parsed.payload, trusted_sellers, expected_recipient)
+    if let Some(reason) =
+        trusted_seller_reason(&parsed.payload, trusted_sellers, expected_recipient)
     {
         return invalid("unknown_seller", reason, Some(parsed.payload));
     }
@@ -401,7 +399,10 @@ pub fn mapping_for_seller<'a>(
     mappings.iter().find(|mapping| {
         mapping.cluster == payload.cluster
             && mapping.program_id == payload.program_id
-            && mapping.sellers.iter().any(|seller| seller == &payload.seller)
+            && mapping
+                .sellers
+                .iter()
+                .any(|seller| seller == &payload.seller)
     })
 }
 
@@ -479,21 +480,24 @@ fn normalize_mapping(mapping: TrustedSellerMapping) -> Result<TrustedSellerMappi
     })
 }
 
-fn mapping_missing_reason(payload: &DeliveryAttestationPayload, mappings: &[TrustedSellerMapping]) -> String {
+fn mapping_missing_reason(
+    payload: &DeliveryAttestationPayload,
+    mappings: &[TrustedSellerMapping],
+) -> String {
     if mappings
         .iter()
         .any(|mapping| mapping.cluster != payload.cluster)
-        && mappings.iter().all(|mapping| mapping.cluster != payload.cluster)
+        && mappings
+            .iter()
+            .all(|mapping| mapping.cluster != payload.cluster)
     {
         return "Delivery cluster is not trusted".to_owned();
     }
-    if mappings
-        .iter()
-        .any(|mapping| mapping.cluster == payload.cluster && mapping.program_id != payload.program_id)
-        && mappings.iter().all(|mapping| {
-            mapping.cluster != payload.cluster || mapping.program_id != payload.program_id
-        })
-    {
+    if mappings.iter().any(|mapping| {
+        mapping.cluster == payload.cluster && mapping.program_id != payload.program_id
+    }) && mappings.iter().all(|mapping| {
+        mapping.cluster != payload.cluster || mapping.program_id != payload.program_id
+    }) {
         return "Delivery programId is not trusted".to_owned();
     }
     "Unknown delivery seller".to_owned()
@@ -534,13 +538,17 @@ fn verify_ed25519(seller: &str, message: &[u8], signature: &[u8]) -> Result<(), 
             .map_err(|_| "Delivery signature is invalid".to_owned())?,
     )
     .map_err(|_| "Delivery signature is invalid".to_owned())?;
-    let signature = Signature::from_slice(signature)
-        .map_err(|_| "Delivery signature is invalid".to_owned())?;
+    let signature =
+        Signature::from_slice(signature).map_err(|_| "Delivery signature is invalid".to_owned())?;
     key.verify(message, &signature)
         .map_err(|_| "Delivery signature is invalid".to_owned())
 }
 
-fn invalid(code: &str, reason: impl Into<String>, payload: Option<DeliveryAttestationPayload>) -> DeliveryVerification {
+fn invalid(
+    code: &str,
+    reason: impl Into<String>,
+    payload: Option<DeliveryAttestationPayload>,
+) -> DeliveryVerification {
     DeliveryVerification {
         valid: false,
         payload,
@@ -550,15 +558,18 @@ fn invalid(code: &str, reason: impl Into<String>, payload: Option<DeliveryAttest
 }
 
 fn is_lowercase_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn is_canonical_base64(value: &str) -> bool {
     value.len() % 4 == 0
         && !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' | b'='))
+        && value.bytes().all(
+            |byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' | b'='),
+        )
         && value.bytes().filter(|byte| *byte == b'=').count() <= 2
         && value
             .as_bytes()
@@ -567,7 +578,9 @@ fn is_canonical_base64(value: &str) -> bool {
             .take_while(|byte| **byte == b'=')
             .count()
             == value.chars().rev().take_while(|ch| *ch == '=').count()
-        && !value[..value.len().saturating_sub(value.bytes().rev().take_while(|b| *b == b'=').count())]
+        && !value[..value
+            .len()
+            .saturating_sub(value.bytes().rev().take_while(|b| *b == b'=').count())]
             .contains('=')
 }
 
@@ -629,7 +642,8 @@ pub fn parse_canonical_utc_ms(value: &str) -> Option<u64> {
     if days < 0 {
         return None;
     }
-    let ms = u64::try_from(days).ok()?
+    let ms = u64::try_from(days)
+        .ok()?
         .checked_mul(86_400_000)?
         .checked_add(u64::from(hour) * 3_600_000)?
         .checked_add(u64::from(minute) * 60_000)?
@@ -744,10 +758,22 @@ mod tests {
         let parsed = parse_delivery_payload(&fixture_payload()).unwrap();
         let canonical = canonical_delivery_payload(&parsed).unwrap();
         assert_eq!(canonical, DELIVERY_CANONICAL_FIXTURE_JSON);
-        assert_eq!(canonical.as_bytes(), DELIVERY_CANONICAL_FIXTURE_JSON.as_bytes());
-        let keys: Vec<&str> = ["version", "statement", "cluster", "programId", "receiptAddress", "seller", "contentHash", "servedAt"]
-            .into_iter()
-            .collect();
+        assert_eq!(
+            canonical.as_bytes(),
+            DELIVERY_CANONICAL_FIXTURE_JSON.as_bytes()
+        );
+        let keys: Vec<&str> = [
+            "version",
+            "statement",
+            "cluster",
+            "programId",
+            "receiptAddress",
+            "seller",
+            "contentHash",
+            "servedAt",
+        ]
+        .into_iter()
+        .collect();
         let mut cursor = 0;
         for key in &keys {
             let needle = format!("\"{key}\":");
@@ -798,10 +824,7 @@ mod tests {
             None,
         );
         assert!(verified.valid);
-        assert_eq!(
-            verified.payload.unwrap().statement,
-            DELIVERY_STATEMENT
-        );
+        assert_eq!(verified.payload.unwrap().statement, DELIVERY_STATEMENT);
 
         let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
         assert_eq!(
@@ -830,7 +853,8 @@ mod tests {
             "A{}",
             DELIVERY_CANONICAL_FIXTURE_SIGNATURE.get(1..).unwrap()
         ));
-        let bad_signature = verify_delivery_attestation(&tampered, &[fixture_mapping()], now, None, None, None);
+        let bad_signature =
+            verify_delivery_attestation(&tampered, &[fixture_mapping()], now, None, None, None);
         assert!(!bad_signature.valid);
         assert!(
             bad_signature
@@ -843,7 +867,8 @@ mod tests {
         let mut uppercase = envelope.clone();
         uppercase["payload"]["contentHash"] =
             Value::String(DELIVERY_HASH_FIXTURE_SHA256.to_ascii_uppercase());
-        let bad_hash = verify_delivery_attestation(&uppercase, &[fixture_mapping()], now, None, None, None);
+        let bad_hash =
+            verify_delivery_attestation(&uppercase, &[fixture_mapping()], now, None, None, None);
         assert!(!bad_hash.valid);
         assert!(bad_hash.reason.unwrap().contains("contentHash"));
 
@@ -905,7 +930,8 @@ mod tests {
             "signature": signature,
         });
         let now = parse_canonical_utc_ms("2026-09-15T04:16:00.000Z").unwrap();
-        let far_future = verify_delivery_attestation(&future, &[fixture_mapping()], now, None, None, None);
+        let far_future =
+            verify_delivery_attestation(&future, &[fixture_mapping()], now, None, None, None);
         assert!(!far_future.valid);
         assert_eq!(far_future.code.as_deref(), Some("invalid_timestamp"));
 
@@ -922,7 +948,8 @@ mod tests {
             },
             "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
         });
-        let offset_iso = verify_delivery_attestation(&offset, &[fixture_mapping()], now, None, None, None);
+        let offset_iso =
+            verify_delivery_attestation(&offset, &[fixture_mapping()], now, None, None, None);
         assert!(!offset_iso.valid);
         assert!(offset_iso.reason.unwrap().contains("servedAt"));
     }

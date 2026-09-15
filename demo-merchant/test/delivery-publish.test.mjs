@@ -11,6 +11,7 @@ import {
   DELIVERY_FIXTURE_SELLER_SEED,
   DELIVERY_HASH_FIXTURE_SHA256,
   canonicalDeliveryPayload,
+  defaultTrustedSellerMapping,
   signDeliveryAttestation,
   verifyDeliveryAttestation,
 } from "@chainpay/sdk";
@@ -276,7 +277,13 @@ test("paid HTTP 200 publishes through mocked Axum; 402 and verify failure do not
     if ((init.method ?? "GET") === "GET") return jsonResponse(404);
     const envelope = JSON.parse(init.body);
     posts.push(envelope);
-    const verified = await verifyDeliveryAttestation(envelope, { programId: DEFAULT_PROGRAM_ID });
+    // Bind the seller, not just the program: an unbound check only proves the
+    // payload is self-signed by whatever key it names, which is exactly what the
+    // SDK now refuses. This is the assertion the test meant to make.
+    const verified = await verifyDeliveryAttestation(envelope, {
+      programId: DEFAULT_PROGRAM_ID,
+      trustedSellers: defaultTrustedSellerMapping([DELIVERY_FIXTURE_SELLER_ADDRESS]),
+    });
     assert.equal(verified.valid, true);
     assert.equal(envelope.payload.receiptAddress, fixture.proof.payload.receiptPDA);
     assert.equal(envelope.payload.seller, DELIVERY_FIXTURE_SELLER_ADDRESS);

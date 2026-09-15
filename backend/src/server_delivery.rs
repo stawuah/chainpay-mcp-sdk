@@ -38,7 +38,11 @@ pub(super) async fn create_delivery_attestation(
         .await?
         || !state
             .store
-            .auth_rate(&format!("delivery-attestations-peer:{peer}"), now, POST_RATE_PEER)
+            .auth_rate(
+                &format!("delivery-attestations-peer:{peer}"),
+                now,
+                POST_RATE_PEER,
+            )
             .await?
     {
         return Err(ApiError::RateLimited);
@@ -55,9 +59,12 @@ pub(super) async fn create_delivery_attestation(
     let raw: Value = serde_json::from_slice(&bytes).map_err(|error| {
         ApiError::BadRequest(format!("delivery attestation must be JSON: {error}"))
     })?;
-    let envelope = parse_delivery_envelope(&raw).map_err(|error| ApiError::BadRequest(error.message()))?;
+    let envelope =
+        parse_delivery_envelope(&raw).map_err(|error| ApiError::BadRequest(error.message()))?;
     if envelope.payload.cluster != state.config.cluster {
-        return Err(ApiError::BadRequest("unsupported Solana cluster".to_owned()));
+        return Err(ApiError::BadRequest(
+            "unsupported Solana cluster".to_owned(),
+        ));
     }
     if canonicalize_address(&state.config.program_id)
         .ok()
@@ -69,9 +76,8 @@ pub(super) async fn create_delivery_attestation(
         ));
     }
 
-    let mapping = mapping_for_seller(&state.config.trusted_sellers, &envelope.payload).ok_or_else(
-        || ApiError::BadRequest("Unknown delivery seller".to_owned()),
-    )?;
+    let mapping = mapping_for_seller(&state.config.trusted_sellers, &envelope.payload)
+        .ok_or_else(|| ApiError::BadRequest("Unknown delivery seller".to_owned()))?;
     let receipt = fetch_settled_delivery_receipt(
         &state,
         &envelope.payload.receipt_address,
@@ -145,9 +151,7 @@ async fn fetch_settled_delivery_receipt(
         .rpc
         .account_info_committed(receipt_address, "finalized")
         .await?
-        .ok_or_else(|| {
-            ApiError::BadRequest("Settled ChainPay receipt was not found".to_owned())
-        })?;
+        .ok_or_else(|| ApiError::BadRequest("Settled ChainPay receipt was not found".to_owned()))?;
     verify_settled_delivery_receipt(
         &account,
         receipt_address,
@@ -396,7 +400,10 @@ mod tests {
         assert_eq!(created.status(), StatusCode::OK);
         let created_json: Value = created.json().await.unwrap();
         assert_eq!(created_json["payload"]["receiptAddress"], receipt);
-        assert_eq!(created_json["payload"]["seller"], DELIVERY_FIXTURE_SELLER_ADDRESS);
+        assert_eq!(
+            created_json["payload"]["seller"],
+            DELIVERY_FIXTURE_SELLER_ADDRESS
+        );
         assert!(created_json.get("payment_id").is_none());
         assert!(created_json.get("amount").is_none());
 
@@ -457,7 +464,10 @@ mod tests {
         ];
         for field in leaked {
             assert!(body.get(field).is_none(), "leaked {field}");
-            assert!(body["payload"].get(field).is_none(), "leaked payload.{field}");
+            assert!(
+                body["payload"].get(field).is_none(),
+                "leaked payload.{field}"
+            );
         }
         assert_eq!(
             store

@@ -785,9 +785,7 @@ impl StatusStore {
                 if let Some(existing) = state.delivery_attestations.get(&key) {
                     return Ok(delivery_put_result(existing.clone(), &record));
                 }
-                state
-                    .delivery_attestations
-                    .insert(key, record.clone());
+                state.delivery_attestations.insert(key, record.clone());
                 Ok(DeliveryAttestationPut::Created(record))
             }
             StorageBackend::Postgres(pool) => {
@@ -825,10 +823,7 @@ impl StatusStore {
                     .bind(&record.seller)
                     .fetch_one(pool)
                     .await?;
-                Ok(delivery_put_result(
-                    delivery_from_row(existing)?,
-                    &record,
-                ))
+                Ok(delivery_put_result(delivery_from_row(existing)?, &record))
             }
         }
     }
@@ -1172,8 +1167,7 @@ fn delivery_from_row(row: PgRow) -> Result<DeliveryAttestationRecord, StorageErr
         served_at: row.try_get("served_at")?,
         signature: row.try_get("signature")?,
         canonical_payload: row.try_get("canonical_payload")?,
-        published_at_ms: from_i64(row.try_get("published_at_ms")?, "published_at_ms")?
-            .unwrap_or(0),
+        published_at_ms: from_i64(row.try_get("published_at_ms")?, "published_at_ms")?.unwrap_or(0),
     })
 }
 
@@ -1318,8 +1312,7 @@ mod tests {
             program_id: "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4".into(),
             receipt_address: "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1".into(),
             seller: "GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB".into(),
-            content_hash: "8e60b641218418bde0cde3b190a028e846ccebed8dc804901b8e6f87b9072eee"
-                .into(),
+            content_hash: "8e60b641218418bde0cde3b190a028e846ccebed8dc804901b8e6f87b9072eee".into(),
             served_at: served_at.into(),
             signature: signature.into(),
             canonical_payload: format!("{served_at}:{signature}"),
