@@ -33,9 +33,14 @@ npm --prefix demo-merchant run dev
 This service never signs or submits a payment. A real custom-flow acceptance
 run still requires explicit wallet/external-signer approval and a confirmed
 Devnet transaction; a local 402 response or invalid-proof test is not
-settlement. Successful `200` bodies are hashed for an optional seller
-response-served statement (PR-07). Without a configured publisher the
-statement is absent and Paid is unchanged. This process does not call Axum.
+settlement. Successful `200` bodies are hashed after `finish`. When
+`CHAINPAY_SELLER_SECRET_KEY` and `CHAINPAY_BACKEND_URL` are set, the merchant
+signs the SDK `chainpay.response-served` payload and POSTs the identical
+envelope to Axum `POST /v1/delivery-attestations`. Early close, 402, and
+verify failure publish nothing. A publication outage leaves the statement
+absent; Paid is unchanged. The signing secret stays on this host. The public
+seller key must match backend `CHAINPAY_TRUSTED_SELLER`. Do not put a live
+secret in git. Tests use the SDK 32-byte `0x07` fixture seed.
 
 Transaction proof reads use the SDK's official legacy/v0/v1 wire decoder on
 bounded base64 RPC results, with canonical message checks. RPC trust is

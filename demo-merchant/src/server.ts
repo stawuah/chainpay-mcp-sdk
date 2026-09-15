@@ -5,8 +5,9 @@ import {
   deriveX402PaymentReferences,
 } from "@chainpay/sdk";
 import { createMerchantApp } from "./app.js";
-import { loadMerchantConfig, sanitizedResourceLabel } from "./config.js";
+import { loadMerchantConfig, loadSellerPublishConfig, sanitizedResourceLabel } from "./config.js";
 import { createRpcTransactionReader } from "./proof.js";
+import { createAxumDeliveryPublisher } from "./publisher.js";
 
 async function main(): Promise<void> {
   const config = loadMerchantConfig();
@@ -29,15 +30,22 @@ async function main(): Promise<void> {
     throw new Error("Merchant asset is not enabled with the expected token program in ChainPay SupportedAsset");
   }
 
+  const sellerPublish = loadSellerPublishConfig(process.env, config.programId);
   const app = createMerchantApp(config, references, {
     getFinalizedReceipt: (address) => client.getPayment(address),
     getFinalizedTransaction: createRpcTransactionReader(config.rpcUrl),
+    ...(sellerPublish ? { publisher: createAxumDeliveryPublisher(sellerPublish) } : {}),
   });
 
   app.listen(config.port, "127.0.0.1", () => {
     process.stdout.write(
       `ChainPay custom receipt-proof demo merchant listening at ${sanitizedResourceLabel(config.resource)}\n`,
     );
+    if (sellerPublish) {
+      process.stdout.write(
+        `Seller response-served attestations enabled for ${sellerPublish.seller}\n`,
+      );
+    }
   });
 }
 

@@ -1,21 +1,5 @@
-import { createHash, createPrivateKey, sign as signEd25519 } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { Response } from "express";
-
-export type ResponseServedPayload = {
-  version: 1;
-  statement: "chainpay.response-served";
-  cluster: "devnet";
-  programId: string;
-  receiptAddress: string;
-  seller: string;
-  contentHash: string;
-  servedAt: string;
-};
-
-export type SignedDeliveryEnvelope = {
-  payload: ResponseServedPayload;
-  signature: string;
-};
 
 export type DeliveryPublishInput = {
   receiptAddress: string;
@@ -26,8 +10,9 @@ export type DeliveryPublishInput = {
 };
 
 /**
- * Optional PR-07 hook. The demo merchant does not POST to Axum.
- * A later backend publisher can attach here and reuse identical signed bytes.
+ * Optional PR-07 hook. Wired to Axum when a host seller key and backend URL
+ * are configured. Callers must sign with `@chainpay/sdk` delivery helpers so
+ * canonical bytes match the relay fixtures.
  */
 export type DeliveryPublisher = {
   publish(input: DeliveryPublishInput): Promise<void>;
@@ -46,58 +31,9 @@ export function serializeJsonBody(body: unknown): Buffer {
 }
 
 export function sha256Hex(bytes: Uint8Array | Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-export function canonicalDeliveryPayload(payload: ResponseServedPayload): string {
-  return JSON.stringify({
-    version: 1,
-    statement: "chainpay.response-served",
-    cluster: payload.cluster,
-    programId: payload.programId,
-    receiptAddress: payload.receiptAddress,
-    seller: payload.seller,
-    contentHash: payload.contentHash,
-    servedAt: payload.servedAt,
-  });
-}
-
-export function buildResponseServedPayload(input: {
-  programId: string;
-  receiptAddress: string;
-  seller: string;
-  contentHash: string;
-  servedAt?: string;
-}): ResponseServedPayload {
-  if (!SHA256_HEX.test(input.contentHash)) {
-    throw new Error("contentHash must be lowercase SHA-256 hex");
-  }
-  return {
-    version: 1,
-    statement: "chainpay.response-served",
-    cluster: "devnet",
-    programId: input.programId,
-    receiptAddress: input.receiptAddress,
-    seller: input.seller,
-    contentHash: input.contentHash,
-    servedAt: input.servedAt ?? new Date().toISOString(),
-  };
-}
-
-/** Merchant-only Ed25519 signing. Tests may pass a generated fixture key. */
-export function signResponseServedEnvelope(
-  payload: ResponseServedPayload,
-  secretKey: Uint8Array,
-): SignedDeliveryEnvelope {
-  const seed = secretKey.length === 64 ? secretKey.subarray(0, 32) : secretKey;
-  if (seed.length !== 32) throw new Error("seller secret key must be 32 or 64 bytes");
-  const key = createPrivateKey({
-    key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(seed)]),
-    format: "der",
-    type: "pkcs8",
-  });
-  const signature = signEd25519(null, Buffer.from(canonicalDeliveryPayload(payload), "utf8"), key);
-  return { payload, signature: signature.toString("base64") };
+  const hex = createHash("sha256").update(bytes).digest("hex");
+  if (!SHA256_HEX.test(hex)) throw new Error("contentHash must be lowercase SHA-256 hex");
+  return hex;
 }
 
 type LifecycleTarget = {

@@ -1,3 +1,4 @@
+import { Keypair } from "@solana/web3.js";
 import { publicKey, type TokenProgram } from "@chainpay/sdk";
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
@@ -14,6 +15,14 @@ export type MerchantConfig = {
   programId: string;
   rpcUrl: string;
   nonce?: string;
+};
+
+/** Optional PR-07 publisher. Absent when the host key or Axum URL is unset. */
+export type SellerPublishConfig = {
+  backendUrl: string;
+  programId: string;
+  seller: string;
+  secretKey: Uint8Array;
 };
 
 export type CustomPaymentRequired = {
@@ -125,4 +134,81 @@ export function customPaymentRequired(config: MerchantConfig): CustomPaymentRequ
 export function sanitizedResourceLabel(resource: string): string {
   const url = new URL(resource);
   return `${url.origin}${url.pathname}`;
+}
+
+/**
+ * Host-only seller attestation. Disabled when the signing key or Axum URL is
+ * unset. Never logs or returns the secret. Does not read
+ * CHAINPAY_DEMO_MERCHANT_SECRET_KEY (that is the MCP demo payment-request signer).
+ */
+export function loadSellerPublishConfig(
+  env: NodeJS.Dict<string> = process.env,
+  programId: string,
+): SellerPublishConfig | undefined {
+  const encoded = env.CHAINPAY_SELLER_SECRET_KEY?.trim();
+  const backend = env.CHAINPAY_BACKEND_URL?.trim();
+  if (!encoded || !backend) return undefined;
+  const backendUrl = assertSafeHttpUrl(backend, "CHAINPAY_BACKEND_URL").toString().replace(/\/$/, "");
+  return sellerPublishConfigFromSecret({
+    backendUrl,
+    programId,
+    secretKey: parseSellerSecretKey(encoded),
+    trustedSeller: env.CHAINPAY_TRUSTED_SELLER?.trim() || undefined,
+  });
+}
+
+export function sellerPublishConfigFromSecret(input: {
+  backendUrl: string;
+  programId: string;
+  secretKey: Uint8Array;
+  trustedSeller?: string;
+}): SellerPublishConfig {
+  const identity = sellerIdentity(input.secretKey);
+  if (input.trustedSeller) {
+    const expected = publicKey(input.trustedSeller).toBase58();
+    if (expected !== identity.seller) {
+      throw new Error("CHAINPAY_TRUSTED_SELLER does not match the configured seller signing key");
+    }
+  }
+  return {
+    backendUrl: input.backendUrl.replace(/\/$/, ""),
+    programId: publicKey(input.programId).toBase58(),
+    seller: identity.seller,
+    secretKey: identity.secretKey,
+  };
+}
+
+function parseSellerSecretKey(encoded: string): Uint8Array {
+  try {
+    if (encoded.startsWith("[")) {
+      const values: unknown = JSON.parse(encoded);
+      if (
+        !Array.isArray(values)
+        || !values.every((value) => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 255)
+      ) {
+        throw new Error("invalid");
+      }
+      return Uint8Array.from(values as number[]);
+    }
+    if (/^[0-9a-fA-F]+$/.test(encoded) && (encoded.length === 64 || encoded.length === 128)) {
+      return Uint8Array.from(Buffer.from(encoded, "hex"));
+    }
+    return Uint8Array.from(Buffer.from(encoded, "base64"));
+  } catch {
+    throw new Error("CHAINPAY_SELLER_SECRET_KEY is invalid");
+  }
+}
+
+function sellerIdentity(secret: Uint8Array): { secretKey: Uint8Array; seller: string } {
+  try {
+    if (secret.length === 32) {
+      return { secretKey: new Uint8Array(secret), seller: Keypair.fromSeed(secret).publicKey.toBase58() };
+    }
+    if (secret.length === 64) {
+      return { secretKey: new Uint8Array(secret), seller: Keypair.fromSecretKey(secret).publicKey.toBase58() };
+    }
+  } catch {
+    throw new Error("CHAINPAY_SELLER_SECRET_KEY is invalid");
+  }
+  throw new Error("CHAINPAY_SELLER_SECRET_KEY is invalid");
 }
