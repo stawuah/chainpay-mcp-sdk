@@ -340,8 +340,19 @@ function parseBareOption(value: Record<string, unknown>, expectedResource?: stri
   if (value.network === SOLANA_DEVNET_CAIP2) {
     return parseV2Envelope(value, expectedResource);
   }
+  // A bare `network: "solana-devnet"` used to be routed to the ChainPay rail on
+  // the strength of the network name alone. Any 402 server could claim it,
+  // receive a real settlement, and then reject a proof it cannot verify — the
+  // payer settles and gets nothing. Since the whole point of this module is to
+  // tell the rails apart *before* any wallet work, an unversioned document is
+  // refused rather than guessed. Servers on the ChainPay rail send
+  // `version: "x402/1.0"`, which `parsePaymentRequiredDocument` dispatches
+  // before ever reaching here.
   if (value.network === CUSTOM_NETWORK) {
-    return parseCustomEnvelope(value, expectedResource);
+    fail(
+      "malformed",
+      `Custom ChainPay x402 requires an explicit version ${CUSTOM_X402_VERSION}; refusing to infer it from the network name`,
+    );
   }
   if (typeof value.network === "string") {
     fail("unsupported_network", "Unsupported x402 network");

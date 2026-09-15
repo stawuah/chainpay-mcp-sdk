@@ -160,6 +160,30 @@ test("rejects mixed versions, numeric amounts, leading zeros, and missing discri
   }), /canonical decimal u64/);
 });
 
+test("never infers the ChainPay rail from the network name alone", () => {
+  // An unversioned document claiming network "solana-devnet" used to be routed
+  // to the custom rail and could reach settlement. Any 402 server can put that
+  // string in a response; only a server actually on this rail sends the version.
+  assert.throws(
+    () => parsePaymentRequiredDocument({
+      scheme: "exact",
+      network: "solana-devnet",
+      amount: "1000",
+      asset: address(),
+      payTo: address(),
+      resource: RESOURCE,
+    }, RESOURCE),
+    (error) => error instanceof X402ProtocolError
+      && error.code === "malformed"
+      && /explicit version/.test(error.message),
+  );
+
+  // The same document with the version present is still accepted, so the real
+  // merchant flow is untouched.
+  const versioned = parsePaymentRequiredDocument(customEnvelope(), RESOURCE);
+  assert.equal(versioned.kind, "custom");
+});
+
 test("rejects unsupported networks and resource mismatches", () => {
   assert.throws(
     () => parsePaymentRequiredDocument(standardV2Envelope({ network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" })),
