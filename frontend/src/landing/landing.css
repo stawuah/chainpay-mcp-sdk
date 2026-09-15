@@ -428,7 +428,7 @@
 .asset-strip-item span { display: block; color: var(--body); font-size: 12px; margin-top: 4px; }
 .asset-strip-note { color: var(--body); font-size: 12px; }
 @keyframes asset-drift { to { transform: translateX(-50%); } }
-.story-satellite,.story-connection,.story-network { display: none; }
+.story-satellite,.story-connection { display: none; }
 @media (min-width: 1100px) and (min-height: 950px) and (prefers-reduced-motion: no-preference) {
  .is-morphing .story-morph { padding: 22px 42px; }
  .story-morph-frame { position: relative; z-index: 2; }
@@ -441,9 +441,6 @@
  .story-connection { display: block; position: absolute; border: 1px dashed #8faeea; border-radius: 20px; width: 95px; height: 86px; z-index: 1; }
  .story-connection-agent { left: -22px; top: 148px; }
  .story-connection-token { right: -12px; bottom: 165px; }
- .story-network { display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--body); margin-top: 14px; }
- .story-network .asset-mark { width: 32px; height: 32px; }
- .story-network-alternative { display: flex; align-items: center; gap: 6px; margin-left: auto; }
  .story-morph-progress { margin-top: 14px; }
  .is-morphing .story-morph-state .story-document { padding: 20px; }
 }
@@ -463,4 +460,29 @@
  .story-satellite-agent { left: -88px; width: 124px; padding: 14px 12px; top: 52px; }
  .story-satellite-agent strong { font-size: 12px; }
  .story-satellite-token { right: -42px; bottom: 98px; }
+}
+
+/* A closing gesture: the permission, payment, and record unfold together. */
+.landing .landing-cta { grid-template-columns: minmax(0, 1.45fr) minmax(260px, 1fr); align-items: center; overflow: hidden; gap: 40px; }
+.landing-cta-copy { display: grid; justify-items: start; gap: 24px; position: relative; z-index: 2; }
+.landing .landing-cta-copy h2 { margin-top: 0; font-size: clamp(36px, 4.6vw, 62px); }
+.landing .landing-cta-copy > p:not(.section-kicker) { max-width: 460px; line-height: 1.65; }
+.landing-cta-visual { position: relative; width: 100%; min-height: 360px; display: grid; align-items: center; padding: 24px; }
+.cta-sheet { grid-area: 1 / 1; border-radius: 20px; padding: 24px; min-height: 180px; background: #fff; color: #14213d; box-shadow: 0 18px 40px -22px #14213d70; border: 1px solid #dbe2ef; }
+.cta-sheet > span { display: block; color: #0045d8; font-size: 10px; letter-spacing: .08em; margin-bottom: 20px; }
+.cta-sheet strong { display: block; font-size: 23px; letter-spacing: -.04em; line-height: 1.2; font-weight: 500; max-width: 12ch; }
+.cta-sheet small { color: #56647d; font-size: 11px; }
+.cta-sheet-rule { height: 1px; background: #dbe2ef; margin: 20px 0 12px; }
+.cta-sheet-back { background: #dbe7ff; transform: translate(-20px,-38px) rotate(-10deg); }
+.cta-sheet-middle { background: #eff4ff; transform: translate(12px,12px) rotate(5deg); }
+.cta-sheet-front { transform: translate(-8px,64px) rotate(-3deg); }
+@media (max-width: 760px) {
+ .landing .landing-cta { grid-template-columns: 1fr; gap: 20px; }
+ .landing-cta-visual { max-width: 360px; min-height: 320px; justify-self: center; }
+ .landing-cta-copy { justify-items: stretch; }
+}
+@media (prefers-reduced-motion: reduce) {
+ .cta-sheet-back { transform: translate(-12px,-38px); }
+ .cta-sheet-middle { transform: translate(12px,12px); }
+ .cta-sheet-front { transform: translate(0,64px); }
 }

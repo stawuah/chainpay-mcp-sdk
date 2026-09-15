@@ -57,7 +57,6 @@ export function PaymentStory({ onOpenDashboard }: { onOpenDashboard: () => void 
         <div className="story-satellite story-satellite-token"><AssetMark asset="USDC" /><div><span className="satellite-label">SAME PAYMENT</span><strong>4.50 USDC</strong><span>Illustrative example</span></div></div>
         <div className="story-connection story-connection-agent" /><div className="story-connection story-connection-token" />
         <div className="story-morph-frame">{chapters.map(({id, visual: Visual}) => <div className="story-morph-state" key={id}><Visual /></div>)}</div>
-        <div className="story-network"><AssetMark asset="Solana" /><span>On Solana Devnet</span><span className="story-network-alternative"><AssetMark asset="PYUSD" />PYUSD also supported</span></div>
         <div className="story-morph-progress"><span /></div>
         <div className="story-morph-steps"><span>Permission</span><span>Payment</span><span>Receipt</span><span>Control</span></div>
       </div>

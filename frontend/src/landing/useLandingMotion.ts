@@ -20,8 +20,12 @@ export function useLandingMotion(root: RefObject<HTMLDivElement | null>) {
         gsap.from(selector, { y: 36, scale: selector === ".landing-cta" ? 0.96 : 1,
           ease: "none", scrollTrigger: { trigger: selector, start: "top bottom", end: "top 65%", scrub: true } });
       });
-      gsap.from(".landing-cta > :not(button)", { y: 18, stagger: 0.08, duration: 0.7, ease: "power3.out",
+      gsap.from(".landing-cta-copy > :not(button)", { y: 18, stagger: 0.08, duration: 0.7, ease: "power3.out",
         scrollTrigger: { trigger: ".landing-cta", start: "top 80%", toggleActions: "play none none reverse" } });
+      const closing = gsap.timeline({ scrollTrigger: { trigger: ".landing-cta", start: "top 90%", end: "center 55%", scrub: true } });
+      closing.fromTo(".cta-sheet-back", { y: 70, x: 30, rotation: 0 }, { y: -38, x: -20, rotation: -10, ease: "power2.out" }, 0)
+        .fromTo(".cta-sheet-middle", { y: 70, x: 30, rotation: 0 }, { y: 12, x: 12, rotation: 5, ease: "power2.out" }, 0.12)
+        .fromTo(".cta-sheet-front", { y: 100, x: 30, rotation: 0 }, { y: 64, x: -8, rotation: -3, ease: "power2.out" }, 0.24);
     }, root);
     // A single stationary document evolves while the original chapters remain
     // in reading order. The visual duplicate is hidden from assistive technology.
