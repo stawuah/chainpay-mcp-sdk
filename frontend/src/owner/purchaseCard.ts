@@ -50,14 +50,19 @@ function tokenLabelForMint(mint: string | undefined, stablecoinOptions: Stableco
 function formatPaymentAmount(
   amount: string | undefined,
   mint: string | undefined,
-  stablecoinOptions: StablecoinOption[],
+  mandate: Mandate | null | undefined,
   mandateDecimals: number | null,
 ): string {
   if (!amount) return "—";
-  const decimals = mandateDecimals;
-  if (decimals === null) return `${amount} base units`;
+  // `mandateDecimals` describes the selected mandate's mint, not necessarily the
+  // mint this payment is denominated in. Applying 6 to a 9-decimal token — or
+  // the reverse — misstates the headline amount by 1000x while still labelling
+  // it with the payment's own token. Only apply the decimals when the two mints
+  // are the same; otherwise keep the exact integer and say what it is.
+  const mintsMatch = Boolean(mint) && Boolean(mandate?.allowedMint) && mint === mandate?.allowedMint;
+  if (!mintsMatch || mandateDecimals === null) return `${amount} base units`;
   try {
-    return formatTokenAmount(BigInt(amount), decimals);
+    return formatTokenAmount(BigInt(amount), mandateDecimals);
   } catch {
     return `${amount} base units`;
   }
@@ -144,7 +149,7 @@ export function purchaseCardFromInboxItem(
   return {
     id: item.id,
     description: purchaseDescription(item),
-    amountLabel: formatPaymentAmount(amount, mint, options.stablecoinOptions, options.mandateDecimals),
+    amountLabel: formatPaymentAmount(amount, mint, options.mandate, options.mandateDecimals),
     tokenLabel,
     recipientLabel: recipient ? shortAddress(recipient) : "—",
     status,

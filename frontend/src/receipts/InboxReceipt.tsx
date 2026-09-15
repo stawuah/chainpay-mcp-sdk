@@ -33,7 +33,13 @@ export function LoadedReceiptCard({
         receipt={state.receipt}
         shareMode={shareMode}
         onShare={onShare}
-        preparedInRequests={preparedInRequests || shareMode === "dashboard"}
+        // Both dashboard call sites pass shareMode="dashboard", so OR-ing it here
+        // forced the flag true for every dashboard render and discarded the
+        // preparedRequestReceiptAddresses match that Dashboard.tsx computes. Any
+        // receipt pasted into the Receipts lookup then claimed it was prepared in
+        // Requests with private invoice text behind it. ReceiptCard already
+        // requires shareMode === "dashboard" before showing the note.
+        preparedInRequests={preparedInRequests}
       />
     );
   }

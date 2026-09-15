@@ -109,3 +109,33 @@ test("public receipt card does not expose MCP names or prepared-in-requests on p
   const verifyPage = await readFile(join(srcRoot, "verify/VerifyPage.tsx"), "utf8");
   assert.equal(verifyPage.includes("Prepared in Requests"), false);
 });
+
+test("the prepared-in-requests note reflects an actual inbox match", async () => {
+  // Both dashboard call sites pass shareMode="dashboard". OR-ing that into the
+  // flag made every dashboard receipt claim it was prepared in Requests, with
+  // private invoice text behind it — including one pasted into the lookup field —
+  // and rendered the whole preparedRequestReceiptAddresses chain inert.
+  const inbox = await readFile(join(srcRoot, "receipts/InboxReceipt.tsx"), "utf8");
+  assert.equal(
+    /preparedInRequests \|\| shareMode === "dashboard"/.test(inbox),
+    false,
+    "the computed match must not be OR-ed with the share mode",
+  );
+  assert.match(inbox, /preparedInRequests=\{preparedInRequests\}/);
+
+  // The dashboard must still be the thing deciding, from the real inbox.
+  const dashboard = await readFile(join(srcRoot, "dashboard/Dashboard.tsx"), "utf8");
+  assert.match(dashboard, /preparedRequestReceiptAddresses\(agentInbox\)/);
+  assert.match(dashboard, /preparedInRequests=\{preparedReceiptAddresses\?\.has\(/);
+});
+
+test("a purchase amount is only decimal-formatted when the mints match", async () => {
+  // mandateDecimals describes the selected mandate's mint. Applying it to a
+  // payment in a different mint misstates the headline amount by 1000x between
+  // a 6-decimal and a 9-decimal token, while labelling it with the payment's
+  // own token name.
+  const purchaseCard = await readFile(join(srcRoot, "owner/purchaseCard.ts"), "utf8");
+  assert.match(purchaseCard, /mintsMatch/);
+  assert.match(purchaseCard, /mint === mandate\?\.allowedMint/);
+  assert.match(purchaseCard, /if \(!mintsMatch \|\| mandateDecimals === null\) return `\$\{amount\} base units`/);
+});
