@@ -95,8 +95,41 @@ external approved-agent signer can sign that transaction locally and return
 only the signed transaction for relay. HTTP agent connections, hashed bearer
 tokens, tool-call activity, and chat history persist in PostgreSQL; production
 startup refuses to fall back to memory when `DATABASE_URL` is absent. Owner
-wallet approval remains explicit. The HTTP process supports POST JSON-RPC requests plus GET event
-streams, so a remote MCP client can use a URL such as:
+wallet approval remains explicit.
+
+## MCP protocol subset (2026-07-28)
+
+Verified 2026-09-15 against the official dated schema and Streamable HTTP
+binding:
+
+- [schema/2026-07-28](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts)
+- [server/discover](https://modelcontextprotocol.io/specification/2026-07-28/server/discover)
+- [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+- [stdio](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio)
+
+This is a tested subset, not blanket MCP conformance and not MCP OAuth.
+Current-version requests carry `io.modelcontextprotocol/protocolVersion` and
+`clientCapabilities` in `params._meta`. They do not need `initialize`.
+Results use `resultType: "complete"` and server identity under `result._meta`.
+`server/discover` and `tools/list` advertise only `{ "tools": {} }` plus
+`ttlMs` / `cacheScope`. The server does not implement subscriptions, resources,
+prompts, or multi-round-trip requests.
+
+HTTP current-version POST requires `MCP-Protocol-Version`, `Mcp-Method`, and
+`Mcp-Name` for `tools/call`. Header mismatches return JSON-RPC `-32020`.
+Unsupported versions return `-32022` with `{ supported, requested }`.
+`Mcp-Session-Id` and `Last-Event-ID` are ignored; the server does not mint
+protocol sessions or resume streams. Current-version GET or DELETE on `/mcp`
+returns 405. Headerless dashboard `tools/list` / `tools/call` requests remain
+a ChainPay compatibility path, not proof of a full legacy handshake.
+
+Legacy `2025-06-18` and `2024-11-05` keep `initialize` / `ping` and the older
+result shape. Legacy GET on `/mcp` is a comment keepalive only. Wallet
+sessions and scoped connections stay application authentication from PR-01
+and never become protocol capability or OAuth evidence.
+
+The HTTP process supports POST JSON-RPC requests, so a remote MCP client can
+use a URL such as:
 
 ```json
 {
@@ -147,12 +180,15 @@ when prompted. Render will use `/healthz` for health checks and expose the MCP
 endpoint at `https://<service-name>.onrender.com/mcp`.
 
 To smoke-test the MCP protocol without an MCP client, run this from the
-repository root after building:
+repository root after building. The first two lines are current-version
+requests; the last two are the preserved legacy handshake:
 
 ```bash
 printf '%s\n' \
+  '{"jsonrpc":"2.0","id":"discover-1","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1.0"}}}}' \
+  '{"jsonrpc":"2.0","id":"list-1","method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"manual-test","version":"1.0"}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"ping"}' \
   | CHAINPAY_RPC_URL=https://api.devnet.solana.com node mcp-server/dist/server.js
 ```
 

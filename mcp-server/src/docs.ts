@@ -816,8 +816,13 @@ export function renderDocsHtml(): string {
             <div class="tool-grid">${renderToolReference()}</div>
           </section>
 
+          <section class="section" id="mcp-protocol" aria-labelledby="mcp-protocol-title">
+            <div class="section-heading"><div><span class="section-index">09 · MCP protocol</span><h2 id="mcp-protocol-title">Tested subset, not blanket conformance.</h2><p>ChainPay implements a dual-era JSON-RPC boundary verified against the official <a href="https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts">2026-07-28 schema</a> on 2026-09-15. Wallet sessions are application authentication from PR-01, not MCP OAuth.</p></div></div>
+            <div class="callout"><strong>Supported now:</strong> <code>server/discover</code>, <code>tools/list</code>, and <code>tools/call</code> on current <code>2026-07-28</code> without an initialize handshake; legacy <code>initialize</code>/<code>ping</code>/<code>tools/list</code>/<code>tools/call</code> for <code>2025-06-18</code> and <code>2024-11-05</code>; public discovery versus private owner tools on HTTP and stdio. Current-version GET or DELETE to <code>/mcp</code> returns 405. Legacy GET is a keepalive comment stream only — not <code>subscriptions/listen</code>, resources, prompts, or MRTR. Capability and version metadata never authorize a wallet.</div>
+          </section>
+
           <section class="section" id="endpoints" aria-labelledby="endpoints-title">
-            <div class="section-heading"><div><span class="section-index">09 · HTTP reference</span><h2 id="endpoints-title">A small surface area.</h2><p>Use the MCP transport for agents and the read-only routes for humans, health checks, and integration discovery.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">10 · HTTP reference</span><h2 id="endpoints-title">A small surface area.</h2><p>Use the MCP transport for agents and the read-only routes for humans, health checks, and integration discovery.</p></div></div>
             <div class="table-wrap">
               <a class="endpoint-card" href="/"><span class="method">GET</span><code>/</code><span>Developer documentation preview</span></a>
               <a class="endpoint-card" href="/mcp"><span class="method">POST</span><code>/mcp</code><span>Streamable HTTP JSON-RPC MCP transport</span></a>
