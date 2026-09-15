@@ -35,6 +35,7 @@ pub enum StorageError {
 
 #[derive(Debug, Default)]
 struct MemoryState {
+    auth: HashMap<String, (serde_json::Value, u64)>,
     payments: HashMap<String, PaymentRecord>,
     transactions: HashMap<String, TransactionRecord>,
     x402_payments: HashMap<String, X402PaymentRecord>,
@@ -84,6 +85,112 @@ impl StatusStore {
         Ok(Self {
             backend: StorageBackend::Postgres(pool),
         })
+    }
+
+    pub async fn auth_rate(
+        &self,
+        bucket: &str,
+        now: u64,
+        limit: u64,
+    ) -> Result<bool, StorageError> {
+        let key = format!("rate:{bucket}:{}", now / 60_000);
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                state.auth.retain(|_, (_, expires)| *expires > now);
+                let entry = state
+                    .auth
+                    .entry(key)
+                    .or_insert((serde_json::json!(0), now + 60_000));
+                let count = entry.0.as_u64().unwrap_or(0) + 1;
+                entry.0 = serde_json::json!(count);
+                Ok(count <= limit)
+            }
+            StorageBackend::Postgres(pool) => {
+                sqlx::query("DELETE FROM owner_auth WHERE expires_at_ms <= $1")
+                    .bind(to_i64(Some(now), "now")?)
+                    .execute(pool)
+                    .await?;
+                let row = sqlx::query("INSERT INTO owner_auth (key,payload,expires_at_ms) VALUES ($1,'1'::jsonb,$2) ON CONFLICT (key) DO UPDATE SET payload=to_jsonb((owner_auth.payload::text)::bigint+1) RETURNING payload")
+                    .bind(key).bind(to_i64(Some(now+60_000), "expires")?).fetch_one(pool).await?;
+                Ok(row
+                    .get::<Json<serde_json::Value>, _>("payload")
+                    .0
+                    .as_u64()
+                    .unwrap_or(u64::MAX)
+                    <= limit)
+            }
+        }
+    }
+
+    /// Session secrets are hashed before reaching this storage API.
+    pub async fn put_auth(
+        &self,
+        key: &str,
+        value: serde_json::Value,
+        expires: u64,
+    ) -> Result<(), StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                state
+                    .write()
+                    .await
+                    .auth
+                    .insert(key.into(), (value, expires));
+            }
+            StorageBackend::Postgres(pool) => {
+                sqlx::query("INSERT INTO owner_auth (key, payload, expires_at_ms) VALUES ($1,$2,$3) ON CONFLICT (key) DO UPDATE SET payload=$2, expires_at_ms=$3")
+                    .bind(key).bind(Json(value)).bind(to_i64(Some(expires), "expires_at_ms")?).execute(pool).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn get_auth(
+        &self,
+        key: &str,
+        now: u64,
+        consume: bool,
+    ) -> Result<Option<serde_json::Value>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                state.auth.retain(|_, (_, expires)| *expires > now);
+                Ok(if consume {
+                    state.auth.remove(key)
+                } else {
+                    state.auth.get(key).cloned()
+                }
+                .map(|(value, _)| value))
+            }
+            StorageBackend::Postgres(pool) => {
+                let query = if consume {
+                    "DELETE FROM owner_auth WHERE key=$1 AND expires_at_ms>$2 RETURNING payload"
+                } else {
+                    "SELECT payload FROM owner_auth WHERE key=$1 AND expires_at_ms>$2"
+                };
+                let row = sqlx::query(query)
+                    .bind(key)
+                    .bind(to_i64(Some(now), "now")?)
+                    .fetch_optional(pool)
+                    .await?;
+                Ok(row.map(|row| row.get::<Json<serde_json::Value>, _>("payload").0))
+            }
+        }
+    }
+
+    pub async fn auth_connection(
+        &self,
+        hash: &str,
+    ) -> Result<Option<serde_json::Value>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(_) => Ok(None),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query("SELECT wallet_address, scope FROM agent_connections WHERE token_hash=$1 AND revoked_at IS NULL")
+                    .bind(hash).fetch_optional(pool).await?;
+                Ok(row.map(|r| serde_json::json!({"wallet": r.get::<String,_>("wallet_address"), "scope": r.get::<String,_>("scope")})))
+            }
+        }
     }
 
     pub async fn get_payment(

@@ -57,6 +57,10 @@ function resourceUrl(value: unknown): string {
   if (url.protocol !== "https:" && !(url.protocol === "http:" && process.env.CHAINPAY_X402_ALLOW_HTTP === "true")) {
     throw new Error("x402 resources must use HTTPS; set CHAINPAY_X402_ALLOW_HTTP=true only for a local demo merchant");
   }
+  const allowed = (process.env.CHAINPAY_X402_ALLOWED_ORIGINS ?? "").split(",").map(value => value.trim()).filter(Boolean);
+  const localDemo = process.env.CHAINPAY_X402_ALLOW_HTTP === "true" && url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (!localDemo && !allowed.includes(url.origin)) throw new Error("Merchant origin is not in CHAINPAY_X402_ALLOWED_ORIGINS");
+  if (url.protocol === "http:" && !localDemo) throw new Error("HTTP is allowed only for the explicit local demo merchant");
   return url.toString();
 }
 
@@ -286,7 +290,7 @@ async function relayManagedPayment(
   agent: string,
 ): Promise<Record<string, unknown>> {
   if (!context.backendUrl || !context.backendAuthToken) {
-    throw new Error("Delegated x402 requires CHAINPAY_BACKEND_URL and CHAINPAY_BACKEND_AUTH_TOKEN");
+    throw new Error("Delegated x402 requires CHAINPAY_BACKEND_URL and a verified caller session or scoped connection");
   }
   const unsigned = await materializeUnsignedTransaction(context.client, prepared.transaction);
   const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/managed-payments`, {
@@ -323,6 +327,7 @@ async function relayManagedPayment(
 async function persistX402Proof(
   context: ChainPayMcpContext,
   idempotencyKey: string,
+  mandate: string,
   proof: Record<string, unknown>,
   responseStatus: number,
   error?: string,
@@ -336,6 +341,7 @@ async function persistX402Proof(
     },
     body: JSON.stringify({
       idempotency_key: idempotencyKey,
+      mandate,
       proof,
       response_status: responseStatus,
       ...(error ? { error } : {}),
@@ -450,6 +456,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   await persistX402Proof(
     context,
     idempotencyKey,
+    mandate,
     proofObject,
     retried.status,
     retried.ok ? undefined : "resource rejected the confirmed ChainPay proof",

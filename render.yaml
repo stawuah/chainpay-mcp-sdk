@@ -24,7 +24,7 @@ services:
       - key: PRIVY_POLICY_ID
         sync: false
       - key: CHAINPAY_ALLOWED_ORIGINS
-        value: "*"
+        value: https://chainpay-frontend.onrender.com
   - type: web
     name: chainpay-mcp
     runtime: node
@@ -41,18 +41,18 @@ services:
         value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
       - key: CHAINPAY_BACKEND_URL
         value: https://chainpay-backend.onrender.com
-      - key: CHAINPAY_BACKEND_AUTH_TOKEN
-        sync: false
       - key: CHAINPAY_HTTP_AUTH_TOKEN
         value: ""
       - key: CHAINPAY_ALLOWED_ORIGINS
-        value: "*"
+        value: https://chainpay-frontend.onrender.com
       - key: OPENROUTER_API_KEY
         sync: false
       - key: CHAINPAY_AI_PROVIDER
         value: openrouter
       - key: CHAINPAY_AGENT_MODEL
         value: openrouter/free
+      - key: CHAINPAY_X402_ALLOWED_ORIGINS
+        sync: false
       - key: CHAINPAY_AGENT_PUBLIC_KEY
         sync: false
       - key: DATABASE_URL

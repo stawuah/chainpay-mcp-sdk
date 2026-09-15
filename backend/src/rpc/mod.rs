@@ -44,7 +44,7 @@ impl Default for RpcConfig {
 #[derive(Debug, Error)]
 pub enum RpcError {
     #[error("Solana RPC request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(reqwest::Error),
     #[error("Solana RPC returned an invalid response: {0}")]
     Decode(#[from] serde_json::Error),
     #[error("Solana RPC rejected {method}: {message}")]
@@ -59,6 +59,12 @@ pub enum RpcError {
     MissingField(&'static str),
     #[error("Solana RPC returned invalid account data: {0}")]
     InvalidAccountData(String),
+}
+
+impl From<reqwest::Error> for RpcError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -87,8 +93,7 @@ pub struct RpcClient {
 }
 
 #[derive(Debug, Deserialize)]
-struct RpcEnvelope<T> {
-    result: Option<T>,
+struct RpcEnvelope {
     error: Option<RpcEnvelopeError>,
 }
 
@@ -140,6 +145,7 @@ impl RpcClient {
     pub fn new(config: RpcConfig) -> Result<Self, RpcError> {
         let http = Client::builder()
             .user_agent("chainpay-backend/0.1")
+            .timeout(Duration::from_secs(20))
             .build()?;
         Ok(Self { http, config })
     }
@@ -202,7 +208,7 @@ impl RpcClient {
                 encoded_transaction,
                 {
                     "encoding": "base64",
-                    "skipPreflight": true,
+                    "skipPreflight": false,
                     "maxRetries": 3,
                     "preflightCommitment": self.config.commitment
                 }
@@ -291,7 +297,7 @@ impl RpcClient {
     async fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T, RpcError> {
         const MAX_ATTEMPTS: usize = 4;
 
-        let response = {
+        let mut response = {
             let mut attempt = 0;
             loop {
                 let response = self
@@ -318,7 +324,17 @@ impl RpcClient {
                 tokio::time::sleep(delay).await;
             }
         };
-        let envelope: RpcEnvelope<T> = response.json().await?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if bytes.len().saturating_add(chunk.len()) > 2_097_152 {
+                return Err(RpcError::InvalidAccountData(
+                    "RPC response exceeds 2 MiB".into(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let raw: Value = serde_json::from_slice(&bytes)?;
+        let envelope: RpcEnvelope = serde_json::from_value(raw.clone())?;
         if let Some(error) = envelope.error {
             let data = error
                 .data
@@ -329,7 +345,8 @@ impl RpcClient {
                 message: format!("{} [{}]{}", error.message, error.code, data),
             });
         }
-        envelope.result.ok_or(RpcError::MissingField("result"))
+        let result = raw.get("result").ok_or(RpcError::MissingField("result"))?;
+        Ok(serde_json::from_value(result.clone())?)
     }
 }
 
@@ -350,6 +367,17 @@ fn retry_delay(response: &reqwest::Response, attempt: usize) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn transport_error_removes_rpc_url_credentials() {
+        let error = reqwest::Client::new()
+            .get("http://fixture-user:fixture-secret@127.0.0.1:1/?api-key=fixture-key")
+            .send()
+            .await
+            .unwrap_err();
+        let safe = RpcError::from(error).to_string();
+        assert!(!safe.contains("fixture-secret") && !safe.contains("fixture-key"));
+    }
 
     #[test]
     fn defaults_to_devnet_and_confirmed_commitment() {

@@ -39,17 +39,28 @@ pub enum SignerConfigError {
     )]
     Incomplete,
     #[error("could not initialize the managed signer HTTP client: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(reqwest::Error),
 }
 
 #[derive(Debug, Error)]
 pub enum SignerProviderError {
     #[error("managed signer provider request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(reqwest::Error),
     #[error("managed signer provider returned HTTP {status}: {message}")]
     Remote { status: StatusCode, message: String },
     #[error("managed signer provider returned invalid data: {0}")]
     InvalidResponse(String),
+}
+
+impl From<reqwest::Error> for SignerConfigError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
+}
+impl From<reqwest::Error> for SignerProviderError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -238,7 +249,7 @@ async fn decode_response<T: for<'de> Deserialize<'de>>(
     response
         .json::<T>()
         .await
-        .map_err(|error| SignerProviderError::InvalidResponse(error.to_string()))
+        .map_err(|error| SignerProviderError::InvalidResponse(error.without_url().to_string()))
 }
 
 fn validate_provider_id(value: &str) -> Result<(), SignerProviderError> {

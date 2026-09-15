@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.15",
+    "@solana/transaction-messages": "^8.3.0",
+    "@solana/transactions": "^8.3.0",
     "@solana/web3.js": "^1.98.4"
   },
   "devDependencies": {

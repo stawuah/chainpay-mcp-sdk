@@ -48,6 +48,7 @@ export async function verifyPaymentRequest(
   request: SignedPaymentRequest,
   currentSlot?: bigint,
 ): Promise<PaymentRequestVerification> {
+  if (request.payload.version !== 1) return validationError(request.payload, "Unsupported payment request version");
   const payload = orderedPayload(request.payload);
   try {
     if (payload.version !== 1) return validationError(payload, "Unsupported payment request version");

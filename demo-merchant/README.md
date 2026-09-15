@@ -19,3 +19,8 @@ npm --prefix demo-merchant run dev
 This service never signs or submits a payment. A real x402 acceptance run still
 requires explicit wallet/external-signer approval and a confirmed Devnet
 transaction; a local 402 response or invalid-proof test is not settlement.
+
+Transaction proof reads use the SDK's official legacy/v0/v1 wire decoder on
+bounded base64 RPC results, with canonical message checks. This verifies the
+existing ChainPay receipt proof; it is not a claim of standard x402 sponsor
+transaction interoperability.

@@ -160,7 +160,7 @@ Frontend checks live mandate, asset, token-account, balance, and receipt state �
 Browser requests wallet signature →
 Signed transaction → Backend →
 Backend validates the signed wire transaction →
-Backend submits directly (skipPreflight: true) →
+Backend submits directly (skipPreflight: false) →
 Anchor executes →
 Receipt PDA created
 ```
