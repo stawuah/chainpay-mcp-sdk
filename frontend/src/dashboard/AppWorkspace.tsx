@@ -54,6 +54,7 @@ export default function AppWorkspace() {
         <Dashboard
           wallet={wallet.wallet}
           walletName={wallet.walletName || "Solana wallet"}
+          walletCapabilities={wallet.walletCapabilities}
           walletSigner={wallet.signTransaction}
           walletMessageSigner={wallet.signMessage}
           mandateAddress={wallet.mandate?.address}

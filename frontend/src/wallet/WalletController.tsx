@@ -226,6 +226,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
   const value = useMemo<WalletContextValue>(() => ({
     wallet,
     walletName: walletConnection?.name ?? "",
+    walletCapabilities: walletConnection?.capabilities ?? null,
     connecting,
     switchingWalletAccount,
     walletPickerOpen,

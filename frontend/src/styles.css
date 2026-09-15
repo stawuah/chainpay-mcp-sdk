@@ -1370,6 +1370,7 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .owner-demo-link a { color: var(--blue); font-size: 13px; font-weight: 600; min-height: 44px; display: inline-flex; align-items: center; }
 .connect-prompt-path { max-width: 560px; margin: 24px 0; }
 .settings-unavailable, .settings-unavailable-card p { margin-top: 6px; color: var(--body); font-size: 12px; line-height: 1.5; }
+.settings-value p.settings-unavailable + p.settings-unavailable { margin-top: 8px; }
 .settings-unavailable-card strong { display: block; color: var(--ink); font-size: 14px; }
 .connection-form { display: grid; gap: 16px; }
 .mandate-advanced-limits { margin-top: 18px; }

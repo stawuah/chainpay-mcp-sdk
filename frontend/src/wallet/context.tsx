@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { Transaction } from "@solana/web3.js";
 import type { WalletPickerOption } from "../ui/WalletPickerDialog";
+import type { WalletCapabilityReport } from "./capabilities";
 
 type MandateStatus = "active" | "paused" | "revoked" | "expired";
 type TokenProgram = "spl-token" | "token-2022";
@@ -51,6 +52,7 @@ type McpToolResponse = { content?: { type: string; text?: string }[]; isError?: 
 export type WalletContextValue = {
   wallet: string;
   walletName: string;
+  walletCapabilities: WalletCapabilityReport | null;
   connecting: boolean;
   switchingWalletAccount: boolean;
   walletPickerOpen: boolean;
@@ -81,6 +83,7 @@ export type WalletContextValue = {
 const disconnected: WalletContextValue = {
   wallet: "",
   walletName: "",
+  walletCapabilities: null,
   connecting: false,
   switchingWalletAccount: false,
   walletPickerOpen: false,

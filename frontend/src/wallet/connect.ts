@@ -14,6 +14,11 @@ import {
   type SolanaSignTransactionFeature,
 } from "@solana/wallet-standard-features";
 import { Transaction } from "@solana/web3.js";
+import {
+  reportLegacyInjectedWallet,
+  reportWalletCapabilities,
+  type WalletCapabilityReport,
+} from "./capabilities";
 
 const DEVNET_CHAIN = "solana:devnet";
 
@@ -40,6 +45,7 @@ export type ChainPayWalletOption = {
 export type ChainPayWallet = {
   address: string;
   name: string;
+  capabilities: WalletCapabilityReport;
   signTransaction: (transaction: Transaction) => Promise<Transaction>;
   signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
   disconnect?: () => Promise<void>;
@@ -82,6 +88,15 @@ function walletAdapter(wallet: StandardSolanaWallet, account: WalletAccount, acc
   return {
     address: account.address,
     name: wallet.name,
+    capabilities: reportWalletCapabilities({
+      source: "wallet-standard",
+      name: wallet.name,
+      address: account.address,
+      standardVersion: wallet.version,
+      chains: wallet.chains,
+      accountChains: account.chains,
+      features: wallet.features as Record<string, unknown>,
+    }),
     signTransaction: async (transaction) => {
       const unsignedTransaction = transaction.serialize({
         requireAllSignatures: false,
@@ -146,6 +161,7 @@ function legacyWalletAdapter(provider: LegacyProvider, address: string, name: st
   return {
     address,
     name,
+    capabilities: reportLegacyInjectedWallet({ name, address }),
     signTransaction: provider.signTransaction.bind(provider),
     signMessage: provider.signMessage
       ? async (message) => (await provider.signMessage!(message, "utf8")).signature
