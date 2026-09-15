@@ -4,6 +4,7 @@ html[data-astryx-theme] {
   --blue: #0052ff;
   --blue-active: #003ecc;
   --color-accent: #0052ff;
+  --color-on-accent: #ffffff;
   --color-text-accent: #0052ff;
   --color-icon-accent: #0052ff;
   --font-family-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -15,6 +16,11 @@ html[data-astryx-theme] {
   --size-element-md: 44px;
   --size-element-lg: 48px;
   --radius-container: 24px;
+}
+
+/* Unlayered app link/reset styles otherwise override Astryx's layered color. */
+:where(.cp-app) .astryx-button[data-variant="primary"] {
+  color: var(--color-on-accent, #fff);
 }
 
 .xds-button,
