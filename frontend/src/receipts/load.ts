@@ -10,6 +10,7 @@ import {
 import { PROGRAM_ID, publicReceiptClient } from "../config/client";
 import { DEVNET_PYUSD_TOKEN_2022_MINT, DEVNET_USDC_MINT } from "../config/public";
 import {
+  amountLabel,
   classifyReceiptPda,
   type CurrentMandateView,
   type PublicReceiptPageState,
@@ -37,7 +38,20 @@ function amountView(amount: TokenAmountDisplay): ReceiptAmountView {
   };
 }
 
-function currentMandateView(read: CurrentMandateRead): CurrentMandateView {
+/**
+ * Render a mandate limit the same way the receipt amount above it is rendered.
+ *
+ * Mandate limits are u64 base units, the same unit as the amount, but the amount
+ * is decimal-formatted from the mint. Printing limits raw put two unit systems
+ * in one card: a 10 USDC cap read as `10000000` directly under an amount reading
+ * `10.00`. Reusing amountLabel keeps the "base units" wording identical when
+ * decimals are unknown, and keeps the value exact — never a JS Number.
+ */
+function mandateAmount(value: bigint, decimals: number | null): string {
+  return amountLabel(amountView(formatExactTokenAmount(value, decimals)));
+}
+
+function currentMandateView(read: CurrentMandateRead, decimals: number | null): CurrentMandateView {
   if (read.status === "present") {
     const mandate = read.mandate;
     return {
@@ -46,9 +60,9 @@ function currentMandateView(read: CurrentMandateRead): CurrentMandateView {
         status: mandate.status,
         paused: mandate.paused,
         revoked: mandate.revoked,
-        maxPerPayment: mandate.maxPerPayment.toString(),
-        totalLimit: mandate.totalLimit.toString(),
-        amountSpent: mandate.amountSpent.toString(),
+        maxPerPayment: mandateAmount(mandate.maxPerPayment, decimals),
+        totalLimit: mandateAmount(mandate.totalLimit, decimals),
+        amountSpent: mandateAmount(mandate.amountSpent, decimals),
         paymentCount: mandate.paymentCount.toString(),
         maxPaymentCount: mandate.maxPaymentCount.toString(),
         cooldownSlots: mandate.cooldownSlots.toString(),
@@ -84,7 +98,7 @@ export function receiptViewFromProof(
     transactionSignature: receipt.transactionSignature,
     amount: amountView(amount),
     tokenLabel: tokenLabelForMint(receipt.mint),
-    currentMandate: currentMandateView(currentMandate),
+    currentMandate: currentMandateView(currentMandate, amount.decimals),
     seller,
   };
 }

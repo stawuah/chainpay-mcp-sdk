@@ -98,6 +98,27 @@ test("unknown decimals stay exact base units", () => {
   assert.equal(model.amountLabel(fixtureReceipt.amount), "4.500000");
 });
 
+test("mandate limits go through the same label as the receipt amount", async () => {
+  // The card printed maxPerPayment, totalLimit and amountSpent as raw u64 base
+  // units directly beneath an amount decimal-formatted from the mint, so a
+  // 10 USDC cap read as `10000000` under an amount reading `10.00`.
+  //
+  // amountLabel itself is covered above. This pins that load.ts actually routes
+  // the mandate fields through it — asserted on source because load.ts imports
+  // the SDK and config/client and cannot be executed without a built sdk/dist,
+  // which the frontend suite deliberately does not build.
+  const load = await readFile(new URL("../src/receipts/load.ts", import.meta.url), "utf8");
+  assert.match(load, /function mandateAmount\(value: bigint, decimals: number \| null\)/);
+  assert.match(load, /amountLabel\(amountView\(formatExactTokenAmount\(value, decimals\)\)\)/);
+  for (const field of ["maxPerPayment", "totalLimit", "amountSpent"]) {
+    assert.match(
+      load,
+      new RegExp(`${field}: mandateAmount\\(mandate\\.${field}, decimals\\)`),
+      `${field} must be formatted, not printed raw`,
+    );
+  }
+});
+
 test("verified stamps keep Allowed and Paid independent of seller and current mandate", () => {
   const stamps = model.receiptStamps(fixtureReceipt);
   assert.equal(stamps[0].key, "allowed");
