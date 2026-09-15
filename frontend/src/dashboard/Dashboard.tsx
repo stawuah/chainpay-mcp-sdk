@@ -1,12 +1,16 @@
 import { useSettlementFormStatus, settlementPendingEvent, settlementTerminalEvent, type Operation, isPendingSettlement } from "../settlement";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveVersionedMandateAddress, toWeb3Transaction } from "@chainpay/sdk";
+import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveReceiptAddress, deriveVersionedMandateAddress, formatExactTokenAmount, toWeb3Transaction } from "@chainpay/sdk";
 import type { Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, TokenProgram } from "@chainpay/sdk";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import solWalletImage from "../assets/your-sol.jpg";
 import usdcWalletImage from "../assets/your-usdc.jpg";
 import pyusdWalletImage from "../assets/yourpyusd.png";
 import type { DashboardTab } from "../routing/paths";
+import { InboxReceipt, LoadedReceiptCard } from "../receipts/InboxReceipt";
+import { receiptViewFromSettledPayment, tokenLabelForMint } from "../receipts/load";
+import { amountLabel, publicReceiptPath } from "../receipts/model";
+import { sharePublicReceipt, shareStatusCopy } from "../receipts/share";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Arrow, Shield, shortAddress } from "../ui/marks";
 import {
@@ -487,7 +491,7 @@ export function Dashboard({
         });
       }
       const nextReply = result.outcome?.kind === "payment_settled"
-        ? `${result.message.trim() || "The payment settled successfully."}\n\nI'm done with the payment. Kindly go to ChainPay and verify the payment in Receipts.`
+        ? `${result.message.trim() || "The payment settled successfully."}\n\nThe receipt is on this page.`
         : result.message.trim() || "ChainPay did not return a response.";
       setReply(nextReply);
       setAgentToolsUsed(result.toolCalls ?? []);
@@ -611,7 +615,7 @@ export function Dashboard({
         if (settled?.status !== "confirmed" || !settled.signature || !settled.receiptAddress) {
           throw new Error("Axum did not return a finalized signature and verified receipt.");
         }
-        const response = `I'm done with the payment. The transaction is ${shortAddress(settled.signature)}. Kindly go to ChainPay and verify the payment in Receipts.`;
+        const response = `The payment settled. Transaction ${shortAddress(settled.signature)}. The receipt is on this page.`;
         setApprovalStatuses((current) => ({ ...current, [inboxId]: "success" }));
         setReply(response);
         updateAgentInboxItem(inboxId, { response, stage: "receipt_ready", approval: undefined, outcome: { kind: "payment_settled", signature: settled.signature, receiptAddress: settled.receiptAddress, status: settled.status } });
@@ -1789,171 +1793,15 @@ function AssistantMessage({ value, className = "" }: { value: string; className?
   return <div className={`assistant-message ${className}`}>{assistantMessageBlocks(value)}</div>;
 }
 
-type VerifiedReceiptDetails = {
+type LedgerReceiptRow = {
   address: string;
-  mandate: string;
   invoiceHash: string;
-  paymentId: string;
-  mint: string;
-  sourceTokenAccount: string;
   recipientTokenAccount: string;
-  recipient?: string;
-  amount: string;
-  agent: string;
   executedAtSlot: string;
-  signatureReference: string;
-  status: string;
-  onChainStatus: string;
-  bump: string;
-  transactionSignature?: string;
-  decimals?: number;
-  tokenLabel?: string;
+  settled: boolean;
+  amountLabel: string;
+  tokenLabel: string;
 };
-
-function parseReceiptRecord(value: unknown): VerifiedReceiptDetails | null {
-  if (!value || typeof value !== "object") return null;
-  const receipt = value as Record<string, unknown>;
-  const requiredFields = [
-    "address", "mandate", "invoiceHash", "paymentId", "mint", "sourceTokenAccount",
-    "recipientTokenAccount", "amount", "agent", "executedAtSlot", "signatureReference", "status",
-  ];
-  if (requiredFields.some((field) => typeof receipt[field] !== "string")) return null;
-  return {
-      address: receipt.address as string,
-      mandate: receipt.mandate as string,
-      invoiceHash: receipt.invoiceHash as string,
-      paymentId: receipt.paymentId as string,
-      mint: receipt.mint as string,
-      sourceTokenAccount: receipt.sourceTokenAccount as string,
-      recipientTokenAccount: receipt.recipientTokenAccount as string,
-      recipient: typeof receipt.recipient === "string" ? receipt.recipient : undefined,
-      amount: receipt.amount as string,
-      agent: receipt.agent as string,
-      executedAtSlot: receipt.executedAtSlot as string,
-      signatureReference: receipt.signatureReference as string,
-      status: receipt.status as string,
-      onChainStatus: String(receipt.onChainStatus ?? "—"),
-      bump: String(receipt.bump ?? "—"),
-      transactionSignature: typeof receipt.transactionSignature === "string" ? receipt.transactionSignature : undefined,
-      decimals: typeof receipt.decimals === "number" ? receipt.decimals : undefined,
-      tokenLabel: typeof receipt.tokenLabel === "string" ? receipt.tokenLabel : undefined,
-  };
-}
-
-function parseVerifiedReceipt(value: string): VerifiedReceiptDetails | null {
-  try {
-    const payload = JSON.parse(value) as { found?: unknown; receipt?: unknown; onChain?: unknown; offChain?: unknown };
-    if (payload.found !== true) return null;
-    const receipt = parseReceiptRecord(payload.onChain ?? payload.receipt);
-    if (!receipt) return null;
-    const offChain = payload.offChain && typeof payload.offChain === "object"
-      ? payload.offChain as Record<string, unknown>
-      : undefined;
-    return {
-      ...receipt,
-      transactionSignature: typeof offChain?.transactionSignature === "string"
-        ? offChain.transactionSignature
-        : receipt.transactionSignature,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function explorerAccountUrl(address: string) {
-  return `https://explorer.solana.com/address/${encodeURIComponent(address)}?cluster=devnet`;
-}
-
-function explorerTransactionUrl(signature: string, receiptView = false) {
-  return `https://explorer.solana.com/tx/${encodeURIComponent(signature)}?cluster=devnet${receiptView ? "&view=receipt" : ""}`;
-}
-
-function receiptAmount(receipt: VerifiedReceiptDetails) {
-  if (!/^\d+$/.test(receipt.amount)) return `${receipt.amount} base units`;
-  try {
-    const decimals = receipt.decimals ?? (
-      receipt.mint === DEVNET_USDC_MINT || receipt.mint === DEVNET_PYUSD_TOKEN_2022_MINT ? 6 : null
-    );
-    return formatTokenAmount(BigInt(receipt.amount), decimals);
-  } catch {
-    return `${receipt.amount} base units`;
-  }
-}
-
-function receiptTokenLabel(receipt: VerifiedReceiptDetails) {
-  if (receipt.tokenLabel) return receipt.tokenLabel;
-  if (receipt.mint === DEVNET_USDC_MINT) return "USDC";
-  if (receipt.mint === DEVNET_PYUSD_TOKEN_2022_MINT) return "PYUSD";
-  return shortAddress(receipt.mint);
-}
-
-function verifiedReceiptFromPayment(receipt: PaymentReceipt, decimals?: number, tokenLabel?: string): VerifiedReceiptDetails {
-  return {
-    address: receipt.address,
-    mandate: receipt.mandate,
-    invoiceHash: bytesToHex(receipt.invoiceHash),
-    paymentId: bytesToHex(receipt.paymentId),
-    mint: receipt.mint,
-    sourceTokenAccount: receipt.sourceTokenAccount,
-    recipientTokenAccount: receipt.recipientTokenAccount,
-    recipient: receipt.recipient,
-    amount: receipt.amount.toString(),
-    agent: receipt.agent,
-    executedAtSlot: receipt.executedAtSlot.toString(),
-    signatureReference: bytesToHex(receipt.signatureReference),
-    status: receipt.status,
-    onChainStatus: receipt.onChainStatus.toString(),
-    bump: receipt.bump.toString(),
-    transactionSignature: receipt.transactionSignature,
-    decimals,
-    tokenLabel,
-  };
-}
-
-function ReceiptAddressField({ label, value }: { label: string; value: string }) {
-  return <div className="verified-receipt-field">
-    <span>{label}</span>
-    <div className="verified-receipt-address">
-      <a href={explorerAccountUrl(value)} target="_blank" rel="noreferrer" title={`Open ${label} on Solana Explorer`}>{value}</a>
-      <button type="button" className="btn-icon" onClick={() => copyValue(value)} aria-label={`Copy ${label}`}>⧉</button>
-    </div>
-  </div>;
-}
-
-function VerifiedReceiptCard({ receipt, onSend }: { receipt: VerifiedReceiptDetails; onSend?: () => void }) {
-  const tokenLabel = receiptTokenLabel(receipt);
-  const recipient = receipt.recipientTokenAccount || receipt.recipient;
-  return <div className="verified-receipt-card">
-    <div className="verified-receipt-heading">
-      <div><span className="soft-label">VERIFIED RECEIPT</span><h3>Settlement confirmed</h3></div>
-      <span className="receipt-confirmed"><i /> {receipt.status}</span>
-    </div>
-    <div className="verified-receipt-summary">
-      <div><span>Settlement amount</span><strong>{receiptAmount(receipt)} {tokenLabel}</strong><small>{receipt.amount} base units</small></div>
-      <div><span>Network</span><strong>Solana Devnet</strong><small>On-chain status {receipt.onChainStatus}</small></div>
-      <div><span>Executed slot</span><strong>{receipt.executedAtSlot}</strong><small>Receipt bump {receipt.bump}</small></div>
-    </div>
-    <div className="verified-receipt-fields">
-      <ReceiptAddressField label="Receipt PDA" value={receipt.address} />
-      <ReceiptAddressField label="Mandate" value={receipt.mandate} />
-      <ReceiptAddressField label={`${tokenLabel} mint`} value={receipt.mint} />
-      <ReceiptAddressField label="Source token account" value={receipt.sourceTokenAccount} />
-      {recipient && <ReceiptAddressField label="Recipient token account" value={recipient} />}
-      <ReceiptAddressField label="Agent" value={receipt.agent} />
-      <div className="verified-receipt-field verified-receipt-wide"><span>Invoice hash</span><strong>{receipt.invoiceHash}</strong><button type="button" className="btn-icon" onClick={() => copyValue(receipt.invoiceHash)} aria-label="Copy invoice hash">⧉</button></div>
-      <div className="verified-receipt-field verified-receipt-wide"><span>Payment ID</span><strong>{receipt.paymentId}</strong><button type="button" className="btn-icon" onClick={() => copyValue(receipt.paymentId)} aria-label="Copy payment ID">⧉</button></div>
-      <div className="verified-receipt-field verified-receipt-wide"><span>Signature reference</span><strong>{receipt.signatureReference}</strong><button type="button" className="btn-icon" onClick={() => copyValue(receipt.signatureReference)} aria-label="Copy signature reference">⧉</button></div>
-    </div>
-    <div className="verified-receipt-actions">
-      {receipt.transactionSignature && <a className="button button-primary button-small" href={explorerTransactionUrl(receipt.transactionSignature, true)} target="_blank" rel="noreferrer">View receipt <Arrow /></a>}
-      {onSend && <button type="button" className="button button-secondary-light button-small" onClick={onSend}>Send receipt <Arrow /></button>}
-      <a href={explorerAccountUrl(receipt.address)} target="_blank" rel="noreferrer">Receipt account <Arrow /></a>
-      <a href={explorerAccountUrl(receipt.mandate)} target="_blank" rel="noreferrer">Mandate <Arrow /></a>
-      {recipient && <a href={explorerAccountUrl(recipient)} target="_blank" rel="noreferrer">Recipient account <Arrow /></a>}
-      <a href={explorerAccountUrl(receipt.mint)} target="_blank" rel="noreferrer">{tokenLabel} mint <Arrow /></a>
-    </div>
-  </div>;
-}
 
 function ReceiptPanel({ mandates, stablecoinOptions, onCallMcp }: { mandates: Mandate[]; stablecoinOptions: StablecoinOption[]; onCallMcp: (name: string, args: Record<string, unknown>) => Promise<McpToolResponse> }) {
   const [lookupMode, setLookupMode] = useState<"receipt" | "mandate">("receipt");
@@ -1961,8 +1809,8 @@ function ReceiptPanel({ mandates, stablecoinOptions, onCallMcp }: { mandates: Ma
   const [lookupMandate, setLookupMandate] = useState("");
   const [lookupInvoiceHash, setLookupInvoiceHash] = useState("");
   const [result, setResult] = useState("");
-  const [verifiedReceipt, setVerifiedReceipt] = useState<VerifiedReceiptDetails | null>(null);
-  const [onChainReceipts, setOnChainReceipts] = useState<VerifiedReceiptDetails[]>([]);
+  const [lookupPda, setLookupPda] = useState("");
+  const [onChainReceipts, setOnChainReceipts] = useState<LedgerReceiptRow[]>([]);
   const [selectedReceiptAddress, setSelectedReceiptAddress] = useState("");
   const [receiptLoadStatus, setReceiptLoadStatus] = useState<"loading" | "ready" | "error">("loading");
   const [receiptLoadError, setReceiptLoadError] = useState("");
@@ -1972,6 +1820,7 @@ function ReceiptPanel({ mandates, stablecoinOptions, onCallMcp }: { mandates: Ma
   const mandateKey = mandates.map((item) => item.address).sort().join("|");
   const stablecoinKey = stablecoinOptions.map((item) => `${item.mint}:${item.label}`).join("|");
   const selectedReceipt = onChainReceipts.find((item) => item.address === selectedReceiptAddress) ?? onChainReceipts[0] ?? null;
+  const settledCount = onChainReceipts.filter((item) => item.settled).length;
 
   useEffect(() => {
     let active = true;
@@ -2008,11 +1857,19 @@ function ReceiptPanel({ mandates, stablecoinOptions, onCallMcp }: { mandates: Ma
       for (const state of decimalStates) {
         if (state.status === "fulfilled") decimalsByMint.set(state.value[0], state.value[1]);
       }
-      const details = receipts.map((receipt) => verifiedReceiptFromPayment(
-        receipt,
-        decimalsByMint.get(receipt.mint),
-        stablecoinOptions.find((option) => option.mint === receipt.mint)?.label,
-      ));
+      const details = receipts.map((receipt) => {
+        const view = receiptViewFromSettledPayment(receipt, decimalsByMint.get(receipt.mint) ?? null);
+        const amount = formatExactTokenAmount(receipt.amount, decimalsByMint.get(receipt.mint) ?? null);
+        return {
+          address: receipt.address,
+          invoiceHash: bytesToHex(receipt.invoiceHash),
+          recipientTokenAccount: receipt.recipientTokenAccount,
+          executedAtSlot: receipt.executedAtSlot.toString(),
+          settled: Boolean(view),
+          amountLabel: amountLabel(amount),
+          tokenLabel: stablecoinOptions.find((option) => option.mint === receipt.mint)?.label ?? tokenLabelForMint(receipt.mint),
+        };
+      });
       if (!active) return;
       setOnChainReceipts(details);
       setSelectedReceiptAddress((current) => (
@@ -2031,42 +1888,38 @@ function ReceiptPanel({ mandates, stablecoinOptions, onCallMcp }: { mandates: Ma
     return () => { active = false; };
   }, [mandateKey, stablecoinKey, receiptLoadVersion]);
 
-  async function sendReceipt(receipt: VerifiedReceiptDetails) {
-    const url = receipt.transactionSignature
-      ? explorerTransactionUrl(receipt.transactionSignature, true)
-      : explorerAccountUrl(receipt.address);
-    const text = `ChainPay receipt: ${receiptAmount(receipt)} ${receiptTokenLabel(receipt)} confirmed on Solana Devnet. Receipt ${receipt.address}.`;
+  async function sendReceipt(receipt: LedgerReceiptRow) {
     setShareMessage("");
-    try {
-      if (typeof navigator.share === "function") {
-        await navigator.share({ title: "ChainPay settlement receipt", text, url });
-        setShareMessage("Receipt sent from your browser.");
-      } else if (navigator.clipboard) {
-        await navigator.clipboard.writeText(`${text}\n${url}`);
-        setShareMessage("Receipt details and link copied. Paste them into any message.");
-      } else {
-        setShareMessage("Open the receipt and copy the Explorer link from your browser.");
-      }
-    } catch (cause) {
-      if (cause instanceof DOMException && cause.name === "AbortError") return;
-      setShareMessage("The browser could not send this receipt. Open it and copy the Explorer link instead.");
-    }
+    const result = await sharePublicReceipt({
+      amountLabel: receipt.amountLabel,
+      tokenLabel: receipt.tokenLabel,
+      receiptPda: receipt.address,
+    });
+    setShareMessage(shareStatusCopy(result));
   }
 
   async function lookup() {
-    const args = lookupMode === "receipt"
-      ? { receiptAddress: receiptAddress.trim() }
-      : { mandate: lookupMandate.trim(), invoiceHash: lookupInvoiceHash.trim() };
-    if (Object.values(args).some((value) => !value)) return;
+    let pda = lookupMode === "receipt" ? receiptAddress.trim() : "";
+    if (lookupMode === "mandate") {
+      if (!lookupMandate.trim() || !lookupInvoiceHash.trim()) return;
+      try {
+        pda = deriveReceiptAddress(lookupMandate.trim(), hexToBytes(lookupInvoiceHash.trim()), PROGRAM_ID);
+      } catch (cause) {
+        setLookupPda("");
+        setResult(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
+    }
+    if (!pda) return;
     setLoading(true);
     setShareMessage("");
+    setLookupPda(pda);
     try {
-      const response = await onCallMcp("get_payment", args);
-      const text = toolText(response);
-      setResult(text);
-      setVerifiedReceipt(parseVerifiedReceipt(text));
+      const response = await onCallMcp("get_payment", lookupMode === "receipt"
+        ? { receiptAddress: pda }
+        : { mandate: lookupMandate.trim(), invoiceHash: lookupInvoiceHash.trim() });
+      setResult(toolText(response));
     } catch (cause) {
-      setVerifiedReceipt(null);
       setResult(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setLoading(false);
@@ -2075,24 +1928,24 @@ function ReceiptPanel({ mandates, stablecoinOptions, onCallMcp }: { mandates: Ma
 
   return <section className="receipt-page">
     <div className="dashboard-card onchain-receipts-card">
-      <div className="dashboard-card-heading"><div><span className="section-kicker">ON-CHAIN RECEIPTS</span><h2>Settlement history</h2></div><div className="receipt-ledger-heading-actions"><span className="chip chip-muted">{onChainReceipts.length} confirmed</span><button type="button" className="refresh-button btn btn-secondary-light" onClick={() => setReceiptLoadVersion((value) => value + 1)} disabled={receiptLoadStatus === "loading"}>↻ Refresh</button></div></div>
-      <p className="builder-intro">Receipts are read directly from the ChainPay program for this wallet’s mandates. Select one to preview, view, or send it.</p>
-      {receiptLoadStatus === "loading" ? <p className="receipt-ledger-empty">Reading finalized Devnet receipts…</p> : onChainReceipts.length === 0 ? <p className="receipt-ledger-empty">No receipts yet — they appear once a payment settles.</p> : <div className="receipt-ledger-list">{onChainReceipts.map((receipt) => {
+      <div className="dashboard-card-heading"><div><span className="section-kicker">ON-CHAIN RECEIPTS</span><h2>Settlement history</h2></div><div className="receipt-ledger-heading-actions"><span className="chip chip-muted">{settledCount} settled</span><button type="button" className="refresh-button btn btn-secondary-light" onClick={() => setReceiptLoadVersion((value) => value + 1)} disabled={receiptLoadStatus === "loading"}>↻ Refresh</button></div></div>
+      <p className="builder-intro">Receipts are read directly from the ChainPay program for this wallet’s mandates. Select one to preview or share the ChainPay URL.</p>
+      {receiptLoadStatus === "loading" ? <p className="receipt-ledger-empty">Reading Devnet receipts…</p> : onChainReceipts.length === 0 ? <p className="receipt-ledger-empty">No receipts yet — they appear once a payment settles.</p> : <div className="receipt-ledger-list">{onChainReceipts.map((receipt) => {
         const selected = receipt.address === selectedReceipt?.address;
         return <article className={`receipt-ledger-row ${selected ? "is-selected" : ""}`} key={receipt.address}>
-          <button type="button" className="receipt-ledger-main" onClick={() => setSelectedReceiptAddress(receipt.address)} aria-label={`Preview ${receiptTokenLabel(receipt)} receipt ${receipt.address}`}>
-            <span className="receipt-ledger-icon">✓</span>
-            <span className="receipt-ledger-payment"><strong>{receiptAmount(receipt)} {receiptTokenLabel(receipt)}</strong><small>Invoice {shortAddress(receipt.invoiceHash)} · to {shortAddress(receipt.recipientTokenAccount)}</small></span>
-            <span className="receipt-ledger-status"><strong>{receipt.status}</strong><small>Slot {receipt.executedAtSlot}</small></span>
+          <button type="button" className="receipt-ledger-main" onClick={() => setSelectedReceiptAddress(receipt.address)} aria-label={`Preview ${receipt.tokenLabel} receipt ${receipt.address}`}>
+            <span className="receipt-ledger-icon">{receipt.settled ? "·" : "?"}</span>
+            <span className="receipt-ledger-payment"><strong>{receipt.amountLabel} {receipt.tokenLabel}</strong><small>Invoice {shortAddress(receipt.invoiceHash)} · to {shortAddress(receipt.recipientTokenAccount)}</small></span>
+            <span className="receipt-ledger-status"><strong>{receipt.settled ? "Settled" : "Unsettled"}</strong><small>Slot {receipt.executedAtSlot}</small></span>
           </button>
-          <div className="receipt-ledger-actions"><button type="button" className="btn-icon" onClick={() => setSelectedReceiptAddress(receipt.address)} aria-label={`Preview receipt ${receipt.address}`}>⌕</button>{receipt.transactionSignature && <a className="btn-icon" href={explorerTransactionUrl(receipt.transactionSignature, true)} target="_blank" rel="noreferrer" aria-label={`View receipt ${receipt.address} on Solana Explorer`}>↗</a>}<button type="button" className="btn-icon" onClick={() => void sendReceipt(receipt)} aria-label={`Send receipt ${receipt.address}`}>➤</button></div>
+          <div className="receipt-ledger-actions"><button type="button" className="btn-icon" onClick={() => setSelectedReceiptAddress(receipt.address)} aria-label={`Preview receipt ${receipt.address}`}>⌕</button><a className="btn-icon" href={publicReceiptPath(receipt.address)} aria-label={`Open public receipt ${receipt.address}`}>↗</a><button type="button" className="btn-icon" onClick={() => void sendReceipt(receipt)} aria-label={`Share receipt ${receipt.address}`}>➤</button></div>
         </article>;
       })}</div>}
       {receiptLoadError && <small className={receiptLoadStatus === "error" ? "receipt-ledger-error" : "receipt-ledger-warning"}>{receiptLoadError}</small>}
     </div>
-    {selectedReceipt && <div className="dashboard-card receipt-preview-card"><div className="dashboard-card-heading"><div><span className="section-kicker">RECEIPT PREVIEW</span><h2>{receiptAmount(selectedReceipt)} {receiptTokenLabel(selectedReceipt)}</h2></div><span className="receipt-confirmed"><i /> Confirmed</span></div><VerifiedReceiptCard receipt={selectedReceipt} onSend={() => void sendReceipt(selectedReceipt)} /></div>}
+    {selectedReceipt && <div className="dashboard-card receipt-preview-card"><div className="dashboard-card-heading"><div><span className="section-kicker">RECEIPT PREVIEW</span><h2>{selectedReceipt.amountLabel} {selectedReceipt.tokenLabel}</h2></div></div><LoadedReceiptCard receiptPda={selectedReceipt.address} shareMode="dashboard" onShare={() => void sendReceipt(selectedReceipt)} /></div>}
     {shareMessage && <div className="receipt-share-message" role="status">{shareMessage}</div>}
-    <div className="dashboard-card receipt-lookup"><div className="dashboard-card-heading"><div><span className="section-kicker">MCP RECEIPT LOOKUP</span><h2>Verify another settlement</h2></div><span className="mcp-badge"><span /> get_payment</span></div><p className="builder-intro">Look up a confirmed payment by receipt PDA, or use its mandate and invoice hash. These lookups are read-only.</p><div className="receipt-lookup-tabs" role="tablist" aria-label="Receipt lookup type"><button type="button" className={lookupMode === "receipt" ? "is-selected" : ""} onClick={() => { setLookupMode("receipt"); setVerifiedReceipt(null); setResult(""); }} role="tab" aria-selected={lookupMode === "receipt"}>Receipt address</button><button type="button" className={lookupMode === "mandate" ? "is-selected" : ""} onClick={() => { setLookupMode("mandate"); setVerifiedReceipt(null); setResult(""); }} role="tab" aria-selected={lookupMode === "mandate"}>Mandate + invoice</button></div>{lookupMode === "receipt" ? <div className="receipt-search"><input value={receiptAddress} onChange={(event) => { setReceiptAddress(event.target.value); setVerifiedReceipt(null); }} onKeyDown={(event) => { if (event.key === "Enter") void lookup(); }} placeholder="Receipt PDA address" aria-label="Receipt PDA address" /><button className="button button-primary" onClick={() => void lookup()} disabled={loading || !receiptAddress.trim()}>{loading ? "Looking up…" : "Verify"} <Arrow /></button></div> : <div className="receipt-search receipt-search-grid"><input value={lookupMandate} onChange={(event) => { setLookupMandate(event.target.value); setVerifiedReceipt(null); }} placeholder="Mandate address" aria-label="Mandate address" /><input value={lookupInvoiceHash} onChange={(event) => { setLookupInvoiceHash(event.target.value); setVerifiedReceipt(null); }} onKeyDown={(event) => { if (event.key === "Enter") void lookup(); }} placeholder="64-character invoice hash" aria-label="Invoice hash" /><button className="button button-primary" onClick={() => void lookup()} disabled={loading || !lookupMandate.trim() || !lookupInvoiceHash.trim()}>{loading ? "Looking up…" : "Verify"} <Arrow /></button></div>}{verifiedReceipt && <VerifiedReceiptCard receipt={verifiedReceipt} onSend={() => void sendReceipt(verifiedReceipt)} />}{result && <details className="receipt-raw"><summary>View raw MCP response</summary><div className="state-box receipt-result"><pre>{result}</pre></div></details>}</div>
+    <div className="dashboard-card receipt-lookup"><div className="dashboard-card-heading"><div><span className="section-kicker">VERIFY A PAYMENT</span><h2>Look up another settlement</h2></div></div><p className="builder-intro">Look up a payment by receipt PDA, or use its mandate and invoice hash. The card below is read from the finalized on-chain receipt.</p><div className="receipt-lookup-tabs" role="tablist" aria-label="Receipt lookup type"><button type="button" className={lookupMode === "receipt" ? "is-selected" : ""} onClick={() => { setLookupMode("receipt"); setLookupPda(""); setResult(""); }} role="tab" aria-selected={lookupMode === "receipt"}>Receipt address</button><button type="button" className={lookupMode === "mandate" ? "is-selected" : ""} onClick={() => { setLookupMode("mandate"); setLookupPda(""); setResult(""); }} role="tab" aria-selected={lookupMode === "mandate"}>Mandate + invoice</button></div>{lookupMode === "receipt" ? <div className="receipt-search"><input value={receiptAddress} onChange={(event) => { setReceiptAddress(event.target.value); setLookupPda(""); }} onKeyDown={(event) => { if (event.key === "Enter") void lookup(); }} placeholder="Receipt PDA address" aria-label="Receipt PDA address" /><button className="button button-primary" onClick={() => void lookup()} disabled={loading || !receiptAddress.trim()}>{loading ? "Looking up…" : "Verify"} <Arrow /></button></div> : <div className="receipt-search receipt-search-grid"><input value={lookupMandate} onChange={(event) => { setLookupMandate(event.target.value); setLookupPda(""); }} placeholder="Mandate address" aria-label="Mandate address" /><input value={lookupInvoiceHash} onChange={(event) => { setLookupInvoiceHash(event.target.value); setLookupPda(""); }} onKeyDown={(event) => { if (event.key === "Enter") void lookup(); }} placeholder="64-character invoice hash" aria-label="Invoice hash" /><button className="button button-primary" onClick={() => void lookup()} disabled={loading || !lookupMandate.trim() || !lookupInvoiceHash.trim()}>{loading ? "Looking up…" : "Verify"} <Arrow /></button></div>}{lookupPda && <LoadedReceiptCard receiptPda={lookupPda} shareMode="dashboard" />}{result && <details className="receipt-raw"><summary>View raw MCP response</summary><div className="state-box receipt-result"><pre>{result}</pre></div></details>}</div>
   </section>;
 }
 
@@ -2133,10 +1986,10 @@ function AgentInboxPanel({ inbox, approvalStatuses, approvalErrors, stablecoinOp
   const currentItem = inbox[0];
   const historyItems = inbox.slice(1, 12);
   const renderApproval = (item: AgentInboxItem) => item.approval && item.stage === "waiting_for_approval" && <AgentApprovalCard approval={item.approval} status={approvalStatuses[item.id] ?? "idle"} error={approvalErrors[item.id] ?? item.error ?? ""} stablecoinOptions={stablecoinOptions} decimals={mandateDecimals} onApprove={() => onApprove(item.id)} />;
-  const renderReceipt = (item: AgentInboxItem) => item.stage === "receipt_ready" && <div className="agent-receipt-callout"><div><b>Payment complete</b><p>I'm done with the payment. Kindly go to ChainPay and verify the payment in Receipts.</p></div><button className="button button-secondary-light button-small" onClick={onOpenReceipts}>Verify payment <Arrow /></button></div>;
+  const renderReceipt = (item: AgentInboxItem) => item.stage === "receipt_ready" && <InboxReceipt receiptAddress={item.outcome?.receiptAddress} />;
   const sourceLabel = (item: AgentInboxItem) => item.source === "invoice" ? "INVOICE / DOCUMENT" : item.source === "mandate" ? "MANDATE REQUEST" : "AI REQUEST";
   const statusLabel = (item: AgentInboxItem) => item.stage === "waiting_for_approval" ? "Approval needed" : item.stage === "receipt_ready" ? "Receipt ready" : item.stage === "approved" ? "Policy active" : item.stage === "blocked" ? "Blocked" : item.stage.replaceAll("_", " ");
-  const statusClass = (item: AgentInboxItem) => item.stage === "receipt_ready" || item.stage === "approved" ? "ok" : item.stage === "blocked" ? "failed" : "";
+  const statusClass = (item: AgentInboxItem) => item.stage === "approved" ? "ok" : item.stage === "blocked" ? "failed" : "";
   const renderHeader = (item: AgentInboxItem, current: boolean) => <div className="agent-inbox-item-heading"><div><span className="agent-inbox-source">{sourceLabel(item)}</span>{current && <span className="agent-current-label">CURRENT REQUEST</span>}<h3>{item.title}</h3></div><span className={`state-pill ${statusClass(item)}`}><i /> {statusLabel(item)}</span></div>;
   return <section className="agent-inbox-panel" aria-labelledby="agent-inbox-title">
     <div className="agent-inbox-heading"><div><span className="section-kicker">AI RECEIVED & PREPARED</span><h2 id="agent-inbox-title">Approval queue</h2></div><div className="agent-inbox-summary"><span className="chip chip-muted">{waitingCount} awaiting approval</span><span className="chip chip-muted">{inbox.length} received</span></div></div>

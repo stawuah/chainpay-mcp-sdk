@@ -21,7 +21,7 @@ export default defineConfig({
             || id.includes("node_modules/@solana")
             || id.includes("node_modules/@wallet-standard")
           ) return "wallet";
-          if (id.includes("/src/dashboard/") || id.includes("/src/owner/") || id.includes("/src/config/client") || id.includes("/sdk/") || id.includes("/src/settlement")) return "dashboard";
+          if (id.includes("/src/dashboard/") || id.includes("/src/owner/") || id.includes("/src/receipts/") || id.includes("/src/config/client") || id.includes("/sdk/") || id.includes("/src/settlement")) return "dashboard";
           if (id.includes("/src/verify/")) return "verify";
           return undefined;
         },
