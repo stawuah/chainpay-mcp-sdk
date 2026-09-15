@@ -1,3 +1,4 @@
+import { BrandLogo } from "../brand/Brand";
 import { Button } from "@astryxdesign/core/Button";
 import { MobileNav } from "@astryxdesign/core/MobileNav";
 import type { DashboardTab } from "../routing/paths";
@@ -44,8 +45,7 @@ export function DashboardNav({ tab, approvalCount = 0, toolCount = 0, onSelect, 
     <>
       <div className="dashboard-sidebar-brand">
         <a className="brand" href="#dashboard" aria-label="ChainPay dashboard">
-          <span className="brand-mark"><span /></span>
-          <span>Chain<span>Pay</span></span>
+          <BrandLogo />
         </a>
       </div>
       <div className="sidebar-label">WORKSPACE</div>

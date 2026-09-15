@@ -20,7 +20,9 @@ export function printReceipt(card: HTMLElement): void {
   style.textContent = `
     @page { margin: 18mm; }
     body { margin: 0; font: 12px/1.5 system-ui, sans-serif; color: #172b4d; background: white; }
-    .receipt-brand { color: #174de6; font-size: 22px; font-weight: 700; }
+    .receipt-brand { margin-bottom: 16px; }
+    .cp-brand { display: inline-flex; align-items: center; gap: 7px; color: #14213d; font: 500 23px/1 Inter, system-ui, sans-serif; letter-spacing: -.035em; }
+    .cp-brand-symbol { width: 33px; height: 33px; color: #0052ff; }
     .receipt-card-heading { display: flex; justify-content: space-between; gap: 20px; }
     h3 { font-size: 24px; margin: 8px 0; }
     small { display: block; font-size: 11px; font-weight: 400; }

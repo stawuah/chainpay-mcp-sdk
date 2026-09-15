@@ -1,3 +1,4 @@
+import { BrandLogo } from "../brand/Brand";
 import { useSettlementFormStatus, settlementPendingEvent, settlementTerminalEvent, type Operation, isPendingSettlement } from "../settlement";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveReceiptAddress, deriveVersionedMandateAddress, formatExactTokenAmount, toWeb3Transaction } from "@chainpay/sdk";
@@ -792,7 +793,7 @@ export function Dashboard({
           <header className="dashboard-topbar">
             <div className="dashboard-topbar-left">
               <IconButton className="dashboard-menu-button" type="button" variant="ghost" label="Open dashboard navigation" icon={<span aria-hidden="true">☰</span>} onClick={() => setMobileNav(true)} />
-              <a className="brand dashboard-topbar-brand" href="#dashboard"><span className="brand-mark"><span /></span><span>chain<span>pay</span></span></a>
+              <a className="brand dashboard-topbar-brand" href="#dashboard"><BrandLogo /></a>
             </div>
             <div className="dashboard-top-actions">
               <span className="dashboard-network"><i /> Solana Devnet</span>

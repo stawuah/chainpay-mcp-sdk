@@ -1,3 +1,4 @@
+import { BrandLogo } from "../brand/Brand";
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { PROGRAM_ID } from "../config/public";
@@ -76,8 +77,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
       <a className="landing-skip" href="#top">Skip to content</a>
       <header className="topbar page-width">
         <a className="brand" href="#top" aria-label="ChainPay home">
-          <span className="brand-mark"><span /></span>
-          <span>chain<span>pay</span></span>
+          <BrandLogo />
         </a>
         <nav id={navId} className={`main-nav${menuOpen ? " open" : ""}`} aria-label="Landing">
           {NAV_LINKS.map((link) => (
@@ -181,8 +181,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
 
       <footer className="landing-footer page-width">
         <a className="brand" href="#top" aria-label="ChainPay home">
-          <span className="brand-mark"><span /></span>
-          <span>chain<span>pay</span></span>
+          <BrandLogo />
         </a>
         <p className="t-body-sm">Policy-controlled agent payments on Solana Devnet. The owner wallet holds the funds.</p>
         <div className="landing-footer-links">

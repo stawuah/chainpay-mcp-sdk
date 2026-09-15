@@ -1,0 +1,20 @@
+:root {
+ --cp-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+ --cp-weight-body: 400;
+ --cp-weight-heading: 500;
+ --cp-weight-label: 600;
+ --cp-brand-blue: #0052ff;
+ --cp-brand-ink: #14213d;
+}
+.cp-brand { display: inline-flex; align-items: center; gap: .32em; color: var(--cp-brand-ink); font-family: var(--cp-font-sans); font-size: 23px; font-weight: var(--cp-weight-heading); letter-spacing: -.035em; line-height: 1; white-space: nowrap; vertical-align: middle; }
+.cp-brand .cp-brand-symbol { display: block; width: 1.42em; height: 1.42em; flex: none; color: var(--cp-brand-blue); }
+.cp-brand .cp-brand-wordmark { color: var(--cp-brand-ink); }
+.cp-brand-compact { font-size: 19px; }
+.cp-brand-large { font-size: 32px; }
+/* Shared type roles connect the mark with the product's native Astryx type. */
+.cp-app :is(h1,h2,h3) { font-family: var(--cp-font-sans); }
+.cp-app .dashboard-heading h1, .cp-app .dashboard-card-heading h2,
+.cp-app .overview-agent-heading h2, .cp-app .mandate-create-toolbar h2,
+.cp-app .app-dialog-heading h2, .cp-app .receipt-page-state h1,
+.cp-app .receipt-card-heading h3 { font-weight: var(--cp-weight-heading); }
+.cp-app .astryx-button { font-family: var(--cp-font-sans); }

@@ -1,3 +1,4 @@
+import { BrandLogo } from "../brand/Brand";
 import { useEffect, useState } from "react";
 import { loadPublicReceiptView } from "../receipts/load";
 import { classifyReceiptPda, initialPageState, type PublicReceiptPageState } from "../receipts/model";
@@ -26,8 +27,7 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
     <main className="site-shell cp-app verify-page">
       <header className="topbar page-width">
         <a className="brand" href="/" aria-label="ChainPay home">
-          <span className="brand-mark"><span /></span>
-          <span>chain<span>pay</span></span>
+          <BrandLogo />
         </a>
         <a className="login-link" href="/">Back to ChainPay</a>
       </header>

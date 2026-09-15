@@ -6,11 +6,12 @@ export const chainPayTheme = defineTheme({
   extends: neutralTheme,
   typography: {
     body: { family: "Inter", fallbacks: "-apple-system, BlinkMacSystemFont, sans-serif" },
-    heading: { family: "Inter", fallbacks: "-apple-system, BlinkMacSystemFont, sans-serif", weight: "normal" },
+    heading: { family: "Inter", fallbacks: "-apple-system, BlinkMacSystemFont, sans-serif", weight: "medium" },
     code: { family: "JetBrains Mono", fallbacks: "ui-monospace, SFMono-Regular, monospace" },
   },
   tokens: {
     "--color-accent": "#0052ff",
+    "--color-on-accent": "#ffffff",
     "--color-text-accent": "#0052ff",
     "--color-icon-accent": "#0052ff",
     "--color-border-blue": "#0052ff",

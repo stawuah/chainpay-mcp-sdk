@@ -117,7 +117,8 @@ test("public verify renders a mocked settled receipt without inventing delivery"
         node.contentWindow.focus = () => {};
         node.contentWindow.print = () => {
           const output = node.contentDocument.body;
-          assert.match(output.textContent, /ChainPay/);
+          assert.match(output.textContent, /chainpay/);
+          assert.equal(output.querySelectorAll(".cp-brand-symbol path").length, 2);
           assert.match(output.textContent, /4\.500000 USDC/);
           assert.match(output.textContent, /No seller statement/);
           assert.match(output.textContent, /Paid is unchanged/);

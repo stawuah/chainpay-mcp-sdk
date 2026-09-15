@@ -1,3 +1,4 @@
+import { BrandLogo } from "../brand/Brand";
 import { AssetMark } from "./SupportedAssets";
 import { Button } from "@astryxdesign/core/Button";
 
@@ -22,7 +23,7 @@ export function PaymentExample() {
 
 export function ReceiptExample() {
   return <article className="story-document story-receipt">
-    <div className="story-document-head"><span className="story-wordmark">chainpay</span><span>Payment receipt</span></div>
+    <div className="story-document-head"><BrandLogo size="compact" /><span>Payment receipt</span></div>
     <p className="story-overline">Illustrative receipt · no payment made</p><h3 className="story-amount">4.50 <span className="story-token"><AssetMark asset="USDC" />USDC</span></h3>
     <dl className="story-fields"><div><dt>Agent</dt><dd>Research agent</dd></div><div><dt>Recipient</dt><dd>Example service</dd></div><div><dt>Network</dt><dd className="story-token"><AssetMark asset="Solana" />Solana Devnet</dd></div></dl>
     <div className="story-evidence"><strong>Payment verification</strong><p>A live receipt reports the verified settlement state.</p><strong>No seller statement</strong><p>Seller evidence is separate from payment verification.</p></div>

@@ -1,3 +1,4 @@
+import { BrandLogo } from "../brand/Brand";
 import { useRef, useState } from "react";
 import { Arrow } from "../ui/marks";
 import {
@@ -82,7 +83,7 @@ export function ReceiptCard({
 
   return (
     <article ref={cardRef} className="receipt-card" data-paid="yes">
-      <p className="receipt-brand">ChainPay</p>
+      <div className="receipt-brand"><BrandLogo /></div>
       <div className="receipt-card-heading">
         <div>
           <span className="section-kicker">PAYMENT RECEIPT</span>

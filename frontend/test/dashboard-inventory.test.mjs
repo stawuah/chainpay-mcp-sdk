@@ -194,6 +194,7 @@ test("DashboardNav renders ordered workspace and secondary destinations", async 
   } finally {
     await act(async () => reactRoot.unmount());
     await unlink(outfile).catch(() => {});
+    await unlink(outfile.replace(/\.mjs$/, ".css")).catch(() => {});
     dom.window.close();
   }
 });
