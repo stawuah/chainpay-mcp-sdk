@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { PROGRAM_ID } from "../config/public";
 import { PaymentStory, PermissionExample } from "./PaymentStory";
+import { SupportedAssets } from "./SupportedAssets";
 import { useLandingMotion } from "./useLandingMotion";
 import "./landing.css";
 
@@ -125,6 +126,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
           </div>
         </section>
 
+        <SupportedAssets />
         <PaymentStory onOpenDashboard={onOpenDashboard} />
 
         <section className="landing-section page-width" id="developers" aria-labelledby="landing-dev-heading">

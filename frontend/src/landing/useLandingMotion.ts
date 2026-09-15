@@ -25,7 +25,7 @@ export function useLandingMotion(root: RefObject<HTMLDivElement | null>) {
     }, root);
     // A single stationary document evolves while the original chapters remain
     // in reading order. The visual duplicate is hidden from assistive technology.
-    media.add("(min-width: 1100px) and (min-height: 800px) and (prefers-reduced-motion: no-preference)", () => {
+    media.add("(min-width: 1100px) and (min-height: 950px) and (prefers-reduced-motion: no-preference)", () => {
       const sequence = root.current!.querySelector<HTMLElement>(".story-sequence")!;
       sequence.classList.add("is-morphing");
       const states = Array.from(sequence.querySelectorAll<HTMLElement>(".story-morph-state"));
@@ -33,8 +33,17 @@ export function useLandingMotion(root: RefObject<HTMLDivElement | null>) {
       gsap.set(states.slice(1), { opacity: 0, y: 28, scale: 0.97 });
       ScrollTrigger.create({ trigger: sequence.querySelector(".story-morph"), start: "top 110px",
         endTrigger: sequence, end: "bottom bottom", pin: true, pinSpacing: false });
+      const agentLayer = sequence.querySelector<HTMLElement>(".story-satellite-agent")!;
+      const tokenLayer = sequence.querySelector<HTMLElement>(".story-satellite-token")!;
+      const agentLabel = agentLayer.querySelector<HTMLElement>(".satellite-label")!;
+      const tokenLabel = tokenLayer.querySelector<HTMLElement>(".satellite-label")!;
+      const labels = [["YOUR PERMISSION", "PAYMENT REQUEST"], ["AMOUNT LIMIT", "FOR YOUR REVIEW"], ["LINKED PERMISSION", "RECEIPT AMOUNT"], ["YOU KEEP CONTROL", "SPENDING RECORDED"]];
       const timeline = gsap.timeline({ scrollTrigger: {
         trigger: chapters[0], start: "center center", endTrigger: chapters[3], end: "center center", scrub: true,
+        onUpdate: self => {
+          const index = Math.min(3, Math.round(self.progress * 3));
+          agentLabel.textContent = labels[index][0]; tokenLabel.textContent = labels[index][1];
+        },
       }});
       states.forEach((state, index) => {
         if (!index) return;
@@ -43,6 +52,8 @@ export function useLandingMotion(root: RefObject<HTMLDivElement | null>) {
           .to(state, { opacity: 1, y: 0, scale: 1, duration: 0.4, ease: "power2.inOut" }, position);
       });
       timeline.to({}, { duration: 0.4 });
+      timeline.to(agentLayer, { x: 8, y: -16, rotation: 0, duration: 3, ease: "none" }, 0)
+        .to(tokenLayer, { x: -8, y: 18, rotation: 0, duration: 3, ease: "none" }, 0);
       gsap.fromTo(".story-morph-progress > span", { scaleX: 0 }, { scaleX: 1, ease: "none",
         scrollTrigger: { trigger: chapters[0], start: "center center", endTrigger: chapters[3], end: "center center", scrub: true } });
       return () => { sequence.classList.remove("is-morphing"); };

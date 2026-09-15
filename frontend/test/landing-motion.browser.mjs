@@ -8,6 +8,15 @@ await page.goto('http://127.0.0.1:5189/');
 await page.getByRole('heading',{level:1}).waitFor();
 await page.waitForTimeout(1200);
 
+await page.locator('.asset-strip').evaluate(e=>window.scrollTo(0,e.getBoundingClientRect().top+scrollY-100));
+await page.getByRole('button',{name:'Pause strip',exact:true}).click();
+assert.equal(await page.locator('.asset-strip-track').evaluate(e=>getComputedStyle(e).animationPlayState),'paused');
+await page.getByRole('button',{name:'Play strip',exact:true}).click();
+await page.mouse.move(0,0);
+await page.waitForTimeout(100);
+assert.equal(await page.locator('.asset-strip-track').evaluate(e=>getComputedStyle(e).animationPlayState),'running');
+assert.ok(await page.locator('.asset-mark').evaluateAll(es=>es.every(e=>e.complete && e.naturalWidth>0)));
+await page.screenshot({path:'/tmp/chainpay-brand-strip.png'});
 const ids = ['spend-limits','payment-review','receipts','stay-in-control'];
 for (const index of [0,1,2,3,2,1]) {
   await page.locator('#'+ids[index]).evaluate(e=>window.scrollTo(0,e.getBoundingClientRect().top+scrollY-innerHeight/2+e.clientHeight/2));

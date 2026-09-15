@@ -1,10 +1,11 @@
+import { AssetMark } from "./SupportedAssets";
 import { Button } from "@astryxdesign/core/Button";
 
 export function PermissionExample() {
   return <article className="story-document">
     <div className="story-document-head"><span>Spending permission</span><span className="story-tag">Example</span></div>
     <div className="story-agent"><span className="story-agent-symbol" aria-hidden="true">↗</span><div><h3>Research agent</h3><p>One agent. A defined allowance.</p></div></div>
-    <dl className="story-fields"><div><dt>Token</dt><dd>USDC</dd></div><div><dt>Per-payment limit</dt><dd>10 USDC</dd></div><div><dt>Total allowance</dt><dd>100 USDC</dd></div><div><dt>Payment mode</dt><dd>Approve each payment</dd></div></dl>
+    <dl className="story-fields"><div><dt>Token</dt><dd className="story-token"><AssetMark asset="USDC" />USDC</dd></div><div><dt>Per-payment limit</dt><dd>10 USDC</dd></div><div><dt>Total allowance</dt><dd>100 USDC</dd></div><div><dt>Payment mode</dt><dd>Approve each payment</dd></div></dl>
     <p className="story-document-note">You review the effective settings before approving in your wallet.</p>
   </article>;
 }
@@ -12,7 +13,7 @@ export function PermissionExample() {
 export function PaymentExample() {
   return <article className="story-document">
     <div className="story-document-head"><span>Payment review</span><span className="story-tag">Example</span></div>
-    <p className="story-overline">Research agent requests</p><h3 className="story-amount">4.50 <span>USDC</span></h3>
+    <p className="story-overline">Research agent requests</p><h3 className="story-amount">4.50 <span className="story-token"><AssetMark asset="USDC" />USDC</span></h3>
     <dl className="story-fields"><div><dt>Recipient</dt><dd>Example service</dd></div><div><dt>Per-payment check</dt><dd>4.50 of 10 USDC</dd></div><div><dt>Allowance check</dt><dd>4.50 of 100 USDC</dd></div></dl>
     <div className="story-check">Within the example amount limits</div>
     <p className="story-document-note">Other permission checks and wallet approval still apply. Nothing is submitted here.</p>
@@ -22,8 +23,8 @@ export function PaymentExample() {
 export function ReceiptExample() {
   return <article className="story-document story-receipt">
     <div className="story-document-head"><span className="story-wordmark">chainpay</span><span>Payment receipt</span></div>
-    <p className="story-overline">Illustrative receipt · no payment made</p><h3 className="story-amount">4.50 <span>USDC</span></h3>
-    <dl className="story-fields"><div><dt>Agent</dt><dd>Research agent</dd></div><div><dt>Recipient</dt><dd>Example service</dd></div><div><dt>Network</dt><dd>Solana Devnet</dd></div></dl>
+    <p className="story-overline">Illustrative receipt · no payment made</p><h3 className="story-amount">4.50 <span className="story-token"><AssetMark asset="USDC" />USDC</span></h3>
+    <dl className="story-fields"><div><dt>Agent</dt><dd>Research agent</dd></div><div><dt>Recipient</dt><dd>Example service</dd></div><div><dt>Network</dt><dd className="story-token"><AssetMark asset="Solana" />Solana Devnet</dd></div></dl>
     <div className="story-evidence"><strong>Payment verification</strong><p>A live receipt reports the verified settlement state.</p><strong>No seller statement</strong><p>Seller evidence is separate from payment verification.</p></div>
     <p className="story-document-note">Public receipts exclude private request text and attachments. Current permission settings are not a historical snapshot.</p>
   </article>;
@@ -32,7 +33,7 @@ export function ReceiptExample() {
 export function ControlExample() {
   return <article className="story-document">
     <div className="story-document-head"><span>Research agent</span><span className="story-tag">After the example payment</span></div>
-    <p className="story-overline">Allowance remaining</p><h3 className="story-amount">95.50 <span>USDC</span></h3>
+    <p className="story-overline">Allowance remaining</p><h3 className="story-amount">95.50 <span className="story-token"><AssetMark asset="USDC" />USDC</span></h3>
     <div className="story-allowance" aria-hidden="true"><span /></div><p className="story-document-note">4.50 USDC spent of 100 USDC</p>
     <dl className="story-fields"><div><dt>Payment</dt><dd>4.50 USDC · example</dd></div><div><dt>Receipt</dt><dd>Linked to the payment</dd></div></dl>
     <div className="story-control-note"><strong>Pause when plans change.</strong><p>Pause and revoke stop future execution. They do not cancel a submitted payment or change an earlier receipt.</p></div>
@@ -52,7 +53,11 @@ export function PaymentStory({ onOpenDashboard }: { onOpenDashboard: () => void 
     <div className="story-sequence page-width">
       <div className="story-morph" aria-hidden="true">
         <div className="story-morph-label"><span>RESEARCH AGENT</span><span>Illustrative example</span></div>
+        <div className="story-satellite story-satellite-agent"><span className="satellite-label">YOUR PERMISSION</span><strong>Research agent</strong><span>10 USDC per payment</span></div>
+        <div className="story-satellite story-satellite-token"><AssetMark asset="USDC" /><div><span className="satellite-label">SAME PAYMENT</span><strong>4.50 USDC</strong><span>Illustrative example</span></div></div>
+        <div className="story-connection story-connection-agent" /><div className="story-connection story-connection-token" />
         <div className="story-morph-frame">{chapters.map(({id, visual: Visual}) => <div className="story-morph-state" key={id}><Visual /></div>)}</div>
+        <div className="story-network"><AssetMark asset="Solana" /><span>On Solana Devnet</span><span className="story-network-alternative"><AssetMark asset="PYUSD" />PYUSD also supported</span></div>
         <div className="story-morph-progress"><span /></div>
         <div className="story-morph-steps"><span>Permission</span><span>Payment</span><span>Receipt</span><span>Control</span></div>
       </div>
