@@ -41,6 +41,17 @@ for(let i=0;i<await buttons.count();i++) {
   assert.ok(contrast(colors.fg,colors.bg)>=4.5, JSON.stringify({mode,colors}));
  }
 }
+assert.equal(await page.locator('.story-network').count(),0);
+const closingTop = await page.locator('.landing-cta-scroll').evaluate(e=>e.getBoundingClientRect().top+scrollY);
+await page.evaluate(y=>window.scrollTo(0,y),closingTop-800);
+await page.waitForTimeout(120);
+const before = await page.locator('.landing-cta').evaluate(e=>getComputedStyle(e).transform);
+await page.evaluate(()=>window.scrollTo(0,document.documentElement.scrollHeight));
+await page.waitForTimeout(120);
+const after = await page.locator('.landing-cta').evaluate(e=>getComputedStyle(e).transform);
+assert.notEqual(before,after);
+assert.equal(await page.locator('.cta-sheet').count(),0);
+await page.screenshot({path:'/tmp/chainpay-cta.png'});
 await page.emulateMedia({reducedMotion:'reduce'});
 await page.waitForFunction(()=>!document.querySelector('.is-morphing'));
 assert.equal(await page.locator('.pin-spacer').count(),0);

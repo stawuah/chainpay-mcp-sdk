@@ -16,16 +16,16 @@ export function useLandingMotion(root: RefObject<HTMLDivElement | null>) {
       gsap.from(".hero-payment-slip", { x: 24, duration: 0.8, delay: 0.08, ease: "power3.out" });
       gsap.to(".landing-hero-visual", { y: -60, scale: 0.96, ease: "none",
         scrollTrigger: { trigger: ".landing-hero", start: "top top", end: "bottom top", scrub: true } });
-      [".story-intro", "#developers", ".landing-faq", ".landing-cta"].forEach((selector) => {
-        gsap.from(selector, { y: 36, scale: selector === ".landing-cta" ? 0.96 : 1,
+      [".story-intro", "#developers", ".landing-faq"].forEach((selector) => {
+        gsap.from(selector, { y: 36,
           ease: "none", scrollTrigger: { trigger: selector, start: "top bottom", end: "top 65%", scrub: true } });
       });
-      gsap.from(".landing-cta-copy > :not(button)", { y: 18, stagger: 0.08, duration: 0.7, ease: "power3.out",
-        scrollTrigger: { trigger: ".landing-cta", start: "top 80%", toggleActions: "play none none reverse" } });
-      const closing = gsap.timeline({ scrollTrigger: { trigger: ".landing-cta", start: "top 90%", end: "center 55%", scrub: true } });
-      closing.fromTo(".cta-sheet-back", { y: 70, x: 30, rotation: 0 }, { y: -38, x: -20, rotation: -10, ease: "power2.out" }, 0)
-        .fromTo(".cta-sheet-middle", { y: 70, x: 30, rotation: 0 }, { y: 12, x: 12, rotation: 5, ease: "power2.out" }, 0.12)
-        .fromTo(".cta-sheet-front", { y: 100, x: 30, rotation: 0 }, { y: 64, x: -8, rotation: -3, ease: "power2.out" }, 0.24);
+      // Keep the trigger still while its panel expands. Clamp the end to the
+      // document bottom so the closing motion remains reachable on short pages.
+      const closing = gsap.timeline({ scrollTrigger: { trigger: ".landing-cta-scroll", start: "top 95%", end: "clamp(bottom 60%)", scrub: true } });
+      closing.fromTo(".landing-cta", { scale: 0.88, y: 60 }, { scale: 1, y: 0, duration: 1, ease: "none" }, 0)
+        .fromTo(".landing-cta-copy h2", { y: 44 }, { y: 0, duration: 0.65, ease: "power2.out" }, 0.1)
+        .fromTo(".landing-cta-boundaries span", { x: 120, rotation: 24, scale: 0.9 }, { x: -40, rotation: -12, scale: 1.1, stagger: 0.08, duration: 0.84, ease: "none" }, 0);
     }, root);
     // A single stationary document evolves while the original chapters remain
     // in reading order. The visual duplicate is hidden from assistive technology.

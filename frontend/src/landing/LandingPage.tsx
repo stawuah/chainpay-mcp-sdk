@@ -167,19 +167,15 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
               </details>
             ))}
           </div>
-          <div className="landing-cta">
+          <div className="landing-cta-scroll"><div className="landing-cta">
             <div className="landing-cta-copy">
             <p className="section-kicker">YOUR RULES. THEIR NEXT MOVE.</p>
             <h2 className="t-lg">Put your first agent on a budget.</h2>
             <p>Start on Solana Devnet. Connecting your wallet does not authorize spending.</p>
             <Button type="button" variant="secondary" size="lg" label="Open dashboard" isDisabled={false} onClick={onOpenDashboard} />
             </div>
-            <div className="landing-cta-visual" aria-hidden="true">
-              <div className="cta-sheet cta-sheet-back"><span>01 / PERMISSION</span><strong>You set the limit.</strong><div className="cta-sheet-rule" /></div>
-              <div className="cta-sheet cta-sheet-middle"><span>02 / PAYMENT</span><strong>Your agent gets to work.</strong><div className="cta-sheet-rule" /></div>
-              <div className="cta-sheet cta-sheet-front"><span>03 / RECEIPT</span><strong>The record stays with you.</strong><div className="cta-sheet-rule" /><small>Your rules. Every step.</small></div>
-            </div>
-          </div>
+            <div className="landing-cta-boundaries" aria-hidden="true"><span /><span /><span /></div>
+          </div></div>
         </section>
       </main>
 
