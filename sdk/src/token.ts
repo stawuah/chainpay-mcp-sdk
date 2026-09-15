@@ -1,5 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
-import type { Address, ChainPayInstruction, TokenProgram } from "./types.js";
+import type { Address, ChainPayInstruction, PaymentPreflightContext, TokenProgram } from "./types.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "./constants.js";
@@ -58,4 +58,39 @@ export function buildCreateAssociatedTokenAccountInstruction(input: {
 
 export function associatedTokenProgramAddress(): Address {
   return ASSOCIATED_TOKEN_PROGRAM_ID;
+}
+
+export type TokenAccountFields = {
+  mint: Address;
+  owner: Address;
+  balance: bigint;
+  delegate: Address | null;
+  delegatedAmount: bigint;
+};
+
+export function readTokenAccountFields(data: Uint8Array | Buffer): TokenAccountFields | null {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  if (bytes.length < 165) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const delegateOption = view.getUint32(72, true);
+  return {
+    mint: new PublicKey(bytes.slice(0, 32)).toBase58(),
+    owner: new PublicKey(bytes.slice(32, 64)).toBase58(),
+    balance: view.getBigUint64(64, true),
+    delegate: delegateOption === 0 ? null : new PublicKey(bytes.slice(76, 108)).toBase58(),
+    delegatedAmount: bytes.length >= 129 ? view.getBigUint64(121, true) : 0n,
+  };
+}
+
+export function paymentPreflightContextFromTokenAccount(
+  data: Uint8Array | Buffer,
+): PaymentPreflightContext | null {
+  const fields = readTokenAccountFields(data);
+  if (!fields) return null;
+  return {
+    sourceBalance: fields.balance,
+    sourceOwner: fields.owner,
+    delegate: fields.delegate,
+    delegatedAmount: fields.delegatedAmount,
+  };
 }

@@ -54,7 +54,13 @@ export function LoadedReceiptCard({
   );
 }
 
-export function InboxReceipt({ receiptAddress }: { receiptAddress?: string }) {
+export function InboxReceipt({
+  receiptAddress,
+  preparedInRequests = true,
+}: {
+  receiptAddress?: string;
+  preparedInRequests?: boolean;
+}) {
   if (!receiptAddress) {
     return (
       <div className="inbox-receipt inbox-receipt-unavailable" role="status">
@@ -66,7 +72,7 @@ export function InboxReceipt({ receiptAddress }: { receiptAddress?: string }) {
 
   return (
     <div className="inbox-receipt">
-      <LoadedReceiptCard receiptPda={receiptAddress} shareMode="dashboard" />
+      <LoadedReceiptCard receiptPda={receiptAddress} shareMode="dashboard" preparedInRequests={preparedInRequests} />
     </div>
   );
 }

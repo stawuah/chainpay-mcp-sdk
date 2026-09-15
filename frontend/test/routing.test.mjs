@@ -18,8 +18,13 @@ test("parses landing, app tabs, mandate builder, and verify paths", () => {
   assert.deepEqual(paths.parsePathname("/"), { kind: "landing" });
   assert.deepEqual(paths.parsePathname("/app"), { kind: "app", tab: "overview" });
   assert.deepEqual(paths.parsePathname("/app/receipts"), { kind: "app", tab: "receipts" });
+  assert.deepEqual(paths.parsePathname("/app/receipts/Receipt1111111111111111111111111111111111111"), {
+    kind: "app",
+    tab: "receipts",
+    receiptDetail: "Receipt1111111111111111111111111111111111111",
+  });
   assert.deepEqual(paths.parsePathname("/app/mandates/new"), { kind: "app", tab: "mandates", mandateBuilder: true });
-  assert.deepEqual(paths.parsePathname("/app/not-a-tab"), { kind: "app", tab: "overview" });
+  assert.deepEqual(paths.parsePathname("/app/not-a-tab"), { kind: "app-not-found", path: "/app/not-a-tab" });
   assert.deepEqual(paths.parsePathname("/verify/abcDEF1234567890abcDEF1234567890ab"), {
     kind: "verify",
     receiptPda: "abcDEF1234567890abcDEF1234567890ab",
@@ -52,7 +57,8 @@ test("permission details round-trip without changing legacy routes", () => {
   assert.equal(paths.buildPath(route), `/app/mandates/${address}`);
   assert.deepEqual(paths.parsePathname(paths.buildPath(route)), route);
   assert.deepEqual(paths.parsePathname("/app/mandates/new"), { kind: "app", tab: "mandates", mandateBuilder: true });
-  assert.deepEqual(paths.parsePathname("/app/mandates/a/b"), { kind: "app", tab: "overview" });
+  assert.deepEqual(paths.parsePathname("/app/mandates/a/b"), { kind: "app-not-found", path: "/app/mandates/a/b" });
+  assert.deepEqual(paths.parsePathname("/unknown-page"), { kind: "public-not-found", path: "/unknown-page" });
   assert.deepEqual(paths.parsePathname("/app/mandates/%ZZ"), { kind: "app", tab: "mandates", mandateDetail: "%ZZ" });
   assert.deepEqual(paths.parsePathname("/app/mandates/a%2Fb"), { kind: "app", tab: "mandates", mandateDetail: "a/b" });
 });

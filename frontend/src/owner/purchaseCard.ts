@@ -1,5 +1,6 @@
 import type { Mandate } from "@chainpay/sdk";
 import type { AgentCheck, AgentInboxItem, AgentInboxStage, StablecoinOption } from "./runtime";
+import { isInboxItemArchived } from "./inboxArchive";
 import { formatTokenAmount } from "./amounts";
 import { shortAddress } from "../ui/marks";
 
@@ -115,11 +116,16 @@ export function purchaseStatusLabel(stage: PurchaseAttentionStage): string {
   }
 }
 
+function activeInboxItems(inbox: AgentInboxItem[]): AgentInboxItem[] {
+  return inbox.filter((item) => !isInboxItemArchived(item));
+}
+
 export function inboxAttentionCounts(inbox: AgentInboxItem[]): InboxAttentionCounts {
-  const waiting = inbox.filter((item) => item.stage === "waiting_for_approval").length;
-  const needsDetails = inbox.filter((item) => item.stage === "needs_details").length;
-  const blocked = inbox.filter((item) => item.stage === "blocked").length;
-  const receiptReady = inbox.filter((item) => item.stage === "receipt_ready").length;
+  const active = activeInboxItems(inbox);
+  const waiting = active.filter((item) => item.stage === "waiting_for_approval").length;
+  const needsDetails = active.filter((item) => item.stage === "needs_details").length;
+  const blocked = active.filter((item) => item.stage === "blocked").length;
+  const receiptReady = active.filter((item) => item.stage === "receipt_ready").length;
   return {
     waiting,
     needsDetails,
@@ -161,7 +167,7 @@ export function purchaseCardFromInboxItem(
 }
 
 export function attentionInboxItems(inbox: AgentInboxItem[]): AgentInboxItem[] {
-  return inbox.filter((item) => (
+  return activeInboxItems(inbox).filter((item) => (
     item.stage === "waiting_for_approval"
     || item.stage === "needs_details"
     || item.stage === "blocked"

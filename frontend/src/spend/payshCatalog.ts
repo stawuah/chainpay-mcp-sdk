@@ -27,7 +27,7 @@ type PayshCatalogResponse = {
 
 /** Catalog prices are public estimates. They do not authorize a payment. */
 export async function fetchPayshCatalog(): Promise<PayshCatalogProvider[]> {
-  const response = await authorizedFetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/catalog/paysh`);
+  const response = await authorizedFetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/catalog/paysh`, {}, undefined, "passive");
   if (!response.ok) throw new Error("Could not load the pay.sh catalog through ChainPay.");
   const payload = await response.json() as PayshCatalogResponse;
   return payload.providers?.providers ?? [];

@@ -20,8 +20,10 @@ import {
 } from "./model";
 import { loadSellerStatement } from "./seller";
 
-const cache = new Map<string, PublicReceiptPageState>();
+const NEGATIVE_CACHE_MS = 60_000;
+const cache = new Map<string, { state: PublicReceiptPageState; cachedAt: number }>();
 const inflight = new Map<string, Promise<PublicReceiptPageState>>();
+const generation = new Map<string, number>();
 
 export function tokenLabelForMint(mint: string): string {
   if (mint === DEVNET_USDC_MINT) return "USDC";
@@ -38,15 +40,6 @@ function amountView(amount: TokenAmountDisplay): ReceiptAmountView {
   };
 }
 
-/**
- * Render a mandate limit the same way the receipt amount above it is rendered.
- *
- * Mandate limits are u64 base units, the same unit as the amount, but the amount
- * is decimal-formatted from the mint. Printing limits raw put two unit systems
- * in one card: a 10 USDC cap read as `10000000` directly under an amount reading
- * `10.00`. Reusing amountLabel keeps the "base units" wording identical when
- * decimals are unknown, and keeps the value exact — never a JS Number.
- */
 function mandateAmount(value: bigint, decimals: number | null): string {
   return amountLabel(amountView(formatExactTokenAmount(value, decimals)));
 }
@@ -136,7 +129,23 @@ function cacheKey(receiptPda: string): string {
   return `${PROGRAM_ID}:${receiptPda}`;
 }
 
-async function readPageState(receiptPda: string): Promise<PublicReceiptPageState> {
+function isNegativeState(state: PublicReceiptPageState): boolean {
+  return state.kind === "malformed" || state.kind === "not_found" || state.kind === "invalid";
+}
+
+function cacheHit(key: string, refresh: boolean): PublicReceiptPageState | undefined {
+  if (refresh) return undefined;
+  const hit = cache.get(key);
+  if (!hit) return undefined;
+  if (hit.state.kind === "rpc_error") return undefined;
+  if (isNegativeState(hit.state) && Date.now() - hit.cachedAt > NEGATIVE_CACHE_MS) {
+    cache.delete(key);
+    return undefined;
+  }
+  return hit.state;
+}
+
+async function readPageState(receiptPda: string, refreshSeller = false): Promise<PublicReceiptPageState> {
   if (classifyReceiptPda(receiptPda) !== "plausible") {
     return { kind: "malformed", receiptPda };
   }
@@ -170,6 +179,7 @@ async function readPageState(receiptPda: string): Promise<PublicReceiptPageState
     seller = await loadSellerStatement({
       receiptAddress: proof.receipt.receipt.address,
       recipientTokenAccount: proof.receipt.receipt.recipientTokenAccount,
+      refresh: refreshSeller,
     });
   } catch (error) {
     seller = {
@@ -191,20 +201,31 @@ export function loadPublicReceiptView(
 ): Promise<PublicReceiptPageState> {
   const trimmed = receiptPda.trim();
   const key = cacheKey(trimmed);
-  if (!options.refresh) {
-    const hit = cache.get(key);
-    if (hit && hit.kind !== "rpc_error") return Promise.resolve(hit);
-    const pending = inflight.get(key);
-    if (pending) return pending;
+  const nextGeneration = (generation.get(key) ?? 0) + 1;
+  generation.set(key, nextGeneration);
+
+  const hit = cacheHit(key, Boolean(options.refresh));
+  if (hit?.kind === "verified" && !options.refresh) {
+    return Promise.resolve(hit);
+  }
+  if (hit && hit.kind !== "verified" && !options.refresh) {
+    return Promise.resolve(hit);
   }
 
-  const request = readPageState(trimmed).then((state) => {
-    if (state.kind !== "rpc_error") cache.set(key, state);
-    else cache.delete(key);
+  const pending = inflight.get(key);
+  if (pending && !options.refresh) return pending;
+
+  const request = readPageState(trimmed, Boolean(options.refresh)).then((state) => {
+    if (generation.get(key) !== nextGeneration) return state;
+    if (state.kind === "rpc_error") {
+      cache.delete(key);
+    } else {
+      cache.set(key, { state, cachedAt: Date.now() });
+    }
     inflight.delete(key);
     return state;
   }, (error) => {
-    inflight.delete(key);
+    if (generation.get(key) === nextGeneration) inflight.delete(key);
     throw error;
   });
   inflight.set(key, request);
@@ -212,5 +233,11 @@ export function loadPublicReceiptView(
 }
 
 export function peekPublicReceiptCache(receiptPda: string): PublicReceiptPageState | undefined {
-  return cache.get(cacheKey(receiptPda.trim()));
+  return cache.get(cacheKey(receiptPda.trim()))?.state;
+}
+
+export function invalidatePublicReceiptCache(receiptPda: string): void {
+  const key = cacheKey(receiptPda.trim());
+  cache.delete(key);
+  generation.set(key, (generation.get(key) ?? 0) + 1);
 }

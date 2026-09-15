@@ -114,7 +114,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
             <p className="t-body landing-hero-text">Let agents get work done with a spending permission you define—and a receipt you can verify.</p>
             <div className="landing-hero-actions">
               <Button type="button" variant="primary" size="lg" label="Open dashboard" isDisabled={false} onClick={onOpenDashboard} />
-              <Button variant="secondary" size="lg" label="See a receipt" isDisabled={false} href="#receipts" />
+              <Button variant="secondary" size="lg" label="See a receipt" isDisabled={false} href="/verify" />
             </div>
             <p className="t-body-sm landing-hero-note">Your funds stay in your wallet. The mandate defines what the approved agent can spend.</p>
           </div>

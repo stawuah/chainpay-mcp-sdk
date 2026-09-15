@@ -1137,6 +1137,8 @@ async fn settle_payment(
     request: PaymentSubmissionRequest,
     mut record: PaymentRecord,
 ) -> Result<Json<PaymentRecord>, ApiError> {
+    // J6a: re-read pause/revoke/expiry immediately before broadcast, not only at reservation.
+    validate_live_payment(state, &request).await?;
     record.signature = Some(recovery::signature(&request.signed_transaction)?);
     record.status = PaymentStatus::Submitted;
     record.updated_at_ms = now_ms();
@@ -1282,6 +1284,7 @@ async fn list_x402_payments(
             x402_payment_id: record.x402_payment_id,
             resource: record.resource,
             mandate,
+            payment_id: record.payment_id.clone(),
             amount,
             status: x402_status_label(record.status),
             protocol,
@@ -1469,6 +1472,8 @@ async fn submit_transaction(
         )
         .await?;
     state.store.put_transaction(record.clone()).await?;
+    // J6a: batch and other owner transactions re-read mandate policy at send time.
+    validate_owner_live(&state, &principal, &transaction).await?;
     if let Err(error) = state
         .rpc
         .send_transaction(&request.signed_transaction)
@@ -1493,55 +1498,183 @@ async fn validate_owner_live(
     transaction: &VersionedTransaction,
 ) -> Result<(), ApiError> {
     let first = &transaction.message.instructions()[0];
+    let program_id = &state.config.program_id;
     if first.data.starts_with(&[86, 4, 7, 7, 120, 139, 232, 139]) {
         for (position, payment) in
-            transactions::batch_payment_requests(&transaction, &state.config.program_id)?
+            transactions::batch_payment_requests(transaction, program_id)?
                 .iter()
                 .enumerate()
         {
             auth::mandate(&state, &principal, &payment.mandate, "execute_payment").await?;
-            validate_live_payment_at(&state, &transaction, position, &payment.mandate).await?;
+            validate_live_payment_at(&state, transaction, position, &payment.mandate).await?;
         }
-    } else if transaction.message.static_account_keys()[first.program_id_index as usize].to_string()
-        == state.config.program_id
-        && first.data[..8] != [230, 170, 158, 68, 33, 169, 16, 158]
-    {
-        for ix in transaction.message.instructions() {
-            let address =
-                transaction.message.static_account_keys()[ix.accounts[0] as usize].to_string();
-            auth::mandate(&state, &principal, &address, "update_mandate").await?;
+        return Ok(());
+    }
+    let first_program = transaction.message.static_account_keys()
+        [first.program_id_index as usize]
+        .to_string();
+    if first_program == "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" {
+        validate_live_enabled_asset(state, transaction).await?;
+        return Ok(());
+    }
+    if [SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].contains(&first_program.as_str()) {
+        if first.data.len() == 1 && first.data[0] == 5 {
+            let source = state
+                .rpc
+                .account_info(
+                    &transaction.message.static_account_keys()[first.accounts[0] as usize]
+                        .to_string(),
+                )
+                .await?
+                .ok_or_else(|| {
+                    ApiError::BadRequest("Source token account was not found".into())
+                })?;
+            if source.data.len() < 108 || source.data[72] != 1 {
+                return Err(ApiError::BadRequest(
+                    "Source token account has no active delegate".into(),
+                ));
+            }
+            let mandate = bs58::encode(&source.data[76..108]).into_string();
+            auth::mandate(&state, &principal, &mandate, "update_mandate").await?;
+            return Ok(());
+        }
+        if first.data.len() == 10 && first.data[0] == 13 {
+            let mandate = transaction.message.static_account_keys()
+                [first.accounts[2] as usize]
+                .to_string();
+            let source = transaction.message.static_account_keys()[first.accounts[0] as usize]
+                .to_string();
+            let mint = transaction.message.static_account_keys()[first.accounts[1] as usize]
+                .to_string();
+            auth::mandate(&state, &principal, &mandate, "update_mandate").await?;
+            validate_live_mandate_token_binding(&state, &mandate, &source, &mint).await?;
+            return Ok(());
         }
     }
-    if transaction.message.static_account_keys()[first.program_id_index as usize].to_string()
-        == "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-    {
-        let mint = transaction.message.static_account_keys()[first.accounts[3] as usize];
-        let token = transaction.message.static_account_keys()[first.accounts[5] as usize];
-        let program: solana_address::Address = state
-            .config
-            .program_id
-            .parse()
-            .map_err(|_| ApiError::Unauthorized)?;
-        let asset_address =
-            solana_address::Address::find_program_address(&[b"asset", mint.as_ref()], &program).0;
-        let asset = state
-            .rpc
-            .account_info(&asset_address.to_string())
-            .await?
-            .ok_or(ApiError::BadRequest(
-                "Mint is not a supported ChainPay asset".into(),
-            ))?;
-        if asset.owner != state.config.program_id
-            || asset.data.len() != 106
-            || asset.data[..8] != [129, 27, 96, 192, 89, 180, 227, 200]
-            || &asset.data[40..72] != mint.as_ref()
-            || &asset.data[72..104] != token.as_ref()
-            || asset.data[104] != 1
-        {
-            return Err(ApiError::BadRequest(
-                "Asset is disabled or incompatible".into(),
-            ));
+    if first_program != *program_id || first.data.len() < 8 {
+        return Ok(());
+    }
+    match &first.data[..8] {
+        [208, 127, 21, 1, 194, 190, 196, 70] => {
+            let config = solana_address::Address::find_program_address(
+                &[b"config"],
+                &program_id.parse().map_err(|_| ApiError::Unauthorized)?,
+            )
+            .0
+            .to_string();
+            if state.rpc.account_info(&config).await?.is_some() {
+                return Err(ApiError::BadRequest(
+                    "Protocol config is already initialized".into(),
+                ));
+            }
         }
+        [21, 80, 155, 149, 117, 207, 235, 16]
+        | [58, 54, 181, 102, 68, 238, 240, 245] => {
+            validate_live_config_authority(state, &principal.wallet).await?;
+        }
+        [69, 131, 248, 29, 105, 50, 139, 30]
+        | [192, 108, 97, 124, 56, 229, 236, 3]
+        | [252, 97, 140, 119, 67, 43, 177, 108] => {
+            for ix in transaction.message.instructions() {
+                if transaction.message.static_account_keys()[ix.program_id_index as usize]
+                    .to_string()
+                    != *program_id
+                {
+                    continue;
+                }
+                let mandate = transaction.message.static_account_keys()[ix.accounts[0] as usize]
+                    .to_string();
+                auth::mandate(&state, &principal, &mandate, "update_mandate").await?;
+                if first.data[..8] == [69, 131, 248, 29, 105, 50, 139, 30]
+                    && transaction.message.instructions().len() == 2
+                {
+                    let approve = &transaction.message.instructions()[1];
+                    let source = transaction.message.static_account_keys()
+                        [approve.accounts[0] as usize]
+                        .to_string();
+                    let mint = transaction.message.static_account_keys()
+                        [approve.accounts[1] as usize]
+                        .to_string();
+                    validate_live_mandate_token_binding(&state, &mandate, &source, &mint).await?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn validate_live_config_authority(
+    state: &BackendState,
+    wallet: &str,
+) -> Result<(), ApiError> {
+    let program: solana_address::Address = state
+        .config
+        .program_id
+        .parse()
+        .map_err(|_| ApiError::Unauthorized)?;
+    let config = solana_address::Address::find_program_address(&[b"config"], &program)
+        .0
+        .to_string();
+    let account = state
+        .rpc
+        .account_info(&config)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest("Protocol config was not found".into()))?;
+    verify_account_pubkey(&account.data[8..40], wallet, "authority")
+        .map_err(|_| ApiError::Forbidden("Protocol authority mismatch".into()))?;
+    Ok(())
+}
+
+async fn validate_live_mandate_token_binding(
+    state: &BackendState,
+    mandate: &str,
+    source: &str,
+    mint: &str,
+) -> Result<(), ApiError> {
+    let account = state
+        .rpc
+        .account_info(mandate)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest("Mandate was not found".into()))?;
+    verify_account_pubkey(&account.data[72..104], source, "source")
+        .map_err(|_| ApiError::BadRequest("Delegate repair source mismatch".into()))?;
+    verify_account_pubkey(&account.data[104..136], mint, "mint")
+        .map_err(|_| ApiError::BadRequest("Delegate repair mint mismatch".into()))?;
+    Ok(())
+}
+
+async fn validate_live_enabled_asset(
+    state: &BackendState,
+    transaction: &VersionedTransaction,
+) -> Result<(), ApiError> {
+    let first = &transaction.message.instructions()[0];
+    let mint = transaction.message.static_account_keys()[first.accounts[3] as usize];
+    let token = transaction.message.static_account_keys()[first.accounts[5] as usize];
+    let program: solana_address::Address = state
+        .config
+        .program_id
+        .parse()
+        .map_err(|_| ApiError::Unauthorized)?;
+    let asset_address =
+        solana_address::Address::find_program_address(&[b"asset", mint.as_ref()], &program).0;
+    let asset = state
+        .rpc
+        .account_info(&asset_address.to_string())
+        .await?
+        .ok_or(ApiError::BadRequest(
+            "Mint is not a supported ChainPay asset".into(),
+        ))?;
+    if asset.owner != state.config.program_id
+        || asset.data.len() != 106
+        || asset.data[..8] != [129, 27, 96, 192, 89, 180, 227, 200]
+        || &asset.data[40..72] != mint.as_ref()
+        || &asset.data[72..104] != token.as_ref()
+        || asset.data[104] != 1
+    {
+        return Err(ApiError::BadRequest(
+            "Asset is disabled or incompatible".into(),
+        ));
     }
     Ok(())
 }
@@ -1728,12 +1861,11 @@ async fn validate_live_payment_at(
         .account_info(mandate)
         .await?
         .ok_or(ApiError::NotFound)?;
-    if account.owner != state.config.program_id
-        || account.data.len() < 235
-        || account.data[..8] != [139, 106, 43, 122, 82, 211, 96, 162]
-    {
-        return Err(ApiError::Unauthorized);
-    }
+    ensure_mandate_sendable(
+        &account,
+        &state.config.program_id,
+        state.rpc.current_slot().await?,
+    )?;
     for (position, range) in [(4, 40..72), (5, 104..136), (6, 72..104)] {
         if keys[ix.accounts[position] as usize].as_ref() != &account.data[range] {
             return Err(ApiError::BadRequest(
@@ -1744,14 +1876,40 @@ async fn validate_live_payment_at(
     Ok(())
 }
 
+const MANDATE_DISCRIMINATOR: [u8; 8] = [139, 106, 43, 122, 82, 211, 96, 162];
+const MANDATE_ACCOUNT_LENGTH: usize = 235;
+
+fn ensure_mandate_sendable(
+    account: &RpcAccount,
+    program_id: &str,
+    current_slot: u64,
+) -> Result<(), ApiError> {
+    if account.owner != program_id
+        || account.data.len() < MANDATE_ACCOUNT_LENGTH
+        || account.data[..8] != MANDATE_DISCRIMINATOR
+    {
+        return Err(ApiError::Unauthorized);
+    }
+    if account.data[232] != 0 || account.data[233] != 0 {
+        return Err(ApiError::BadRequest(
+            "payment mandate is paused or revoked".to_owned(),
+        ));
+    }
+    let expires_at_slot = u64::from_le_bytes(account.data[200..208].try_into().unwrap());
+    if expires_at_slot <= current_slot {
+        return Err(ApiError::BadRequest(
+            "payment mandate has expired".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 async fn verify_managed_mandate(
     rpc: &RpcClient,
     signer: &ManagedSignerRecord,
     request: &PaymentSubmissionRequest,
     program_id: &str,
 ) -> Result<(), ApiError> {
-    const MANDATE_DISCRIMINATOR: [u8; 8] = [139, 106, 43, 122, 82, 211, 96, 162];
-    const MANDATE_ACCOUNT_LENGTH: usize = 235;
     let account = rpc
         .account_info(&request.mandate)
         .await?
@@ -1774,18 +1932,14 @@ async fn verify_managed_mandate(
             .ok_or_else(|| ApiError::BadRequest("mint is required".to_owned()))?,
         "mint",
     )?;
-    if account.data[232] != 0 || account.data[233] != 0 {
-        return Err(ApiError::BadRequest(
-            "managed payment mandate is paused or revoked".to_owned(),
-        ));
-    }
-    let expires_at_slot = u64::from_le_bytes(account.data[200..208].try_into().unwrap());
-    if expires_at_slot <= rpc.current_slot().await? {
-        return Err(ApiError::BadRequest(
-            "managed payment mandate has expired".to_owned(),
-        ));
-    }
-    Ok(())
+    ensure_mandate_sendable(&account, program_id, rpc.current_slot().await?).map_err(|error| {
+        match error {
+            ApiError::BadRequest(message) => ApiError::BadRequest(format!(
+                "managed {message}"
+            )),
+            other => other,
+        }
+    })
 }
 
 async fn verify_finalized_receipt(
@@ -2186,6 +2340,39 @@ mod tests {
         assert!(
             verify_wallet_message_signature(&wallet, b"different message", &signature).is_err()
         );
+    }
+
+    #[test]
+    fn ensure_mandate_sendable_rejects_paused_revoked_and_expired() {
+        let program_id = DEFAULT_PROGRAM_ID;
+        let mut active = RpcAccount {
+            owner: program_id.into(),
+            data: vec![0; 235],
+        };
+        active.data[..8].copy_from_slice(&MANDATE_DISCRIMINATOR);
+        active.data[200..208].copy_from_slice(&100_u64.to_le_bytes());
+        ensure_mandate_sendable(&active, program_id, 1).unwrap();
+
+        let mut paused = active.clone();
+        paused.data[232] = 1;
+        assert!(matches!(
+            ensure_mandate_sendable(&paused, program_id, 1),
+            Err(ApiError::BadRequest(message)) if message.contains("paused or revoked")
+        ));
+
+        let mut revoked = active.clone();
+        revoked.data[233] = 1;
+        assert!(matches!(
+            ensure_mandate_sendable(&revoked, program_id, 1),
+            Err(ApiError::BadRequest(message)) if message.contains("paused or revoked")
+        ));
+
+        let mut expired = active;
+        expired.data[200..208].copy_from_slice(&1_u64.to_le_bytes());
+        assert!(matches!(
+            ensure_mandate_sendable(&expired, program_id, 10),
+            Err(ApiError::BadRequest(message)) if message.contains("expired")
+        ));
     }
 
     #[test]

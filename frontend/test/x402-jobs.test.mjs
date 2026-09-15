@@ -39,6 +39,20 @@ test("standard x402 v2 and MPP stay visible but blocked", async () => {
   assert.equal(mpp.payable, false);
 });
 
+test("resumable jobs require payment_id from the job API", async () => {
+  const jobs = await loadModule({}, "../src/spend/x402Display.ts");
+  assert.equal(jobs.x402JobResumable({
+    x402_payment_id: "job-1",
+    resource: "https://api.example",
+    status: "prepared",
+    protocol: "chainpay_custom_x402",
+    payable: true,
+    payment_id: "payment_deadbeef",
+    created_at_ms: 1,
+    updated_at_ms: 2,
+  }), true);
+});
+
 test("verified jobs expose receipt cycle steps", async () => {
   const jobs = await loadModule({}, "../src/spend/x402Display.ts");
   const steps = jobs.x402CycleSteps({

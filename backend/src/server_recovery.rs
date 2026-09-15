@@ -989,6 +989,43 @@ mod tests {
         data[280] = 1;
         data
     }
+    fn mandate_account_data(
+        record: &PaymentRecord,
+        paused: bool,
+        revoked: bool,
+        expires_at_slot: u64,
+    ) -> Vec<u8> {
+        let mut data = vec![0; 235];
+        data[..8].copy_from_slice(&[139, 106, 43, 122, 82, 211, 96, 162]);
+        data[40..72].copy_from_slice(
+            &bs58::decode(record.agent.as_ref().unwrap())
+                .into_vec()
+                .unwrap(),
+        );
+        data[72..104].copy_from_slice(&[6; 32]);
+        data[104..136].copy_from_slice(
+            &bs58::decode(record.mint.as_ref().unwrap())
+                .into_vec()
+                .unwrap(),
+        );
+        data[200..208].copy_from_slice(&expires_at_slot.to_le_bytes());
+        data[232] = u8::from(paused);
+        data[233] = u8::from(revoked);
+        data
+    }
+    fn rpc_account_info(
+        address: &str,
+        mandate: &str,
+        mandate_data: &[u8],
+        receipt_data: &[u8],
+    ) -> Value {
+        let encoded = if address == mandate {
+            BASE64.encode(mandate_data)
+        } else {
+            BASE64.encode(receipt_data)
+        };
+        json!({"owner": DEFAULT_PROGRAM_ID, "data": [encoded, "base64"]})
+    }
     #[tokio::test]
     async fn timeout_recovers_finalized_receipt_and_preserves_verified_proof() {
         let (mut state, principal, request) = fixture();
@@ -997,15 +1034,21 @@ mod tests {
             .unwrap();
         let stage = Arc::new(AtomicUsize::new(0));
         let sends = Arc::new(AtomicUsize::new(0));
-        let data = BASE64.encode(receipt_data(&record));
+        let receipt = receipt_data(&record);
+        let mandate = mandate_account_data(&record, false, false, u64::MAX);
+        let fixture_record = record.clone();
         let stage_rpc = stage.clone();
         let sends_rpc = sends.clone();
         let signature = record.signature.clone().unwrap();
-        let router=Router::new().fallback(move |Json(request):Json<Value>|{let stage=stage_rpc.load(Ordering::SeqCst);let sends=sends_rpc.clone();let data=data.clone();let signature=signature.clone();async move {
+        let router=Router::new().fallback(move |Json(request):Json<Value>|{let stage=stage_rpc.load(Ordering::SeqCst);let sends=sends_rpc.clone();let receipt=receipt.clone();let mandate=mandate.clone();let fixture_record=fixture_record.clone();let signature=signature.clone();async move {
             let result=match request["method"].as_str().unwrap(){
                 "sendTransaction"=>{sends.fetch_add(1,Ordering::SeqCst);return (StatusCode::BAD_GATEWAY,Json(json!({"error":"fixture transport ambiguity"})));},
                 "getSignatureStatuses"=>{assert_eq!(request["params"][0][0],signature);json!({"value":[if stage==0{Value::Null}else{json!({"slot":7,"confirmationStatus":if stage==1{"confirmed"}else{"finalized"},"err":if stage==1||stage==4{json!({"InstructionError":[0,"fixture"]})}else{Value::Null}})}]})},
-                "getAccountInfo"=>json!({"value":if stage==2{Value::Null}else{json!({"owner":DEFAULT_PROGRAM_ID,"data":[data,"base64"]})}}),
+                "getAccountInfo"=>{
+                    let address=request["params"][0].as_str().unwrap();
+                    json!({"value":if stage==2 && address!=fixture_record.mandate{Value::Null}else{rpc_account_info(address,&fixture_record.mandate,&mandate,&receipt)}})
+                },
+                "getSlot"=>json!(1),
                 other=>panic!("Unexpected RPC {other}"),
             };(StatusCode::OK,Json(json!({"jsonrpc":"2.0","id":1,"result":result})))
         }});
@@ -1286,10 +1329,14 @@ mod tests {
         let (_, record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
             .await
             .unwrap();
-        let data = BASE64.encode(receipt_data(&record));
+        let receipt = receipt_data(&record);
+        let mandate = mandate_account_data(&record, false, false, u64::MAX);
+        let fixture_record = record.clone();
         let signature = record.signature.clone().unwrap();
         let router = Router::new().fallback(move |Json(body): Json<Value>| {
-            let data = data.clone();
+            let receipt = receipt.clone();
+            let mandate = mandate.clone();
+            let fixture_record = fixture_record.clone();
             async move {
                 if body["method"] == "sendTransaction" {
                     return (
@@ -1302,8 +1349,15 @@ mod tests {
                         json!({"value":[{"slot":9,"confirmationStatus":"finalized","err":Value::Null}]})
                     }
                     "getAccountInfo" => {
-                        json!({"value":{"owner":DEFAULT_PROGRAM_ID,"data":[data,"base64"]}})
+                        let address = body["params"][0].as_str().unwrap();
+                        json!({"value": rpc_account_info(
+                            address,
+                            &fixture_record.mandate,
+                            &mandate,
+                            &receipt,
+                        )})
                     }
+                    "getSlot" => json!(1),
                     other => panic!("Unexpected RPC {other}"),
                 };
                 (StatusCode::OK, Json(json!({"jsonrpc":"2.0","id":1,"result":result})))
@@ -1333,12 +1387,16 @@ mod tests {
         assert!(known_unsent(&record));
         let sends = Arc::new(AtomicUsize::new(0));
         let landed = Arc::new(AtomicUsize::new(0));
-        let data = BASE64.encode(receipt_data(&record));
+        let receipt = receipt_data(&record);
+        let mandate = mandate_account_data(&record, false, false, u64::MAX);
+        let fixture_record = record.clone();
         let signature = record.signature.clone().unwrap();
         let sends_rpc = sends.clone();
         let landed_rpc = landed.clone();
         let router = Router::new().fallback(move |Json(body): Json<Value>| {
-            let data = data.clone();
+            let receipt = receipt.clone();
+            let mandate = mandate.clone();
+            let fixture_record = fixture_record.clone();
             let signature = signature.clone();
             let sends = sends_rpc.clone();
             let landed = landed_rpc.clone();
@@ -1356,7 +1414,16 @@ mod tests {
                             json!({"value":[{"slot":3,"confirmationStatus":"finalized","err":Value::Null}]})
                         }
                     }
-                    "getAccountInfo" => json!({"value":{"owner":DEFAULT_PROGRAM_ID,"data":[data,"base64"]}}),
+                    "getAccountInfo" => {
+                        let address = body["params"][0].as_str().unwrap();
+                        json!({"value": rpc_account_info(
+                            address,
+                            &fixture_record.mandate,
+                            &mandate,
+                            &receipt,
+                        )})
+                    }
+                    "getSlot" => json!(1),
                     other => panic!("Unexpected RPC {other}"),
                 };
                 (StatusCode::OK, Json(json!({"jsonrpc":"2.0","id":1,"result":result})))
@@ -1383,6 +1450,159 @@ mod tests {
         assert!(!known_unsent(&again));
         assert_eq!(again.status, PaymentStatus::Confirmed);
         assert_eq!(sends.load(Ordering::SeqCst), 1);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn paused_mandate_blocks_immediate_pre_send_validation() {
+        let (mut state, _, request) = fixture();
+        let mut record = initial(&request, SigningMode::Human).unwrap();
+        record.signature = Some(signature(&request.signed_transaction).unwrap());
+        let receipt = receipt_data(&record);
+        let mandate = mandate_account_data(&record, true, false, u64::MAX);
+        let fixture_record = record.clone();
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let receipt = receipt.clone();
+            let mandate = mandate.clone();
+            let fixture_record = fixture_record.clone();
+            async move {
+                let result = match body["method"].as_str().unwrap() {
+                    "getAccountInfo" => {
+                        let address = body["params"][0].as_str().unwrap();
+                        json!({"value": rpc_account_info(
+                            address,
+                            &fixture_record.mandate,
+                            &mandate,
+                            &receipt,
+                        )})
+                    }
+                    "getSlot" => json!(1),
+                    other => panic!("Unexpected RPC {other}"),
+                };
+                (StatusCode::OK, Json(json!({"jsonrpc":"2.0","id":1,"result":result})))
+            }
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        state.config.rpc.url = format!("http://{address}");
+        state.rpc = RpcClient::new(state.config.rpc.clone()).unwrap();
+        let result = settle_payment(&state, request, record.clone()).await;
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+        assert_eq!(record.status, PaymentStatus::Prepared);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn revoked_mandate_does_not_block_submitted_reconciliation() {
+        let (mut state, _, request) = fixture();
+        let mut record = initial(&request, SigningMode::Human).unwrap();
+        record.signature = Some(signature(&request.signed_transaction).unwrap());
+        record.status = PaymentStatus::Submitted;
+        let receipt = receipt_data(&record);
+        let mandate = mandate_account_data(&record, false, true, u64::MAX);
+        let fixture_record = record.clone();
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let receipt = receipt.clone();
+            let mandate = mandate.clone();
+            let fixture_record = fixture_record.clone();
+            async move {
+                let result = match body["method"].as_str().unwrap() {
+                    "getSignatureStatuses" => {
+                        json!({"value":[{"slot":9,"confirmationStatus":"finalized","err":Value::Null}]})
+                    }
+                    "getAccountInfo" => {
+                        let address = body["params"][0].as_str().unwrap();
+                        json!({"value": rpc_account_info(
+                            address,
+                            &fixture_record.mandate,
+                            &mandate,
+                            &receipt,
+                        )})
+                    }
+                    other => panic!("Unexpected RPC {other}"),
+                };
+                (StatusCode::OK, Json(json!({"jsonrpc":"2.0","id":1,"result":result})))
+            }
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        state.config.rpc.url = format!("http://{address}");
+        state.rpc = RpcClient::new(state.config.rpc.clone()).unwrap();
+        let reconciled = payment(&state, record).await.unwrap();
+        assert_eq!(reconciled.status, PaymentStatus::Confirmed);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn recovery_resubmit_honors_revoked_mandate_without_failing_prior_submission() {
+        let (mut state, principal, request) = fixture();
+        let (_, mut record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
+            .await
+            .unwrap();
+        record.status = PaymentStatus::Submitted;
+        record.signature = Some(signature(&request.signed_transaction).unwrap());
+        state.store.put_payment(record.clone()).await.unwrap();
+        let receipt = receipt_data(&record);
+        let mandate = mandate_account_data(&record, false, true, u64::MAX);
+        let fixture_record = record.clone();
+        let sends = Arc::new(AtomicUsize::new(0));
+        let sends_rpc = sends.clone();
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let receipt = receipt.clone();
+            let mandate = mandate.clone();
+            let fixture_record = fixture_record.clone();
+            let sends = sends_rpc.clone();
+            async move {
+                let result = match body["method"].as_str().unwrap() {
+                    "sendTransaction" => {
+                        sends.fetch_add(1, Ordering::SeqCst);
+                        json!("should-not-send")
+                    }
+                    "getSignatureStatuses" => json!({"value":[Value::Null]}),
+                    "isBlockhashValid" => json!(true),
+                    "getAccountInfo" => {
+                        let address = body["params"][0].as_str().unwrap();
+                        json!({"value": rpc_account_info(
+                            address,
+                            &fixture_record.mandate,
+                            &mandate,
+                            &receipt,
+                        )})
+                    }
+                    "getSlot" => json!(1),
+                    other => panic!("Unexpected RPC {other}"),
+                };
+                (StatusCode::OK, Json(json!({"jsonrpc":"2.0","id":1,"result":result})))
+            }
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        state.config.rpc.url = format!("http://{address}");
+        state.rpc = RpcClient::new(state.config.rpc.clone()).unwrap();
+        assert!(
+            recover_payment(
+                State(state.clone()),
+                Extension(principal.clone()),
+                Path(record.payment_id.clone()),
+                Json(RecoverSigned {
+                    signed_transaction: request.signed_transaction.clone(),
+                    resubmit: true
+                })
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(sends.load(Ordering::SeqCst), 0);
+        let stored = state
+            .store
+            .get_payment(&record.payment_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, PaymentStatus::Submitted);
         task.abort();
     }
 

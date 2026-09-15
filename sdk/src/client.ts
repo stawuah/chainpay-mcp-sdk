@@ -41,6 +41,7 @@ import {
   type PreparePaymentInput,
 } from "./payment.js";
 import { deriveAssetAddress, deriveConfigAddress, deriveReceiptAddress } from "./pda.js";
+import { paymentPreflightContextFromTokenAccount } from "./token.js";
 import {
   amountDisplayFromMint,
   readCurrentMandateFields,
@@ -458,12 +459,20 @@ export class ChainPayClient {
     const executionAgent = agent ?? mandate.approvedAgent;
     const receiptAddress = deriveReceiptAddress(mandate.address, request.invoiceHash, this.programId);
     const existingReceipt = await this.getPayment(receiptAddress);
+    const sourceAccountInfo = await this.connection.getAccountInfo(
+      publicKey(mandate.sourceTokenAccount),
+      this.commitment,
+    );
+    const sourceContext = sourceAccountInfo
+      ? paymentPreflightContextFromTokenAccount(new Uint8Array(sourceAccountInfo.data))
+      : undefined;
     const preflight = preflightPayment(
       request,
       mandate,
       currentSlot,
       executionAgent,
       existingReceipt !== null,
+      sourceContext ?? undefined,
     );
     const instruction = buildExecutePaymentInstruction(request, executionAgent, mandate, this.programId);
 

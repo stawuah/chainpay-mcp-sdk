@@ -17,6 +17,10 @@ the authority for every payment.
 - build mandate creation plus limited delegate approval;
 - build update, pause, revoke, and delegate-revoke transactions;
 - prepare payment transactions with local policy preflight;
+- verify source balance, owner, delegate identity, and remaining delegated
+  allowance when `preparePayment` loads the mandate source token account;
+- run cumulative batch preflight with `preflightPaymentBatch` (the dashboard
+  batch importer applies the same rules when checking CSV rows);
 - detect duplicate invoice receipts before submission;
 - execute through an injected external-signing/submission adapter.
 
@@ -46,6 +50,29 @@ if (!prepared.preflight.valid) {
   throw new Error("Payment rejected by local preflight");
 }
 ```
+
+Batch cumulative checks:
+
+```ts
+import { preflightPaymentBatch, preparePayment } from "@chainpay/sdk";
+
+const batch = preflightPaymentBatch(
+  requests.map((input) => ({
+    request: preparePayment(input),
+    mandate,
+    agent: approvedAgent,
+    sourceContext, // optional; include when the source token account is loaded
+  })),
+  currentSlot,
+);
+
+if (!batch.valid) {
+  throw new Error(batch.batchChecks.filter((check) => !check.ok).map((check) => check.message).join("; "));
+}
+```
+
+Standalone `preflightPayment(...)` without source context performs mandate policy
+checks only. It does not imply a full funding or delegation check.
 
 ## Supported transaction reader
 

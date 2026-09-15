@@ -65,6 +65,11 @@ const fixtureReceipt = {
   seller: { status: "absent" },
 };
 
+test("formats unlimited mandate payment counts honestly", () => {
+  assert.equal(model.formatMandatePaymentCount("3", "0"), "3 · Unlimited");
+  assert.equal(model.formatMandatePaymentCount("3", "25"), "3 / 25");
+});
+
 test("classifies empty, malformed, and plausible receipt PDAs", () => {
   assert.equal(model.classifyReceiptPda(""), "empty");
   assert.equal(model.classifyReceiptPda("InvalidPDA"), "malformed");

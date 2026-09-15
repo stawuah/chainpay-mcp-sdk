@@ -157,10 +157,37 @@ export type PolicyCheck = {
   message: string;
 };
 
+/** Verified source token account fields supplied by preparePayment. */
+export type PaymentPreflightContext = {
+  sourceBalance: bigint;
+  sourceOwner: Address;
+  delegate: Address | null;
+  delegatedAmount: bigint;
+};
+
 export type PaymentPreflight = {
   valid: boolean;
   currentSlot: bigint;
   checks: PolicyCheck[];
+};
+
+export type BatchPreflightEntry = {
+  request: PaymentRequest;
+  mandate: Mandate;
+  agent?: Address;
+  receiptAlreadyExists?: boolean;
+  sourceContext?: PaymentPreflightContext;
+};
+
+export type PaymentBatchPreflight = {
+  valid: boolean;
+  currentSlot: bigint;
+  entries: Array<{
+    request: PaymentRequest;
+    mandate: Address;
+    preflight: PaymentPreflight;
+  }>;
+  batchChecks: PolicyCheck[];
 };
 
 export type PreparedPayment = {

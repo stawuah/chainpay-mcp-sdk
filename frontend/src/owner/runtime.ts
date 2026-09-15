@@ -148,10 +148,13 @@ export type AgentApproval = {
   [key: string]: unknown;
 };
 export type AgentOutcome = {
-  kind: "mandate_approval_required" | "payment_approval_required" | "payment_settled" | "payment_blocked" | "details_required";
+  kind: "mandate_approval_required" | "payment_approval_required" | "payment_settled" | "payment_blocked" | "details_required" | "payment_pending";
   receiptAddress?: string;
   signature?: string;
   status?: string;
+  paymentId?: string;
+  resourceStatus?: string;
+  receiptUrl?: string;
 };
 export type AgentCheck = {
   key: "limits" | "token" | "recipient" | "expiry" | "policy";
@@ -180,7 +183,10 @@ export type AgentInboxItem = {
   outcome?: AgentOutcome;
   requirements?: AgentRequirements;
   error?: string;
+  archivedAt?: string;
 };
+
+export { archiveInboxItem, isInboxItemArchived, restoreInboxItem } from "./inboxArchive";
 export type ApprovalStatus = "idle" | "signing" | "pending" | "success" | "error";
 export type ProtocolConfig = {
   address?: string;
@@ -190,7 +196,15 @@ export type ProtocolConfig = {
 };
 
 export type MandateTableStatus = "active" | "paused" | "revoked";
-export type MandateAction = "pause" | "resume" | "revoke";
+export type MandateUpdateFields = {
+  maxPerPayment: bigint;
+  totalLimit: bigint;
+  expiresAtSlot: bigint;
+  maxPaymentCount: bigint;
+  cooldownSlots: bigint;
+};
+
+export type MandateAction = "pause" | "resume" | "revoke" | "update";
 export type ConnectionToolCall = { name: string; count: number; lastCalledAt: string };
 export type AgentConnection = { id: string; wallet: string; agentName: string; scope: string; connectedAt: string; lastSeenAt: string | null; totalCalls: number; toolsCalled: ConnectionToolCall[]; mandates: number };
 export type ServerAgentConnection = Omit<AgentConnection, "mandates">;
@@ -619,7 +633,8 @@ export function pastedPaymentResponse(details: PastedPaymentDetails): AgentRespo
 export function inboxStageForResult(result: AgentResponse): AgentInboxStage {
   if (result.outcome?.kind === "payment_settled") return "receipt_ready";
   if (result.outcome?.kind === "details_required" || result.requirements?.status === "needs_details") return "needs_details";
-  if (result.outcome?.kind === "payment_blocked") return "blocked";
+  if (result.outcome?.kind === "payment_blocked" || result.requirements?.status === "blocked") return "blocked";
+  if (result.outcome?.kind === "payment_pending") return "approved";
   if (result.approval) return "waiting_for_approval";
   if (result.toolCalls?.includes("create_mandate")) return "mandate_prepared";
   if (result.toolCalls?.some((tool) => ["quote_payment_request", "quote_payment", "find_compatible_mandate", "verify_payment_request"].includes(tool))) return "policy_checked";

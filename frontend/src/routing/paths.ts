@@ -15,7 +15,9 @@ export type DashboardTab = (typeof DASHBOARD_TABS)[number];
 
 export type AppRoute =
   | { kind: "landing" }
-  | { kind: "app"; tab: DashboardTab; mandateBuilder?: boolean; mandateDetail?: string }
+  | { kind: "app"; tab: DashboardTab; mandateBuilder?: boolean; mandateDetail?: string; receiptDetail?: string }
+  | { kind: "app-not-found"; path: string }
+  | { kind: "public-not-found"; path: string }
   | { kind: "verify"; receiptPda: string };
 
 export function isDashboardTab(value: string): value is DashboardTab {
@@ -39,9 +41,17 @@ export function parsePathname(pathname: string): AppRoute {
         return { kind: "app", tab: "mandates", mandateDetail: encoded };
       }
     }
+    if (/^receipts\/[^/]+$/.test(rest)) {
+      const encoded = rest.slice("receipts/".length);
+      try {
+        return { kind: "app", tab: "receipts", receiptDetail: decodeURIComponent(encoded) };
+      } catch {
+        return { kind: "app", tab: "receipts", receiptDetail: encoded };
+      }
+    }
     const tab = rest.split("/")[0] ?? "";
     if (isDashboardTab(tab) && rest === tab) return { kind: "app", tab };
-    return { kind: "app", tab: "overview" };
+    return { kind: "app-not-found", path: normalized };
   }
 
   if (normalized === "/verify") return { kind: "verify", receiptPda: "" };
@@ -55,7 +65,7 @@ export function parsePathname(pathname: string): AppRoute {
     }
   }
 
-  return { kind: "landing" };
+  return { kind: "public-not-found", path: normalized };
 }
 
 export function buildPath(route: AppRoute): string {
@@ -63,8 +73,10 @@ export function buildPath(route: AppRoute): string {
   if (route.kind === "verify") {
     return route.receiptPda ? `/verify/${encodeURIComponent(route.receiptPda)}` : "/verify";
   }
+  if (route.kind === "app-not-found" || route.kind === "public-not-found") return route.path;
   if (route.mandateBuilder && route.tab === "mandates") return "/app/mandates/new";
   if (route.mandateDetail && route.tab === "mandates") return `/app/mandates/${encodeURIComponent(route.mandateDetail)}`;
+  if (route.receiptDetail && route.tab === "receipts") return `/app/receipts/${encodeURIComponent(route.receiptDetail)}`;
   return `/app/${route.tab}`;
 }
 

@@ -9,8 +9,13 @@ export type X402ProtocolSummary = {
 export type X402JobLike = {
   payable: boolean;
   status: string;
+  payment_id?: string;
   error?: string;
 };
+
+export function x402JobResumable(job: X402JobLike): boolean {
+  return Boolean(job.payment_id) && job.payable && (job.status === "submitted" || job.status === "confirmed" || job.status === "prepared");
+}
 
 const PROTOCOL_LABELS: Record<string, string> = {
   chainpay_custom_x402: "ChainPay custom x402/1.0",

@@ -43,7 +43,14 @@ export default function AppWorkspace() {
           switchingWalletAccount={wallet.switchingWalletAccount}
           tab={currentRoute.tab}
           mandateBuilder={currentRoute.mandateBuilder}
-          onTabChange={(tab, options) => navigate({ kind: "app", tab, mandateBuilder: options?.mandateBuilder })}
+          receiptDetail={currentRoute.receiptDetail}
+          onTabChange={(tab, options) => navigate({
+            kind: "app",
+            tab,
+            mandateBuilder: options?.mandateBuilder,
+            mandateDetail: options?.mandateDetail,
+            receiptDetail: options?.receiptDetail,
+          })}
           onNavigateHome={() => navigate({ kind: "landing" })}
           onRefresh={wallet.refreshMandate}
           onSelectMandate={wallet.selectMandate}

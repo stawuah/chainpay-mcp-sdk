@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { Arrow } from "../ui/marks";
 import {
   amountLabel,
+  formatMandatePaymentCount,
   pageAllowsSuccessChrome,
   publicReceiptPath,
   publicReceiptUrl,
@@ -36,7 +37,7 @@ function CurrentMandate({ receipt }: { receipt: ReceiptView }) {
             <Field label="Max per payment" value={current.fields.maxPerPayment} />
             <Field label="Total limit" value={current.fields.totalLimit} />
             <Field label="Amount spent" value={current.fields.amountSpent} />
-            <Field label="Payment count" value={`${current.fields.paymentCount} / ${current.fields.maxPaymentCount}`} />
+            <Field label="Payment count" value={formatMandatePaymentCount(current.fields.paymentCount, current.fields.maxPaymentCount)} />
             <Field label="Cooldown slots" value={current.fields.cooldownSlots} />
             <Field label="Expires at slot" value={current.fields.expiresAtSlot} />
           </dl>
@@ -124,17 +125,18 @@ export function ReceiptCard({
       <CurrentMandate receipt={receipt} />
       <details className="receipt-technical">
         <summary>Technical details</summary>
+        <p className="receipt-identifier-note">These identifiers come from the on-chain receipt account. They are not Axum operation IDs or x402 job IDs.</p>
         <dl>
-          <Field label="Receipt PDA" value={receipt.address} />
-          <Field label="Mandate" value={receipt.mandate} />
+          <Field label="Receipt PDA (on-chain account)" value={receipt.address} />
+          <Field label="Spending permission (mandate PDA)" value={receipt.mandate} />
           <Field label="Mint" value={receipt.mint} />
           <Field label="Source token account" value={receipt.sourceTokenAccount} />
-          <Field label="Invoice hash" value={receipt.invoiceHash} />
-          <Field label="Payment ID" value={receipt.paymentId} />
-          <Field label="Signature reference" value={receipt.signatureReference} />
+          <Field label="On-chain invoice hash" value={receipt.invoiceHash} />
+          <Field label="On-chain payment ID" value={receipt.paymentId} />
+          <Field label="Signature reference (replay lock)" value={receipt.signatureReference} />
           <Field label="On-chain status" value={receipt.onChainStatus} />
           <Field label="Bump" value={receipt.bump} />
-          {receipt.transactionSignature && <Field label="Activity signature" value={receipt.transactionSignature} />}
+          {receipt.transactionSignature && <Field label="Solana activity signature" value={receipt.transactionSignature} />}
         </dl>
       </details>
       <div className="receipt-card-actions">
@@ -154,7 +156,19 @@ export function ReceiptCard({
   );
 }
 
-export function ReceiptPageState({ state, onRetry }: { state: PublicReceiptPageState; onRetry?: () => void }) {
+export function ReceiptPageState({
+  state,
+  onRetry,
+  editableAddress,
+  onAddressChange,
+  onEditAddress,
+}: {
+  state: PublicReceiptPageState;
+  onRetry?: () => void;
+  editableAddress?: string;
+  onAddressChange?: (value: string) => void;
+  onEditAddress?: () => void;
+}) {
   if (state.kind === "loading") {
     return (
       <div className="receipt-page-state" aria-busy="true">
@@ -176,11 +190,28 @@ export function ReceiptPageState({ state, onRetry }: { state: PublicReceiptPageS
       : state.kind === "rpc_error"
         ? { title: "Receipt verification is unavailable.", body: state.message }
         : { title: "This account is not a verified ChainPay receipt.", body: state.reason };
+  const canRetry = state.kind === "rpc_error" || state.kind === "not_found";
   return (
     <div className="receipt-page-state" role="alert" data-kind={state.kind}>
       <h2 className="t-xl">{copy.title}</h2>
       <p className="t-body">{copy.body}</p>
-      {state.kind === "rpc_error" && onRetry && (
+      {editableAddress !== undefined && onAddressChange && (
+        <div className="verify-entry-form">
+          <label className="verify-entry-label" htmlFor="verify-receipt-edit">Receipt address</label>
+          <input
+            id="verify-receipt-edit"
+            className="verify-entry-input mono"
+            value={editableAddress}
+            onChange={(event) => onAddressChange(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          {onEditAddress && (
+            <button type="button" className="button button-secondary" onClick={onEditAddress}>Check this address</button>
+          )}
+        </div>
+      )}
+      {canRetry && onRetry && (
         <button type="button" className="button button-primary" onClick={onRetry}>Try again</button>
       )}
     </div>

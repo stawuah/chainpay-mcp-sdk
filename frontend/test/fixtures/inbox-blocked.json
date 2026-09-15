@@ -1,0 +1,27 @@
+{
+  "id": "req-blocked",
+  "createdAt": "2026-09-15T12:05:00.000Z",
+  "source": "message",
+  "title": "Over-limit purchase",
+  "prompt": "pay 500 USDC",
+  "response": "blocked by policy",
+  "stage": "blocked",
+  "toolCalls": ["check_payment_requirements"],
+  "attachments": [],
+  "approval": {
+    "kind": "payment",
+    "action": "blocked",
+    "payment": {
+      "amount": "500000000",
+      "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      "recipient": "RecipientTokenAccount111111111111111111111"
+    }
+  },
+  "requirements": {
+    "status": "blocked",
+    "missing": [],
+    "checks": [
+      { "key": "limits", "label": "Limits", "status": "fail", "detail": "Requested 500 USDC exceeds this permission's 100 USDC per-payment limit." }
+    ]
+  }
+}

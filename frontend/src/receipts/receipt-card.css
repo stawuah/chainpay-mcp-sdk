@@ -112,6 +112,25 @@
 .receipt-page-state p { color: var(--body); }
 .receipt-page-home { display: inline-block; margin-top: 18px; color: var(--blue); }
 .verify-page .receipt-card { margin-top: 28px; }
+.verify-entry { max-width: 640px; margin-top: 24px; }
+.verify-entry-form { display: grid; gap: 12px; margin-top: 16px; }
+.verify-entry-label { color: var(--body); font: 600 12px var(--sans); }
+.verify-entry-input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 14px;
+}
+.verify-entry-input:focus {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.verify-demo-link { margin-top: 18px; color: var(--body); font-size: 13px; }
+.verify-demo-link a { color: var(--blue); }
+.inbox-receipt-actions { display: flex; gap: 10px; margin-top: 12px; }
 .inbox-receipt { margin-top: 16px; }
 .inbox-receipt-unavailable {
   padding: 13px;

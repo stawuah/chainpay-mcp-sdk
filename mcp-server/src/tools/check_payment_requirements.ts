@@ -45,11 +45,11 @@ function preflightChecks(preflight: PaymentPreflight): RequirementCheck[] {
   };
 
   return [
-    grouped("limits", ["amount_positive", "per_payment_limit", "total_limit", "payment_count_limit", "cooldown"], "Payment amount and mandate limits are waiting for a policy preflight."),
+    grouped("limits", ["amount_positive", "per_payment_limit", "total_limit", "payment_count_limit", "cooldown", "source_balance", "delegated_amount", "batch_total_limit", "batch_payment_count", "batch_cooldown", "batch_source_balance", "batch_delegated_amount"], "Payment amount and mandate limits are waiting for a policy preflight."),
     grouped("token", ["mint", "token_program", "asset_registry"], "Provide the token mint and token program."),
     grouped("recipient", ["recipient"], "Provide the recipient token account from the invoice."),
     grouped("expiry", ["expiry"], "An active, unexpired mandate is required."),
-    grouped("policy", ["mandate_status", "approved_agent", "invoice_hash", "payment_id", "signature_reference", "duplicate_invoice"], "Provide an active mandate and a verified merchant request."),
+    grouped("policy", ["mandate_status", "approved_agent", "source_owner", "delegate_identity", "invoice_hash", "payment_id", "signature_reference", "duplicate_invoice"], "Provide an active mandate and a verified merchant request."),
   ];
 }
 

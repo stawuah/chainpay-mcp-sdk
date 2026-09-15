@@ -56,9 +56,11 @@ export async function loadSellerStatement(input: {
   receiptAddress: string;
   recipientTokenAccount: string;
   fetchImpl?: typeof fetch;
+  refresh?: boolean;
 }): Promise<SellerStatementState> {
   const fetchImpl = input.fetchImpl ?? fetch;
-  const url = `${BACKEND_URL.replace(/\/$/, "")}/v1/delivery-attestations/${encodeURIComponent(input.receiptAddress)}`;
+  const base = `${BACKEND_URL.replace(/\/$/, "")}/v1/delivery-attestations/${encodeURIComponent(input.receiptAddress)}`;
+  const url = input.refresh ? `${base}?refresh=${Date.now()}` : base;
   let httpStatus: number | null = null;
   let body: unknown;
   try {

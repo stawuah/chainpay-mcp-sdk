@@ -41,6 +41,278 @@ fn address_bytes(value: &str) -> Result<Vec<u8>, ApiError> {
         .map_err(|_| bad("Invalid address"))
 }
 
+const INIT_CONFIG: [u8; 8] = [208, 127, 21, 1, 194, 190, 196, 70];
+const REGISTER_ASSET: [u8; 8] = [21, 80, 155, 149, 117, 207, 235, 16];
+const SET_ASSET_STATUS: [u8; 8] = [58, 54, 181, 102, 68, 238, 240, 245];
+const CREATE_MANDATE: [u8; 8] = [230, 170, 158, 68, 33, 169, 16, 158];
+const PAUSE_MANDATE: [u8; 8] = [192, 108, 97, 124, 56, 229, 236, 3];
+const REVOKE_MANDATE: [u8; 8] = [252, 97, 140, 119, 67, 43, 177, 108];
+const UPDATE_MANDATE: [u8; 8] = [69, 131, 248, 29, 105, 50, 139, 30];
+const APPROVE_CHECKED: u8 = 13;
+const REVOKE_DELEGATE: u8 = 5;
+const ATA_PROGRAM: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
+
+fn discriminator(data: &[u8]) -> Option<[u8; 8]> {
+    if data.len() < 8 {
+        return None;
+    }
+    data[..8].try_into().ok()
+}
+
+fn token_program(value: &str) -> Result<(), ApiError> {
+    if ![SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].contains(&value) {
+        return Err(bad("Invalid token program"));
+    }
+    Ok(())
+}
+
+fn validate_approve_checked(
+    tx: &VersionedTransaction,
+    position: usize,
+    wallet: &str,
+    mandate: &str,
+    source: &str,
+    mint: &str,
+) -> Result<(), ApiError> {
+    let ix = &tx.message.instructions()[position];
+    token_program(&key(tx, ix.program_id_index)?)?;
+    if ix.accounts.len() != 4 || ix.data.len() != 10 || ix.data[0] != APPROVE_CHECKED {
+        return Err(bad("Unexpected delegate approval"));
+    }
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|index| key(tx, *index))
+        .collect::<Result<Vec<_>, _>>()?;
+    if accounts != [source, mint, mandate, wallet] {
+        return Err(bad(
+            "Delegate approval must match mandate, owner, source and mint",
+        ));
+    }
+    if ix.accounts[3] as usize >= tx.message.header().num_required_signatures as usize {
+        return Err(bad("Delegate approval owner must sign"));
+    }
+    role(tx, ix.program_id_index, false, false)?;
+    Ok(())
+}
+
+fn validate_ata_creation(
+    tx: &VersionedTransaction,
+    wallet: &str,
+    owner_must_be_wallet: bool,
+) -> Result<(), ApiError> {
+    let ix = &tx.message.instructions()[0];
+    if tx.message.instructions().len() != 1 || !ix.data.is_empty() || ix.accounts.len() != 6 {
+        return Err(bad("Only standalone associated-token setup is supported"));
+    }
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|index| key(tx, *index))
+        .collect::<Result<Vec<_>, _>>()?;
+    if accounts[0] != wallet
+        || accounts[4] != SYSTEM_PROGRAM
+        || key(tx, ix.program_id_index)? != ATA_PROGRAM
+    {
+        return Err(bad("Associated token account payer must be the owner wallet"));
+    }
+    token_program(&accounts[5])?;
+    if owner_must_be_wallet && accounts[2] != wallet {
+        return Err(bad(
+            "Token account must be the connected owner's canonical ATA",
+        ));
+    }
+    if accounts[1]
+        != pda(
+            ATA_PROGRAM,
+            &[
+                &address_bytes(&accounts[2])?,
+                &address_bytes(&accounts[5])?,
+                &address_bytes(&accounts[3])?,
+            ],
+        )?
+    {
+        return Err(bad("Associated token account address mismatch"));
+    }
+    if owner_must_be_wallet {
+        for (position, index) in ix.accounts.iter().enumerate() {
+            role(
+                tx,
+                *index,
+                matches!(position, 0 | 1 | 2),
+                matches!(position, 0 | 2),
+            )?;
+        }
+    } else {
+        role(tx, ix.accounts[0], true, true)?;
+        role(tx, ix.accounts[1], true, false)?;
+    }
+    role(tx, ix.program_id_index, false, false)?;
+    Ok(())
+}
+
+fn validate_delegate_repair(tx: &VersionedTransaction, wallet: &str) -> Result<(), ApiError> {
+    if tx.message.instructions().len() != 1 {
+        return Err(bad("Delegate repair must be a single approval instruction"));
+    }
+    let accounts = tx.message.instructions()[0]
+        .accounts
+        .iter()
+        .map(|index| key(tx, *index))
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_approve_checked(tx, 0, wallet, &accounts[2], &accounts[0], &accounts[1])?;
+    Ok(())
+}
+
+fn validate_delegate_removal(tx: &VersionedTransaction, wallet: &str) -> Result<(), ApiError> {
+    let ix = &tx.message.instructions()[0];
+    if tx.message.instructions().len() != 1
+        || ix.data.len() != 1
+        || ix.data[0] != REVOKE_DELEGATE
+        || ix.accounts.len() != 2
+        || tx.message.static_account_keys().len() != 3
+    {
+        return Err(bad("Delegate removal must be a standalone revoke instruction"));
+    }
+    token_program(&key(tx, ix.program_id_index)?)?;
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|index| key(tx, *index))
+        .collect::<Result<Vec<_>, _>>()?;
+    if accounts[1] != wallet {
+        return Err(bad("Delegate removal must be signed by the token account owner"));
+    }
+    if ix.accounts[1] as usize >= tx.message.header().num_required_signatures as usize {
+        return Err(bad("Delegate removal owner must sign"));
+    }
+    role(tx, ix.program_id_index, false, false)?;
+    Ok(())
+}
+
+fn validate_initialize_config(
+    tx: &VersionedTransaction,
+    wallet: &str,
+    program: &str,
+) -> Result<(), ApiError> {
+    let ix = &tx.message.instructions()[0];
+    if tx.message.instructions().len() != 1
+        || ix.data.len() != 104
+        || ix.accounts.len() != 3
+        || tx.message.static_account_keys().len() != 4
+    {
+        return Err(bad("Invalid protocol initialization transaction"));
+    }
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|index| key(tx, *index))
+        .collect::<Result<Vec<_>, _>>()?;
+    if accounts[0] != pda(program, &[b"config"])?
+        || accounts[1] != wallet
+        || accounts[2] != SYSTEM_PROGRAM
+    {
+        return Err(bad("Invalid protocol initialization accounts"));
+    }
+    if ix.accounts[1] as usize >= tx.message.header().num_required_signatures as usize {
+        return Err(bad("Protocol initialization authority must sign"));
+    }
+    role(tx, ix.program_id_index, false, false)?;
+    Ok(())
+}
+
+fn validate_register_asset(
+    tx: &VersionedTransaction,
+    wallet: &str,
+    program: &str,
+) -> Result<(), ApiError> {
+    let ix = &tx.message.instructions()[0];
+    if tx.message.instructions().len() != 1
+        || ix.data.len() != 40
+        || ix.accounts.len() != 6
+        || tx.message.static_account_keys().len() != 7
+    {
+        return Err(bad("Invalid asset registration transaction"));
+    }
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|index| key(tx, *index))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mint = bs58::encode(&ix.data[8..40]).into_string();
+    token_program(&accounts[4])?;
+    if accounts[0] != pda(program, &[b"config"])?
+        || accounts[1] != pda(program, &[b"asset", &ix.data[8..40]])?
+        || accounts[2] != wallet
+        || accounts[3] != mint
+        || accounts[5] != SYSTEM_PROGRAM
+    {
+        return Err(bad("Invalid asset registration accounts"));
+    }
+    if ix.accounts[2] as usize >= tx.message.header().num_required_signatures as usize {
+        return Err(bad("Asset registration authority must sign"));
+    }
+    role(tx, ix.program_id_index, false, false)?;
+    Ok(())
+}
+
+fn validate_set_asset_status(
+    tx: &VersionedTransaction,
+    wallet: &str,
+    program: &str,
+) -> Result<(), ApiError> {
+    let ix = &tx.message.instructions()[0];
+    if tx.message.instructions().len() != 1
+        || ix.data.len() != 9
+        || ix.accounts.len() != 3
+        || tx.message.static_account_keys().len() != 4
+        || ix.data[8] > 1
+    {
+        return Err(bad("Invalid asset status transaction"));
+    }
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|index| key(tx, *index))
+        .collect::<Result<Vec<_>, _>>()?;
+    if accounts[0] != pda(program, &[b"config"])? || accounts[2] != wallet {
+        return Err(bad("Invalid asset status accounts"));
+    }
+    if ix.accounts[2] as usize >= tx.message.header().num_required_signatures as usize {
+        return Err(bad("Asset status authority must sign"));
+    }
+    role(tx, ix.program_id_index, false, false)?;
+    Ok(())
+}
+
+fn validate_management_instruction(
+    tx: &VersionedTransaction,
+    position: usize,
+    wallet: &str,
+) -> Result<(), ApiError> {
+    let ix = &tx.message.instructions()[position];
+    let expected = if ix.data[..8] == UPDATE_MANDATE {
+        81
+    } else {
+        8
+    };
+    if ix.data.len() != expected || ix.accounts.len() != 2 {
+        return Err(bad("Invalid mandate management transaction"));
+    }
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|index| key(tx, *index))
+        .collect::<Result<Vec<_>, _>>()?;
+    if accounts[1] != wallet {
+        return Err(bad("Invalid mandate management transaction"));
+    }
+    role(tx, ix.accounts[0], true, false)?;
+    role(tx, ix.accounts[1], true, true)?;
+    Ok(())
+}
+
 pub(super) fn future_mandate(
     program: &str,
     wallet: &str,
@@ -299,49 +571,22 @@ pub(super) fn owner(
         }
         return Ok(());
     }
-    if key(tx, ix.program_id_index)? == "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" {
-        if instructions.len() != 1
-            || !ix.data.is_empty()
-            || ix.accounts.len() != 6
-            || tx.message.static_account_keys().len() != 6
-        {
-            return Err(bad(
-                "Only the owner token-account setup instruction is supported",
-            ));
-        }
-        let a = ix
+    if key(tx, ix.program_id_index)? == ATA_PROGRAM {
+        let owner_is_wallet = ix
             .accounts
-            .iter()
-            .map(|i| key(tx, *i))
-            .collect::<Result<Vec<_>, _>>()?;
-        if a[0] != wallet
-            || a[2] != wallet
-            || a[4] != "11111111111111111111111111111111"
-            || ![SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].contains(&a[5].as_str())
-            || a[1]
-                != pda(
-                    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
-                    &[
-                        &address_bytes(wallet)?,
-                        &address_bytes(&a[5])?,
-                        &address_bytes(&a[3])?,
-                    ],
-                )?
-        {
-            return Err(bad(
-                "Token account must be the connected owner's canonical ATA",
-            ));
+            .get(2)
+            .is_some_and(|index| key(tx, *index).is_ok_and(|owner| owner == wallet));
+        return validate_ata_creation(tx, wallet, owner_is_wallet);
+    }
+    if [SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].contains(&key(tx, ix.program_id_index)?.as_str())
+    {
+        if ix.data.len() == 1 && ix.data[0] == REVOKE_DELEGATE {
+            return validate_delegate_removal(tx, wallet);
         }
-        for (position, index) in ix.accounts.iter().enumerate() {
-            role(
-                tx,
-                *index,
-                matches!(position, 0 | 1 | 2),
-                matches!(position, 0 | 2),
-            )?;
+        if ix.data.len() == 10 && ix.data[0] == APPROVE_CHECKED {
+            return validate_delegate_repair(tx, wallet);
         }
-        role(tx, ix.program_id_index, false, false)?;
-        return Ok(());
+        return Err(bad("Relay accepts only supported token delegate actions"));
     }
     if key(tx, ix.program_id_index)? != program || ix.data.len() < 8 {
         return Err(bad("Relay accepts only supported ChainPay owner actions"));
@@ -352,15 +597,18 @@ pub(super) fn owner(
         .iter()
         .map(|i| key(tx, *i))
         .collect::<Result<Vec<_>, _>>()?;
-    match &ix.data[..8] {
-        [230, 170, 158, 68, 33, 169, 16, 158] => {
+    match discriminator(&ix.data) {
+        Some(INIT_CONFIG) => validate_initialize_config(tx, wallet, program),
+        Some(REGISTER_ASSET) => validate_register_asset(tx, wallet, program),
+        Some(SET_ASSET_STATUS) => validate_set_asset_status(tx, wallet, program),
+        Some(CREATE_MANDATE) => {
             if tx.message.static_account_keys().len() != 9
                 || ix.data.len() != 176
                 || a.len() != 8
                 || a[3] != wallet
                 || a[0] != pda(program, &[b"config"])?
                 || a[1] != pda(program, &[b"asset", &address_bytes(&a[4])?])?
-                || a[7] != "11111111111111111111111111111111"
+                || a[7] != SYSTEM_PROGRAM
                 || ![SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].contains(&a[6].as_str())
             {
                 return Err(bad("Invalid create_mandate accounts"));
@@ -382,56 +630,48 @@ pub(super) fn owner(
             {
                 return Err(bad("Invalid mandate PDA"));
             }
-            // ApproveChecked is the only auxiliary needed by the existing create flow.
             if instructions.len() != 2 {
                 return Err(bad(
                     "Create mandate must include its exact delegate approval",
                 ));
             }
-            let approve = &instructions[1];
-            if key(tx, approve.program_id_index)? != a[6]
-                || approve.accounts.len() != 4
-                || approve.data.len() != 10
-                || approve.data[0] != 13
-            {
+            if key(tx, instructions[1].program_id_index)? != a[6] {
                 return Err(bad("Unexpected delegate approval"));
             }
-            let aa = approve
-                .accounts
-                .iter()
-                .map(|i| key(tx, *i))
-                .collect::<Result<Vec<_>, _>>()?;
-            if aa != vec![a[5].clone(), a[4].clone(), a[2].clone(), wallet.into()] {
-                return Err(bad(
-                    "Delegate approval must match created mandate, owner, source and mint",
-                ));
-            }
+            validate_approve_checked(tx, 1, wallet, &a[2], &a[5], &a[4])?;
             for (position, index) in ix.accounts.iter().enumerate() {
                 role(tx, *index, matches!(position, 2 | 3 | 5), position == 3)?;
             }
+            Ok(())
         }
-        [192, 108, 97, 124, 56, 229, 236, 3]
-        | [252, 97, 140, 119, 67, 43, 177, 108]
-        | [69, 131, 248, 29, 105, 50, 139, 30] => {
-            let expected = if ix.data[..8] == [69, 131, 248, 29, 105, 50, 139, 30] {
-                81
+        Some(UPDATE_MANDATE) => {
+            validate_management_instruction(tx, 0, wallet)?;
+            if instructions.len() == 2 {
+                validate_approve_checked(
+                    tx,
+                    1,
+                    wallet,
+                    &a[0],
+                    &key(tx, instructions[1].accounts[0])?,
+                    &key(tx, instructions[1].accounts[1])?,
+                )
+            } else if instructions.len() == 1 {
+                if tx.message.static_account_keys().len() != 3 {
+                    return Err(bad("Invalid mandate management transaction"));
+                }
+                Ok(())
             } else {
-                8
-            };
-            if tx.message.static_account_keys().len() != 3
-                || ix.data.len() != expected
-                || a.len() != 2
-                || a[1] != wallet
-                || instructions.len() != 1
-            {
+                Err(bad("Mandate update must include at most one delegate approval"))
+            }
+        }
+        Some(PAUSE_MANDATE) | Some(REVOKE_MANDATE) => {
+            if tx.message.static_account_keys().len() != 3 || instructions.len() != 1 {
                 return Err(bad("Invalid mandate management transaction"));
             }
-            role(tx, ix.accounts[0], true, false)?;
-            role(tx, ix.accounts[1], true, true)?; // Owner is also fee payer.
+            validate_management_instruction(tx, 0, wallet)
         }
-        _ => return Err(bad("Unsupported ChainPay owner action")),
+        _ => Err(bad("Unsupported ChainPay owner action")),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -853,5 +1093,316 @@ pub(super) mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn protocol_asset_and_recipient_ata_shapes_are_accepted() {
+        let (_, request, signer) = fixture(0);
+        let wallet = request.agent.unwrap();
+        let mint = bs58::encode([5; 32]).into_string();
+        let config = pda(DEFAULT_PROGRAM_ID, &[b"config"]).unwrap();
+        let asset = pda(DEFAULT_PROGRAM_ID, &[b"asset", &[5; 32]]).unwrap();
+        let recipient = bs58::encode([9; 32]).into_string();
+        let ata = pda(
+            ATA_PROGRAM,
+            &[
+                &address_bytes(&recipient).unwrap(),
+                &address_bytes(SPL_TOKEN_PROGRAM_ID).unwrap(),
+                &[5; 32],
+            ],
+        )
+        .unwrap();
+        let keys = [
+            wallet.clone(),
+            config.clone(),
+            asset.clone(),
+            mint.clone(),
+            SPL_TOKEN_PROGRAM_ID.into(),
+            SYSTEM_PROGRAM.into(),
+            DEFAULT_PROGRAM_ID.into(),
+            recipient.clone(),
+            ata.clone(),
+            ATA_PROGRAM.into(),
+        ]
+        .map(|value| Address::from_str(&value).unwrap())
+        .to_vec();
+
+        let mut init_data = INIT_CONFIG.to_vec();
+        init_data.extend_from_slice(&[1; 96]);
+        let init = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 1,
+            },
+            account_keys: [
+                wallet.clone(),
+                config.clone(),
+                SYSTEM_PROGRAM.into(),
+                DEFAULT_PROGRAM_ID.into(),
+            ]
+            .map(|value| Address::from_str(&value).unwrap())
+            .to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 3,
+                accounts: vec![1, 0, 2],
+                data: init_data,
+            }],
+        });
+        let init_tx = VersionedTransaction {
+            signatures: vec![signer.sign(&init.serialize()).to_bytes().into()],
+            message: init,
+        };
+        owner(&init_tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+
+        let mut register_data = REGISTER_ASSET.to_vec();
+        register_data.extend_from_slice(&[5; 32]);
+        let register = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 4,
+            },
+            account_keys: keys[..7].to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 6,
+                accounts: vec![1, 2, 0, 3, 4, 5],
+                data: register_data,
+            }],
+        });
+        let register_tx = VersionedTransaction {
+            signatures: vec![signer.sign(&register.serialize()).to_bytes().into()],
+            message: register,
+        };
+        owner(&register_tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+
+        let set_status = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 1,
+            },
+            account_keys: [wallet.clone(), config.clone(), asset.clone(), DEFAULT_PROGRAM_ID.into()]
+                .map(|value| Address::from_str(&value).unwrap())
+                .to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 3,
+                accounts: vec![1, 2, 0],
+                data: vec![58, 54, 181, 102, 68, 238, 240, 245, 0],
+            }],
+        });
+        let set_status_tx = VersionedTransaction {
+            signatures: vec![signer.sign(&set_status.serialize()).to_bytes().into()],
+            message: set_status,
+        };
+        owner(&set_status_tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+
+        let recipient_ata = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 4,
+            },
+            account_keys: [
+                wallet.clone(),
+                ata.clone(),
+                recipient.clone(),
+                mint.clone(),
+                SPL_TOKEN_PROGRAM_ID.into(),
+                SYSTEM_PROGRAM.into(),
+                ATA_PROGRAM.into(),
+            ]
+            .map(|value| Address::from_str(&value).unwrap())
+            .to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 6,
+                accounts: vec![0, 1, 2, 3, 5, 4],
+                data: vec![],
+            }],
+        });
+        let recipient_tx = VersionedTransaction {
+            signatures: vec![signer.sign(&recipient_ata.serialize()).to_bytes().into()],
+            message: recipient_ata,
+        };
+        owner(&recipient_tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+        let mut bad_recipient = recipient_tx;
+        if let VersionedMessage::Legacy(message) = &mut bad_recipient.message {
+            message.instructions[0].accounts[2] = 0;
+        }
+        assert!(owner(&bad_recipient, &wallet, DEFAULT_PROGRAM_ID).is_err());
+    }
+
+    #[test]
+    fn mandate_update_with_approval_and_delegate_actions_validate() {
+        let (_, request, signer) = fixture(0);
+        let wallet = request.agent.unwrap();
+        let mandate = bs58::encode([2; 32]).into_string();
+        let source = bs58::encode([6; 32]).into_string();
+        let mint = bs58::encode([5; 32]).into_string();
+        let keys = [
+            wallet.clone(),
+            mandate.clone(),
+            source.clone(),
+            mint.clone(),
+            SPL_TOKEN_PROGRAM_ID.into(),
+            DEFAULT_PROGRAM_ID.into(),
+        ]
+        .map(|value| Address::from_str(&value).unwrap())
+        .to_vec();
+        let mut update_data = UPDATE_MANDATE.to_vec();
+        update_data.extend_from_slice(&signer.verifying_key().to_bytes());
+        for value in [10_u64, 100, 1000, 0, 0] {
+            update_data.extend_from_slice(&value.to_le_bytes());
+        }
+        update_data.push(0);
+        let mut approval = vec![APPROVE_CHECKED];
+        approval.extend_from_slice(&100u64.to_le_bytes());
+        approval.push(6);
+        let update = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 2,
+            },
+            account_keys: keys.clone(),
+            recent_blockhash: Default::default(),
+            instructions: vec![
+                CompiledInstruction {
+                    program_id_index: 5,
+                    accounts: vec![1, 0],
+                    data: update_data.clone(),
+                },
+                CompiledInstruction {
+                    program_id_index: 4,
+                    accounts: vec![2, 3, 1, 0],
+                    data: approval.clone(),
+                },
+            ],
+        });
+        let update_tx = VersionedTransaction {
+            signatures: vec![signer.sign(&update.serialize()).to_bytes().into()],
+            message: update,
+        };
+        owner(&update_tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+
+        let repair = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 2,
+            },
+            account_keys: keys[..5].to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 4,
+                accounts: vec![2, 3, 1, 0],
+                data: approval,
+            }],
+        });
+        let repair_tx = VersionedTransaction {
+            signatures: vec![signer.sign(&repair.serialize()).to_bytes().into()],
+            message: repair,
+        };
+        owner(&repair_tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+
+        let removal = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 1,
+            },
+            account_keys: [wallet.clone(), source, SPL_TOKEN_PROGRAM_ID.into()]
+                .map(|value| Address::from_str(&value).unwrap())
+                .to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 2,
+                accounts: vec![1, 0],
+                data: vec![REVOKE_DELEGATE],
+            }],
+        });
+        let removal_tx = VersionedTransaction {
+            signatures: vec![signer.sign(&removal.serialize()).to_bytes().into()],
+            message: removal,
+        };
+        owner(&removal_tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+
+        let mut bad_update = update_tx;
+        if let VersionedMessage::Legacy(message) = &mut bad_update.message {
+            message.instructions[1].accounts[2] = 0;
+        }
+        assert!(owner(&bad_update, &wallet, DEFAULT_PROGRAM_ID).is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_owner_shapes() {
+        let (_, request, _) = fixture(0);
+        let wallet = request.agent.unwrap();
+        let memo = VersionedTransaction {
+            signatures: vec![Default::default()],
+            message: VersionedMessage::Legacy(Message {
+                header: MessageHeader {
+                    num_required_signatures: 1,
+                    num_readonly_signed_accounts: 0,
+                    num_readonly_unsigned_accounts: 1,
+                },
+                account_keys: [
+                    wallet.clone(),
+                    bs58::encode([10; 32]).into_string(),
+                ]
+                .map(|value| Address::from_str(&value).unwrap())
+                .to_vec(),
+                recent_blockhash: Default::default(),
+                instructions: vec![CompiledInstruction {
+                    program_id_index: 1,
+                    accounts: vec![0],
+                    data: b"hello".to_vec(),
+                }],
+            }),
+        };
+        assert!(owner(&memo, &wallet, DEFAULT_PROGRAM_ID).is_err());
+
+        let mut register_data = REGISTER_ASSET.to_vec();
+        register_data.extend_from_slice(&[5; 32]);
+        let register = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 4,
+            },
+            account_keys: [
+                wallet.clone(),
+                pda(DEFAULT_PROGRAM_ID, &[b"config"]).unwrap(),
+                pda(DEFAULT_PROGRAM_ID, &[b"asset", &[5; 32]]).unwrap(),
+                bs58::encode([5; 32]).into_string(),
+                SPL_TOKEN_PROGRAM_ID.into(),
+                SYSTEM_PROGRAM.into(),
+                DEFAULT_PROGRAM_ID.into(),
+            ]
+            .map(|value| Address::from_str(&value).unwrap())
+            .to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![
+                CompiledInstruction {
+                    program_id_index: 6,
+                    accounts: vec![1, 2, 0, 3, 4, 5],
+                    data: register_data,
+                },
+                CompiledInstruction {
+                    program_id_index: 6,
+                    accounts: vec![1, 2, 0, 3, 4, 5],
+                    data: vec![21, 80, 155, 149, 117, 207, 235, 16, 5, 5, 5, 5],
+                },
+            ],
+        });
+        let extra_ix = VersionedTransaction {
+            signatures: vec![Default::default()],
+            message: register,
+        };
+        assert!(owner(&extra_ix, &wallet, DEFAULT_PROGRAM_ID).is_err());
     }
 }

@@ -34,8 +34,17 @@ export async function sharePublicReceipt(input: {
 
   try {
     if (share) {
-      await share({ title: payload.title, text: payload.text, url: payload.url });
-      return { status: "shared" };
+      try {
+        await share({ title: payload.title, text: payload.text, url: payload.url });
+        return { status: "shared" };
+      } catch (cause) {
+        if (cause instanceof DOMException && cause.name === "AbortError") return { status: "cancelled" };
+        if (clipboardWrite) {
+          await clipboardWrite(`${payload.text}\n${payload.url}`);
+          return { status: "copied" };
+        }
+        throw cause;
+      }
     }
     if (clipboardWrite) {
       await clipboardWrite(`${payload.text}\n${payload.url}`);

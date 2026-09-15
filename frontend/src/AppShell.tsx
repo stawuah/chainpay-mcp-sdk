@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { Router } from "./routing/Router";
 import { useRoute } from "./routing/useRoute";
 import { LandingPage } from "./landing/LandingPage";
+import { AppNotFoundPage, PublicNotFoundPage } from "./routing/NotFoundPages";
 import { usePublicWallet } from "./wallet/public-session";
 
 const WalletController = lazy(() => import("./wallet/WalletController"));
@@ -25,6 +26,19 @@ function Routes() {
       <Suspense fallback={<RouteFallback />}>
         <VerifyPage receiptPda={currentRoute.receiptPda} />
       </Suspense>
+    );
+  }
+
+  if (currentRoute.kind === "public-not-found") {
+    return <PublicNotFoundPage path={currentRoute.path} />;
+  }
+
+  if (currentRoute.kind === "app-not-found") {
+    return (
+      <AppNotFoundPage
+        path={currentRoute.path}
+        onOpenOverview={() => navigate({ kind: "app", tab: "overview" })}
+      />
     );
   }
 

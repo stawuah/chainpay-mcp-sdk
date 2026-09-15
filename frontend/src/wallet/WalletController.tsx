@@ -10,10 +10,12 @@ import {
 import { WalletPickerDialog } from "../ui/WalletPickerDialog";
 import { WalletContextProvider, type WalletContextValue } from "./context";
 import { PublicWalletProvider } from "./public-session";
+import { useRoute } from "../routing/useRoute";
 
 type Mandate = NonNullable<WalletContextValue["mandate"]>;
 
 export default function WalletController({ children }: { children: ReactNode }) {
+  const { navigate } = useRoute();
   const [walletConnection, setWalletConnection] = useState<ChainPayWallet | null>(null);
   const [connecting, setConnecting] = useState(false);
   const connectionInFlight = useRef(false);
@@ -103,7 +105,10 @@ export default function WalletController({ children }: { children: ReactNode }) 
       ?? nextMandates.find((value) => value.status !== "revoked")
       ?? nextMandates[0]
       ?? null;
-    setMandates(nextMandates);
+    setMandates((current) => {
+      if (discoveredState[0]?.status === "rejected" && current.length > 0) return current;
+      return nextMandates;
+    });
     setMandate(selectedMandate);
     selectedMandateAddress.current = selectedMandate?.address;
     setMandateAddress(selectedMandate?.address ?? legacyAddress);
@@ -181,13 +186,15 @@ export default function WalletController({ children }: { children: ReactNode }) 
       setWalletConnection(connection);
       setWalletPickerOpen(false);
       void loadWalletState(connection.address);
+      const path = window.location.pathname.replace(/\/+$/, "") || "/";
+      if (path === "/") navigate({ kind: "app", tab: "overview" });
     } catch (cause) {
       setWalletConnectionError(cause instanceof Error ? cause.message : "Wallet connection failed.");
     } finally {
       connectionInFlight.current = false;
       setConnecting(false);
     }
-  }, [connecting, loadWalletState, wallet]);
+  }, [connecting, loadWalletState, navigate, wallet]);
 
   const leaveCurrentWallet = useCallback(async (changeWallet: boolean) => {
     const currentConnection = walletConnection;

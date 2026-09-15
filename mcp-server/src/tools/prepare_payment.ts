@@ -10,9 +10,20 @@ export async function preparePayment(
 ) {
   const parsed = parsePaymentInput(requireObject(args));
   const prepared = await context.client.preparePayment(parsed.input, parsed.agent);
-  const unsignedTransaction = prepared.preflight.valid
-    ? await materializeUnsignedTransaction(context.client, prepared.transaction)
-    : undefined;
+  if (!prepared.preflight.valid) {
+    return toolResult(
+      {
+        action: "rejected_by_preflight",
+        receiptAddress: prepared.receiptAddress,
+        preflight: prepared.preflight,
+        capabilityProfile: prepared.capabilityProfile,
+        requirements: requirementsFromPreflight(prepared.preflight),
+        transaction: serializeTransaction(prepared.transaction),
+      },
+      true,
+    );
+  }
+  const unsignedTransaction = await materializeUnsignedTransaction(context.client, prepared.transaction);
   return toolResult(
     {
       action: "agent_signature_required",
@@ -32,8 +43,7 @@ export async function preparePayment(
       capabilityProfile: prepared.capabilityProfile,
       requirements: requirementsFromPreflight(prepared.preflight),
       transaction: serializeTransaction(prepared.transaction),
-      ...(unsignedTransaction ? { unsignedTransaction } : {}),
+      unsignedTransaction,
     },
-    !prepared.preflight.valid,
   );
 }

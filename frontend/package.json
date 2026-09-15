@@ -11,6 +11,11 @@
     "test:permission-browser": "node test/permission-details.browser.mjs",
     "test:landing-browser": "node test/landing.browser.mjs",
     "test:landing-motion-browser": "node test/landing-motion.browser.mjs",
+    "test:verify-public-browser": "node test/verify-public.browser.mjs",
+    "test:dashboard-nav-browser": "node test/dashboard-nav.browser.mjs",
+    "test:live-purchase-browser": "node test/live-purchase.browser.mjs",
+    "test:record-details-scope-browser": "node test/record-details-scope.browser.mjs",
+    "test:browser": "npm run test:landing-browser && npm run test:landing-motion-browser && npm run test:permission-browser && npm run test:verify-public-browser && npm run test:dashboard-nav-browser && npm run test:live-purchase-browser && npm run test:record-details-scope-browser",
     "test:owner-onboarding-browser": "node test/owner-onboarding.browser.mjs"
   },
   "dependencies": {

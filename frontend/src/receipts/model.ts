@@ -109,6 +109,10 @@ export function amountLabel(amount: ReceiptAmountView): string {
     : amount.display;
 }
 
+export function formatMandatePaymentCount(paymentCount: string, maxPaymentCount: string): string {
+  return maxPaymentCount === "0" ? `${paymentCount} · Unlimited` : `${paymentCount} / ${maxPaymentCount}`;
+}
+
 export function sellerStamp(seller: SellerStatementState): ReceiptStamp {
   if (seller.status === "valid") {
     return {

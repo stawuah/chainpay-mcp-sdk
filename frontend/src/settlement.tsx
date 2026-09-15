@@ -8,6 +8,10 @@ const storageKey = "chainpay.pending-operations.v1";
 export const settlementPendingEvent = "chainpay:settlement-pending";
 export const settlementTerminalEvent = "chainpay:settlement-terminal";
 const terminal = (status: string) => ["confirmed", "failed"].includes(status);
+export function listStoredOperations(): Operation[] {
+  return read();
+}
+
 function read(): Operation[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(storageKey) ?? "[]");
@@ -43,7 +47,7 @@ function checkOwner(operation: Operation) {
 }
 export async function reconcileSettlement(operation: Operation): Promise<Settlement> {
   checkOwner(operation);
-  const response = await authorizedFetch(`${operation.backend}/v1/${operation.kind}/${operation.id}`, { signal: AbortSignal.timeout(20_000) }, sessionBinding());
+  const response = await authorizedFetch(`${operation.backend}/v1/${operation.kind}/${operation.id}`, { signal: AbortSignal.timeout(20_000) }, sessionBinding(), "passive");
   if (!response.ok) throw new Error(`Status unavailable (${response.status}). Check again or cancel only if the backend confirms this request never started.`);
   const result = await response.json() as Settlement;
   return publishSettlement(operation, result).result ?? result;
@@ -104,18 +108,28 @@ export async function guardPendingApprovals(wallet: string, transaction: Transac
   if (transaction.instructions.length > 0 && transaction.instructions.every((ix) => ix.programId.toBase58() === programId && ["252,97,140,119,67,43,177,108", "192,108,97,124,56,229,236,3"].includes(Array.from(ix.data).join(",")))) return;
   if (read().some((row) => row.wallet === wallet && !terminal(row.status))) throw new PendingSettlementError("An earlier settlement is unresolved. Check settlement, retry its same signed approval, or cancel only an unstarted request.");
 }
-export function useSettlementFormStatus<S extends string>(wallet: string, setStatus: (update: (current: S) => S) => void) {
+export function useSettlementFormStatus<S extends string>(
+  wallet: string,
+  setStatus: (update: (current: S) => S) => void,
+  operationKeyRef?: { current: string | null },
+) {
   useEffect(() => {
-    const pending = (event: Event) => { if ((event as CustomEvent<Operation>).detail.wallet === wallet) setStatus((current) => current === "signing" ? "pending" as S : current); };
+    const pending = (event: Event) => {
+      const operation = (event as CustomEvent<Operation>).detail;
+      if (operation.wallet !== wallet) return;
+      if (operationKeyRef?.current && operation.key !== operationKeyRef.current) return;
+      setStatus((current) => current === "signing" ? "pending" as S : current);
+    };
     const settled = (event: Event) => {
       const operation = (event as CustomEvent<Operation>).detail;
       if (operation.wallet !== wallet || !terminal(operation.status)) return;
+      if (operationKeyRef?.current && operation.key !== operationKeyRef.current) return;
       setStatus((current) => (current === "signing" || current === "pending") ? (operation.status === "confirmed" ? "success" : "error") as S : current);
     };
     window.addEventListener(settlementPendingEvent, pending);
     window.addEventListener(settlementTerminalEvent, settled);
     return () => { window.removeEventListener(settlementPendingEvent, pending); window.removeEventListener(settlementTerminalEvent, settled); };
-  }, [wallet, setStatus]);
+  }, [wallet, setStatus, operationKeyRef]);
 }
 export function PendingSettlements({ wallet }: { wallet: string }) {
   const [rows, setRows] = useState(() => read());
@@ -125,7 +139,7 @@ export function PendingSettlements({ wallet }: { wallet: string }) {
   const run = (action: () => Promise<unknown>) => { setChecking(true); void action().then(() => setMessage("Settlement status updated.")).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error))).finally(() => setChecking(false)); };
   const operations = rows.filter((row) => row.wallet === wallet);
   if (!operations.length) return null;
-  return <section className="state-box" aria-live="polite" style={{ margin: 16 }}><strong>Settlement recovery</strong><p>Keep the original approval. Recovery never requests a new wallet signature.</p>{operations.map((operation) => <div key={operation.id}><code>{operation.id}</code><p>{operation.status === "confirmed" ? "Finalized" : operation.status === "failed" ? operation.result?.error ?? "Rejected before settlement" : "Pending verification"}{operation.signature ? ` · ${operation.signature}` : ""}</p>{terminal(operation.status) ? <button onClick={() => dismissSettlement(operation.id)}>Dismiss</button> : <><button disabled={checking} onClick={() => run(() => reconcileSettlement(operation))}>Check settlement</button>{operation.wire && <button disabled={checking} onClick={() => run(() => retrySameApproval(operation))}>Retry same signed approval</button>}<button disabled={checking} onClick={() => run(() => cancelUnstarted(operation))}>Cancel only if unstarted</button></>}</div>)}{message && <p>{message}</p>}</section>;
+  return <section className="state-box" aria-live="polite" style={{ margin: 16 }}><strong>Settlement recovery</strong><p>Keep the original approval. Recovery never requests a new wallet signature.</p>{operations.map((operation) => <div key={operation.id}><span>Axum operation ID</span><code>{operation.id}</code><p>{operation.status === "confirmed" ? "Finalized" : operation.status === "failed" ? operation.result?.error ?? "Rejected before settlement" : "Pending verification"}{operation.signature ? ` · ${operation.signature}` : ""}</p>{terminal(operation.status) ? <button onClick={() => dismissSettlement(operation.id)}>Dismiss</button> : <><button disabled={checking} onClick={() => run(() => reconcileSettlement(operation))}>Check settlement</button>{operation.wire && <button disabled={checking} onClick={() => run(() => retrySameApproval(operation))}>Retry same signed approval</button>}<button disabled={checking} onClick={() => run(() => cancelUnstarted(operation))}>Cancel only if unstarted</button></>}</div>)}{message && <p>{message}</p>}</section>;
 }
 export function rejectBeforeSubmission(operation: Operation) { publishSettlement(operation, { status: "failed", error: "Request rejected before submission" }); }
 export class PendingSettlementError extends Error {}

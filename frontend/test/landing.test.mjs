@@ -57,9 +57,9 @@ test("landing CTAs stay on wired callbacks and do not invent a live receipt URL"
   assert.match(text, /isDisabled=/);
   assert.match(text, /onClick=\{onOpenDashboard\}/);
   assert.match(text, /onClick=\{onConnect\}|onConnect\(\)/);
-  assert.match(text, /href="#receipts"/);
+  assert.match(text, /href="\/verify"/);
   assert.match(text, /See a receipt/);
-  assert.equal(text.includes("/verify/"), false);
+  assert.equal(text.includes("VITE_CHAINPAY_DEMO_RECEIPT_PDA"), false);
   assert.equal(text.includes("VITE_"), false);
 });
 
