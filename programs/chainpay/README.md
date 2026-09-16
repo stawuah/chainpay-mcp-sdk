@@ -1,7 +1,7 @@
 # ChainPay Solana program
 
 This Anchor program implements the ChainPay Devnet payment rail described in
-`docs/scope.md`.
+[product scope](../../docs/scope.md).
 
 ## On-chain flow
 
@@ -75,16 +75,38 @@ map it to the finalized transaction signature after confirmation.
 
 ## Local verification
 
+Run from the repository root after installing a current Rust toolchain. Initial
+runs may download Cargo dependencies; use `--offline` only after they are cached.
+
 ```bash
 cargo fmt --all -- --check
-cargo test -p chainpay --offline
-cargo check -p chainpay --offline
-
-# Build the SBF program, generate target/idl/chainpay.json, and run both
-# classic SPL Token and Token-2022 settlement tests.
-make ANCHOR=/home/stephen/.avm/bin/anchor-1.1.2 contract-smoke
+cargo test -p chainpay
+cargo check -p chainpay
 ```
+
+These run formatting, host unit tests, and type checking. They do not execute the
+compiled Solana program or demonstrate live settlement.
+
+### Build and exercise the compiled contract
+
+Install the **Anchor 1.1.2** CLI specified by `Anchor.toml`, plus the Solana/Agave
+SBF build tools (`cargo-build-sbf` on PATH). With that toolchain available:
+
+```bash
+anchor --version
+make contract-smoke
+```
+
+The Make target runs `anchor build --ignore-keys --no-docs`, generates the
+compiled program and `target/idl/chainpay.json`, then runs the feature-gated
+LiteSVM settlement tests for classic SPL Token and Token-2022. LiteSVM executes
+the compiled program locally; it does not connect to Devnet. If your Anchor
+binary is outside PATH, use `make ANCHOR=/absolute/path/to/anchor contract-smoke`.
+
+For build or IDL generation alone, use `make contract-build` or
+`make contract-idl`. Build output belongs under ignored `target/` directories.
 
 Do not deploy or sign transactions as part of local checks. Devnet deployment
 requires an explicit wallet, configured RPC, funded payer, and a separately
-approved deployment step.
+approved deployment step. See [networks](../../docs/reference/networks.md) for
+program and asset identities.

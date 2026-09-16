@@ -3,19 +3,35 @@
 Axum coordinates Devnet payment submission and PostgreSQL metadata. The program
 remains the authority for spending; a wallet login never authorizes a payment.
 
+Start with [local development](../docs/getting-started/local-development.md) for
+installation and the backend → HTTP MCP → frontend startup order.
+
 ## Configuration and checks
 
+Run from the repository root with a dedicated development PostgreSQL database.
+Replace `LOCAL_PASSWORD` with the local role password (URL-encode reserved
+characters); the linked setup guide explains database prerequisites.
+The process reads exported environment variables; it does not load `.env` files.
+
 ```bash
+CHAINPAY_HTTP_HOST=127.0.0.1 CHAINPAY_HTTP_PORT=8080 \
 CHAINPAY_RPC_URL=https://api.devnet.solana.com \
 CHAINPAY_ALLOWED_ORIGINS=http://localhost:5173 \
-DATABASE_URL=postgresql://chainpay:chainpay@127.0.0.1:5432/chainpay \
+DATABASE_URL='postgresql://chainpay:LOCAL_PASSWORD@127.0.0.1:5432/chainpay_dev' \
 cargo run -p chainpay-backend
 
 cargo test -p chainpay-backend
 ```
 
-Startup applies `backend/migrations`, including `0006_owner_sessions.sql`.
-Production requires PostgreSQL; in-memory storage is only for local tests.
+Startup applies every bundled migration in `backend/migrations`, currently
+`0001` through `0008`. These change schema and remove obsolete simulation columns;
+use a development database for local work. HTTP MCP must use the same database
+and starts after those tables exist. Normal startup requires PostgreSQL;
+in-memory storage is only for local tests.
+
+Success: `curl -fsS http://127.0.0.1:8080/healthz` returns JSON with
+`status: "ok"` and `cluster: "devnet"`. This is a startup check, not settlement.
+
 Use explicit browser origins, including the scheme and port. `*` does not
 permit wallet login. Session/challenge records and rate limits use the shared
 PostgreSQL store; expired records are removed during authentication traffic.
@@ -41,7 +57,7 @@ server credentials in Vite variables.
 The frontend keeps the token in memory, renews expired sessions through a new
 message signature, and clears/revokes it on wallet switch or disconnect.
 Challenges are limited to 20 per direct peer and 1,000 globally per minute; login
-attempts are limited to 200 per minute across instances. Caller-selected wallet
+attempts are limited to 20 per direct peer and 2,000 globally per minute across instances. Caller-selected wallet
 addresses do not consume another owner's allowance. Forwarding headers are not
 trusted; configure requester limits at the trusted edge when sharing a reverse proxy.
 
@@ -51,7 +67,7 @@ Public: `/healthz`, `/v1/config`, `/v1/rpc/latest-blockhash`, `/rpc`,
 `POST /v1/delivery-attestations`, and
 `GET /v1/delivery-attestations/{receiptAddress}`.
 Trusted seller identities are public configuration (see
-[trusted-sellers.md](../docs/trusted-sellers.md)); the signing secret never
+[trusted-sellers.md](../docs/guides/trusted-sellers.md)); the signing secret never
 enters this service. A missing or invalid seller statement does not change Paid.
 The RPC proxy only forwards named read methods, bounds batches/history/body and
 response sizes, and restricts program discovery to ChainPay with owner/mandate
@@ -106,8 +122,9 @@ Tests generate local fixture keys and never broadcast payments. The optional
 `postgres_login_consumes_once_and_survives_store_reconnect` test uses an explicit
 isolated localhost `TEST_DATABASE_URL`; it checks concurrent consumption through
 independent pools, session persistence across store reconnects, and revocation.
-It passed against a new local PostgreSQL fixture. This does not establish live
-Devnet settlement or a production database restart drill.
+Historical fixture results are recorded in the [implementation status](../chainpay_skill/IMPLEMENTATION_STATUS.md).
+This test does not establish live Devnet settlement or a production database
+restart drill.
 
 Codec availability was checked on 2026-09-15 with `cargo info solana-transaction@4.2.0`
 and `npm view @solana/transactions version`. See the [official Rust codec](https://docs.rs/solana-transaction/4.2.0/solana_transaction/versioned/struct.VersionedTransaction.html)
