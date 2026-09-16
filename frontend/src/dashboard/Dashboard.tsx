@@ -31,6 +31,8 @@ import { useToast } from "@astryxdesign/core/Toast";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Arrow, Shield, shortAddress } from "../ui/marks";
 import { DashboardMobileNav, DashboardNav } from "./DashboardNav";
+import { PageHeader } from "./PageHeader";
+import { tabCopy } from "./tabCopy";
 import { reviewExactAmount } from "../owner/amounts";
 import { buildConnectionScope, ownedMandateAddresses } from "../owner/connectionScope";
 import { EmptyOwnerOverview } from "../owner/EmptyOwnerOverview";
@@ -920,7 +922,18 @@ export function Dashboard({
             </div>
           </header>
           <div className="dashboard-page">
-          <div className="dashboard-heading"><div><span className="section-kicker">{tab === "mandates" ? "POLICY CONTROL" : tab === "assistant" ? "PAYMENT REQUESTS" : agentsTabActive ? "AGENT ACCESS" : "CONTROL CENTER"}</span><h1 className="t-xl">{tab === "assistant" ? "Requests." : tab === "protocol" ? "Protocol setup." : tab === "mandates" ? "Spending permissions." : tab === "payments" ? "Route a payment." : agentsTabActive ? "Agents." : tab === "receipts" ? "Receipts." : tab === "tools" ? "Developer tools." : tab === "settings" ? "Settings." : mandates.length === 0 ? `${FIRST_MANDATE_TITLE}.` : "Good to see you."}</h1><p>{tab === "assistant" ? "Bring an invoice or payment request here. ChainPay verifies it against your mandate and shows what the agent is buying before wallet approval." : tab === "protocol" ? "Initialize the protocol asset list from the authority wallet." : tab === "mandates" ? (mandateCreateOpen ? "Create a policy for an agent to follow before a payment can be signed." : "A mandate is an on-chain spending permission. Review the rules your agent must follow before paying.") : tab === "payments" ? "Check the request, then approve the payment in your wallet." : agentsTabActive ? "Pair an external MCP client or use the dashboard assistant. Your mandate sets the spend limit; pairing controls who may call payment tools." : tab === "receipts" ? "Preview, verify, and send durable proof for every confirmed settlement." : tab === "tools" ? "The exact tools agents can call. Nothing else is exposed." : tab === "settings" ? "Solana Devnet status, wallet controls, and account actions." : mandates.length === 0 ? "Connect your wallet, set your limits, then give your agent access." : "Live purchases from your agent, checked against the mandate you already approved."}</p></div>{tab === "overview" && mandates.length === 0 ? null : tab === "overview" || tab === "mandates" ? (mandateCreateOpen ? <Button type="button" variant="secondary" className="refresh-button" label="← Back to mandates" isDisabled={false} onClick={() => setMandateCreateOpen(false)} /> : <Button type="button" variant="primary" className="overview-new-mandate" label={mandates.length === 0 ? FIRST_MANDATE_TITLE : "＋ New mandate"} isDisabled={false} onClick={openMandateCreate} />) : <Button type="button" variant="secondary" className="refresh-button" label="↻ Refresh" isDisabled={integrationStatus === "loading"} onClick={() => void onRefresh()} />}</div>
+          <PageHeader
+            copy={tabCopy(tab, { hasMandates: mandates.length > 0, mandateCreateOpen })}
+            action={
+              tab === "overview" && mandates.length === 0 ? null
+              : tab === "overview" || tab === "mandates" ? (
+                mandateCreateOpen
+                  ? <Button type="button" variant="secondary" className="refresh-button" label="← Back to mandates" isDisabled={false} onClick={() => setMandateCreateOpen(false)} />
+                  : <Button type="button" variant="primary" className="overview-new-mandate" label={mandates.length === 0 ? FIRST_MANDATE_TITLE : "＋ New mandate"} isDisabled={false} onClick={openMandateCreate} />
+              )
+              : <Button type="button" variant="secondary" className="refresh-button" label="↻ Refresh" isDisabled={integrationStatus === "loading"} onClick={() => void onRefresh()} />
+            }
+          />
 
           {ownerSignIn.status !== "ready" && (mandates.length > 0 || tab !== "overview") && (
             <div className="cp-workspace-signin">

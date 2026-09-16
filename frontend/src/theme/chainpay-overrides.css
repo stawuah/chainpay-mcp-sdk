@@ -1,21 +1,60 @@
+/*
+  ChainPay -> Astryx token bridge.
+
+  Astryx components read their colors from --color-* tokens defined by
+  theme-neutral with light-dark(). Anything NOT named here keeps the neutral
+  default, which is why typed input text used to render pure #000000 while all
+  ChainPay body copy is #14213d: TextInput colors its value with
+  --color-text-primary and nothing mapped it.
+
+  Ink scale is the blue-tinted navy set already used by OwnerWelcome, the landing
+  story, the record panel and the brand mark. That set is canonical; the older
+  neutral grey (#0a0b0d / #5b616e / #dee1e6) is being retired.
+*/
 :root,
 [data-astryx-theme="chainpay"],
 html[data-astryx-theme] {
+  /* Brand accent */
   --blue: #0052ff;
   --blue-active: #003ecc;
   --color-accent: #0052ff;
   --color-on-accent: #ffffff;
   --color-text-accent: #0052ff;
   --color-icon-accent: #0052ff;
+  --color-border-blue: #0052ff;
+  --color-icon-blue: #0052ff;
+
+  /* Text — the fix for black input values */
+  --color-text-primary: #14213d;
+  --color-text-secondary: #56647d;
+  --color-text-disabled: #8a95a8;
+
+  /* Surfaces */
+  --color-background-surface: #ffffff;
+  --color-background-card: #ffffff;
+  --color-background-popover: #ffffff;
+  --color-background-muted: #eff4ff;
+
+  /* Borders */
+  --color-border: #dbe2ef;
+  --color-border-emphasized: #c6d1e6;
+
+  /* Radii — tighter than the old blanket 24px */
+  --radius-inner: 6px;
+  --radius-element: 10px;
+  --radius-container: 12px;
+
+  /* Typography */
   --font-family-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-family-heading: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-family-code: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   --font-family-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-family-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Touch targets */
   --size-element-sm: 44px;
   --size-element-md: 44px;
   --size-element-lg: 48px;
-  --radius-container: 24px;
 }
 
 /* Unlayered app link/reset styles otherwise override Astryx's layered color. */
@@ -23,8 +62,29 @@ html[data-astryx-theme] {
   color: var(--color-on-accent, #fff);
 }
 
-.xds-button,
-.xds-icon-button,
-[data-astryx-theme] button.xds-button {
+/*
+  Touch-target floor. This previously targeted `.xds-button`, which matches
+  nothing — Astryx 0.6.1's stable prefix is `astryx-` (core/src/naming.ts).
+  The 44px guarantee was silently unenforced.
+*/
+.astryx-button,
+.astryx-icon-button,
+[data-astryx-theme] button.astryx-button {
   min-height: var(--size-element-md);
+}
+
+/*
+  Chrome paints its own autofill colors when no rule claims them. There was no
+  :-webkit-autofill rule anywhere in the project, so autofilled values ignored
+  the theme entirely.
+*/
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: var(--color-text-primary);
+  caret-color: var(--color-text-primary);
+  -webkit-box-shadow: 0 0 0 1000px var(--color-background-surface) inset;
+  box-shadow: 0 0 0 1000px var(--color-background-surface) inset;
 }

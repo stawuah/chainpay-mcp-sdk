@@ -10,6 +10,19 @@ export const chainPayTheme = defineTheme({
     code: { family: "JetBrains Mono", fallbacks: "ui-monospace, SFMono-Regular, monospace" },
   },
   tokens: {
+    // Mirrors theme/chainpay-overrides.css. Astryx components read --color-*;
+    // anything not named here keeps theme-neutral's light-dark() default, which
+    // is how input values ended up pure #000000 against #14213d body copy.
+    "--color-text-primary": "#14213d",
+    "--color-text-secondary": "#56647d",
+    "--color-text-disabled": "#8a95a8",
+    "--color-background-surface": "#ffffff",
+    "--color-background-card": "#ffffff",
+    "--color-background-muted": "#eff4ff",
+    "--color-border": "#dbe2ef",
+    "--color-border-emphasized": "#c6d1e6",
+    "--radius-inner": "6px",
+    "--radius-element": "10px",
     "--color-accent": "#0052ff",
     "--color-on-accent": "#ffffff",
     "--color-text-accent": "#0052ff",
@@ -22,6 +35,6 @@ export const chainPayTheme = defineTheme({
     "--size-element-sm": "44px",
     "--size-element-md": "44px",
     "--size-element-lg": "48px",
-    "--radius-container": "24px",
+    "--radius-container": "12px",
   },
 });
