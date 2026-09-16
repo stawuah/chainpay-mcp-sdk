@@ -68,4 +68,3 @@ A successful `/healthz` alone does not establish that wallet login works.
 Private requests require the actual owner's wallet session or a scoped connection
 credential. `CHAINPAY_HTTP_AUTH_TOKEN` is a server-side integration setting, not an
 owner-session bypass. Never place it in frontend code or a Vite environment variable.
-

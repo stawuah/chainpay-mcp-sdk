@@ -63,3 +63,13 @@ Run `npm --prefix frontend run test:dashboard-owner` with Vite on port 5189. The
 The sidebar uses one width for its rail and layout, compact navigation spacing, and a scrollable interior on short screens. Back to site remains available in collapsed mode. Developer tools, protocol administration, and the MCP connection entry have explicit return controls; returning keeps Advanced settings expanded. Advanced settings exposes the configured MCP address with copy feedback and the existing agent connection flow.
 
 Validation: 88 frontend unit tests, production build, owner dashboard browser suite, and sidebar/settings browser suite pass. Browser checks cover desktop/mobile layouts, short-screen navigation, collapsed controls, and advanced return paths. Hosted wallet challenge creation returned HTTP 401 for local and hosted frontend origins; deployment/configuration remediation remains outstanding. No financial transactions were submitted during this UI work.
+
+## Review captures
+
+These captures render the real dashboard with labeled, read-only design fixtures. Balances, permissions, and activity are sample data; they do not demonstrate a live wallet session or settlement.
+
+![Overview with fixture spending and agent activity](assets/dashboard-overview.png)
+
+![Spending permission limits with exact fields and convenience sliders](assets/dashboard-spending-permissions.png)
+
+![Compact sidebar and expanded settings with MCP connection controls](assets/dashboard-advanced-settings.png)
