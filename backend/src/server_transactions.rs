@@ -6,7 +6,7 @@ use std::str::FromStr;
 fn bad(message: &str) -> ApiError {
     ApiError::BadRequest(message.into())
 }
-fn key(tx: &VersionedTransaction, index: u8) -> Result<String, ApiError> {
+pub(super) fn key(tx: &VersionedTransaction, index: u8) -> Result<String, ApiError> {
     tx.message
         .static_account_keys()
         .get(index as usize)
@@ -115,7 +115,9 @@ fn validate_ata_creation(
         || accounts[4] != SYSTEM_PROGRAM
         || key(tx, ix.program_id_index)? != ATA_PROGRAM
     {
-        return Err(bad("Associated token account payer must be the owner wallet"));
+        return Err(bad(
+            "Associated token account payer must be the owner wallet",
+        ));
     }
     token_program(&accounts[5])?;
     if owner_must_be_wallet && accounts[2] != wallet {
@@ -161,6 +163,11 @@ fn validate_delegate_repair(tx: &VersionedTransaction, wallet: &str) -> Result<(
         .iter()
         .map(|index| key(tx, *index))
         .collect::<Result<Vec<_>, _>>()?;
+    // The account count must be checked here, not only inside validate_approve_checked:
+    // the indexes below are evaluated as its arguments, so a short list panics first.
+    if accounts.len() != 4 {
+        return Err(bad("Unexpected delegate approval"));
+    }
     validate_approve_checked(tx, 0, wallet, &accounts[2], &accounts[0], &accounts[1])?;
     Ok(())
 }
@@ -173,7 +180,9 @@ fn validate_delegate_removal(tx: &VersionedTransaction, wallet: &str) -> Result<
         || ix.accounts.len() != 2
         || tx.message.static_account_keys().len() != 3
     {
-        return Err(bad("Delegate removal must be a standalone revoke instruction"));
+        return Err(bad(
+            "Delegate removal must be a standalone revoke instruction",
+        ));
     }
     token_program(&key(tx, ix.program_id_index)?)?;
     let accounts = ix
@@ -182,7 +191,9 @@ fn validate_delegate_removal(tx: &VersionedTransaction, wallet: &str) -> Result<
         .map(|index| key(tx, *index))
         .collect::<Result<Vec<_>, _>>()?;
     if accounts[1] != wallet {
-        return Err(bad("Delegate removal must be signed by the token account owner"));
+        return Err(bad(
+            "Delegate removal must be signed by the token account owner",
+        ));
     }
     if ix.accounts[1] as usize >= tx.message.header().num_required_signatures as usize {
         return Err(bad("Delegate removal owner must sign"));
@@ -578,7 +589,8 @@ pub(super) fn owner(
             .is_some_and(|index| key(tx, *index).is_ok_and(|owner| owner == wallet));
         return validate_ata_creation(tx, wallet, owner_is_wallet);
     }
-    if [SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].contains(&key(tx, ix.program_id_index)?.as_str())
+    if [SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]
+        .contains(&key(tx, ix.program_id_index)?.as_str())
     {
         if ix.data.len() == 1 && ix.data[0] == REVOKE_DELEGATE {
             return validate_delegate_removal(tx, wallet);
@@ -647,6 +659,11 @@ pub(super) fn owner(
         Some(UPDATE_MANDATE) => {
             validate_management_instruction(tx, 0, wallet)?;
             if instructions.len() == 2 {
+                // Checked here because the indexes below are evaluated as arguments to
+                // validate_approve_checked, ahead of its own account-count guard.
+                if instructions[1].accounts.len() != 4 {
+                    return Err(bad("Unexpected delegate approval"));
+                }
                 validate_approve_checked(
                     tx,
                     1,
@@ -661,7 +678,9 @@ pub(super) fn owner(
                 }
                 Ok(())
             } else {
-                Err(bad("Mandate update must include at most one delegate approval"))
+                Err(bad(
+                    "Mandate update must include at most one delegate approval",
+                ))
             }
         }
         Some(PAUSE_MANDATE) | Some(REVOKE_MANDATE) => {
@@ -783,6 +802,93 @@ pub(super) mod tests {
             assert!(decode_solana_transaction(&trailing, "fixture").is_err());
             assert!(decode_solana_transaction(&wire[..wire.len() - 1], "fixture").is_err());
         }
+    }
+
+    /// Build a minimal legacy transaction whose key set is exactly what the
+    /// instruction references, so it clears common()'s "every key is used" rule.
+    fn minimal(
+        keys: Vec<String>,
+        instructions: Vec<CompiledInstruction>,
+        readonly_unsigned: u8,
+    ) -> VersionedTransaction {
+        let mut seed = [0; 32];
+        getrandom::fill(&mut seed).unwrap();
+        let signer = SigningKey::from_bytes(&seed);
+        let account_keys = keys.iter().map(|s| Address::from_str(s).unwrap()).collect();
+        let message = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: readonly_unsigned,
+            },
+            account_keys,
+            recent_blockhash: Default::default(),
+            instructions,
+        });
+        let signatures = vec![signer.sign(&message.serialize()).to_bytes().into()];
+        VersionedTransaction {
+            message,
+            signatures,
+        }
+    }
+
+    /// Both shapes below indexed out of bounds while building the arguments to
+    /// validate_approve_checked, which only checks accounts.len() after they are
+    /// evaluated. There is no CatchPanic layer, so a panic takes the worker.
+    /// Removing either guard makes this test panic rather than fail.
+    #[test]
+    fn owner_validation_rejects_short_account_lists_instead_of_panicking() {
+        let wallet = bs58::encode([9u8; 32]).into_string();
+        let other = bs58::encode([8u8; 32]).into_string();
+        let approve_data = vec![APPROVE_CHECKED, 0, 0, 0, 0, 0, 0, 0, 0, 6];
+
+        // Delegate repair: a lone ApproveChecked carrying two accounts, not four.
+        let tx = minimal(
+            vec![wallet.clone(), other.clone(), SPL_TOKEN_PROGRAM_ID.into()],
+            vec![CompiledInstruction {
+                program_id_index: 2,
+                accounts: vec![0, 1],
+                data: approve_data.clone(),
+            }],
+            1,
+        );
+        assert!(
+            common(&tx).is_ok(),
+            "shape must reach validate_delegate_repair"
+        );
+        assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
+
+        // update_mandate whose trailing approval carries no accounts at all.
+        // Instruction 0 is shaped to clear validate_management_instruction, which
+        // only inspects instruction 0.
+        let mut update_data = UPDATE_MANDATE.to_vec();
+        update_data.resize(81, 0);
+        let tx = minimal(
+            vec![
+                wallet.clone(),
+                other,
+                DEFAULT_PROGRAM_ID.into(),
+                SPL_TOKEN_PROGRAM_ID.into(),
+            ],
+            vec![
+                CompiledInstruction {
+                    program_id_index: 2,
+                    accounts: vec![1, 0],
+                    data: update_data,
+                },
+                CompiledInstruction {
+                    program_id_index: 3,
+                    accounts: vec![],
+                    data: approve_data,
+                },
+            ],
+            2,
+        );
+        assert!(
+            common(&tx).is_ok(),
+            "shape must reach the UPDATE_MANDATE arm"
+        );
+        assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
     }
 
     #[test]
@@ -1184,9 +1290,14 @@ pub(super) mod tests {
                 num_readonly_signed_accounts: 0,
                 num_readonly_unsigned_accounts: 1,
             },
-            account_keys: [wallet.clone(), config.clone(), asset.clone(), DEFAULT_PROGRAM_ID.into()]
-                .map(|value| Address::from_str(&value).unwrap())
-                .to_vec(),
+            account_keys: [
+                wallet.clone(),
+                config.clone(),
+                asset.clone(),
+                DEFAULT_PROGRAM_ID.into(),
+            ]
+            .map(|value| Address::from_str(&value).unwrap())
+            .to_vec(),
             recent_blockhash: Default::default(),
             instructions: vec![CompiledInstruction {
                 program_id_index: 3,
@@ -1350,12 +1461,9 @@ pub(super) mod tests {
                     num_readonly_signed_accounts: 0,
                     num_readonly_unsigned_accounts: 1,
                 },
-                account_keys: [
-                    wallet.clone(),
-                    bs58::encode([10; 32]).into_string(),
-                ]
-                .map(|value| Address::from_str(&value).unwrap())
-                .to_vec(),
+                account_keys: [wallet.clone(), bs58::encode([10; 32]).into_string()]
+                    .map(|value| Address::from_str(&value).unwrap())
+                    .to_vec(),
                 recent_blockhash: Default::default(),
                 instructions: vec![CompiledInstruction {
                     program_id_index: 1,

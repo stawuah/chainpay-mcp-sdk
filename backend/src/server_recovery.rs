@@ -1479,7 +1479,10 @@ mod tests {
                     "getSlot" => json!(1),
                     other => panic!("Unexpected RPC {other}"),
                 };
-                (StatusCode::OK, Json(json!({"jsonrpc":"2.0","id":1,"result":result})))
+                (
+                    StatusCode::OK,
+                    Json(json!({"jsonrpc":"2.0","id":1,"result":result})),
+                )
             }
         });
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1574,7 +1577,10 @@ mod tests {
                     "getSlot" => json!(1),
                     other => panic!("Unexpected RPC {other}"),
                 };
-                (StatusCode::OK, Json(json!({"jsonrpc":"2.0","id":1,"result":result})))
+                (
+                    StatusCode::OK,
+                    Json(json!({"jsonrpc":"2.0","id":1,"result":result})),
+                )
             }
         });
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

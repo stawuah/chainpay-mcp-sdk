@@ -1444,6 +1444,10 @@ async fn submit_transaction(
         created_at_ms: now,
         updated_at_ms: now,
     };
+    // J6a: batch and other owner transactions re-read mandate policy at send time.
+    // This runs before the operation is claimed and recorded: a rejection here must not
+    // leave a Submitted record behind that was never broadcast and can never be resolved.
+    validate_owner_live(&state, &principal, &transaction).await?;
     let (won, owner, bound, initial) = state
         .store
         .claim_operation(
@@ -1472,8 +1476,6 @@ async fn submit_transaction(
         )
         .await?;
     state.store.put_transaction(record.clone()).await?;
-    // J6a: batch and other owner transactions re-read mandate policy at send time.
-    validate_owner_live(&state, &principal, &transaction).await?;
     if let Err(error) = state
         .rpc
         .send_transaction(&request.signed_transaction)
@@ -1492,27 +1494,54 @@ async fn submit_transaction(
     Ok(Json(recovery::transaction(&state, record).await?))
 }
 
+/// Resolve one account of a compiled instruction by position, without indexing.
+/// Both the position within the instruction and the resulting account index come
+/// from the submitted transaction, so neither can be trusted to be in range.
+fn address_at(
+    tx: &VersionedTransaction,
+    accounts: &[u8],
+    position: usize,
+) -> Result<solana_address::Address, ApiError> {
+    let index = *accounts.get(position).ok_or_else(|| {
+        ApiError::BadRequest("Transaction instruction is missing a required account".into())
+    })?;
+    tx.message
+        .static_account_keys()
+        .get(index as usize)
+        .copied()
+        .ok_or_else(|| ApiError::BadRequest("Unresolved transaction account".into()))
+}
+
+fn account_at(
+    tx: &VersionedTransaction,
+    accounts: &[u8],
+    position: usize,
+) -> Result<String, ApiError> {
+    Ok(address_at(tx, accounts, position)?.to_string())
+}
+
 async fn validate_owner_live(
     state: &BackendState,
     principal: &Principal,
     transaction: &VersionedTransaction,
 ) -> Result<(), ApiError> {
-    let first = &transaction.message.instructions()[0];
+    let first = transaction
+        .message
+        .instructions()
+        .first()
+        .ok_or_else(|| ApiError::BadRequest("Transaction has no instructions".into()))?;
     let program_id = &state.config.program_id;
     if first.data.starts_with(&[86, 4, 7, 7, 120, 139, 232, 139]) {
-        for (position, payment) in
-            transactions::batch_payment_requests(transaction, program_id)?
-                .iter()
-                .enumerate()
+        for (position, payment) in transactions::batch_payment_requests(transaction, program_id)?
+            .iter()
+            .enumerate()
         {
             auth::mandate(&state, &principal, &payment.mandate, "execute_payment").await?;
             validate_live_payment_at(&state, transaction, position, &payment.mandate).await?;
         }
         return Ok(());
     }
-    let first_program = transaction.message.static_account_keys()
-        [first.program_id_index as usize]
-        .to_string();
+    let first_program = transactions::key(transaction, first.program_id_index)?;
     if first_program == "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" {
         validate_live_enabled_asset(state, transaction).await?;
         return Ok(());
@@ -1521,14 +1550,9 @@ async fn validate_owner_live(
         if first.data.len() == 1 && first.data[0] == 5 {
             let source = state
                 .rpc
-                .account_info(
-                    &transaction.message.static_account_keys()[first.accounts[0] as usize]
-                        .to_string(),
-                )
+                .account_info(&account_at(transaction, &first.accounts, 0)?)
                 .await?
-                .ok_or_else(|| {
-                    ApiError::BadRequest("Source token account was not found".into())
-                })?;
+                .ok_or_else(|| ApiError::BadRequest("Source token account was not found".into()))?;
             if source.data.len() < 108 || source.data[72] != 1 {
                 return Err(ApiError::BadRequest(
                     "Source token account has no active delegate".into(),
@@ -1539,13 +1563,9 @@ async fn validate_owner_live(
             return Ok(());
         }
         if first.data.len() == 10 && first.data[0] == 13 {
-            let mandate = transaction.message.static_account_keys()
-                [first.accounts[2] as usize]
-                .to_string();
-            let source = transaction.message.static_account_keys()[first.accounts[0] as usize]
-                .to_string();
-            let mint = transaction.message.static_account_keys()[first.accounts[1] as usize]
-                .to_string();
+            let mandate = account_at(transaction, &first.accounts, 2)?;
+            let source = account_at(transaction, &first.accounts, 0)?;
+            let mint = account_at(transaction, &first.accounts, 1)?;
             auth::mandate(&state, &principal, &mandate, "update_mandate").await?;
             validate_live_mandate_token_binding(&state, &mandate, &source, &mint).await?;
             return Ok(());
@@ -1568,33 +1588,24 @@ async fn validate_owner_live(
                 ));
             }
         }
-        [21, 80, 155, 149, 117, 207, 235, 16]
-        | [58, 54, 181, 102, 68, 238, 240, 245] => {
+        [21, 80, 155, 149, 117, 207, 235, 16] | [58, 54, 181, 102, 68, 238, 240, 245] => {
             validate_live_config_authority(state, &principal.wallet).await?;
         }
         [69, 131, 248, 29, 105, 50, 139, 30]
         | [192, 108, 97, 124, 56, 229, 236, 3]
         | [252, 97, 140, 119, 67, 43, 177, 108] => {
             for ix in transaction.message.instructions() {
-                if transaction.message.static_account_keys()[ix.program_id_index as usize]
-                    .to_string()
-                    != *program_id
-                {
+                if transactions::key(transaction, ix.program_id_index)? != *program_id {
                     continue;
                 }
-                let mandate = transaction.message.static_account_keys()[ix.accounts[0] as usize]
-                    .to_string();
+                let mandate = account_at(transaction, &ix.accounts, 0)?;
                 auth::mandate(&state, &principal, &mandate, "update_mandate").await?;
                 if first.data[..8] == [69, 131, 248, 29, 105, 50, 139, 30]
                     && transaction.message.instructions().len() == 2
                 {
                     let approve = &transaction.message.instructions()[1];
-                    let source = transaction.message.static_account_keys()
-                        [approve.accounts[0] as usize]
-                        .to_string();
-                    let mint = transaction.message.static_account_keys()
-                        [approve.accounts[1] as usize]
-                        .to_string();
+                    let source = account_at(transaction, &approve.accounts, 0)?;
+                    let mint = account_at(transaction, &approve.accounts, 1)?;
                     validate_live_mandate_token_binding(&state, &mandate, &source, &mint).await?;
                 }
             }
@@ -1648,9 +1659,13 @@ async fn validate_live_enabled_asset(
     state: &BackendState,
     transaction: &VersionedTransaction,
 ) -> Result<(), ApiError> {
-    let first = &transaction.message.instructions()[0];
-    let mint = transaction.message.static_account_keys()[first.accounts[3] as usize];
-    let token = transaction.message.static_account_keys()[first.accounts[5] as usize];
+    let first = transaction
+        .message
+        .instructions()
+        .first()
+        .ok_or_else(|| ApiError::BadRequest("Transaction has no instructions".into()))?;
+    let mint = address_at(transaction, &first.accounts, 3)?;
+    let token = address_at(transaction, &first.accounts, 5)?;
     let program: solana_address::Address = state
         .config
         .program_id
@@ -1934,9 +1949,7 @@ async fn verify_managed_mandate(
     )?;
     ensure_mandate_sendable(&account, program_id, rpc.current_slot().await?).map_err(|error| {
         match error {
-            ApiError::BadRequest(message) => ApiError::BadRequest(format!(
-                "managed {message}"
-            )),
+            ApiError::BadRequest(message) => ApiError::BadRequest(format!("managed {message}")),
             other => other,
         }
     })

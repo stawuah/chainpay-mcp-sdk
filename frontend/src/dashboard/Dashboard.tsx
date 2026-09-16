@@ -126,6 +126,7 @@ import {
   coreToolReferences,
   buildMcpClientConfig,
 } from "../owner/runtime";
+import { pausedAfterMandateAction } from "../owner/mandateAction";
 
 const demoReceiptHref = configuredDemoReceiptPath(import.meta.env.VITE_CHAINPAY_DEMO_RECEIPT_PDA);
 
@@ -792,7 +793,7 @@ export function Dashboard({
           expiresAtSlot: updateFields?.expiresAtSlot ?? targetMandate.expiresAtSlot,
           maxPaymentCount: updateFields?.maxPaymentCount ?? targetMandate.maxPaymentCount,
           cooldownSlots: updateFields?.cooldownSlots ?? targetMandate.cooldownSlots,
-          paused: targetMandate.status === "paused",
+          paused: pausedAfterMandateAction(action, targetMandate.status),
         }, wallet, targetMandate.address);
     const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
     const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
