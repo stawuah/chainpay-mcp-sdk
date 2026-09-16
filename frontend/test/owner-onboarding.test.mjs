@@ -158,7 +158,12 @@ test("Dashboard empty overview and settings no longer invent this wallet's payme
   assert.match(dashboard, /allowPayments/);
   assert.match(dashboard, /Permit payments within this mandate/);
   assert.match(dashboard, /Solana Devnet/);
-  assert.match(dashboard, /Notifications unavailable/);
+  // The Notifications tab was removed. Its panel said "There is no webhook or
+  // email delivery in this build. Nothing here can be saved." — this test's
+  // intent was that the dashboard never presents savable preferences it cannot
+  // honour, and an absent tab satisfies that more strongly than the disclaimer.
+  assert.equal(dashboard.includes("settings-notifications"), false);
+  assert.equal(/notification/i.test(dashboard), false);
   assert.equal(dashboard.includes("Mainnet-beta"), false);
   assert.match(dashboard, /Estimated/);
   assert.match(dashboard, /reviewExactAmount/);

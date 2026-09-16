@@ -1467,12 +1467,15 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .mandate-table th { height: 48px; padding: 0 20px; border-bottom: 1px solid var(--line); color: var(--muted); font: 500 10px var(--mono); text-align: left; text-transform: uppercase; white-space: nowrap; }
 .mandate-table td { padding: 18px 20px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
 .mandate-table tbody tr:last-child td { border-bottom: 0; }
-.mandate-table th:nth-child(1) { width: 22%; }
-.mandate-table th:nth-child(2) { width: 18%; }
-.mandate-table th:nth-child(3) { width: 17%; }
-.mandate-table th:nth-child(4) { width: 24%; }
+/* Table column widths. The actions column at 7% could not hold "Resume", and
+   the min-width meant to guarantee it targeted .xds-button, which matches
+   nothing — so Pause/Resume clipped at the right edge of the card. */
+.mandate-table th:nth-child(1) { width: 30%; }
+.mandate-table th:nth-child(2) { width: 17%; }
+.mandate-table th:nth-child(3) { width: 27%; }
+.mandate-table th:nth-child(4) { width: 14%; }
 .mandate-table th:nth-child(5) { width: 12%; }
-.mandate-table th:nth-child(6) { width: 7%; }
+.mandate-token-note { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; }
 .mandate-agent-cell, .mandate-token-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .mandate-agent-avatar { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; color: #fff; background: var(--blue); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .mandate-agent-cell strong, .mandate-agent-cell small, .mandate-token-cell strong, .mandate-token-cell small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1533,8 +1536,14 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .protocol-layout { align-items: start; margin-top: 28px; }
 .protocol-form-card, .protocol-review-card { min-width: 0; }
 .protocol-form-card .builder-grid { margin-top: 26px; }
-.protocol-slots { gap: 12px; }
+/*
+  A base58 mint is 43-44 characters. In the two-column builder grid the value
+  overflowed and was clipped mid-address, and it rendered in the body face while
+  every other address in the product is mono. One column, mono, full value.
+*/
+.protocol-slots { grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .protocol-slots .field { gap: 6px; }
+.protocol-slots input { font-family: var(--mono); font-size: 12px; text-overflow: ellipsis; }
 .protocol-slots .field input[readonly] { color: var(--body); background: var(--soft); }
 .protocol-authority { display: grid; grid-template-columns: 1fr auto; gap: 7px 16px; padding: 14px 0 0; margin-top: 25px; border-top: 1px solid var(--line); color: var(--body); font-size: 12px; }
 .protocol-authority strong { color: var(--ink); font-weight: 500; }
@@ -2303,7 +2312,64 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .cp-app .mandate-table td { padding-block: 20px; }
 .cp-app .mandate-agent-cell strong { font-size: 14px; }
 .cp-app .mandate-amount-line { flex-wrap: wrap; font-variant-numeric: tabular-nums; }
-.cp-app .mandate-table-actions .xds-button { min-width: 76px; }
+.cp-app .mandate-table-actions .astryx-button { min-width: 76px; }
 .cp-app .mandate-table tbody tr:focus-visible { outline: 3px solid var(--blue); outline-offset: -3px; }
 .cp-app .mandate-table-status.expired { color: #56647d; background: #f0f2f6; }
 .cp-app .mandate-table-status.expired .mandate-status-check { color: #56647d; background: transparent; }
+
+/* ============================================================
+   Dashboard type scale and layout corrections.
+
+   Ruling on the design.md contradiction: display sits at 500 and never reaches
+   600. design.md said "never bold" meaning never 700 Inter, but the literal 400
+   reading left the dashboard the lightest surface in the product — lighter than
+   the wallet-connect screen it is meant to feel continuous with. brand.css,
+   chainpay-theme.ts, landing.css and owner-welcome.css already run 500.
+   Kickers stay at 600 because 11px uppercase mono goes mushy below it.
+   ============================================================ */
+
+.cp-app .dashboard-heading h1 {
+  font-size: clamp(34px, 3.2vw, 44px);
+  font-weight: 500;
+  line-height: 1.08;
+  letter-spacing: -.035em;
+}
+.cp-app .dashboard-card-heading h2,
+.cp-app .dashboard-heading + * h2 {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: -.02em;
+}
+
+/* Numerics are the identity signal in this product. Tabular figures keep
+   columns aligned when a digit count changes; only three selectors set this
+   before, so the mandates column was aligned by luck. */
+.cp-app .mono,
+.cp-app .t-num,
+.cp-app .row-number,
+.cp-app .dashboard-stat strong,
+.cp-app .mandate-amount-line,
+.cp-app .receipt-ledger-payment strong,
+.cp-app .settings-value strong,
+.cp-app pre,
+.cp-app .schema-block {
+  font-variant-numeric: tabular-nums;
+}
+
+/* One content width. Panels previously ended at four different right edges
+   (~1032, ~1123, ~1177 and 1398px) depending on which tab was open, so the
+   page looked ragged as you moved through the sidebar. */
+.cp-app .dashboard-page > div > .page-panel,
+.cp-app .dashboard-page > div > section,
+.cp-app .settings-panel,
+.cp-app .reference-list {
+  width: 100%;
+  max-width: none;
+}
+
+/* The sidebar is a flex column inside a 100vh sticky aside, but the dashboard
+   body can be taller than the viewport. Its background stopped at 100vh and
+   left a grey gutter below the fold on long tabs. */
+.cp-app .dashboard-layout { background: var(--canvas); }
+.cp-app .dashboard-main { background: var(--soft); }

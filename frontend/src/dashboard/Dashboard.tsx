@@ -931,6 +931,10 @@ export function Dashboard({
                   ? <Button type="button" variant="secondary" className="refresh-button" label="← Back to mandates" isDisabled={false} onClick={() => setMandateCreateOpen(false)} />
                   : <Button type="button" variant="primary" className="overview-new-mandate" label={mandates.length === 0 ? FIRST_MANDATE_TITLE : "＋ New mandate"} isDisabled={false} onClick={openMandateCreate} />
               )
+              // Receipts carries its own scoped Refresh on the settlement-history
+              // card. A second, identical-looking page-level button next to it
+              // refreshed mandates instead, which read as a duplicate.
+              : tab === "receipts" ? null
               : <Button type="button" variant="secondary" className="refresh-button" label="↻ Refresh" isDisabled={integrationStatus === "loading"} onClick={() => void onRefresh()} />
             }
           />
@@ -1386,7 +1390,6 @@ export function MandatesPanel({
               <TableRow isHeaderRow>
                 <TableHeaderCell scope="col">Agent</TableHeaderCell>
                 <TableHeaderCell scope="col">Date</TableHeaderCell>
-                <TableHeaderCell scope="col">Token type</TableHeaderCell>
                 <TableHeaderCell scope="col">Amount</TableHeaderCell>
                 <TableHeaderCell scope="col">Status</TableHeaderCell>
                 <TableHeaderCell scope="col" className="mandate-actions-heading"><span className="sr-only">Actions</span></TableHeaderCell>
@@ -1409,12 +1412,10 @@ export function MandatesPanel({
                       </div>
                     </TableCell>
                     <TableCell data-label="Date"><div className="mandate-date-cell"><strong>{mandateCreatedLabel(value)}</strong><small className="mono">{expiry}</small></div></TableCell>
-                    <TableCell data-label="Token type">
-                      <div className="mandate-token-cell"><strong>{selectedAsset?.label ?? shortAddress(value.allowedMint)}</strong><small>{selectedAsset?.detail ?? (value.tokenProgram === "token-2022" ? "Token-2022" : "Classic SPL Token")}</small></div>
-                    </TableCell>
                     <TableCell data-label="Amount" className="mandate-amount-cell">
                       <div className="mandate-amount-line"><strong>{formatTokenAmount(value.amountSpent, decimals ?? null)}</strong><span>/ {formatTokenAmount(value.totalLimit, decimals ?? null)} {selectedAsset?.label ?? "tokens"}</span></div>
                       <div className="mandate-spend-bar" aria-label={`${progress}% of mandate spend used`}><span style={{ width: `${progress}%` }} /></div>
+                      <small className="mandate-token-note">{selectedAsset?.detail ?? (value.tokenProgram === "token-2022" ? "Token-2022" : "Classic SPL Token")}</small>
                     </TableCell>
                     <TableCell data-label="Status"><span className={`mandate-table-status ${status}`}><span className="mandate-status-check">✓</span>{mandateStatusLabel(status)}</span></TableCell>
                     <TableCell data-label="Actions" className="mandate-table-actions">
@@ -2742,14 +2743,13 @@ function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimal
 
 function AgentsPanel({ connections, hostedAssistantStatus, onConnect, onOpenAssistant }: { connections: AgentConnection[]; hostedAssistantStatus: "unknown" | "available" | "unavailable"; onConnect: () => void; onOpenAssistant: () => void }) {
   return <section className="page-panel">
-    <div className="page-panel-actions"><Button type="button" variant="secondary" label="Open Requests" isDisabled={false} onClick={onOpenAssistant} /></div>
     <div className="hosted-assistant-card">
       <span className="soft-label">DASHBOARD ASSISTANT</span>
       <strong>{hostedAssistantStatus === "available" ? "Ready in Requests" : hostedAssistantStatus === "unavailable" ? "Unavailable on this host" : "Open Requests to verify a purchase"}</strong>
       <p>Uses your owner session, not an MCP bearer token. Same purchase card, no extra credential.</p>
       <Button type="button" variant="secondary" label="Open Requests" isDisabled={false} onClick={onOpenAssistant} />
     </div>
-    {connections.length ? <div className="agent-card-grid">{connections.map((connection) => <article className="dashboard-card agent-registry-card" key={connection.id}><div className="agent-registry-top"><span className="avatar-ring agent-avatar">{connection.agentName.slice(0, 2).toUpperCase()}</span><span className={connectionIsLive(connection.lastSeenAt) ? "status-pill" : "state-pill"}><i /> {connectionIsLive(connection.lastSeenAt) ? "Connected" : "Registered"}</span></div><h2>{connection.agentName}</h2><p className="mono">External MCP client · {shortAddress(connection.wallet)}</p><div className="agent-registry-meta"><span>{connection.mandates} active mandate{connection.mandates === 1 ? "" : "s"}</span><strong>{connectionSeenLabel(connection.lastSeenAt)}</strong></div><span className="chip chip-muted agent-scope-chip">{connectionScopeDetails(connection.scope).label}</span><div className="agent-tool-calls">{connection.toolsCalled.length ? connection.toolsCalled.slice(0, 4).map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span className="t-body-sm">No tools called yet.</span>}</div></article>)}</div> : <div className="dashboard-card page-empty"><p>No external MCP clients paired yet.</p><Button type="button" variant="primary" label="Pair an MCP client" isDisabled={false} onClick={onConnect} /></div>}
+    {connections.length ? <div className="agent-card-grid">{connections.map((connection) => <article className="dashboard-card agent-registry-card" key={connection.id}><div className="agent-registry-top"><span className="avatar-ring agent-avatar">{connection.agentName.slice(0, 2).toUpperCase()}</span><span className={connectionIsLive(connection.lastSeenAt) ? "status-pill" : "state-pill"}><i /> {connectionIsLive(connection.lastSeenAt) ? "Connected" : "Registered"}</span></div><h2>{connection.agentName}</h2><p className="mono">External MCP client · {shortAddress(connection.wallet)}</p><div className="agent-registry-meta"><span>{connection.mandates} active mandate{connection.mandates === 1 ? "" : "s"}</span><strong>{connectionSeenLabel(connection.lastSeenAt)}</strong></div><span className="chip chip-muted agent-scope-chip">{connectionScopeDetails(connection.scope).label}</span><div className="agent-tool-calls">{connection.toolsCalled.length ? connection.toolsCalled.slice(0, 4).map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span className="t-body-sm">No tools called yet.</span>}</div></article>)}</div> : null}
   </section>;
 }
 
@@ -2908,18 +2908,16 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
 }
 
 function SettingsPanel({ wallet, walletName, walletCapabilities, activeMandateCount, dangerStatus, onRevokeAll, onDisconnect, onChangeWallet }: { wallet: string; walletName: string; walletCapabilities?: WalletCapabilityReport | null; activeMandateCount: number; dangerStatus: string; onRevokeAll: () => void; onDisconnect: () => void; onChangeWallet: () => void }) {
-  const [section, setSection] = useState<"general" | "notifications" | "danger">("general");
+  const [section, setSection] = useState<"general" | "danger">("general");
   const [confirmAction, setConfirmAction] = useState<"revoke" | "disconnect" | null>(null);
   const capability = walletCapabilities ?? null;
   const capabilityCopy = capability ? describeWalletCapabilities(capability) : null;
   return <section className="page-panel settings-panel">
-    <TabList className="settings-tabs" value={section} onChange={(value) => setSection(value as "general" | "notifications" | "danger")} role="tablist" aria-label="Settings sections">
+    <TabList className="settings-tabs" value={section} onChange={(value) => setSection(value as "general" | "danger")} role="tablist" aria-label="Settings sections">
       <Tab value="general" label="General" panelId="settings-general" />
-      <Tab value="notifications" label="Notifications" panelId="settings-notifications" />
       <Tab value="danger" label="Danger zone" panelId="settings-danger" />
     </TabList>
     {section === "general" && <div className="dashboard-card settings-card" id="settings-general" role="tabpanel"><div className="settings-value"><span>Network</span><div><strong>Solana Devnet</strong><p className="settings-unavailable">This dashboard talks to Solana Devnet. The network cannot be switched here.</p></div></div><div className="settings-value"><span>Connected wallet</span><div className="copy-row"><span className="mono">{wallet}</span><IconButton type="button" variant="ghost" label="Copy wallet address" icon={<span>⧉</span>} onClick={() => void copyValue(wallet)} /></div></div><div className="settings-value"><span>Wallet capability</span><div><strong>{capabilityCopy?.identity ?? walletName}</strong><p className="settings-unavailable">{capabilityCopy ? capabilityCopy.summary : "Capability evidence was not recorded for this connection. Transaction v1 is unverified. ChainPay still builds legacy transactions."}</p><p className="settings-unavailable">Advertised versions: {capabilityCopy?.versionsLabel ?? "Not recorded"}. v1: {capabilityCopy?.v1Label ?? "Unverified"}. Devnet chain: {capabilityCopy?.chainLabel ?? "solana:devnet unverified"}. Production: {capabilityCopy?.productionLabel ?? "Legacy. v1 production is off."}</p></div></div><div className="settings-wallet-action"><div><strong>Use a different wallet</strong><p>Leave this wallet’s dashboard and choose another browser wallet or account. Existing mandates stay on-chain.</p></div><Button type="button" variant="secondary" label="Change wallet" isDisabled={false} onClick={onChangeWallet} /></div></div>}
-    {section === "notifications" && <div className="dashboard-card settings-card" id="settings-notifications" role="tabpanel"><div className="settings-unavailable-card"><strong>Notifications unavailable</strong><p>There is no webhook or email delivery in this build. Nothing here can be saved. Future owner webhooks will run inside the Axum service as a separate Kwasi-reviewed feature — this screen is intentionally read-only until then.</p></div></div>}
     {section === "danger" && <div className="dashboard-card settings-card danger-card" id="settings-danger" role="tabpanel"><div className="danger-row"><div><strong>Revoke all mandates</strong><p>{activeMandateCount === 0 ? "There are no non-revoked mandates to revoke." : `This asks your wallet to approve revoke instructions for ${activeMandateCount} non-revoked mandate${activeMandateCount === 1 ? "" : "s"}, including paused and expired. Settled payments stay on-chain.`}</p></div><Button type="button" variant="secondary" label="Revoke all" isDisabled={activeMandateCount === 0} onClick={() => setConfirmAction("revoke")} /></div><div className="danger-row"><div><strong>Disconnect wallet</strong><p>Return to the public ChainPay landing page. This does not revoke mandates.</p></div><Button type="button" variant="secondary" label="Disconnect" isDisabled={false} onClick={() => setConfirmAction("disconnect")} /></div>{dangerStatus && <p className="settings-status">{dangerStatus}</p>}</div>}
     <ConfirmDialog open={confirmAction === "revoke"} title="Revoke every non-revoked mandate?" description={`${activeMandateCount} mandate${activeMandateCount === 1 ? "" : "s"} that ${activeMandateCount === 1 ? "is" : "are"} not yet revoked — active, paused, or expired — will require a wallet-approved revoke transaction. Agents will not be able to request new payments until you create new mandates.`} confirmLabel="Revoke all mandates" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onRevokeAll(); }} />
     <ConfirmDialog open={confirmAction === "disconnect"} title="Disconnect this wallet?" description="You will leave the connected dashboard and return to the public site. Unsigned transactions will be discarded. Existing mandates stay on-chain." confirmLabel="Disconnect wallet" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onDisconnect(); }} />
