@@ -2373,3 +2373,57 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
    left a grey gutter below the fold on long tabs. */
 .cp-app .dashboard-layout { background: var(--canvas); }
 .cp-app .dashboard-main { background: var(--soft); }
+
+/* ============================================================
+   WCAG AA corrections.
+
+   PRODUCT.md requires AA. Three token colours were being used as text on white
+   at ratios that do not reach it:
+     --muted   #7c828a  3.88:1   (every kicker, eyebrow and soft label)
+     --green   #05b169  2.80:1
+     --yellow  #f4b000  1.90:1
+   The first is the widespread one: kickers are 11px, so they need 4.5:1, and
+   every tab has one. --green and --yellow stay as fills and dots, where a
+   contrast minimum does not apply, but never as text.
+   ============================================================ */
+
+.cp-app .eyebrow,
+.cp-app .section-kicker,
+.cp-app .soft-label {
+  color: #6a7183; /* 4.88:1 on white */
+}
+
+/* Status badges: dot plus word, never colour alone, each tone's text checked
+   against its own fill rather than against white. */
+.cp-app .mandate-table-status.active { color: #03794a; background: #e6f7ef; border: 1px solid #b3e6cd; }
+.cp-app .mandate-table-status.paused { color: #8a5a00; background: #fdf4e0; border: 1px solid #f2dda8; }
+.cp-app .mandate-table-status.revoked { color: #b01b28; background: #fdeced; border: 1px solid #f5c4c8; }
+.cp-app .mandate-table-status.expired { color: #56647d; background: #f0f2f6; border: 1px solid #dbe2ef; }
+.cp-app .mandate-table-status { font-weight: 500; text-transform: none; }
+
+/* Top chrome, condensed.
+
+   The sign-in prompt and the integration strip each said the session was not
+   ready, on every one of the nine tabs, stacked — together about 120px above
+   the fold before any tab content began. The action now lives once in the
+   topbar beside the network pill; the page keeps a single explanatory line,
+   because PRODUCT.md requires that signing in and approving spend never read
+   as the same act. */
+.cp-app .cp-workspace-signin.is-compact {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 14px;
+  border: 1px solid #d8e3ff;
+  border-radius: var(--radius-element, 10px);
+  background: #f4f7ff;
+}
+.cp-app .cp-workspace-signin.is-compact p { color: var(--body); font-size: 13px; line-height: 1.5; }
+.cp-app .cp-workspace-signin.is-compact strong { display: none; }
+
+.cp-app .topbar-signin { min-height: 36px; }
+.cp-app .dashboard-network.error i { background: var(--yellow); }
+.cp-app .dashboard-network.loading i { background: var(--muted); }
+
+.cp-app .integration-strip { padding-block: 10px; font-size: 11px; }

@@ -883,7 +883,19 @@ export function Dashboard({
               <a className="brand dashboard-topbar-brand" href="#dashboard"><BrandLogo /></a>
             </div>
             <div className="dashboard-top-actions">
-              <span className="dashboard-network"><i /> Solana Devnet</span>
+              <span className={`dashboard-network ${integrationStatus}`}>
+                <i /> {integrationStatus === "loading" ? "Syncing" : integrationStatus === "error" ? "Needs attention" : "Solana Devnet"}
+              </span>
+              {ownerSignIn.status !== "ready" && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="topbar-signin"
+                  label={ownerSignIn.status === "signing" ? "Waiting for login message…" : "Sign in"}
+                  isDisabled={ownerSignIn.status === "signing"}
+                  onClick={() => void ownerSignIn.signIn()}
+                />
+              )}
               <div className="wallet-menu">
                 <Popover
                   isOpen={walletMenuOpen}
@@ -940,9 +952,8 @@ export function Dashboard({
           />
 
           {ownerSignIn.status !== "ready" && (mandates.length > 0 || tab !== "overview") && (
-            <div className="cp-workspace-signin">
-              <div><strong>Sign in to your workspace</strong><p>A login message opens agent tools. Spending approval is separate.</p></div>
-              <Button type="button" variant="secondary" label={ownerSignIn.status === "signing" ? "Waiting for login message…" : "Sign in"} isDisabled={ownerSignIn.status === "signing"} onClick={() => void ownerSignIn.signIn()} />
+            <div className="cp-workspace-signin is-compact">
+              <div><p>Sign in to load agent tools. A login message is not a spending approval.</p></div>
               {ownerSignIn.error && <p role="alert">{ownerSignIn.error}</p>}
             </div>
           )}

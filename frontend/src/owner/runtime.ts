@@ -41,6 +41,10 @@ declare global {
 }
 
 export function shortAddress(value: string) {
+  // Without the length guard a short value repeats its own characters: an
+  // 8-character id rendered as "AgEn…T111", which reads as a truncation of
+  // something longer and is not reversible by eye.
+  if (value.length <= 12) return value;
   return `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
 
