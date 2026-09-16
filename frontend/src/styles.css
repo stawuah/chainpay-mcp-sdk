@@ -1857,15 +1857,49 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
   .mandate-table-scroll { overflow: visible; }
   .mandate-table { min-width: 0; }
   .mandate-table thead { display: none; }
-  .mandate-table, .mandate-table tbody, .mandate-table tr, .mandate-table td { display: block; width: 100%; }
-  .mandate-table tbody tr:not(.mandate-empty-row) { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; padding: 18px; }
-  .mandate-table tbody tr:not(.mandate-empty-row) td { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0; border: 0; }
+  .mandate-table, .mandate-table tbody, .mandate-table tr { display: block; width: 100%; }
+  /*
+    `width: 100%` on a grid item is a circular dependency against an unsized
+    `1fr` track: Chrome resolved the track to 0, so every amount cell was zero
+    pixels wide and wrapped one character per line. The cells are grid items —
+    they fill their area without being told to.
+  */
+  .mandate-table td { display: block; }
+  .mandate-table tbody tr:not(.mandate-empty-row) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px 16px;
+    padding: 18px;
+  }
+  .mandate-table tbody tr:not(.mandate-empty-row) td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
   .mandate-table tbody tr:not(.mandate-empty-row) td::before { color: var(--muted); content: attr(data-label); font: 500 10px var(--mono); text-transform: uppercase; }
-  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Agent"], .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Amount"] { grid-column: 1 / -1; display: block; }
-  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Agent"]::before, .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Amount"]::before { display: none; }
-  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Actions"] { grid-column: 2; grid-row: 4; justify-content: flex-end; }
+  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Agent"],
+  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Amount"] { grid-column: 1 / -1; display: block; }
+  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Agent"]::before,
+  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Amount"]::before { display: none; }
+  /* Status and Actions share the last row. Auto placement puts them there
+     without naming a row number, which broke as soon as a column was removed. */
+  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Status"] { grid-column: 1; justify-content: flex-start; }
+  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Actions"] { grid-column: 2; justify-content: flex-end; }
   .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Actions"]::before { display: none; }
-  .mandate-table tbody tr:not(.mandate-empty-row) td[data-label="Status"] { grid-column: 1; grid-row: 4; justify-content: flex-start; }
+  /*
+    Astryx gives table cells `max-width: 0` — the usual trick for making a
+    fixed-layout table truncate, harmless while the table lays out as a table.
+    These rules switch it to display:block/grid for the stacked mobile row,
+    where that max-width is no longer neutralised and collapsed every cell to
+    zero pixels wide, so each amount wrapped one character per line. It is
+    declared through a :not(#\#) specificity hack, so !important is the only
+    way to reach it.
+  */
+  .mandate-table tbody tr td { max-width: none !important; }
   .mandate-amount-cell { min-width: 0; }
   .mandate-empty-row td { display: block; }
   .mandate-filter-bar { overflow-x: auto; padding-bottom: 2px; }
