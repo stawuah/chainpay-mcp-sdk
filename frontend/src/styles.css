@@ -2580,3 +2580,75 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
   .cp-app .tool-row { grid-template-columns: minmax(0, 1fr); }
   .cp-app .tool-row-toggle { justify-self: start; }
 }
+
+/* ============================================================
+   Collapsible sidebar rail.
+
+   There was no desktop collapse at all before — only the mobile drawer. The
+   grid column and the aside also disagreed on width (256px vs 232px), so both
+   now come from one custom property that the rail toggles.
+   ============================================================ */
+.cp-app .dashboard-layout {
+  --sidebar-width: 232px;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  transition: grid-template-columns .22s ease;
+}
+.cp-app .dashboard-layout.is-rail { --sidebar-width: 68px; }
+.cp-app .dashboard-sidebar { width: var(--sidebar-width); transition: width .22s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-app .dashboard-layout,
+  .cp-app .dashboard-sidebar { transition: none; }
+}
+
+.cp-app .dashboard-sidebar-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cp-app .sidebar-collapse-toggle {
+  flex: 0 0 auto;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.cp-app .sidebar-collapse-toggle:hover { color: var(--ink); background: var(--soft); }
+
+/* Rail mode: icons only, labels and section headings out of the flow. */
+.cp-app .dashboard-layout.is-rail .dashboard-sidebar { padding-inline: 10px; }
+.cp-app .dashboard-layout.is-rail .sidebar-label,
+.cp-app .dashboard-layout.is-rail .sidebar-safe,
+.cp-app .dashboard-layout.is-rail .side-link .tool-count,
+.cp-app .dashboard-layout.is-rail .cp-brand-wordmark,
+.cp-app .dashboard-layout.is-rail .sidebar-back {
+  display: none;
+}
+.cp-app .dashboard-layout.is-rail .side-link {
+  justify-content: center;
+  padding-inline: 0;
+  gap: 0;
+}
+.cp-app .dashboard-layout.is-rail .sidebar-separator { margin-inline: 6px; }
+/* At 68px the mark and the toggle cannot sit side by side, so they stack
+   instead of wrapping and pushing the mark off the left edge. */
+.cp-app .dashboard-layout.is-rail .dashboard-sidebar-brand {
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-inline: 0;
+}
+.cp-app .dashboard-layout.is-rail .dashboard-sidebar-brand .brand { padding: 0; }
+.cp-app .dashboard-layout.is-rail .cp-brand { gap: 0; }
+.cp-app .dashboard-layout.is-rail .sidebar-collapse-toggle { margin: 0; }
+
+/* The drawer always renders expanded, whatever the desktop rail is set to. */
+[data-testid="dashboard-mobile-nav"] .sidebar-collapse-toggle { display: none; }
+
+/* The topbar carries z-index 20 for its wallet popover, and the sticky sidebar
+   had no stacking context of its own, so the header's box sat above the
+   sidebar's top edge and swallowed clicks there — including the collapse
+   toggle beside the brand. */
+.cp-app .dashboard-sidebar { position: sticky; z-index: 30; }

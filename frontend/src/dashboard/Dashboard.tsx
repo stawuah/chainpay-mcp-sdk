@@ -1,4 +1,5 @@
 import { BrandLogo } from "../brand/Brand";
+import { useSidebarCollapse } from "./useSidebarCollapse";
 import { useSettlementFormStatus, settlementPendingEvent, settlementTerminalEvent, listStoredOperations, type Operation, isPendingSettlement } from "../settlement";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveReceiptAddress, deriveVersionedMandateAddress, formatExactTokenAmount, toWeb3Transaction } from "@chainpay/sdk";
@@ -214,6 +215,7 @@ export function Dashboard({
   onNavigateHome,
 }: DashboardProps) {
   const [mobileNav, setMobileNav] = useState(false);
+  const { collapsed: sidebarCollapsed, toggle: toggleSidebar } = useSidebarCollapse();
   const [prompt, setPrompt] = useState("Inspect my active mandate");
   const [reply, setReply] = useState("Ask ChainPay about your active mandate, receipt, or agent permissions.");
   const [thinking, setThinking] = useState(false);
@@ -873,9 +875,9 @@ export function Dashboard({
   return (
     <div className="dashboard-app cp-app">
       <DashboardMobileNav isOpen={mobileNav} onOpenChange={setMobileNav} {...dashboardNav} />
-      <div className="dashboard-layout">
+      <div className={`dashboard-layout${sidebarCollapsed ? " is-rail" : ""}`}>
         <aside className="dashboard-sidebar">
-          <DashboardNav {...dashboardNav} />
+          <DashboardNav {...dashboardNav} collapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
         </aside>
 
         <main className="dashboard-main" id="dashboard">
