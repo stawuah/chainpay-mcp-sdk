@@ -465,7 +465,7 @@ pub(super) async fn recover_provision(
         }
         Err(_) => {
             return Err(ApiError::Conflict(format!(
-                "Provider identity {} is not yet verifiable. Retry the same enrollment lookup; see docs/settlement-recovery.md.",
+                "Provider identity {} is not yet verifiable. Retry the same enrollment lookup; never create another identity.",
                 crate::signer::external_id(owner, mandate)
             )));
         }

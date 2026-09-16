@@ -45,6 +45,9 @@ import { buildRecentActivity } from "../owner/recentActivity";
 import { configuredDemoReceiptPath, FIRST_MANDATE_TITLE, LOGIN_VS_APPROVAL } from "../owner/onboarding";
 import { PurchaseCard } from "./PurchaseCard";
 import { describeWalletCapabilities, type WalletCapabilityReport } from "../wallet/capabilities";
+import { loadWalletDrafts, saveWalletDrafts, type BatchCsvPayment } from "../wallet/draftStore";
+import { chunkPreparedTransactions } from "../wallet/transactionChunks";
+import { createRecipientTokenAccount, type RecipientAtaReview } from "../wallet/recipientAta";
 import { estimatedSlotsForDays, mandateExpiryLabel, parseExpirySlot } from "../owner/slotEstimate";
 import { useOwnerSignIn } from "../owner/useOwnerSignIn";
 import { useSlotEstimate } from "../owner/useSlotEstimate";
@@ -265,12 +268,29 @@ export function Dashboard({
 
   useEffect(() => {
     setAgentInbox(wallet ? loadAgentInbox(wallet) : []);
-    setAgentAttachments([]);
-    setAssistantHistory([]);
     setApprovalStatuses({});
     setApprovalErrors({});
     setSettlementHistory(wallet ? listStoredOperations().filter((operation) => operation.wallet === wallet) : []);
+    if (!wallet) {
+      setPrompt("");
+      setReply("Ask ChainPay about your active mandate, receipt, or agent permissions.");
+      setAssistantHistory([]);
+      setAgentAttachments([]);
+      return;
+    }
+    const assistantDraft = loadWalletDrafts(wallet).assistant;
+    setPrompt(assistantDraft?.prompt ?? "Inspect my active mandate");
+    setReply(assistantDraft?.reply ?? "Ask ChainPay about your active mandate, receipt, or agent permissions.");
+    setAssistantHistory(assistantDraft?.history ?? []);
+    setAgentAttachments(assistantDraft?.attachments ?? []);
   }, [wallet]);
+
+  useEffect(() => {
+    if (!wallet) return;
+    saveWalletDrafts(wallet, {
+      assistant: { prompt, reply, history: assistantHistory, attachments: agentAttachments },
+    });
+  }, [wallet, prompt, reply, assistantHistory, agentAttachments]);
 
   useEffect(() => {
     const refreshHistory = () => {
@@ -764,16 +784,21 @@ export function Dashboard({
       return;
     }
     try {
-      const prepared: PreparedTransaction = {
-        instructions: revocableMandates.flatMap((value) => chainpayClient.buildRevokeMandate(wallet, value.address).instructions),
-        requiredSigners: [wallet],
-        feePayer: wallet,
-      };
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-      const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
-      await submitSignedTransaction(`revoke-all:${wallet}:${latest.blockhash}`, signed.serialize());
+      const chunks = chunkPreparedTransactions(
+        revocableMandates.map((value) => chainpayClient.buildRevokeMandate(wallet, value.address)),
+        latest.blockhash,
+      );
+      let revoked = 0;
+      for (let index = 0; index < chunks.length; index += 1) {
+        const signed = await walletSigner(toWeb3Transaction(chunks[index], latest.blockhash));
+        await submitSignedTransaction(`revoke-all:${wallet}:${index}:${latest.blockhash}`, signed.serialize());
+        revoked += chunks[index].instructions.length;
+      }
       await onRefresh();
-      setDangerStatus(`${revocableMandates.length} mandate${revocableMandates.length === 1 ? "" : "s"} revoked.`);
+      setDangerStatus(chunks.length > 1
+        ? `${revoked} mandate${revoked === 1 ? "" : "s"} revoked in ${chunks.length} wallet transactions.`
+        : `${revoked} mandate${revoked === 1 ? "" : "s"} revoked.`);
     } catch (cause) {
       setDangerStatus(cause instanceof Error ? cause.message : String(cause));
     }
@@ -1036,6 +1061,9 @@ export function MandatesPanel({
   const [currentSlot, setCurrentSlot] = useState<bigint | null>(null);
   const { estimate: slotEstimate } = useSlotEstimate();
   const [decimalsByMint, setDecimalsByMint] = useState<Record<string, number>>({});
+  const [sourceDelegate, setSourceDelegate] = useState<string | null>(null);
+  const [sourceDelegatedAmount, setSourceDelegatedAmount] = useState<bigint>(0n);
+  const [delegateLoading, setDelegateLoading] = useState(false);
   const { currentRoute, navigate } = useRoute();
   const fullDetailAddress = currentRoute.kind === "app" && currentRoute.tab === "mandates" ? currentRoute.mandateDetail : undefined;
   const [expandedMandateAddress, setExpandedMandateAddress] = useState<string | null>(null);
@@ -1140,6 +1168,72 @@ export function MandatesPanel({
     });
     return () => { active = false; };
   }, [mandates.map((value) => value.allowedMint).join(",")]);
+
+  useEffect(() => {
+    if (!expandedMandate) {
+      setSourceDelegate(null);
+      setSourceDelegatedAmount(0n);
+      return undefined;
+    }
+    let active = true;
+    setDelegateLoading(true);
+    void getAccountInfoOrNull(new PublicKey(expandedMandate.sourceTokenAccount)).then((account) => {
+      if (!active) return;
+      setSourceDelegate(readTokenAccountDelegate(account));
+      setSourceDelegatedAmount(readTokenAccountDelegatedAmount(account));
+      setDelegateLoading(false);
+    }).catch(() => {
+      if (!active) return;
+      setSourceDelegate(null);
+      setSourceDelegatedAmount(0n);
+      setDelegateLoading(false);
+    });
+    return () => { active = false; };
+  }, [expandedMandate?.address, expandedMandate?.sourceTokenAccount]);
+
+  async function repairDelegateApproval(targetMandate: Mandate) {
+    if (!walletSigner) {
+      setActionError("The connected wallet does not expose transaction signing.");
+      return;
+    }
+    if (expandedMandateDecimals === undefined || expandedMandateDecimals === null) {
+      setActionError("Token decimals are not available yet. Refresh and try again.");
+      return;
+    }
+    const remainingAllowance = targetMandate.totalLimit > targetMandate.amountSpent
+      ? targetMandate.totalLimit - targetMandate.amountSpent
+      : 0n;
+    if (remainingAllowance <= 0n) {
+      setActionError("This mandate has no remaining allowance to delegate.");
+      return;
+    }
+    actionLock.current = true;
+    setActionAddress(targetMandate.address);
+    setActionError("");
+    setActionInFlight("update");
+    try {
+      const tokenProgram = targetMandate.tokenProgram ?? await chainpayClient.getTokenProgram(targetMandate.sourceTokenAccount);
+      const prepared = chainpayClient.buildApproveDelegate({
+        owner: wallet,
+        sourceTokenAccount: targetMandate.sourceTokenAccount,
+        allowedMint: targetMandate.allowedMint,
+        tokenProgram,
+        mandate: targetMandate.address,
+        totalLimit: targetMandate.totalLimit,
+        delegateAmount: remainingAllowance,
+        decimals: expandedMandateDecimals,
+      });
+      const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
+      const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
+      await submitSignedTransaction(`delegate-repair:${targetMandate.address}:${latest.blockhash}`, signed.serialize());
+      await onRefresh(targetMandate.address);
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      actionLock.current = false;
+      setActionInFlight(null);
+    }
+  }
 
   async function handleMandateAction(action: MandateAction, targetMandate: Mandate, updateFields?: MandateUpdateFields) {
     if (actionLock.current) return;
@@ -1340,6 +1434,11 @@ export function MandatesPanel({
           <div><span>Per-payment limit</span><strong>{formatTokenAmount(expandedMandate.maxPerPayment, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
           <div><span>Remaining allowance</span><strong>{formatTokenAmount(expandedMandate.totalLimit > expandedMandate.amountSpent ? expandedMandate.totalLimit - expandedMandate.amountSpent : 0n, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
         </div>
+        {(expandedMandate.status === "active" || expandedMandate.status === "paused") && <div className="cp-delegate-status"><span className="section-kicker">SPL DELEGATE</span><p className="builder-intro">Token accounts have one current delegate. Repair approval replaces the delegated allowance with the mandate’s remaining allowance — it does not increment an existing approval and may displace another mandate’s delegate.</p>{delegateLoading ? <p role="status">Reading source token account…</p> : <><div className="mandate-detail-grid"><div><span>Current delegate</span><strong className="mono">{sourceDelegate ? shortAddress(sourceDelegate) : "None"}</strong></div><div><span>Remaining delegated amount</span><strong>{formatTokenAmount(sourceDelegatedAmount, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div></div>{(() => {
+          const remainingAllowance = expandedMandate.totalLimit > expandedMandate.amountSpent ? expandedMandate.totalLimit - expandedMandate.amountSpent : 0n;
+          const needsRepair = sourceDelegate !== expandedMandate.address || sourceDelegatedAmount < remainingAllowance;
+          return needsRepair ? <div className="mandate-detail-actions"><Button type="button" variant="secondary" label={actionInFlight === "update" ? "Waiting for wallet…" : "Repair approval"} isDisabled={actionInFlight !== null || remainingAllowance <= 0n} onClick={() => void repairDelegateApproval(expandedMandate)} /><span className="mandate-detail-note">Approves {formatTokenAmount(remainingAllowance, expandedMandateDecimals ?? null)} to this mandate PDA.</span></div> : <p className="mandate-detail-note">Source token account is delegated to this mandate with enough remaining allowance for future payments.</p>;
+        })()}</>}</div>}
         <div className="mandate-detail-grid">
           <div><span>Maximum per payment</span><strong>{formatTokenAmount(expandedMandate.maxPerPayment, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
           <div><span>Total spending limit</span><strong>{formatTokenAmount(expandedMandate.totalLimit, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
@@ -1432,6 +1531,8 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
   const [error, setError] = useState("");
   const [signature, setSignature] = useState("");
   const [receipt, setReceipt] = useState<PaymentReceipt | null>(null);
+  const [recipientAtaReview, setRecipientAtaReview] = useState<RecipientAtaReview | null>(null);
+  const [recipientAtaStatus, setRecipientAtaStatus] = useState<"idle" | "creating" | "ready">("idle");
   const allPaymentMandates = mandates
     .filter((candidate) => candidate.status === "active" && candidate.approvedAgent === wallet)
     .sort((left, right) => stablecoinOrder(left.allowedMint, stablecoinOptions) - stablecoinOrder(right.allowedMint, stablecoinOptions));
@@ -1447,6 +1548,20 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
   }, [mandate?.address, onSelectMandate, selectedPaymentMandate?.address]);
 
   useEffect(() => {
+    const paymentDraft = loadWalletDrafts(wallet).payment;
+    if (paymentDraft) {
+      setInvoice(paymentDraft.invoice);
+      setAmount(paymentDraft.amount);
+      setRecipient(paymentDraft.recipient);
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    if (!wallet) return;
+    saveWalletDrafts(wallet, { payment: { invoice, amount, recipient } });
+  }, [wallet, invoice, amount, recipient]);
+
+  useEffect(() => {
     if (selectedPaymentMandate) setAmount((current) => current || selectedPaymentMandate.maxPerPayment.toString());
   }, [selectedPaymentMandate]);
 
@@ -1456,6 +1571,8 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
     setSignature("");
     setReceipt(null);
     setError("");
+    setRecipientAtaReview(null);
+    setRecipientAtaStatus("idle");
   }, [selectedPaymentMandate?.address]);
 
   useEffect(() => {
@@ -1522,6 +1639,21 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
         throw new Error("The source token account could not be read. Refresh the mandate and try again.");
       }
       const destination = await resolvePaymentDestination(recipient, selectedPaymentMandate.allowedMint, tokenProgram, wallet);
+      if (destination.createInstruction) {
+        setRecipientAtaReview({
+          ownerWallet: recipient.trim(),
+          tokenAccount: destination.address,
+          mint: selectedPaymentMandate.allowedMint,
+          tokenProgram,
+          createInstruction: destination.createInstruction,
+        });
+        setRecipientAtaStatus("idle");
+        setPrepared(null);
+        setStatus("idle");
+        setError("The recipient needs a token account before payment can be prepared. Review and create it separately, then prepare again.");
+        return;
+      }
+      setRecipientAtaReview(null);
       const mcpArgs: Record<string, unknown> = {
         mandate: selectedPaymentMandate.address,
         agent: wallet,
@@ -1546,9 +1678,6 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
         amount: rawAmount,
         tokenProgram,
       }, wallet);
-      if (destination.createInstruction) {
-        nextPrepared.transaction.instructions.unshift(destination.createInstruction);
-      }
       setPrepared(nextPrepared);
       const failedChecks = nextPrepared.preflight.checks.filter((check) => !check.ok).map((check) => check.message);
       if (mcpResult.isError || !nextPrepared.preflight.valid) {
@@ -1619,6 +1748,21 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
     if (nextMandate?.status === "active") onSelectMandate(nextMandate);
   }
 
+  async function createRecipientAccount() {
+    if (!recipientAtaReview || !walletSigner) return;
+    setRecipientAtaStatus("creating");
+    setError("");
+    try {
+      await createRecipientTokenAccount(recipientAtaReview, walletSigner, wallet);
+      setRecipientAtaReview(null);
+      setRecipientAtaStatus("ready");
+      setError("");
+    } catch (cause) {
+      setRecipientAtaStatus("idle");
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   if (!selectedPaymentMandate) {
     return <div className="dashboard-card flow-empty"><div className="empty-icon">↗</div><h2>{hasDelegatedActiveMandate ? "No wallet-approved mandate" : "No active mandate yet"}</h2><p>{hasDelegatedActiveMandate ? "Your active mandate uses automatic payments through ChainPay's secure provider wallet. Use it from a connected agent with signingMode set to delegated, or create an “Approve each payment” mandate to pay from this browser wallet." : "Create a mandate first. Payments can only be prepared after ChainPay has an on-chain policy to check."}</p><div className="flow-empty-actions"><Button type="button" variant="primary" label="New permission" isDisabled={false} onClick={onOpenMandateBuilder} /><Button type="button" variant="secondary" label="Agents" isDisabled={false} onClick={onOpenAgents} /></div></div>;
   }
@@ -1658,6 +1802,7 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
           <TextInput className="field-wide" label="Recipient wallet address" value={recipient} onChange={(value) => { setRecipient(value); setPrepared(null); setSignature(""); }} placeholder="Paste the recipient's Solana wallet address" description="ChainPay derives the recipient’s account for the selected USDC, PYUSD, or Token-2022 mint." />
         </div>
         <div className="payment-policy-note"><Shield /><span>Policy limit: <b>{formatTokenAmount(selectedPaymentMandate.maxPerPayment, mintDecimals)}</b> per payment · <b>{formatTokenAmount(selectedPaymentMandate.totalLimit, mintDecimals)}</b> total · {selectedPaymentMandate.status}</span></div>
+        {recipientAtaReview && <div className="dashboard-card recipient-ata-review"><span className="section-kicker">RECIPIENT ACCOUNT</span><h3>Create the recipient token account first</h3><p>ChainPay will not prepend account creation to the payment transaction. Review the derived account, pay SOL rent from your wallet, then prepare the payment again.</p><div className="review-list"><div><span>Recipient wallet</span><strong className="mono">{shortAddress(recipientAtaReview.ownerWallet)}</strong></div><div><span>Token account</span><strong className="mono">{shortAddress(recipientAtaReview.tokenAccount)}</strong></div><div><span>Stablecoin mint</span><strong className="mono">{shortAddress(recipientAtaReview.mint)}</strong></div></div><Button type="button" variant="primary" label={recipientAtaStatus === "creating" ? "Creating account…" : "Create recipient account"} isDisabled={recipientAtaStatus === "creating" || !walletSigner} onClick={() => void createRecipientAccount()} /></div>}
         <div className="builder-actions"><Button type="button" variant="primary" label={status === "preparing" ? "Checking payment…" : "Prepare payment"} isDisabled={status === "preparing" || status === "signing"} onClick={() => void prepare()} /><span className="builder-safety"><Shield /> Wallet approval required to settle</span></div>
         {error && <div className="builder-error"><b>Payment blocked</b><span>{error}</span></div>}
         {signature && prepared && <>
@@ -1677,17 +1822,6 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
 }
 
 const MAX_ATOMIC_BATCH_PAYMENTS = 4;
-
-type BatchCsvPayment = {
-  row: number;
-  mandateAddress: string;
-  invoice: string;
-  amount: string;
-  recipient: string;
-  requiredToken?: string;
-  receiptAddress?: string;
-  tokenProgram?: TokenProgram;
-};
 
 type BatchPaymentEntry = {
   item: BatchCsvPayment;
@@ -1815,6 +1949,21 @@ function BatchPaymentsPanel({ wallet, walletSigner, mandates, stablecoinOptions,
   const [batchPrepared, setBatchPrepared] = useState<PreparedTransaction | null>(null);
   const [signature, setSignature] = useState("");
   const [aiReviewRequested, setAiReviewRequested] = useState(false);
+  const [pendingRecipientCreates, setPendingRecipientCreates] = useState<RecipientAtaReview[]>([]);
+  const [creatingRecipientAccount, setCreatingRecipientAccount] = useState<string | null>(null);
+
+  useEffect(() => {
+    const batchDraft = loadWalletDrafts(wallet).batch;
+    if (batchDraft?.items.length) {
+      setItems(batchDraft.items);
+      setEntries(batchDraft.items.map((item) => ({ item, status: "imported" })));
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    if (!wallet || !items.length) return;
+    saveWalletDrafts(wallet, { batch: { items, csvFileName: csvFile?.name } });
+  }, [wallet, items, csvFile?.name]);
 
   async function importCsv(file?: File) {
     if (!file) return;
@@ -1852,15 +2001,58 @@ function BatchPaymentsPanel({ wallet, walletSigner, mandates, stablecoinOptions,
     setAiReviewRequested(true);
   }
 
+  async function collectPendingRecipientCreates() {
+    const pending = new Map<string, RecipientAtaReview>();
+    for (const item of items) {
+      const selectedMandate = mandates.find((candidate) => candidate.address === item.mandateAddress);
+      if (!selectedMandate) continue;
+      const tokenProgram = selectedMandate.tokenProgram ?? await chainpayClient.getTokenProgram(selectedMandate.sourceTokenAccount);
+      const destination = await resolvePaymentDestination(item.recipient, selectedMandate.allowedMint, tokenProgram, wallet);
+      if (destination.createInstruction && !pending.has(destination.address)) {
+        pending.set(destination.address, {
+          ownerWallet: item.recipient.trim(),
+          tokenAccount: destination.address,
+          mint: selectedMandate.allowedMint,
+          tokenProgram,
+          createInstruction: destination.createInstruction,
+        });
+      }
+    }
+    return [...pending.values()];
+  }
+
+  async function createPendingRecipientAccount(review: RecipientAtaReview) {
+    if (!walletSigner) return;
+    setCreatingRecipientAccount(review.tokenAccount);
+    setError("");
+    try {
+      await createRecipientTokenAccount(review, walletSigner, wallet);
+      const remaining = pendingRecipientCreates.filter((candidate) => candidate.tokenAccount !== review.tokenAccount);
+      setPendingRecipientCreates(remaining);
+      if (!remaining.length) setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setCreatingRecipientAccount(null);
+    }
+  }
+
   async function prepareBatch() {
     if (!items.length) return;
     setStatus("checking");
     setError("");
     setBatchPrepared(null);
     setSignature("");
+    const pendingCreates = await collectPendingRecipientCreates();
+    if (pendingCreates.length) {
+      setPendingRecipientCreates(pendingCreates);
+      setStatus("error");
+      setError(`${pendingCreates.length} recipient token account${pendingCreates.length === 1 ? "" : "s"} must be created before this batch can be prepared. Create each account separately, then check the batch again.`);
+      return;
+    }
+    setPendingRecipientCreates([]);
     const nextEntries: BatchPaymentEntry[] = [];
     const seenInvoices = new Set<string>();
-    const seenRecipientAccounts = new Set<string>();
 
     for (const item of items) {
       try {
@@ -1891,6 +2083,9 @@ function BatchPaymentsPanel({ wallet, walletSigner, mandates, stablecoinOptions,
         }
 
         const destination = await resolvePaymentDestination(item.recipient, selectedMandate.allowedMint, tokenProgram, wallet);
+        if (destination.createInstruction) {
+          throw new Error(`Recipient token account ${destination.address} must be created before batch preparation.`);
+        }
         const prepared = await chainpayClient.preparePayment({
           mandate: selectedMandate.address,
           invoiceHash: hexToBytes(invoiceHash),
@@ -1903,10 +2098,6 @@ function BatchPaymentsPanel({ wallet, walletSigner, mandates, stablecoinOptions,
         }, wallet);
         if (item.receiptAddress && item.receiptAddress !== prepared.receiptAddress) {
           throw new Error("Receipt address does not match the receipt derived from this mandate and invoice.");
-        }
-        if (destination.createInstruction && !seenRecipientAccounts.has(destination.address)) {
-          prepared.transaction.instructions.unshift(destination.createInstruction);
-          seenRecipientAccounts.add(destination.address);
         }
         const failedChecks = prepared.preflight.checks.filter((check) => !check.ok).map((check) => check.message);
         if (failedChecks.length) throw new Error(failedChecks.join(" · "));
@@ -2010,6 +2201,7 @@ function BatchPaymentsPanel({ wallet, walletSigner, mandates, stablecoinOptions,
       <div className="batch-template-note"><span className="soft-label">CSV COLUMNS</span><code>mandate_address, invoice, amount, recipient, required_token, receipt_address, token_program</code><small>Only the first four columns are required. A supplied receipt address is verified against ChainPay’s derived receipt PDA.</small></div>
       <div className="batch-import-actions"><FileInput label="Choose CSV file" accept=".csv,text/csv" maxSize={512_000} value={csvFile} onChange={(file) => { const next = Array.isArray(file) ? file[0] ?? null : file; setCsvFile(next); void importCsv(next ?? undefined); }} /><Button type="button" variant="secondary" label="Download template" isDisabled={false} onClick={downloadBatchPaymentsTemplate} /></div>
       {error && <div className="builder-error"><b>Batch needs attention</b><span>{error}</span></div>}
+      {pendingRecipientCreates.length > 0 && <div className="dashboard-card recipient-ata-review"><span className="section-kicker">RECIPIENT ACCOUNTS</span><h3>Create missing recipient token accounts</h3><p>Batch settlement never prepends account creation. Create each account in a separate wallet transaction, then check the batch again.</p>{pendingRecipientCreates.map((review) => <div className="review-list" key={review.tokenAccount}><div><span>Recipient</span><strong className="mono">{shortAddress(review.ownerWallet)}</strong></div><div><span>Token account</span><strong className="mono">{shortAddress(review.tokenAccount)}</strong></div><Button type="button" variant="secondary" label={creatingRecipientAccount === review.tokenAccount ? "Creating…" : "Create account"} isDisabled={creatingRecipientAccount !== null || !walletSigner} onClick={() => void createPendingRecipientAccount(review)} /></div>)}</div>}
       {entries.length > 0 && <>
         <div className="batch-list-meta"><span>{entries.length} of {MAX_ATOMIC_BATCH_PAYMENTS} payments imported</span><span>{entries.filter((entry) => entry.status === "ready" || entry.status === "settled").length} ready</span></div>
         <Table className="batch-payment-table" density="compact" dividers="rows">
@@ -2714,7 +2906,7 @@ function SettingsPanel({ wallet, walletName, walletCapabilities, activeMandateCo
       <Tab value="danger" label="Danger zone" panelId="settings-danger" />
     </TabList>
     {section === "general" && <div className="dashboard-card settings-card" id="settings-general" role="tabpanel"><div className="settings-value"><span>Network</span><div><strong>Solana Devnet</strong><p className="settings-unavailable">This dashboard talks to Solana Devnet. The network cannot be switched here.</p></div></div><div className="settings-value"><span>Connected wallet</span><div className="copy-row"><span className="mono">{wallet}</span><IconButton type="button" variant="ghost" label="Copy wallet address" icon={<span>⧉</span>} onClick={() => void copyValue(wallet)} /></div></div><div className="settings-value"><span>Wallet capability</span><div><strong>{capabilityCopy?.identity ?? walletName}</strong><p className="settings-unavailable">{capabilityCopy ? capabilityCopy.summary : "Capability evidence was not recorded for this connection. Transaction v1 is unverified. ChainPay still builds legacy transactions."}</p><p className="settings-unavailable">Advertised versions: {capabilityCopy?.versionsLabel ?? "Not recorded"}. v1: {capabilityCopy?.v1Label ?? "Unverified"}. Devnet chain: {capabilityCopy?.chainLabel ?? "solana:devnet unverified"}. Production: {capabilityCopy?.productionLabel ?? "Legacy. v1 production is off."}</p></div></div><div className="settings-wallet-action"><div><strong>Use a different wallet</strong><p>Leave this wallet’s dashboard and choose another browser wallet or account. Existing mandates stay on-chain.</p></div><Button type="button" variant="secondary" label="Change wallet" isDisabled={false} onClick={onChangeWallet} /></div></div>}
-    {section === "notifications" && <div className="dashboard-card settings-card" id="settings-notifications" role="tabpanel"><div className="settings-unavailable-card"><strong>Notifications unavailable</strong><p>There is no webhook or email delivery in this build. Nothing here can be saved.</p></div></div>}
+    {section === "notifications" && <div className="dashboard-card settings-card" id="settings-notifications" role="tabpanel"><div className="settings-unavailable-card"><strong>Notifications unavailable</strong><p>There is no webhook or email delivery in this build. Nothing here can be saved. Future owner webhooks will run inside the Axum service as a separate Kwasi-reviewed feature — this screen is intentionally read-only until then.</p></div></div>}
     {section === "danger" && <div className="dashboard-card settings-card danger-card" id="settings-danger" role="tabpanel"><div className="danger-row"><div><strong>Revoke all mandates</strong><p>{activeMandateCount === 0 ? "There are no non-revoked mandates to revoke." : `This asks your wallet to approve revoke instructions for ${activeMandateCount} non-revoked mandate${activeMandateCount === 1 ? "" : "s"}, including paused and expired. Settled payments stay on-chain.`}</p></div><Button type="button" variant="secondary" label="Revoke all" isDisabled={activeMandateCount === 0} onClick={() => setConfirmAction("revoke")} /></div><div className="danger-row"><div><strong>Disconnect wallet</strong><p>Return to the public ChainPay landing page. This does not revoke mandates.</p></div><Button type="button" variant="secondary" label="Disconnect" isDisabled={false} onClick={() => setConfirmAction("disconnect")} /></div>{dangerStatus && <p className="settings-status">{dangerStatus}</p>}</div>}
     <ConfirmDialog open={confirmAction === "revoke"} title="Revoke every non-revoked mandate?" description={`${activeMandateCount} mandate${activeMandateCount === 1 ? "" : "s"} that ${activeMandateCount === 1 ? "is" : "are"} not yet revoked — active, paused, or expired — will require a wallet-approved revoke transaction. Agents will not be able to request new payments until you create new mandates.`} confirmLabel="Revoke all mandates" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onRevokeAll(); }} />
     <ConfirmDialog open={confirmAction === "disconnect"} title="Disconnect this wallet?" description="You will leave the connected dashboard and return to the public site. Unsigned transactions will be discarded. Existing mandates stay on-chain." confirmLabel="Disconnect wallet" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onDisconnect(); }} />
@@ -2949,6 +3141,33 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
   const [catalogError, setCatalogError] = useState("");
   const [catalogSelection, setCatalogSelection] = useState("");
   const [catalogNote, setCatalogNote] = useState("");
+
+  useEffect(() => {
+    const draft = loadWalletDrafts(wallet).mandateBuilder;
+    if (!draft) return;
+    setForm(draft.form);
+    setSigningMode(draft.signingMode);
+    setMandateNonce(draft.mandateNonce);
+    setStablecoin(draft.stablecoin);
+    setCatalogSelection(draft.catalogSelection);
+    setCatalogNote(draft.catalogNote);
+    setSlotEdited(draft.slotEdited);
+  }, [wallet]);
+
+  useEffect(() => {
+    if (!wallet) return;
+    saveWalletDrafts(wallet, {
+      mandateBuilder: {
+        form,
+        signingMode,
+        mandateNonce,
+        stablecoin,
+        catalogSelection,
+        catalogNote,
+        slotEdited,
+      },
+    });
+  }, [wallet, form, signingMode, mandateNonce, stablecoin, catalogSelection, catalogNote, slotEdited]);
 
   useEffect(() => {
     let active = true;

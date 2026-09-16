@@ -95,7 +95,7 @@ export async function cancelUnstarted(operation: Operation) {
 }
 export async function retrySameApproval(operation: Operation) {
   checkOwner(operation);
-  if (!operation.wire) throw new Error("Original signed bytes are unavailable. Follow docs/settlement-recovery.md; do not sign again.");
+  if (!operation.wire) throw new Error("Original signed bytes are unavailable for this browser session. Use Check settlement to see whether the payment already finalized. If the backend confirms the request never started, use Cancel only if unstarted. Do not sign a new payment for the same invoice — that would create a separate operation.");
   const response = await authorizedFetch(`${operation.backend}/v1/${operation.kind}/${operation.id}/recover`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ signed_transaction: operation.wire, resubmit: true }) }, sessionBinding());
   if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Recovery unavailable; keep the original approval");
   return publishSettlement(operation, await response.json() as Settlement);

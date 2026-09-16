@@ -24,6 +24,7 @@ import {
 } from "./encoding.js";
 import {
   type CreateMandateInput,
+  buildApproveDelegateInstruction,
   buildCreateMandateTransaction,
   buildInitializeConfigInstruction,
   buildPauseMandateInstruction,
@@ -422,6 +423,16 @@ export class ChainPayClient {
       instructions: [buildRevokeDelegateInstruction(sourceTokenAccount, owner, tokenProgram)],
       requiredSigners: [owner],
       feePayer: owner,
+    };
+  }
+
+  buildApproveDelegate(
+    input: Parameters<typeof buildApproveDelegateInstruction>[0],
+  ): PreparedTransaction {
+    return {
+      instructions: [buildApproveDelegateInstruction(input)],
+      requiredSigners: [input.owner],
+      feePayer: input.owner,
     };
   }
 
