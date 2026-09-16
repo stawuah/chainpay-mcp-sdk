@@ -1,8 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "../skill/assets/design-token.css";
+import "./theme/astryx.css";
 import "./styles.css";
 import "./polyfills";
+import { ChainPayTheme } from "./theme/ChainPayTheme";
 
 const rootElement = document.getElementById("root");
 
@@ -10,11 +12,13 @@ if (!rootElement) throw new Error("ChainPay root element is missing.");
 
 const root = createRoot(rootElement);
 
-void import("./App")
-  .then(({ default: App }) => {
+void import("./AppShell")
+  .then(({ default: AppShell }) => {
     root.render(
       <StrictMode>
-        <App />
+        <ChainPayTheme>
+          <AppShell />
+        </ChainPayTheme>
       </StrictMode>,
     );
   })

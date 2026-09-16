@@ -1,0 +1,27 @@
+{
+  "kind": "verified",
+  "receiptPda": "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1",
+  "receipt": {
+    "address": "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1",
+    "mandate": "Mandate11111111111111111111111111111111111",
+    "invoiceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "paymentId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    "sourceTokenAccount": "Source111111111111111111111111111111111111",
+    "recipientTokenAccount": "Dest1111111111111111111111111111111111111",
+    "agent": "Agent111111111111111111111111111111111111",
+    "executedAtSlot": "484791192",
+    "signatureReference": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "bump": "255",
+    "onChainStatus": "1",
+    "amount": {
+      "baseUnits": "4500000",
+      "decimals": 6,
+      "display": "4.500000",
+      "displayKind": "ui-amount"
+    },
+    "tokenLabel": "USDC",
+    "currentMandate": { "status": "absent" },
+    "seller": { "status": "absent" }
+  }
+}

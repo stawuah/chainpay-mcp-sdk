@@ -35,14 +35,19 @@ exact fields that the user must provide before it can quote, prepare, or settle
 a payment. `prepare_payment` returns a policy-checked transaction plan; the
 connected wallet signs it only after the user reviews the request in the web
 UI.
-`prepare_x402_payment` normalizes an x402 exact challenge into the same
-policy-checked flow. `execute_x402_payment` requires an explicit `signingMode`.
-Human mode returns or relays a browser-signed transaction. Delegated mode sends
-the unsigned wire transaction to Axum, which validates it, asks the
-mandate-bound Privy wallet to sign, revalidates the unchanged message, submits
-it, verifies the finalized receipt PDA, and retries the resource with an
-`X-PAYMENT` proof. The x402 adapter does not custody keys or operate a hosted
-facilitator.
+`prepare_x402_payment` and `execute_x402_payment` detect protocol from document
+shape, not header name. The supported rail is ChainPay's custom `x402/1.0`
+receipt-proof flow: `network` is `solana-devnet`, `payTo` is a recipient token
+account, and proof is `{signature, receiptPDA}`. Standard x402 v2
+`PAYMENT-REQUIRED` (`x402Version: 2`, CAIP-2
+`solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`) is recognized and returned as
+`x402_unsupported_sponsor` before wallet preparation, signing, or settlement.
+ChainPay does not operate a standard sponsor or facilitator; a custom receipt
+proof is not a partially signed sponsored transaction. `execute_x402_payment`
+requires an explicit `signingMode`. Human mode returns or relays a
+browser-signed custom settlement. Delegated mode sends the unsigned wire
+transaction to Axum. After Paid, resume with `paymentId` retries the original
+resource only.
 
 `execute_payment` performs SDK preflight first and requires an explicit
 `signingMode`. In `human` mode it returns a base64 unsigned transaction, recent
@@ -90,8 +95,41 @@ external approved-agent signer can sign that transaction locally and return
 only the signed transaction for relay. HTTP agent connections, hashed bearer
 tokens, tool-call activity, and chat history persist in PostgreSQL; production
 startup refuses to fall back to memory when `DATABASE_URL` is absent. Owner
-wallet approval remains explicit. The HTTP process supports POST JSON-RPC requests plus GET event
-streams, so a remote MCP client can use a URL such as:
+wallet approval remains explicit.
+
+## MCP protocol subset (2026-07-28)
+
+Verified 2026-09-15 against the official dated schema and Streamable HTTP
+binding:
+
+- [schema/2026-07-28](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts)
+- [server/discover](https://modelcontextprotocol.io/specification/2026-07-28/server/discover)
+- [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+- [stdio](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio)
+
+This is a tested subset, not blanket MCP conformance and not MCP OAuth.
+Current-version requests carry `io.modelcontextprotocol/protocolVersion` and
+`clientCapabilities` in `params._meta`. They do not need `initialize`.
+Results use `resultType: "complete"` and server identity under `result._meta`.
+`server/discover` and `tools/list` advertise only `{ "tools": {} }` plus
+`ttlMs` / `cacheScope`. The server does not implement subscriptions, resources,
+prompts, or multi-round-trip requests.
+
+HTTP current-version POST requires `MCP-Protocol-Version`, `Mcp-Method`, and
+`Mcp-Name` for `tools/call`. Header mismatches return JSON-RPC `-32020`.
+Unsupported versions return `-32022` with `{ supported, requested }`.
+`Mcp-Session-Id` and `Last-Event-ID` are ignored; the server does not mint
+protocol sessions or resume streams. Current-version GET or DELETE on `/mcp`
+returns 405. Headerless dashboard `tools/list` / `tools/call` requests remain
+a ChainPay compatibility path, not proof of a full legacy handshake.
+
+Legacy `2025-06-18` and `2024-11-05` keep `initialize` / `ping` and the older
+result shape. Legacy GET on `/mcp` is a comment keepalive only. Wallet
+sessions and scoped connections stay application authentication from PR-01
+and never become protocol capability or OAuth evidence.
+
+The HTTP process supports POST JSON-RPC requests, so a remote MCP client can
+use a URL such as:
 
 ```json
 {
@@ -142,12 +180,15 @@ when prompted. Render will use `/healthz` for health checks and expose the MCP
 endpoint at `https://<service-name>.onrender.com/mcp`.
 
 To smoke-test the MCP protocol without an MCP client, run this from the
-repository root after building:
+repository root after building. The first two lines are current-version
+requests; the last two are the preserved legacy handshake:
 
 ```bash
 printf '%s\n' \
+  '{"jsonrpc":"2.0","id":"discover-1","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"manual-test","version":"1.0"}}}}' \
+  '{"jsonrpc":"2.0","id":"list-1","method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"manual-test","version":"1.0"}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"ping"}' \
   | CHAINPAY_RPC_URL=https://api.devnet.solana.com node mcp-server/dist/server.js
 ```
 
@@ -224,5 +265,8 @@ Hosted x402 fetches require exact trusted merchant origins in
 `CHAINPAY_X402_ALLOWED_ORIGINS` (comma-separated). HTTPS is required. The explicit
 `CHAINPAY_X402_ALLOW_HTTP=true` development option only permits localhost or
 loopback HTTP merchants. Redirects remain blocked and responses bounded.
-This adapter's receipt-PDA proof is a ChainPay-specific x402 flow; it does not
-claim standard sponsor-partially-signed x402 transaction interoperability.
+This adapter's receipt-PDA proof is ChainPay's custom `x402/1.0` flow. It is
+labeled as such in tool results. Standard x402 v2 exact SVM (sponsor
+countersign of a partially signed transaction) is parsed and rejected as
+`x402_unsupported_sponsor`. Header aliases (`PAYMENT-REQUIRED`,
+`X-Payment-Required`) never select the protocol by themselves.

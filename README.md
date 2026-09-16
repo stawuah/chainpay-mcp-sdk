@@ -131,5 +131,27 @@ the remote MCP endpoint.
 - The SDK, MCP server, backend, and app must never store private keys or seed
   phrases.
 
+## Last mile (owner journey)
+
+After a successful payment, the dashboard shows the same human-readable
+**ReceiptCard** as the public verify flow — not Explorer-only success.
+
+- **Stranger verify:** landing **See a receipt** → `/verify` paste or
+  `/verify/:pda` — no wallet required.
+- **Owner deep link:** `/app/receipts/:pda` opens the inbox receipt card when
+  signed in.
+- **Settlement recovery:** in-app **Check settlement**, **Retry same approval**,
+  and **Cancel only if unstarted** — see [docs/settlement-recovery.md](docs/settlement-recovery.md).
+- **Recipient ATA:** payment and batch flows review recipient wallet + derived
+  ATA + rent in a separate sign step before settlement (see
+  [docs/token-account-payment-flow.md](docs/token-account-payment-flow.md)).
+
+Optional local demo receipt (Devnet baseline, readonly):
+
+```bash
+# frontend/.env.local — do not set in production without confirming
+VITE_CHAINPAY_DEMO_RECEIPT_PDA=7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q
+```
+
 See [docs/scope.md](docs/scope.md) for the authoritative product, technical,
 and delivery scope.

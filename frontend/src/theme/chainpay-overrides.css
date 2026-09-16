@@ -1,0 +1,30 @@
+:root,
+[data-astryx-theme="chainpay"],
+html[data-astryx-theme] {
+  --blue: #0052ff;
+  --blue-active: #003ecc;
+  --color-accent: #0052ff;
+  --color-on-accent: #ffffff;
+  --color-text-accent: #0052ff;
+  --color-icon-accent: #0052ff;
+  --font-family-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-family-heading: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-family-code: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-family-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-family-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --size-element-sm: 44px;
+  --size-element-md: 44px;
+  --size-element-lg: 48px;
+  --radius-container: 24px;
+}
+
+/* Unlayered app link/reset styles otherwise override Astryx's layered color. */
+:where(.cp-app) .astryx-button[data-variant="primary"] {
+  color: var(--color-on-accent, #fff);
+}
+
+.xds-button,
+.xds-icon-button,
+[data-astryx-theme] button.xds-button {
+  min-height: var(--size-element-md);
+}

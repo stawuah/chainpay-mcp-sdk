@@ -32,11 +32,15 @@ export async function waitForPayment(
   const deadline = Date.now() + timeoutMs;
   let latest: Record<string, unknown> | undefined;
   do {
-    const response = await fetch(endpoint, {
+    let response: Response;
+    try { response = await fetch(endpoint, {
       headers: context.backendAuthToken
         ? { Authorization: `Bearer ${context.backendAuthToken}` }
         : undefined,
-    });
+      signal: AbortSignal.timeout(20_000),
+    }); } catch {
+      return toolResult({ action: "payment_pending", paymentId, payment: latest, message: "Status service is unavailable. Keep this operation and signature; retry wait_for_payment without a new approval." });
+    }
     if (response.ok) {
       latest = await response.json() as Record<string, unknown>;
       if (TERMINAL_STATUSES.has(String(latest.status))) {
@@ -56,5 +60,6 @@ export async function waitForPayment(
     paymentId,
     payment: latest,
     timeoutMs,
+    message: "Settlement is unresolved. Keep this operation and signature; retry wait_for_payment without a new approval.",
   });
 }

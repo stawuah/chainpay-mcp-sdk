@@ -232,14 +232,15 @@ In `Payments`:
 
 1. Enter the invoice/reference, amount, and recipient wallet.
 2. Select `Prepare payment`. This performs MCP policy validation and reads live Devnet state without submitting.
-3. Confirm the recipient, mint, amount, mandate checks, and receipt PDA.
-4. Select `Sign & settle payment`.
-5. Approve the wallet prompt. This is the real settlement step.
-6. Open the returned Solana Explorer transaction and receipt address.
+3. If the recipient ATA is missing, review recipient wallet, derived ATA, and SOL rent; sign the **separate** ATA creation transaction.
+4. Confirm the recipient, mint, amount, mandate checks, and receipt PDA.
+5. Select `Sign & settle payment`.
+6. Approve the wallet prompt. This is the real settlement step.
+7. The success view shows the shared **ReceiptCard** (same component as public verify), not Explorer-only.
 
 The frontend resolves the recipient wallet to the correct associated token
-account for classic SPL Token or Token-2022. If the account does not exist,
-the signed transaction can include its creation before the transfer.
+account for classic SPL Token or Token-2022. ATA creation is never bundled
+into the settlement transaction without an explicit prior review step.
 
 For a quote-only agent test, call `quote_payment` or use:
 
@@ -252,7 +253,30 @@ For an x402 request, the agent sends the challenge to
 the challenge and policy, then the wallet remains responsible for signing.
 It does not bypass the mandate or become a key custodian.
 
-## 7. Verify the resulting receipt
+## 7. Stranger verify (no wallet)
+
+Test public receipt reading without signing in:
+
+1. Copy a finalized Devnet receipt PDA from Explorer or a prior payment.
+2. Open `http://127.0.0.1:5173/verify` and paste the PDA, or navigate directly to `/verify/<pda>`.
+3. Confirm **Allowed** / **Paid** stamps and mandate summary render.
+4. Optional baseline (readonly, no new signing):
+
+```text
+Receipt PDA: 7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q
+Settlement tx: 6vvJgRXdneFkrqxgvedbkCCGqw4SUqTLvYcEgHsKnbzfZX28uWmQrt3U6ToJGmByf7AxK224Uxz8jSczAVi8x7D
+Program: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
+```
+
+Optional local demo link (unlabeled until you confirm production use):
+
+```bash
+VITE_CHAINPAY_DEMO_RECEIPT_PDA=7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q
+```
+
+Landing **See a receipt** uses this env when set; otherwise it routes to `/verify` paste.
+
+## 8. Verify the resulting receipt (owner / MCP)
 
 Use the frontend receipt lookup or call `get_payment` through the deployed MCP
 endpoint with the receipt address or invoice hash. The backend status API is:
@@ -265,7 +289,7 @@ The final proof is the finalized Solana transaction and the ChainPay receipt
 PDA. A successful HTTP response alone is not proof of settlement; wait for the
 backend status to become finalized and verify the transaction on Devnet.
 
-## 8. Troubleshooting the hosted path
+## 9. Troubleshooting the hosted path
 
 | Symptom | Check |
 | --- | --- |

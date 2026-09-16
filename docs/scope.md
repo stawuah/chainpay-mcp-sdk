@@ -31,6 +31,8 @@ already made in the ChainPay discussion:
 - The user remains the owner of funds.
 - The agent can only spend through user-approved on-chain policy.
 - Every successful payment must produce a verifiable receipt.
+- Public `/verify` and owner `/app/receipts/:pda` share the same receipt card;
+  stranger verify does not require wallet sign-in.
 - x402 challenge normalization is part of the first connector bundle; hosted
   facilitators and custody remain out of scope.
 - Stripe, PayPal, Visa, OpenUSD, and other connectors are extensions, not core

@@ -17,6 +17,10 @@ the authority for every payment.
 - build mandate creation plus limited delegate approval;
 - build update, pause, revoke, and delegate-revoke transactions;
 - prepare payment transactions with local policy preflight;
+- verify source balance, owner, delegate identity, and remaining delegated
+  allowance when `preparePayment` loads the mandate source token account;
+- run cumulative batch preflight with `preflightPaymentBatch` (the dashboard
+  batch importer applies the same rules when checking CSV rows);
 - detect duplicate invoice receipts before submission;
 - execute through an injected external-signing/submission adapter.
 
@@ -47,6 +51,29 @@ if (!prepared.preflight.valid) {
 }
 ```
 
+Batch cumulative checks:
+
+```ts
+import { preflightPaymentBatch, preparePayment } from "@chainpay/sdk";
+
+const batch = preflightPaymentBatch(
+  requests.map((input) => ({
+    request: preparePayment(input),
+    mandate,
+    agent: approvedAgent,
+    sourceContext, // optional; include when the source token account is loaded
+  })),
+  currentSlot,
+);
+
+if (!batch.valid) {
+  throw new Error(batch.batchChecks.filter((check) => !check.ok).map((check) => check.message).join("; "));
+}
+```
+
+Standalone `preflightPayment(...)` without source context performs mandate policy
+checks only. It does not imply a full funding or delegation check.
+
 ## Supported transaction reader
 
 `decodeSupportedTransaction(bytes)` uses the official
@@ -55,4 +82,6 @@ legacy/v0/v1. It bounds wire size and checks canonical transaction **and message
 bytes. The demo merchant requests base64 with `maxSupportedTransactionVersion: 1`
 and passes the returned bytes through this decoder. Raising an RPC flag alone
 is not treated as decoder support. Existing transaction construction stays
-legacy; no production v1 builder was introduced.
+legacy unless `compileV1TransactionBytes` is called with explicit compute-unit
+and loaded-accounts budgets. A generated-mock send on local Agave 4.2.2 is not
+Jupiter acceptance. Public Devnet `requestAirdrop` returned 429 on 2026-09-15.

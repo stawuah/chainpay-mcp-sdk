@@ -1,8 +1,11 @@
 import type {
   Address,
+  BatchPreflightEntry,
   ChainPayInstruction,
   Mandate,
+  PaymentBatchPreflight,
   PaymentPreflight,
+  PaymentPreflightContext,
   PaymentRequest,
   PreparedTransaction,
   TokenProgram,
@@ -100,12 +103,52 @@ function check(name: string, ok: boolean, message: string) {
   return { name, ok, message };
 }
 
+function sourceAccountChecks(
+  request: PaymentRequest,
+  mandate: Mandate,
+  context: PaymentPreflightContext,
+) {
+  return [
+    check(
+      "source_owner",
+      address(context.sourceOwner) === mandate.owner,
+      address(context.sourceOwner) === mandate.owner
+        ? "Source token account owner matches the mandate owner"
+        : "Source token account owner does not match the mandate owner",
+    ),
+    check(
+      "source_balance",
+      request.amount <= context.sourceBalance,
+      request.amount <= context.sourceBalance
+        ? "Source token account balance covers this payment"
+        : "Source token account balance is insufficient for this payment",
+    ),
+    check(
+      "delegate_identity",
+      context.delegate !== null && address(context.delegate) === mandate.address,
+      context.delegate !== null && address(context.delegate) === mandate.address
+        ? "Source token account delegates spending authority to this mandate"
+        : "Source token account is not delegated to this mandate",
+    ),
+    check(
+      "delegated_amount",
+      context.delegatedAmount > 0n && request.amount <= context.delegatedAmount,
+      context.delegatedAmount > 0n && request.amount <= context.delegatedAmount
+        ? "Remaining delegated allowance covers this payment"
+        : context.delegatedAmount <= 0n
+          ? "Source token account has no remaining delegated allowance"
+          : "Payment exceeds the remaining delegated allowance",
+    ),
+  ];
+}
+
 export function preflightPayment(
   request: PaymentRequest,
   mandate: Mandate,
   currentSlot: bigint,
   agent?: Address,
   receiptAlreadyExists = false,
+  sourceContext?: PaymentPreflightContext,
 ): PaymentPreflight {
   const checks = [
     check(
@@ -213,9 +256,105 @@ export function preflightPayment(
         ? "Token program matches the loaded mandate context"
         : "Token program does not match the source token account",
     ),
+    ...(sourceContext ? sourceAccountChecks(request, mandate, sourceContext) : []),
   ];
 
   return { valid: checks.every((item) => item.ok), currentSlot, checks };
+}
+
+function batchChecksForMandateGroup(
+  group: BatchPreflightEntry[],
+  mandate: Mandate,
+): ReturnType<typeof check>[] {
+  const totalAmount = group.reduce((total, entry) => total + entry.request.amount, 0n);
+  const checks: ReturnType<typeof check>[] = [
+    check(
+      "batch_total_limit",
+      mandate.amountSpent + totalAmount <= mandate.totalLimit,
+      mandate.amountSpent + totalAmount <= mandate.totalLimit
+        ? "Batch total is within the mandate spending limit"
+        : "Together, these payments exceed the mandate total spending limit",
+    ),
+    check(
+      "batch_payment_count",
+      mandate.maxPaymentCount === 0n || mandate.paymentCount + BigInt(group.length) <= mandate.maxPaymentCount,
+      mandate.maxPaymentCount === 0n || mandate.paymentCount + BigInt(group.length) <= mandate.maxPaymentCount
+        ? "Batch size is within the mandate payment-count limit"
+        : "Together, these payments exceed the mandate payment-count limit",
+    ),
+    check(
+      "batch_cooldown",
+      group.length <= 1 || mandate.cooldownSlots === 0n,
+      group.length <= 1 || mandate.cooldownSlots === 0n
+        ? "Batch respects the mandate cooldown policy"
+        : "This mandate has a cooldown and can only settle once per atomic batch",
+    ),
+  ];
+
+  const context = group.find((entry) => entry.sourceContext)?.sourceContext;
+  if (context) {
+    checks.push(
+      check(
+        "batch_source_balance",
+        totalAmount <= context.sourceBalance,
+        totalAmount <= context.sourceBalance
+          ? "Source token account balance covers the batch total"
+          : "Source token account balance is insufficient for the batch total",
+      ),
+      check(
+        "batch_delegated_amount",
+        context.delegatedAmount > 0n && totalAmount <= context.delegatedAmount,
+        context.delegatedAmount > 0n && totalAmount <= context.delegatedAmount
+          ? "Remaining delegated allowance covers the batch total"
+          : context.delegatedAmount <= 0n
+            ? "Source token account has no remaining delegated allowance for this batch"
+            : "Batch total exceeds the remaining delegated allowance",
+      ),
+    );
+  }
+
+  return checks;
+}
+
+/**
+ * Run per-payment preflight plus cumulative batch checks grouped by mandate.
+ * Dashboard batch import uses the same cumulative rules when source context
+ * is supplied for each row.
+ */
+export function preflightPaymentBatch(
+  entries: BatchPreflightEntry[],
+  currentSlot: bigint,
+): PaymentBatchPreflight {
+  const preparedEntries = entries.map((entry) => ({
+    request: entry.request,
+    mandate: address(entry.mandate.address),
+    preflight: preflightPayment(
+      entry.request,
+      entry.mandate,
+      currentSlot,
+      entry.agent,
+      entry.receiptAlreadyExists ?? false,
+      entry.sourceContext,
+    ),
+  }));
+
+  const groups = new Map<string, BatchPreflightEntry[]>();
+  for (const entry of entries) {
+    const key = address(entry.mandate.address);
+    const group = groups.get(key) ?? [];
+    group.push(entry);
+    groups.set(key, group);
+  }
+
+  const batchChecks = [...groups.values()].flatMap((group) => batchChecksForMandateGroup(group, group[0].mandate));
+  const valid = preparedEntries.every((entry) => entry.preflight.valid) && batchChecks.every((item) => item.ok);
+
+  return {
+    valid,
+    currentSlot,
+    entries: preparedEntries,
+    batchChecks,
+  };
 }
 
 export function preparedPaymentTransaction(

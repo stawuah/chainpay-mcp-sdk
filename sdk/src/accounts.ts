@@ -7,7 +7,7 @@ import type {
   SupportedAsset,
   TokenProgram,
 } from "./types.js";
-import { ACCOUNT_DISCRIMINATORS, RECEIPT_STATUS_SETTLED } from "./constants.js";
+import { ACCOUNT_DISCRIMINATORS, MANDATE_ACCOUNT_LENGTH, RECEIPT_ACCOUNT_LENGTH, RECEIPT_STATUS_SETTLED } from "./constants.js";
 import {
   address,
   assertDiscriminator,
@@ -84,7 +84,7 @@ export function decodeMandate(
 ): Mandate {
   const bytes = accountBytes(data);
   assertDiscriminator(bytes, ACCOUNT_DISCRIMINATORS.paymentMandate, "PaymentMandate");
-  requireLength(bytes, 235, "PaymentMandate");
+  requireLength(bytes, MANDATE_ACCOUNT_LENGTH, "PaymentMandate");
   const expiresAtSlot = readU64(bytes, 200);
   const maxPaymentCount = readU64(bytes, 208);
   const cooldownSlots = readU64(bytes, 216);
@@ -128,7 +128,7 @@ export function decodePaymentReceipt(
 ): PaymentReceipt {
   const bytes = accountBytes(data);
   assertDiscriminator(bytes, ACCOUNT_DISCRIMINATORS.paymentReceipt, "PaymentReceipt");
-  requireLength(bytes, 282, "PaymentReceipt");
+  requireLength(bytes, RECEIPT_ACCOUNT_LENGTH, "PaymentReceipt");
   const onChainStatus = readU8(bytes, 280);
 
   return {
@@ -143,10 +143,26 @@ export function decodePaymentReceipt(
     amount: readU64(bytes, 200),
     agent: readPublicKey(bytes, 208),
     executedAtSlot: readU64(bytes, 240),
+    // Replay lock supplied at settle. Not seller delivery and not the
+    // Solana transaction signature.
     signatureReference: readBytes32(bytes, 248, "signatureReference"),
     status: paymentStatus(onChainStatus),
     onChainStatus,
     bump: readU8(bytes, 281),
     transactionSignature,
   };
+}
+
+/**
+ * Decode the current mandate account only. Independent of paginated
+ * creation history and source token metadata. Public receipt cards may
+ * attach these fields as optional enrichment; a decode failure must not
+ * invent limits or invalidate a settled payment.
+ */
+export function decodeCurrentMandateFields(
+  data: Uint8Array | Buffer,
+  mandateAddress: Address,
+  currentSlot?: bigint,
+): Mandate {
+  return decodeMandate(data, mandateAddress, currentSlot);
 }

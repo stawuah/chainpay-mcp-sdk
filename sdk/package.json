@@ -17,6 +17,9 @@
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@solana/addresses": "^8.3.0",
+    "@solana/instructions": "^8.3.0",
+    "@solana/rpc-types": "^8.3.0",
     "@solana/spl-token": "^0.4.15",
     "@solana/transaction-messages": "^8.3.0",
     "@solana/transactions": "^8.3.0",

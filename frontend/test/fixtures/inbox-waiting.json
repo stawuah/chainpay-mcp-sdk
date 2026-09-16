@@ -1,0 +1,28 @@
+{
+  "id": "req-waiting",
+  "createdAt": "2026-09-15T12:00:00.000Z",
+  "source": "invoice",
+  "title": "Vendor invoice #42",
+  "prompt": "pay vendor",
+  "response": "assistant commentary only",
+  "stage": "waiting_for_approval",
+  "toolCalls": ["prepare_payment"],
+  "attachments": [],
+  "approval": {
+    "kind": "payment",
+    "action": "agent_signature_required",
+    "payment": {
+      "amount": "4500000",
+      "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      "recipient": "RecipientTokenAccount111111111111111111111"
+    }
+  },
+  "requirements": {
+    "status": "ready",
+    "missing": [],
+    "checks": [
+      { "key": "limits", "label": "Limits", "status": "pass", "detail": "Within mandate limits." },
+      { "key": "token", "label": "Token", "status": "pass", "detail": "USDC allowed." }
+    ]
+  }
+}

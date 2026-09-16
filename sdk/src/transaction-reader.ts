@@ -1,7 +1,7 @@
 import { getTransactionDecoder, getTransactionEncoder } from "@solana/transactions";
 import { getCompiledTransactionMessageDecoder, getCompiledTransactionMessageEncoder } from "@solana/transaction-messages";
 
-/** Read-only official codec boundary. Production construction remains legacy. */
+/** Read-only official codec boundary. Construction defaults to legacy; v1 compile is explicit. */
 export function decodeSupportedTransaction(bytes: Uint8Array) {
   if (bytes.length === 0 || bytes.length > 4096) throw new Error("Transaction exceeds the supported wire size");
   const transaction = getTransactionDecoder().decode(bytes);
