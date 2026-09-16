@@ -639,8 +639,20 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .receipt-ledger-actions .btn-icon { display: grid; place-items: center; border: 1px solid var(--line); color: var(--body); background: #fff; font-size: 11px; }
 .receipt-ledger-actions .btn-icon:hover { border-color: var(--blue); color: var(--blue); }
 .receipt-ledger-empty { padding: 25px 0 4px; color: var(--muted); font-size: 12px; }
-.receipt-ledger-error, .receipt-ledger-warning { display: block; padding-top: 13px; color: var(--red); font: 500 10px var(--mono); }
-.receipt-ledger-warning { color: #9a6800; }
+/* A transient RPC read failure is not a broken build. Red 10px mono read as a
+   console error in the demo path; this is an inline notice in the body face,
+   which still carries the fact without alarming. */
+.receipt-ledger-error, .receipt-ledger-warning {
+  display: block;
+  padding: 10px 12px;
+  margin-top: 14px;
+  border: 1px solid #f2dda8;
+  border-radius: 8px;
+  background: #fdf9ef;
+  color: #8a5a00;
+  font: 400 12px/1.5 inherit;
+}
+.receipt-ledger-warning { border-color: #e3e8f2; background: #f7f9fc; color: var(--body); }
 .receipt-share-message { padding: 13px 16px; border: 1px solid #cdebdc; border-radius: 14px; color: var(--green); background: #fbfffc; font: 500 10px var(--mono); }
 .receipt-search { display: flex; gap: 9px; margin-top: 20px; }
 .receipt-search .button { flex: 0 0 auto; }
@@ -2652,3 +2664,63 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
    sidebar's top edge and swallowed clicks there — including the collapse
    toggle beside the brand. */
 .cp-app .dashboard-sidebar { position: sticky; z-index: 30; }
+
+/* Payment shape outline — see PaymentShapeOutline.tsx. Dashed throughout, so it
+   never reads as a prepared payment waiting for approval. */
+.cp-app .payment-shape {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px dashed #c6d1e6;
+  border-radius: var(--radius-card, 12px);
+  background: #fbfcfe;
+}
+.cp-app .payment-shape-flag {
+  padding: 10px 20px;
+  border-bottom: 1px dashed #c6d1e6;
+  background: #f4f7ff;
+  color: #3c5488;
+  font-size: 11px;
+  font-weight: 600;
+}
+.cp-app .payment-shape-body {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 0;
+}
+.cp-app .payment-shape-request { padding: 20px; }
+.cp-app .payment-shape-review { padding: 20px; border-left: 1px dashed #dbe2ef; }
+.cp-app .payment-shape-request h3 { margin-top: 8px; font-size: 17px; font-weight: 500; letter-spacing: -.01em; }
+
+.cp-app .payment-shape-request dl { margin: 16px 0 0; display: grid; gap: 14px; }
+.cp-app .payment-shape-request dt { color: #6a7183; font: 600 10px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.cp-app .payment-shape-request dd { margin: 5px 0 0; }
+.payment-shape-blank { color: #8a95a8; font-family: var(--mono); }
+.cp-app .payment-shape-request small,
+.cp-app .payment-shape-review small { display: block; margin-top: 3px; color: var(--body); font-size: 11px; line-height: 1.5; }
+
+.cp-app .payment-shape-review ul { padding: 0; margin: 14px 0 0; list-style: none; display: grid; gap: 11px; }
+.cp-app .payment-shape-review li { display: flex; gap: 10px; align-items: flex-start; }
+.payment-shape-mark {
+  flex: 0 0 auto;
+  width: 18px; height: 18px;
+  display: grid; place-items: center;
+  border: 1px solid #c6d1e6;
+  border-radius: 50%;
+  color: #8a95a8;
+  font-size: 12px;
+  line-height: 1;
+}
+.cp-app .payment-shape-review b { display: block; color: var(--ink); font-size: 12px; font-weight: 600; }
+.cp-app .payment-shape-note {
+  padding-top: 14px;
+  margin-top: 14px;
+  border-top: 1px dashed #dbe2ef;
+  color: var(--body);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 860px) {
+  .cp-app .payment-shape-body { grid-template-columns: minmax(0, 1fr); }
+  .cp-app .payment-shape-review { border-left: 0; border-top: 1px dashed #dbe2ef; }
+}

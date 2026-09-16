@@ -153,3 +153,60 @@
 @media (max-width: 720px) {
   .receipt-summary { grid-template-columns: 1fr; }
 }
+
+/* Sample receipt outline — the shape of the artifact, with no values and no
+   verification claim. Visually distinct from a real receipt on purpose: a
+   dashed edge and a tinted flag, so it can never be mistaken for a settlement.
+   See SampleReceiptOutline.tsx for why ReceiptCard is not reused here. */
+.receipt-card.is-sample {
+  padding: 0;
+  overflow: hidden;
+  border: 1px dashed #c6d1e6;
+  border-radius: 12px;
+  background: #fbfcfe;
+  box-shadow: none;
+}
+.sample-receipt-flag {
+  padding: 10px 20px;
+  border-bottom: 1px dashed #c6d1e6;
+  background: #fdf4e0;
+  color: #8a5a00;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.sample-receipt-head { padding: 20px 20px 0; }
+.sample-receipt-head h3 { margin-top: 8px; color: #14213d; font-size: 17px; font-weight: 500; letter-spacing: -.01em; }
+.sample-receipt-head p { margin-top: 8px; color: #56647d; font-size: 13px; line-height: 1.6; }
+
+.sample-receipt-stamps { padding: 18px 20px 0; margin: 0; list-style: none; display: grid; gap: 10px; }
+.sample-receipt-stamps li { display: flex; gap: 10px; align-items: flex-start; }
+.sample-stamp-mark {
+  flex: 0 0 auto;
+  width: 18px; height: 18px;
+  display: grid; place-items: center;
+  border: 1px solid #c6d1e6;
+  border-radius: 50%;
+  color: #8a95a8;
+  font-size: 12px;
+  line-height: 1;
+}
+.sample-receipt-stamps b { display: block; color: #14213d; font-size: 12px; font-weight: 600; }
+.sample-receipt-stamps small { display: block; margin-top: 2px; color: #56647d; font-size: 11px; line-height: 1.5; }
+
+.sample-receipt-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 20px;
+  padding: 18px 20px 22px;
+  margin: 18px 0 0;
+  border-top: 1px dashed #dbe2ef;
+}
+.sample-receipt-fields dt { color: #6a7183; font: 600 10px/1.4 var(--mono, monospace); letter-spacing: .08em; text-transform: uppercase; }
+.sample-receipt-fields dd { margin: 5px 0 0; }
+.sample-receipt-blank { color: #8a95a8; font-family: var(--mono, monospace); }
+.sample-receipt-fields small { display: block; margin-top: 3px; color: #56647d; font-size: 11px; line-height: 1.5; }
+
+@media (max-width: 640px) {
+  .sample-receipt-fields { grid-template-columns: minmax(0, 1fr); }
+}

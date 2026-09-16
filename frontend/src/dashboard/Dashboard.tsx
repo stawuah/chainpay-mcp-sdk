@@ -12,6 +12,7 @@ import { buildPath, type DashboardTab } from "../routing/paths";
 import { useRoute } from "../routing/useRoute";
 import { RecordDetails } from "../ui/RecordDetails";
 import { InboxReceipt, LoadedReceiptCard } from "../receipts/InboxReceipt";
+import { SampleReceiptOutline } from "../receipts/SampleReceiptOutline";
 import { receiptViewFromSettledPayment, tokenLabelForMint } from "../receipts/load";
 import { amountLabel, publicReceiptPath } from "../receipts/model";
 import { sharePublicReceipt, shareStatusCopy } from "../receipts/share";
@@ -49,6 +50,7 @@ import {
 import { buildRecentActivity } from "../owner/recentActivity";
 import { configuredDemoReceiptPath, FIRST_MANDATE_TITLE, LOGIN_VS_APPROVAL } from "../owner/onboarding";
 import { PurchaseCard } from "./PurchaseCard";
+import { PaymentShapeOutline } from "./PaymentShapeOutline";
 import { describeWalletCapabilities, type WalletCapabilityReport } from "../wallet/capabilities";
 import { loadWalletDrafts, saveWalletDrafts, type BatchCsvPayment } from "../wallet/draftStore";
 import { chunkPreparedTransactions } from "../wallet/transactionChunks";
@@ -1817,7 +1819,10 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
   }
 
   if (!selectedPaymentMandate) {
-    return <div className="dashboard-card flow-empty"><div className="empty-icon">↗</div><h2>{hasDelegatedActiveMandate ? "No wallet-approved mandate" : "No active mandate yet"}</h2><p>{hasDelegatedActiveMandate ? "Your active mandate uses automatic payments through ChainPay's secure provider wallet. Use it from a connected agent with signingMode set to delegated, or create an “Approve each payment” mandate to pay from this browser wallet." : "Create a mandate first. Payments can only be prepared after ChainPay has an on-chain policy to check."}</p><div className="flow-empty-actions"><Button type="button" variant="primary" label="New permission" isDisabled={false} onClick={onOpenMandateBuilder} /><Button type="button" variant="secondary" label="Agents" isDisabled={false} onClick={onOpenAgents} /></div></div>;
+    return <>
+      <div className="dashboard-card flow-empty"><div className="empty-icon">↗</div><h2>{hasDelegatedActiveMandate ? "This mandate does not sign from your browser" : "No spending permission yet"}</h2><p>{hasDelegatedActiveMandate ? "Your active mandate settles through the provisioned signer, inside the limits you approved. Use it from a paired agent, or create an “Approve each payment” mandate to sign here." : "Payments are checked against an on-chain mandate. Create one first — you approve its limits in your wallet before any payment can be prepared."}</p><div className="flow-empty-actions"><Button type="button" variant="primary" label={hasDelegatedActiveMandate ? "Create an approve-each-payment mandate" : "Create a mandate"} isDisabled={false} onClick={onOpenMandateBuilder} /><Button type="button" variant="secondary" label="Open Agents" isDisabled={false} onClick={onOpenAgents} /></div></div>
+      <PaymentShapeOutline />
+    </>;
   }
 
   return (
@@ -2528,7 +2533,7 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
     <div className="dashboard-card onchain-receipts-card" hidden={Boolean(detailReceiptAddress)}>
       <div className="dashboard-card-heading"><div><span className="section-kicker">ON-CHAIN RECEIPTS</span><h2>Settlement history</h2></div><div className="receipt-ledger-heading-actions"><span className="chip chip-muted">{settledCount} settled</span><Button type="button" variant="secondary" className="refresh-button" label="↻ Refresh" isDisabled={receiptLoadStatus === "loading"} onClick={() => setReceiptLoadVersion((value) => value + 1)} /></div></div>
       <p className="builder-intro">Receipts are read directly from the ChainPay program for this wallet’s mandates. Select one to preview or share the ChainPay URL.</p>
-      {receiptLoadStatus === "loading" ? <div className="receipt-ledger-empty" aria-busy="true"><Skeleton width="100%" height={72} /><p>Reading Devnet receipts…</p></div> : onChainReceipts.length === 0 ? <p className="receipt-ledger-empty">No receipts yet — they appear once a payment settles.</p> : <Table className="receipt-ledger-table" density="compact" dividers="rows" hasHover>
+      {receiptLoadStatus === "loading" ? <div className="receipt-ledger-empty" aria-busy="true"><Skeleton width="100%" height={72} /><p>Reading Devnet receipts…</p></div> : onChainReceipts.length === 0 ? <div className="receipt-ledger-empty"><p>No receipts yet — one is written on chain for every settled payment.</p><SampleReceiptOutline /></div> : <Table className="receipt-ledger-table" density="compact" dividers="rows" hasHover>
         <TableHeader>
           <TableRow isHeaderRow>
             <TableHeaderCell scope="col">Amount</TableHeaderCell>
