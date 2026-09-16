@@ -115,8 +115,11 @@ Your source token account → Recipient token account
 ```
 
 If a wallet address is supplied, ChainPay derives the recipient's associated
-token account for that exact mint. If the account does not exist, it can be
-created before the payment.
+token account for that exact mint. If the account does not exist, the dashboard
+shows a **separate review step**: recipient wallet, derived ATA, SOL rent/fees,
+and an explicit wallet sign for ATA creation. Only after that confirmation does
+payment preparation run **without** prepending the create instruction into the
+settlement transaction.
 
 The recipient receives the actual token:
 
@@ -147,11 +150,14 @@ selected token and the correct network.
 6. ChainPay validates the rules
    └── Block or approve the request on-chain
 
-7. Payment settles
+7. Recipient ATA (if needed)
+   └── Separate sign for associated token account creation
+
+8. Payment settles
    └── Source token account → recipient token account
 
-8. Receipt is written
-   └── The settlement can be looked up later
+9. Receipt is written
+   └── Public `/verify/:pda` or owner inbox receipt card
 ```
 
 The wallet remains the owner of the funds throughout the flow. The AI can

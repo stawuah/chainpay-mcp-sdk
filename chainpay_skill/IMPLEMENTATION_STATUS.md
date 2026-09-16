@@ -1,6 +1,6 @@
 # ChainPay implementation status
 
-Updated: 2026-09-15
+Updated: 2026-09-16
 
 This file separates implementation/regression evidence from real Devnet
 settlement acceptance. Tests and local HTTP fixtures do not count as settlement.
@@ -33,3 +33,43 @@ Sources: GitHub Advisory Database pages dated in
 
 No transaction was signed or submitted during this implementation session.
 Known historical USDC and PYUSD transactions were queried read-only.
+
+## Owner journey close (fork stack PR #22 + #23)
+
+Evidence is regression, browser, and readonly Devnet receipt reads unless noted.
+Stack: `dre/pr-20-owner-onboarding` → `dre/journey-close-j1` (#22) →
+`dre/journey-close-remaining` (#23).
+
+| Journey slice | Status | Evidence |
+|---|---|---|
+| J1 last mile (receipt card, `/verify`, inbox archive, CTAs) | Closed | PR #22; shared `ReceiptCard`; landing **See a receipt** → `/verify`; `/app/receipts/:pda` |
+| J2 session safety (Back, false-empty, unknown routes, drafts, recovery copy) | Closed | PR #22 + #23; wallet-scoped in-memory drafts; inline settlement recovery (no doc-only dead end) |
+| J3 MCP/outcomes (blocked vs approve, activity, x402 jobs) | Closed | PR #22; frontend tests 83/83 |
+| J4a relay prerequisites | Closed | PR #22 (Kwasi review) |
+| J4b object CRUD + delegate repair + ATA review + revoke chunking | Closed | PR #22 + #23; separate recipient ATA sign step; revoke-all tx chunking |
+| J5 SDK honesty | Closed | PR #22 |
+| J6a human send re-reads pause/revoke | Closed | PR #22 |
+| J6b public policy observation | **Blocked** | Kwasi-owned Axum worker; public card shows **current** mandate limits with honest labeling |
+| J6c owner webhooks / email | **Blocked** | Settings → Notifications is read-only: “There is no webhook or email delivery in this build.” Future delivery is an Axum worker, not a missing Save button |
+| J7 program asks | **Blocked** | Written asks only — listed under **Open program asks (Kwasi)** below |
+| J8 demo evidence | Partial | Readonly baseline USDC receipt PDA `7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q` loads on `/verify`; new signed demo requires Dre authorization |
+| DG1–DG3 data gaps | **Blocked** | No invented purchase description, no historical snapshot backfill, agent shown as address unless program adds a name |
+
+### Open program asks (Kwasi)
+
+Do not implement until agreed:
+
+1. **DuplicateInvoice** custom error for reused invoice hashes
+2. **PaymentCountExceeded** instead of overflow panic on count increment
+3. Optional on-chain receipt policy snapshot (alternative: J6b off-chain observation — pick one)
+4. Optional merchant-signed purchase memo/hash
+5. Optional on-chain delivery attestation field
+
+Seller-facing copy remains **“Seller attests response served.”** until an approved on-chain field exists.
+
+### PostgreSQL migrations (through `0008`)
+
+Migrations `0001`–`0008` cover persistence, managed-signer metadata, operation recovery,
+and PR01 owner-scoped idempotency. Production requires `DATABASE_URL`; startup fails
+closed without Neon. Restart acceptance after `0005`/`0008` still needs an approved
+real payment row — not claimed here.

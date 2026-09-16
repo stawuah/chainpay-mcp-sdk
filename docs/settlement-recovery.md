@@ -2,6 +2,21 @@
 
 All recovery uses the original authenticated owner, intent, invoice and signature. A status read never signs or broadcasts. Confirmed payment means a finalized transaction **and** a matching receipt. Merchant delivery is a separate x402 continuation.
 
+## In-app operator path (dashboard)
+
+The waiting settlement card is the primary operator surface — this document is
+reference for humans and integrators, not the only recovery UI.
+
+- **Check settlement** — re-read Axum status for the original operation; updates
+  the same waiting form or inbox row.
+- **Retry same approval** — rebroadcast the **identical** signed transaction when
+  the backend confirms signature status is absent and the blockhash is still valid.
+  If wire bytes are unavailable, the UI shows operator copy: check status, cancel
+  only if unstarted, and **do not sign a replacement payment**.
+- **Cancel only if unstarted** — atomic reservation cancel when no send started.
+
+Never clear an uncertain reservation manually.
+
 ## Browser and MCP
 
 - Keep `payment_id` / `transaction_id` after a timeout. MCP returns the deterministic payment ID even when the Axum response is lost. `wait_for_payment` reads the existing operation.
