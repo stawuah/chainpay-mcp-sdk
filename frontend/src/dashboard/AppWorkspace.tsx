@@ -4,6 +4,7 @@ import { useRoute } from "../routing/useRoute";
 import { useWallet } from "../wallet/context";
 import { OwnerWelcome } from "../owner/OwnerWelcome";
 import { buildStablecoinOptions } from "../owner/runtime";
+import { clearWalletDrafts } from "../wallet/draftStore";
 
 const Dashboard = lazy(() => import("./Dashboard"));
 
@@ -25,7 +26,15 @@ export default function AppWorkspace() {
     <>
       <PendingSettlements wallet={wallet.wallet} />
       <Suspense fallback={<RouteFallback />}>
+        {/*
+          Keyed by address so switching accounts remounts the dashboard. An account
+          switch replaces wallet.wallet in place without ever emptying it, so this
+          component never unmounts on its own, and Dashboard's draft state — invoice,
+          amount, recipient, the CSV batch, the mandate builder — would otherwise stay
+          on screen under the new wallet and be saved into its draft slot.
+        */}
         <Dashboard
+          key={wallet.wallet}
           wallet={wallet.wallet}
           walletName={wallet.walletName || "Solana wallet"}
           walletCapabilities={wallet.walletCapabilities}
@@ -56,6 +65,9 @@ export default function AppWorkspace() {
           onSelectMandate={wallet.selectMandate}
           onChangeAccount={() => void wallet.changeConnectedAccount()}
           onDisconnect={() => {
+            // Drafts are per-wallet and survive an account switch on purpose, so that
+            // switching back restores them. Disconnecting is the one point they should go.
+            clearWalletDrafts(wallet.wallet);
             void wallet.disconnectWallet();
             navigate({ kind: "landing" });
           }}
