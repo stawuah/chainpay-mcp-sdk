@@ -143,8 +143,9 @@ export class McpConnectionRegistry {
   async register(input: RegisterConnectionInput) {
     const wallet = input.wallet.trim();
     const agentName = input.agentName.trim();
-    if (!wallet) throw new Error("wallet is required");
-    if (!agentName) throw new Error("agentName is required");
+    if (!wallet || wallet.length > 44) throw new Error("wallet is required and must be a Solana address");
+    if (!agentName || agentName.length > 128) throw new Error("agentName must contain 1..128 characters");
+    if ((input.scope?.length ?? 0) > 8192) throw new Error("scope is too large");
 
     const now = new Date().toISOString();
     const token = `cp_agent_${randomBytes(24).toString("hex")}`;

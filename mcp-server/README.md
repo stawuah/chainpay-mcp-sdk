@@ -128,19 +128,16 @@ Start command: node mcp-server/dist/http.js
 Health check: /healthz
 ```
 
-Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, `CHAINPAY_BACKEND_URL`, `DATABASE_URL`,
-`CHAINPAY_BACKEND_AUTH_TOKEN`, and `CHAINPAY_HTTP_AUTH_TOKEN` in the host's
-environment settings. Set `OPENROUTER_API_KEY` and `CHAINPAY_AI_PROVIDER=openrouter`
-to enable the dashboard assistant. The default model is `openrouter/free`; you can
-override it with `CHAINPAY_AGENT_MODEL`. For public read-only Devnet testing,
-`CHAINPAY_HTTP_AUTH_TOKEN` may be empty. Delegated signing requires a non-empty
-backend token, and the same value must be configured as Axum's
-`CHAINPAY_HTTP_AUTH_TOKEN` and MCP's `CHAINPAY_BACKEND_AUTH_TOKEN`. For payment
-traffic, put HTTPS and authentication in front of both endpoints.
+Set `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, `CHAINPAY_BACKEND_URL`,
+`DATABASE_URL`, and explicit `CHAINPAY_ALLOWED_ORIGINS` in the host environment.
+Set `OPENROUTER_API_KEY` and `CHAINPAY_AI_PROVIDER=openrouter` to enable the
+assistant. Private traffic requires a wallet session or scoped connection;
+shared service tokens and blank-token configurations cannot authorize callers.
+Use HTTPS for hosted endpoints. See PR01 caller authorization below.
 
 Render is also supported through the root [render.yaml](../render.yaml)
 Blueprint. In Render, choose **New → Blueprint**, connect this repository, and
-provide the `CHAINPAY_RPC_URL` and optional `CHAINPAY_HTTP_AUTH_TOKEN` values
+provide the `CHAINPAY_RPC_URL` and explicit allowed frontend origins
 when prompted. Render will use `/healthz` for health checks and expose the MCP
 endpoint at `https://<service-name>.onrender.com/mcp`.
 
@@ -199,3 +196,33 @@ keep the `/mcp` suffix. The health check is the same hostname with `/healthz`.
 To inspect the deployed tool definitions directly in a browser, open the same
 hostname with `/tools`. This endpoint returns the same schemas exposed by
 MCP's `tools/list` method and does not execute tools or submit transactions.
+
+## PR01 caller authorization
+
+Private HTTP routes require an owner wallet session from Axum or an active
+scoped connection. `/connections` registration/list/revoke, `/inbox`, and
+`/agent/chat` require an owner session and derive the wallet from it. Supplying
+another wallet address returns 403 before inbox persistence or model work.
+Each MCP request has its own context; nested chat tools pass the same central
+permission check. No empty-token or shared-service-token bypass exists.
+
+Register connections after wallet login, selecting an owned mandate and an
+explicit list of permitted tool names. The `scope` field is a JSON string:
+`{"version":1,"mandates":["<mandate>"],"tools":["get_mandate"],"agents":{}}`.
+The server fills `agents` from the on-chain approved agents. Agent connections
+cannot invoke owner-management tools. Existing `Unscoped` connections must be
+reconnected. Copy the returned bearer token into the MCP client configuration;
+it is displayed once and stored hashed. Public documentation, health and tool
+catalog remain available without a token.
+
+For stdio private calls, configure `CHAINPAY_BACKEND_URL` and
+`CHAINPAY_CALLER_TOKEN` with the actual owner session/scoped connection token.
+`CHAINPAY_BACKEND_AUTH_TOKEN` and `CHAINPAY_HTTP_AUTH_TOKEN` are not caller
+identities. HTTP forwards each caller's credential to Axum automatically.
+
+Hosted x402 fetches require exact trusted merchant origins in
+`CHAINPAY_X402_ALLOWED_ORIGINS` (comma-separated). HTTPS is required. The explicit
+`CHAINPAY_X402_ALLOW_HTTP=true` development option only permits localhost or
+loopback HTTP merchants. Redirects remain blocked and responses bounded.
+This adapter's receipt-PDA proof is a ChainPay-specific x402 flow; it does not
+claim standard sponsor-partially-signed x402 transaction interoperability.

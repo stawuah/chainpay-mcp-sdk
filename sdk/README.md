@@ -46,3 +46,13 @@ if (!prepared.preflight.valid) {
   throw new Error("Payment rejected by local preflight");
 }
 ```
+
+## Supported transaction reader
+
+`decodeSupportedTransaction(bytes)` uses the official
+`@solana/transactions` and `@solana/transaction-messages` 8.3 codecs for
+legacy/v0/v1. It bounds wire size and checks canonical transaction **and message**
+bytes. The demo merchant requests base64 with `maxSupportedTransactionVersion: 1`
+and passes the returned bytes through this decoder. Raising an RPC flag alone
+is not treated as decoder support. Existing transaction construction stays
+legacy; no production v1 builder was introduced.

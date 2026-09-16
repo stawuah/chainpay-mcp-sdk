@@ -60,6 +60,8 @@ pub struct PaymentSubmissionRequest {
 pub struct ManagedSignerChallengeRequest {
     pub owner_wallet: String,
     pub mandate_pda: String,
+    pub mint: String,
+    pub mandate_nonce: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +107,7 @@ pub struct X402PaymentMetadata {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct X402ProofRequest {
+    pub mandate: String,
     pub idempotency_key: String,
     pub proof: serde_json::Value,
     pub response_status: u16,

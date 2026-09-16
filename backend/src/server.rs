@@ -1,5 +1,12 @@
+#[path = "server_transactions.rs"]
+mod transactions;
+use transactions::owner as validate_owner_transaction;
+#[path = "server_auth.rs"]
+mod auth;
+use auth::Principal;
+use axum::Extension;
 use std::{
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -44,7 +51,7 @@ use crate::{
 const DEFAULT_PROGRAM_ID: &str = "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4";
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 8080;
-const MAX_TRANSACTION_BYTES: usize = 1_232;
+const MAX_TRANSACTION_BYTES: usize = 4_096;
 const SPL_TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const MANAGED_SIGNER_CHALLENGE_TTL_MS: u64 = 5 * 60 * 1_000;
@@ -58,6 +65,10 @@ pub struct BackendConfig {
     pub rpc: RpcConfig,
     pub auth_token: String,
     pub allowed_origins: Vec<String>,
+    /// Number of reverse proxies in front of this process. 0 means the socket
+    /// peer is the client. Any value above 0 makes the rate-limit identity come
+    /// from `X-Forwarded-For` instead, counting that many hops from the right.
+    pub trusted_proxy_hops: usize,
 }
 
 #[derive(Debug, Error)]
@@ -68,6 +79,8 @@ pub enum ConfigError {
     UnsupportedCluster,
     #[error("invalid RPC timeout configuration: {0}")]
     InvalidDuration(String),
+    #[error("CHAINPAY_TRUSTED_PROXY_HOPS must be a non-negative integer")]
+    InvalidTrustedProxyHops,
     #[error("invalid status store configuration: {0}")]
     Storage(#[from] StorageError),
 }
@@ -88,6 +101,18 @@ impl BackendConfig {
 
         let confirmation_timeout = parse_duration_secs("CHAINPAY_CONFIRMATION_TIMEOUT_SECS", 30)?;
         let poll_interval = parse_duration_ms("CHAINPAY_CONFIRMATION_POLL_MS", 500)?;
+        let trusted_proxy_hops = std::env::var("CHAINPAY_TRUSTED_PROXY_HOPS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|_| ConfigError::InvalidTrustedProxyHops)
+            })
+            .transpose()?
+            .unwrap_or(0);
+
         let allowed_origins = std::env::var("CHAINPAY_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| "http://localhost:5173".to_owned())
             .split(',')
@@ -112,6 +137,7 @@ impl BackendConfig {
             },
             auth_token: std::env::var("CHAINPAY_HTTP_AUTH_TOKEN").unwrap_or_default(),
             allowed_origins,
+            trusted_proxy_hops,
         })
     }
 
@@ -188,6 +214,10 @@ enum ApiError {
     BadRequest(String),
     #[error("unauthorized")]
     Unauthorized,
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+    #[error("rate limit exceeded")]
+    RateLimited,
     #[error("not found")]
     NotFound,
     #[error("RPC error: {0}")]
@@ -205,6 +235,8 @@ impl IntoResponse for ApiError {
         let status = match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Forbidden(_) => StatusCode::FORBIDDEN,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Rpc(_) => StatusCode::BAD_GATEWAY,
             Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -238,6 +270,15 @@ pub fn build_router(state: BackendState) -> Router {
     let origins = state.config.allowed_origins.clone();
     let auth_state = state.clone();
     Router::new()
+        .route("/v1/auth/principal", get(auth::principal))
+        .route(
+            "/v1/auth/challenge",
+            get(auth::challenge).post(auth::challenge),
+        )
+        .route(
+            "/v1/auth/session",
+            get(auth::session).post(auth::login).delete(auth::logout),
+        )
         .route("/healthz", get(health))
         .route("/v1/config", get(config))
         .route("/v1/payment-requests/verify", post(verify_payment_request))
@@ -274,9 +315,12 @@ pub async fn run(state: BackendState) -> Result<(), Box<dyn std::error::Error + 
     println!("ChainPay backend listening on http://{address}");
     println!("RPC proxy: http://{address}/rpc");
     println!("Payment API: http://{address}/v1/payments");
-    axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        build_router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
@@ -306,34 +350,82 @@ async fn shutdown_signal() {
     }
 }
 
+/// Client IP taken from `X-Forwarded-For`, counting `hops` trusted proxies in
+/// from the right. Returns `None` when no proxy is declared, the header is
+/// absent or malformed, or the position does not hold a valid IP — callers fall
+/// back to the socket peer. Entries left of the position were appended by
+/// whoever spoke to the outermost proxy and carry no authority.
+fn forwarded_client_ip(headers: &axum::http::HeaderMap, hops: usize) -> Option<String> {
+    if hops == 0 {
+        return None;
+    }
+    let raw = headers.get("x-forwarded-for")?.to_str().ok()?;
+    let entries = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let index = entries.len().checked_sub(hops)?;
+    let candidate = entries.get(index)?;
+    candidate.parse::<IpAddr>().ok().map(|ip| ip.to_string())
+}
+
 async fn auth_middleware(
     State(state): State<BackendState>,
-    request: Request<axum::body::Body>,
+    mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
+    // Behind a reverse proxy the socket peer is the proxy for every caller, which
+    // collapses per-peer rate limits into one shared bucket. Only consult
+    // `X-Forwarded-For` when the deployment declares how many proxies sit in
+    // front, and then only the entry those proxies wrote. Everything to the left
+    // of it is caller-supplied and is never trusted.
+    let socket_peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .map(|value| value.0.ip().to_string());
+    let peer = forwarded_client_ip(request.headers(), state.config.trusted_proxy_hops)
+        .or(socket_peer)
+        .unwrap_or_else(|| "unknown-peer".into());
+    request.headers_mut().insert(
+        "x-chainpay-peer",
+        HeaderValue::from_str(&peer).unwrap_or(HeaderValue::from_static("unknown-peer")),
+    );
     let path = request.uri().path();
-    let wallet_signed_relay = path == "/rpc"
-        || path == "/v1/transactions/submit"
-        || path == "/v1/managed-signers/challenge"
-        || path == "/v1/managed-signers/provision";
     if request.method() == axum::http::Method::OPTIONS
-        || path == "/healthz"
-        || wallet_signed_relay
-        || state.config.auth_token.is_empty()
+        || matches!(
+            path,
+            "/healthz"
+                | "/v1/config"
+                | "/rpc"
+                | "/v1/rpc/latest-blockhash"
+                | "/v1/auth/challenge"
+                | "/v1/auth/session"
+        )
     {
-        return next.run(request).await;
+        let mut response = next.run(request).await;
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        return response;
     }
-
-    let expected = format!("Bearer {}", state.config.auth_token);
-    let authorized = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == expected);
-    if authorized {
-        next.run(request).await
-    } else {
-        ApiError::Unauthorized.into_response()
+    match auth::identify(&state, request.headers()).await {
+        Ok(principal) => {
+            let mut request = request;
+            request.extensions_mut().insert(principal);
+            let mut response = next.run(request).await;
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
+        Err(error) => {
+            let mut response = error.into_response();
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
     }
 }
 
@@ -352,6 +444,7 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
             axum::http::Method::GET,
             axum::http::Method::POST,
             axum::http::Method::OPTIONS,
+            axum::http::Method::DELETE,
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
@@ -380,8 +473,17 @@ async fn config(State(state): State<BackendState>) -> Json<BackendConfigResponse
 
 async fn verify_payment_request(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Json(request): Json<SignedPaymentRequest>,
 ) -> Result<Json<PaymentRequestVerificationResponse>, ApiError> {
+    if let Some(scope) = &principal.scope {
+        if !scope["tools"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|v| v == "verify_payment_request"))
+        {
+            return Err(ApiError::Unauthorized);
+        }
+    }
     let payload = request.payload;
     let canonical = serde_json::to_vec(&payload).map_err(|error| {
         ApiError::BadRequest(format!("cannot serialize payment request: {error}"))
@@ -491,38 +593,114 @@ async fn proxy_rpc(
             "RPC requests must contain jsonrpc=2.0 and a method".to_owned(),
         ));
     }
+    if !state.store.auth_rate("public-rpc", now_ms(), 600).await? {
+        return Err(ApiError::RateLimited);
+    }
+    let params = request
+        .params
+        .as_ref()
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::BadRequest("RPC params must be an array".into()))?;
+    if serde_json::to_vec(params)
+        .map_err(|_| ApiError::Unauthorized)?
+        .len()
+        > 4096
+    {
+        return Err(ApiError::BadRequest("RPC params too large".into()));
+    }
+    if request.method == "getProgramAccounts" {
+        if params.first().and_then(Value::as_str) != Some(&state.config.program_id) {
+            return Err(ApiError::BadRequest(
+                "Only ChainPay program discovery is allowed".into(),
+            ));
+        }
+        let filters = params
+            .get(1)
+            .and_then(|v| v["filters"].as_array())
+            .ok_or_else(|| ApiError::BadRequest("Bounded ChainPay filters required".into()))?;
+        let size = filters.iter().find_map(|v| v["dataSize"].as_u64());
+        if !matches!(size, Some(106 | 235 | 282))
+            || (size != Some(106)
+                && !filters.iter().any(|v| {
+                    v["memcmp"]["offset"] == 8
+                        && v["memcmp"]["bytes"]
+                            .as_str()
+                            .is_some_and(|v| validate_solana_address(v, "filter").is_ok())
+                }))
+        {
+            return Err(ApiError::BadRequest(
+                "Owner/mandate discovery filter required".into(),
+            ));
+        }
+    }
+    if request.method == "getSignaturesForAddress"
+        && !params
+            .get(1)
+            .and_then(|v| v["limit"].as_u64())
+            .is_some_and(|v| v > 0 && v <= 100)
+    {
+        return Err(ApiError::BadRequest("History limit must be 1..100".into()));
+    }
+    if matches!(
+        request.method.as_str(),
+        "getMultipleAccounts" | "getSignatureStatuses"
+    ) && !params
+        .first()
+        .and_then(Value::as_array)
+        .is_some_and(|v| !v.is_empty() && v.len() <= 20)
+    {
+        return Err(ApiError::BadRequest("RPC batch limit is 20".into()));
+    }
     Ok(Json(state.rpc.forward_proxy(request).await?))
 }
 
 async fn get_payment(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Path(payment_id): Path<String>,
 ) -> Result<Json<PaymentRecord>, ApiError> {
-    state
+    let record = state
         .store
         .get_payment(&payment_id)
         .await?
-        .map(Json)
-        .ok_or(ApiError::NotFound)
+        .ok_or(ApiError::NotFound)?;
+    auth::mandate(&state, &principal, &record.mandate, "get_payment").await?;
+    Ok(Json(record))
 }
 
 async fn get_payment_by_receipt(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Path(receipt_address): Path<String>,
 ) -> Result<Json<PaymentRecord>, ApiError> {
     validate_string(&receipt_address, "receipt_address")?;
-    state
+    let record = state
         .store
         .find_payment_by_receipt(&receipt_address)
         .await?
-        .map(Json)
-        .ok_or(ApiError::NotFound)
+        .ok_or(ApiError::NotFound)?;
+    auth::mandate(&state, &principal, &record.mandate, "get_payment").await?;
+    Ok(Json(record))
 }
 
 async fn get_transaction(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Path(transaction_id): Path<String>,
 ) -> Result<Json<TransactionRecord>, ApiError> {
+    auth::owner(&principal, &principal.wallet)?;
+    let owner = state
+        .store
+        .get_auth(
+            &format!("transaction-owner:{transaction_id}"),
+            now_ms(),
+            false,
+        )
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    if owner.as_str() != Some(&principal.wallet) {
+        return Err(ApiError::Unauthorized);
+    }
     state
         .store
         .get_transaction(&transaction_id)
@@ -533,13 +711,34 @@ async fn get_transaction(
 
 async fn create_managed_signer_challenge(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Json(request): Json<ManagedSignerChallengeRequest>,
 ) -> Result<Json<ManagedSignerChallengeResponse>, ApiError> {
     if state.signer_provider.is_none() {
         return Err(ApiError::ManagedSignerUnavailable);
     }
+    auth::owner(&principal, &request.owner_wallet)?;
     validate_solana_address(&request.owner_wallet, "owner_wallet")?;
     validate_solana_address(&request.mandate_pda, "mandate_pda")?;
+    if transactions::future_mandate(
+        &state.config.program_id,
+        &principal.wallet,
+        &request.mint,
+        &request.mandate_nonce,
+    )? != request.mandate_pda
+    {
+        return Err(ApiError::Forbidden(
+            "Future mandate PDA must bind this owner, mint and nonce".into(),
+        ));
+    }
+    if state
+        .rpc
+        .account_info(&request.mandate_pda)
+        .await?
+        .is_some()
+    {
+        auth::mandate(&state, &principal, &request.mandate_pda, "create_mandate").await?;
+    }
 
     let mut nonce = [0_u8; 32];
     getrandom::fill(&mut nonce).map_err(|error| {
@@ -579,6 +778,7 @@ async fn create_managed_signer_challenge(
 
 async fn provision_managed_signer(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Json(request): Json<ManagedSignerProvisionRequest>,
 ) -> Result<Json<ManagedSignerRecord>, ApiError> {
     let provider = state
@@ -592,6 +792,15 @@ async fn provision_managed_signer(
         .get_managed_signer_challenge(&request.challenge_id)
         .await?
         .ok_or(ApiError::NotFound)?;
+    auth::owner(&principal, &challenge.owner_wallet)?;
+    if state
+        .rpc
+        .account_info(&challenge.mandate_pda)
+        .await?
+        .is_some()
+    {
+        auth::mandate(&state, &principal, &challenge.mandate_pda, "create_mandate").await?;
+    }
     verify_wallet_message_signature(
         &challenge.owner_wallet,
         challenge.message.as_bytes(),
@@ -661,17 +870,32 @@ async fn provision_managed_signer(
 
 async fn submit_managed_payment(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Json(request): Json<ManagedPaymentSubmissionRequest>,
 ) -> Result<Json<PaymentRecord>, ApiError> {
     let provider = state
         .signer_provider
         .as_ref()
         .ok_or(ApiError::ManagedSignerUnavailable)?;
+    auth::mandate(
+        &state,
+        &principal,
+        &request.mandate,
+        if request.x402.is_some() {
+            "execute_x402_payment"
+        } else {
+            "execute_payment"
+        },
+    )
+    .await?;
     let amount = request
         .amount
         .ok_or_else(|| ApiError::BadRequest("amount is required".to_owned()))?;
     let payment = PaymentSubmissionRequest {
-        idempotency_key: request.idempotency_key,
+        idempotency_key: format!(
+            "{}:{}:{}",
+            principal.wallet, request.mandate, request.idempotency_key
+        ),
         mandate: request.mandate,
         invoice_hash: request.invoice_hash,
         receipt_address: request.receipt_address,
@@ -688,6 +912,7 @@ async fn submit_managed_payment(
         &payment,
         &state.config.program_id,
     )?;
+    validate_live_payment(&state, &payment).await?;
     if let Some(existing) = state
         .store
         .find_payment_by_idempotency(&payment.idempotency_key)
@@ -742,9 +967,27 @@ async fn submit_managed_payment(
 
 async fn submit_payment(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Json(request): Json<PaymentSubmissionRequest>,
 ) -> Result<Json<PaymentRecord>, ApiError> {
+    auth::mandate(
+        &state,
+        &principal,
+        &request.mandate,
+        if request.x402.is_some() {
+            "execute_x402_payment"
+        } else {
+            "execute_payment"
+        },
+    )
+    .await?;
     validate_payment_request(&request, &state.config.program_id)?;
+    validate_live_payment(&state, &request).await?;
+    let mut request = request;
+    request.idempotency_key = format!(
+        "{}:{}:{}",
+        principal.wallet, request.mandate, request.idempotency_key
+    );
     settle_payment(&state, request, SigningMode::Human).await
 }
 
@@ -864,6 +1107,7 @@ async fn persist_payment(
 
 async fn record_x402_proof(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Json(request): Json<X402ProofRequest>,
 ) -> Result<Json<X402PaymentRecord>, ApiError> {
     validate_string(&request.idempotency_key, "idempotency_key")?;
@@ -874,7 +1118,10 @@ async fn record_x402_proof(
     }
     let mut record = state
         .store
-        .find_x402_by_idempotency(&request.idempotency_key)
+        .find_x402_by_idempotency(&format!(
+            "{}:{}:{}",
+            principal.wallet, request.mandate, request.idempotency_key
+        ))
         .await?
         .ok_or(ApiError::NotFound)?;
     if !matches!(
@@ -885,6 +1132,12 @@ async fn record_x402_proof(
             "x402 proof can only be recorded after confirmed settlement".to_owned(),
         ));
     }
+    let payment = state
+        .store
+        .get_payment(record.payment_id.as_deref().ok_or(ApiError::NotFound)?)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    auth::mandate(&state, &principal, &payment.mandate, "execute_x402_payment").await?;
     record.proof = Some(request.proof);
     record.response_status = Some(request.response_status);
     record.error = request.error;
@@ -900,9 +1153,69 @@ async fn record_x402_proof(
 
 async fn submit_transaction(
     State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
     Json(request): Json<TransactionSubmissionRequest>,
 ) -> Result<Json<TransactionRecord>, ApiError> {
+    auth::owner(&principal, &principal.wallet)?;
     validate_transaction_request(&request)?;
+    let transaction = decode_solana_transaction(
+        &decode_transaction(&request.signed_transaction)?,
+        "signed_transaction",
+    )?;
+    validate_owner_transaction(&transaction, &principal.wallet, &state.config.program_id)?;
+    let first = &transaction.message.instructions()[0];
+    if first.data.starts_with(&[86, 4, 7, 7, 120, 139, 232, 139]) {
+        for (position, payment) in
+            transactions::batch_payment_requests(&transaction, &state.config.program_id)?
+                .iter()
+                .enumerate()
+        {
+            auth::mandate(&state, &principal, &payment.mandate, "execute_payment").await?;
+            validate_live_payment_at(&state, &transaction, position, &payment.mandate).await?;
+        }
+    } else if transaction.message.static_account_keys()[first.program_id_index as usize].to_string()
+        == state.config.program_id
+        && first.data[..8] != [230, 170, 158, 68, 33, 169, 16, 158]
+    {
+        for ix in transaction.message.instructions() {
+            let address =
+                transaction.message.static_account_keys()[ix.accounts[0] as usize].to_string();
+            auth::mandate(&state, &principal, &address, "update_mandate").await?;
+        }
+    }
+    if transaction.message.static_account_keys()[first.program_id_index as usize].to_string()
+        == "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+    {
+        let mint = transaction.message.static_account_keys()[first.accounts[3] as usize];
+        let token = transaction.message.static_account_keys()[first.accounts[5] as usize];
+        let program: solana_address::Address = state
+            .config
+            .program_id
+            .parse()
+            .map_err(|_| ApiError::Unauthorized)?;
+        let asset_address =
+            solana_address::Address::find_program_address(&[b"asset", mint.as_ref()], &program).0;
+        let asset = state
+            .rpc
+            .account_info(&asset_address.to_string())
+            .await?
+            .ok_or(ApiError::BadRequest(
+                "Mint is not a supported ChainPay asset".into(),
+            ))?;
+        if asset.owner != state.config.program_id
+            || asset.data.len() != 106
+            || asset.data[..8] != [129, 27, 96, 192, 89, 180, 227, 200]
+            || &asset.data[40..72] != mint.as_ref()
+            || &asset.data[72..104] != token.as_ref()
+            || asset.data[104] != 1
+        {
+            return Err(ApiError::BadRequest(
+                "Asset is disabled or incompatible".into(),
+            ));
+        }
+    }
+    let mut request = request;
+    request.idempotency_key = format!("{}:{}", principal.wallet, request.idempotency_key);
     if let Some(existing) = state
         .store
         .find_transaction_by_idempotency(&request.idempotency_key)
@@ -922,6 +1235,14 @@ async fn submit_transaction(
         created_at_ms: now,
         updated_at_ms: now,
     };
+    state
+        .store
+        .put_auth(
+            &format!("transaction-owner:{}", record.transaction_id),
+            json!(principal.wallet),
+            i64::MAX as u64,
+        )
+        .await?;
     state.store.put_transaction(record.clone()).await?;
 
     let signature = match state
@@ -1011,16 +1332,8 @@ fn validate_provider_signed_transaction(
     let signed_bytes = decode_transaction(signed_transaction)?;
     let unsigned = decode_solana_transaction(&unsigned_bytes, "unsigned_transaction")?;
     let signed = decode_solana_transaction(&signed_bytes, "provider signed_transaction")?;
-    let unsigned_message = bincode::serialize(&unsigned.message).map_err(|error| {
-        ApiError::BadRequest(format!(
-            "cannot encode unsigned transaction message: {error}"
-        ))
-    })?;
-    let signed_message = bincode::serialize(&signed.message).map_err(|error| {
-        ApiError::BadRequest(format!(
-            "cannot encode provider transaction message: {error}"
-        ))
-    })?;
+    let unsigned_message = unsigned.message.serialize();
+    let signed_message = signed.message.serialize();
     if unsigned_message != signed_message {
         return Err(ApiError::BadRequest(
             "managed signer provider changed the reviewed transaction message".to_owned(),
@@ -1117,6 +1430,46 @@ fn validate_single_signer_transaction(
         return Err(ApiError::BadRequest(
             "unsigned_transaction must not contain any existing signatures".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+async fn validate_live_payment(
+    state: &BackendState,
+    request: &PaymentSubmissionRequest,
+) -> Result<(), ApiError> {
+    let tx = decode_solana_transaction(
+        &decode_transaction(&request.signed_transaction)?,
+        "transaction",
+    )?;
+    validate_live_payment_at(state, &tx, 0, &request.mandate).await
+}
+
+async fn validate_live_payment_at(
+    state: &BackendState,
+    tx: &VersionedTransaction,
+    position: usize,
+    mandate: &str,
+) -> Result<(), ApiError> {
+    let ix = &tx.message.instructions()[position];
+    let keys = tx.message.static_account_keys();
+    let account = state
+        .rpc
+        .account_info(mandate)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if account.owner != state.config.program_id
+        || account.data.len() < 235
+        || account.data[..8] != [139, 106, 43, 122, 82, 211, 96, 162]
+    {
+        return Err(ApiError::Unauthorized);
+    }
+    for (position, range) in [(4, 40..72), (5, 104..136), (6, 72..104)] {
+        if keys[ix.accounts[position] as usize].as_ref() != &account.data[range] {
+            return Err(ApiError::BadRequest(
+                "Payment agent/mint/source differs from on-chain mandate".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -1286,107 +1639,29 @@ fn validate_chainpay_transaction_semantics(
     request: &PaymentSubmissionRequest,
     program_id: &str,
 ) -> Result<(), ApiError> {
-    const EXECUTE_PAYMENT: [u8; 8] = [86, 4, 7, 7, 120, 139, 232, 139];
-    let keys = transaction.message.static_account_keys();
-    for instruction in transaction.message.instructions() {
-        let Some(program) = keys.get(instruction.program_id_index as usize) else {
-            continue;
-        };
-        if program.to_string() != program_id || !instruction.data.starts_with(&EXECUTE_PAYMENT) {
-            continue;
-        }
-        if instruction.data.len() != 112 {
-            return Err(ApiError::BadRequest(
-                "execute_payment instruction has an invalid data length".to_owned(),
-            ));
-        }
-        if instruction.accounts.len() < 10 {
-            return Err(ApiError::BadRequest(
-                "execute_payment instruction is missing required accounts".to_owned(),
-            ));
-        }
-        let account = |position: usize| -> Result<String, ApiError> {
-            let index = *instruction.accounts.get(position).ok_or_else(|| {
-                ApiError::BadRequest("execute_payment account list is incomplete".to_owned())
-            })? as usize;
-            keys.get(index).map(ToString::to_string).ok_or_else(|| {
-                ApiError::BadRequest("execute_payment uses an unresolved lookup account".to_owned())
-            })
-        };
-        if account(2)? != request.mandate {
-            return Err(ApiError::BadRequest(
-                "signed transaction mandate does not match the request".to_owned(),
-            ));
-        }
-        if hex_encode(&instruction.data[8..40])
-            != request.invoice_hash.trim().trim_start_matches("0x")
-        {
-            return Err(ApiError::BadRequest(
-                "signed transaction invoice hash does not match the request".to_owned(),
-            ));
-        }
-        if let Some(receipt) = &request.receipt_address {
-            if account(3)? != *receipt {
-                return Err(ApiError::BadRequest(
-                    "signed transaction receipt does not match the request".to_owned(),
-                ));
-            }
-        }
-        if let Some(agent) = &request.agent {
-            if account(4)? != *agent {
-                return Err(ApiError::BadRequest(
-                    "signed transaction agent does not match the request".to_owned(),
-                ));
-            }
-        }
-        if let Some(mint) = &request.mint {
-            if account(5)? != *mint {
-                return Err(ApiError::BadRequest(
-                    "signed transaction mint does not match the request".to_owned(),
-                ));
-            }
-        }
-        if account(7)? != request.recipient {
-            return Err(ApiError::BadRequest(
-                "signed transaction recipient does not match the request".to_owned(),
-            ));
-        }
-        if let Some(token_program) = &request.token_program {
-            let expected = match token_program.as_str() {
-                "spl-token" => SPL_TOKEN_PROGRAM_ID,
-                "token-2022" => TOKEN_2022_PROGRAM_ID,
-                _ => {
-                    return Err(ApiError::BadRequest(
-                        "token_program must be spl-token or token-2022".to_owned(),
-                    ));
-                }
-            };
-            if account(8)? != expected {
-                return Err(ApiError::BadRequest(
-                    "signed transaction token program does not match the request".to_owned(),
-                ));
-            }
-        }
-        if let Some(amount) = request.amount {
-            let encoded_amount = u64::from_le_bytes(instruction.data[104..112].try_into().unwrap());
-            if encoded_amount != amount {
-                return Err(ApiError::BadRequest(
-                    "signed transaction amount does not match the request".to_owned(),
-                ));
-            }
-        }
-        return Ok(());
-    }
-
-    Err(ApiError::BadRequest(
-        "signed transaction does not contain a ChainPay execute_payment instruction".to_owned(),
-    ))
+    transactions::payment(transaction, request, program_id)
 }
 
 fn decode_solana_transaction(bytes: &[u8], field: &str) -> Result<VersionedTransaction, ApiError> {
-    bincode::deserialize(bytes).map_err(|error| {
-        ApiError::BadRequest(format!("{field} is not a Solana transaction: {error}"))
-    })
+    let transaction: VersionedTransaction = wincode::deserialize(bytes).map_err(|error| {
+        ApiError::BadRequest(format!(
+            "{field} is not a supported Solana transaction: {error}"
+        ))
+    })?;
+    let canonical =
+        wincode::serialize(&transaction).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    if canonical != bytes
+        || (bytes.len() > 1232
+            && !matches!(
+                transaction.message,
+                solana_transaction::VersionedMessage::V1(_)
+            ))
+    {
+        return Err(ApiError::BadRequest(
+            "Noncanonical or oversized transaction".into(),
+        ));
+    }
+    Ok(transaction)
 }
 
 fn validate_transaction_request(request: &TransactionSubmissionRequest) -> Result<(), ApiError> {
@@ -1398,11 +1673,7 @@ fn validate_transaction_request(request: &TransactionSubmissionRequest) -> Resul
         ));
     }
     let bytes = decode_transaction(&request.signed_transaction)?;
-    let transaction: VersionedTransaction = bincode::deserialize(&bytes).map_err(|error| {
-        ApiError::BadRequest(format!(
-            "signed_transaction is not a Solana transaction: {error}"
-        ))
-    })?;
+    let transaction = decode_solana_transaction(&bytes, "signed_transaction")?;
     transaction.sanitize().map_err(|error| {
         ApiError::BadRequest(format!("signed_transaction failed sanitization: {error}"))
     })?;
@@ -1415,13 +1686,18 @@ fn validate_transaction_request(request: &TransactionSubmissionRequest) -> Resul
 }
 
 fn validate_string(value: &str, name: &str) -> Result<(), ApiError> {
-    if value.trim().is_empty() {
+    if value.len() > 8192 || value.trim().is_empty() {
         return Err(ApiError::BadRequest(format!("{name} must not be empty")));
     }
     Ok(())
 }
 
 fn validate_solana_address(value: &str, name: &str) -> Result<(), ApiError> {
+    if value.len() < 32 || value.len() > 44 {
+        return Err(ApiError::BadRequest(format!(
+            "{name} must be a Solana address"
+        )));
+    }
     validate_string(value, name)?;
     let bytes = bs58::decode(value).into_vec().map_err(|error| {
         ApiError::BadRequest(format!("{name} must be a base58 Solana address: {error}"))
@@ -1541,6 +1817,45 @@ mod tests {
     use ed25519_dalek::{Signer as _, SigningKey};
     use serde_json::json;
 
+    fn xff(value: &str) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_str(value).unwrap());
+        headers
+    }
+
+    #[test]
+    fn forwarded_peer_is_ignored_until_a_proxy_count_is_declared() {
+        // Default deployment: the socket peer is the client, so a caller-supplied
+        // header must never become the rate-limit identity.
+        assert_eq!(forwarded_client_ip(&xff("203.0.113.9"), 0), None);
+        assert_eq!(forwarded_client_ip(&axum::http::HeaderMap::new(), 1), None);
+    }
+
+    #[test]
+    fn forwarded_peer_counts_trusted_hops_from_the_right() {
+        // One trusted proxy (the Render edge): only the entry it appended counts.
+        // A caller that sends its own X-Forwarded-For lands to the left of it and
+        // cannot choose its own bucket.
+        assert_eq!(
+            forwarded_client_ip(&xff("198.51.100.7, 203.0.113.9"), 1).as_deref(),
+            Some("203.0.113.9"),
+        );
+        assert_eq!(
+            forwarded_client_ip(&xff("spoofed, 198.51.100.7, 203.0.113.9"), 2).as_deref(),
+            Some("198.51.100.7"),
+        );
+    }
+
+    #[test]
+    fn forwarded_peer_falls_back_when_the_header_cannot_be_trusted() {
+        // Too few entries for the declared hop count, or a non-IP at that
+        // position, means we have no trustworthy client identity: fall back to
+        // the socket peer rather than rate-limiting on attacker-chosen text.
+        assert_eq!(forwarded_client_ip(&xff("203.0.113.9"), 2), None);
+        assert_eq!(forwarded_client_ip(&xff("not-an-ip"), 1), None);
+        assert_eq!(forwarded_client_ip(&xff("  , , "), 1), None);
+    }
+
     #[test]
     fn deterministic_ids_are_stable_and_namespaced() {
         assert_eq!(
@@ -1641,6 +1956,7 @@ mod tests {
                     "memo": null,
                     "confirmationStatus": "finalized"
                 }]),
+                "getTransaction" => Value::Null,
                 _ => json!({}),
             };
             Json(json!({ "jsonrpc": "2.0", "id": 1, "result": result }))
@@ -1673,7 +1989,7 @@ mod tests {
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "getProgramAccounts",
-                "params": ["program-id", { "filters": [{ "dataSize": 235 }] }]
+                "params": [DEFAULT_PROGRAM_ID, { "filters": [{ "dataSize": 235 }, { "memcmp": { "offset": 8, "bytes": DEFAULT_PROGRAM_ID } }] }]
             }))
             .send()
             .await
@@ -1696,6 +2012,18 @@ mod tests {
         assert_eq!(history.status(), StatusCode::OK);
         let history_json: Value = history.json().await.unwrap();
         assert_eq!(history_json["result"][0]["slot"], 41);
+
+        let missing: Value = reqwest::Client::new().post(format!("http://{api_address}/rpc")).json(&json!({"jsonrpc":"2.0","id":4,"method":"getTransaction","params":["fixture-signature"]})).send().await.unwrap().json().await.unwrap();
+        assert!(missing.get("result").unwrap().is_null());
+        let blocked = reqwest::Client::new()
+            .post(format!("http://{api_address}/v1/transactions/submit"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), StatusCode::UNAUTHORIZED);
+        let expensive = reqwest::Client::new().post(format!("http://{api_address}/rpc")).json(&json!({"jsonrpc":"2.0","id":5,"method":"getProgramAccounts","params":[DEFAULT_PROGRAM_ID,{}]})).send().await.unwrap();
+        assert_eq!(expensive.status(), StatusCode::BAD_REQUEST);
 
         api_task.abort();
         rpc_task.abort();

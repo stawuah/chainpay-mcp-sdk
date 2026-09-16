@@ -1,3 +1,4 @@
+import { decodeSupportedTransaction } from "@chainpay/sdk";
 import express, { type Request, type Response } from "express";
 import {
   ChainPayClient,
@@ -135,16 +136,19 @@ async function main() {
       if (receipt.amount !== BigInt(config.amount)) throw new Error("amount mismatch");
       if (receipt.agent !== config.allowedAgent) throw new Error("approved agent mismatch");
 
-      const transaction = await client.connection.getTransaction(proof.payload.signature, {
-        commitment: "finalized",
-        maxSupportedTransactionVersion: 0,
+      const rpcResponse = await fetch(client.connection.rpcEndpoint, {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(10_000),
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: [proof.payload.signature, { commitment: "finalized", encoding: "base64", maxSupportedTransactionVersion: 1 }] }),
       });
+      if (!rpcResponse.ok) throw new Error("Settlement transaction RPC failed");
+      const envelope = await rpcResponse.json() as { result?: { slot: number; transaction: [string, string]; meta: { err: unknown; logMessages?: string[]; loadedAddresses?: { writable: string[]; readonly: string[] } } } };
+      const transaction = envelope.result;
       if (!transaction || transaction.meta?.err !== null) throw new Error("settlement transaction is missing or failed");
       if (BigInt(transaction.slot) !== receipt.executedAtSlot) throw new Error("transaction slot does not match receipt");
-      const keys = transaction.transaction.message.getAccountKeys({ accountKeysFromLookups: transaction.meta?.loadedAddresses });
-      if (!Array.from({ length: keys.length }, (_unused, index) => keys.get(index)?.toBase58()).includes(receiptAddress)) {
-        throw new Error("settlement transaction does not reference the receipt PDA");
-      }
+      if (transaction.transaction[1] !== "base64" || transaction.transaction[0].length > 5464) throw new Error("Invalid transaction wire encoding");
+      const decoded = decodeSupportedTransaction(Buffer.from(transaction.transaction[0], "base64"));
+      const keys: string[] = [...decoded.message.staticAccounts, ...(transaction.meta.loadedAddresses?.writable ?? []), ...(transaction.meta.loadedAddresses?.readonly ?? [])];
+      if (!keys.includes(receiptAddress)) throw new Error("settlement transaction does not reference the receipt PDA");
       if (!transaction.meta.logMessages?.some((line) => line.includes("Instruction: ExecutePayment"))) {
         throw new Error("transaction did not execute ChainPay payment settlement");
       }

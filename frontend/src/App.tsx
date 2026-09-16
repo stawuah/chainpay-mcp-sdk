@@ -1,3 +1,4 @@
+import { authorizedFetch, configureSession, setSessionWallet } from "./session";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChainPayClient, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveVersionedMandateAddress, toWeb3Transaction } from "@chainpay/sdk";
 import type { ChainPayInstruction, Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, SupportedAsset, TokenProgram } from "@chainpay/sdk";
@@ -289,6 +290,16 @@ async function copyValue(value: string) {
   }
 }
 
+configureSession(BACKEND_URL, MCP_URL);
+
+function connectionScopeDetails(scope: string) {
+  try {
+    const parsed = JSON.parse(scope) as { mandates?: string[]; tools?: string[] };
+    const count = parsed.mandates?.length ?? 0;
+    return { count, label: `${count} mandate${count === 1 ? "" : "s"} · ${parsed.tools?.some(tool => ["execute_payment", "execute_x402_payment"].includes(tool)) ? "Payments permitted" : "Read and prepare"}` };
+  } catch { return { count: 0, label: "Reconnect to select permissions" }; }
+}
+
 function mcpConnectionsUrl(wallet: string) {
   return `${MCP_URL.replace(/\/mcp\/?$/, "")}/connections?wallet=${encodeURIComponent(wallet)}`;
 }
@@ -305,15 +316,15 @@ function buildMcpClientConfig(serverUrl: string, token?: string) {
 }
 
 async function fetchMcpConnections(wallet: string): Promise<AgentConnection[]> {
-  const response = await fetch(mcpConnectionsUrl(wallet));
+  const response = await authorizedFetch(mcpConnectionsUrl(wallet));
   const payload = await response.json() as { connections?: ServerAgentConnection[]; error?: string };
   if (!response.ok) throw new Error(payload.error ?? `MCP connections request failed (${response.status})`);
-  return (payload.connections ?? []).map((connection) => ({ ...connection, mandates: connection.scope === "Current mandate" ? 1 : 0 }));
+  return (payload.connections ?? []).map((connection) => ({ ...connection, mandates: connectionScopeDetails(connection.scope).count }));
 }
 
 async function registerMcpConnection(wallet: string, agentName: string, scope: string) {
   const endpoint = mcpConnectionsUrl(wallet).replace(/\?.*$/, "");
-  const response = await fetch(endpoint, {
+  const response = await authorizedFetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ wallet, agentName, scope }),
@@ -327,7 +338,7 @@ async function registerMcpConnection(wallet: string, agentName: string, scope: s
 
 async function revokeMcpConnection(wallet: string, id: string) {
   const endpoint = `${MCP_URL.replace(/\/mcp\/?$/, "")}/connections/${encodeURIComponent(id)}?wallet=${encodeURIComponent(wallet)}`;
-  const response = await fetch(endpoint, { method: "DELETE" });
+  const response = await authorizedFetch(endpoint, { method: "DELETE" });
   if (!response.ok) {
     const payload = await response.json() as { error?: string };
     throw new Error(payload.error ?? `MCP connection revoke failed (${response.status})`);
@@ -335,7 +346,7 @@ async function revokeMcpConnection(wallet: string, id: string) {
 }
 
 async function mcpRequest<T>(method: string, params?: Record<string, unknown>): Promise<T> {
-  const response = await fetch(MCP_URL, {
+  const response = await authorizedFetch(MCP_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
@@ -631,7 +642,7 @@ async function callChainPayAgent(
   message: string,
   context: { wallet: string; mandateAddress?: string; history: AgentHistoryItem[]; paymentRequest?: Record<string, unknown>; attachments?: AgentAttachment[] },
 ): Promise<AgentResponse> {
-  const response = await fetch(AGENT_URL, {
+  const response = await authorizedFetch(AGENT_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ message, wallet: context.wallet, mandateAddress: context.mandateAddress, history: context.history, paymentRequest: context.paymentRequest, attachments: context.attachments }),
@@ -660,7 +671,7 @@ function preparedTransactionFromAgentApproval(approval: AgentApproval): Prepared
 
 async function submitSignedTransaction(idempotencyKey: string, signedTransaction: Uint8Array) {
   if (!BACKEND_URL) throw new Error("VITE_CHAINPAY_BACKEND_URL is not configured.");
-  const response = await fetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/transactions/submit`, {
+  const response = await authorizedFetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/transactions/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -705,12 +716,14 @@ async function readJsonResponse<T extends Record<string, unknown>>(response: Res
 async function provisionManagedSigner(
   ownerWallet: string,
   mandatePda: string,
+  mint: string,
+  mandateNonce: string,
   signMessage: (message: Uint8Array) => Promise<Uint8Array>,
 ): Promise<ManagedSigner> {
-  const challengeResponse = await fetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/managed-signers/challenge`, {
+  const challengeResponse = await authorizedFetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/managed-signers/challenge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ owner_wallet: ownerWallet, mandate_pda: mandatePda }),
+    body: JSON.stringify({ owner_wallet: ownerWallet, mandate_pda: mandatePda, mint, mandate_nonce: mandateNonce }),
   });
   const challenge = await readJsonResponse<{
     challenge_id?: string;
@@ -722,7 +735,7 @@ async function provisionManagedSigner(
   }
 
   const signature = await signMessage(new TextEncoder().encode(challenge.message));
-  const provisionResponse = await fetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/managed-signers/provision`, {
+  const provisionResponse = await authorizedFetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/managed-signers/provision`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1557,6 +1570,7 @@ function App() {
   }
 
   function clearWalletState() {
+    setSessionWallet(null);
     setWalletConnection(null);
     clearWalletScopedState();
   }
@@ -1568,7 +1582,9 @@ function App() {
     setSwitchingWalletAccount(true);
 
     try {
+      setSessionWallet(null);
       const nextConnection = await walletConnection.changeAccount();
+      setSessionWallet(nextConnection);
       setWalletConnection(nextConnection);
       if (nextConnection.address !== previousAddress) {
         clearWalletScopedState();
@@ -1619,6 +1635,7 @@ function App() {
     setWalletConnectionError("");
     try {
       const connection = await connectChainPayWallet(optionId, window.solana, window.phantom?.solana);
+      setSessionWallet(connection);
       setWalletConnection(connection);
       setWalletPickerOpen(false);
       void loadWalletState(connection.address);
@@ -1638,6 +1655,7 @@ function App() {
         return;
       }
       if (nextWallet.address === walletConnection.address) return;
+      setSessionWallet(nextWallet);
       setWalletConnection(nextWallet);
       clearWalletScopedState();
       void loadWalletState(nextWallet.address);
@@ -2117,7 +2135,7 @@ function Dashboard({
         const nextConnections = await fetchMcpConnections(wallet);
         if (active) setConnections(nextConnections.map((connection) => ({
           ...connection,
-          mandates: connection.scope === "Current mandate" ? 1 : 0,
+          mandates: connectionScopeDetails(connection.scope).count,
         })));
       } catch {
         // MCP telemetry is optional; the rest of the dashboard remains usable.
@@ -3987,7 +4005,7 @@ function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimal
 function AgentsPanel({ connections, onConnect, onOpenAssistant }: { connections: AgentConnection[]; onConnect: () => void; onOpenAssistant: () => void }) {
   return <section className="page-panel">
     <div className="page-panel-actions"><button className="button button-secondary-light" onClick={onOpenAssistant}>Open assistant <Arrow /></button><button className="button button-primary" onClick={onConnect}>Connect an agent <Arrow /></button></div>
-    {connections.length ? <div className="agent-card-grid">{connections.map((connection) => <article className="dashboard-card agent-registry-card" key={connection.id}><div className="agent-registry-top"><span className="avatar-ring agent-avatar">{connection.agentName.slice(0, 2).toUpperCase()}</span><span className={connection.lastSeenAt ? "status-pill" : "state-pill"}><i /> {connection.lastSeenAt ? "Connected" : "Registered"}</span></div><h2>{connection.agentName}</h2><p className="mono">Owner · {shortAddress(connection.wallet)}</p><div className="agent-registry-meta"><span>{connection.mandates} active mandate{connection.mandates === 1 ? "" : "s"}</span><strong>{connectionSeenLabel(connection.lastSeenAt)}</strong></div><span className="chip chip-muted agent-scope-chip">{connection.scope}</span><div className="agent-tool-calls">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span className="t-body-sm">No tools called yet.</span>}</div></article>)}</div> : <div className="dashboard-card page-empty"><p>No agents connected yet.</p><button className="button button-primary" onClick={onConnect}>Connect an agent <Arrow /></button></div>}
+    {connections.length ? <div className="agent-card-grid">{connections.map((connection) => <article className="dashboard-card agent-registry-card" key={connection.id}><div className="agent-registry-top"><span className="avatar-ring agent-avatar">{connection.agentName.slice(0, 2).toUpperCase()}</span><span className={connection.lastSeenAt ? "status-pill" : "state-pill"}><i /> {connection.lastSeenAt ? "Connected" : "Registered"}</span></div><h2>{connection.agentName}</h2><p className="mono">Owner · {shortAddress(connection.wallet)}</p><div className="agent-registry-meta"><span>{connection.mandates} active mandate{connection.mandates === 1 ? "" : "s"}</span><strong>{connectionSeenLabel(connection.lastSeenAt)}</strong></div><span className="chip chip-muted agent-scope-chip">{connectionScopeDetails(connection.scope).label}</span><div className="agent-tool-calls">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span className="t-body-sm">No tools called yet.</span>}</div></article>)}</div> : <div className="dashboard-card page-empty"><p>No agents connected yet.</p><button className="button button-primary" onClick={onConnect}>Connect an agent <Arrow /></button></div>}
     {connections.length > 0 && <button className="button button-primary page-panel-primary" onClick={onConnect}>Connect an agent <Arrow /></button>}
   </section>;
 }
@@ -4036,7 +4054,8 @@ function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoke
   const [dialogOpen, setDialogOpen] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [agentName, setAgentName] = useState("");
-  const [scope, setScope] = useState("Unscoped");
+  const [scope, setScope] = useState("");
+  const [allowPayments, setAllowPayments] = useState(false);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
   const [connectionId, setConnectionId] = useState("");
@@ -4057,15 +4076,15 @@ function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoke
     setError("");
     try {
       const createdAgentName = agentName.trim();
-      const result = await registerMcpConnection(wallet, createdAgentName, scope);
-      onConnected({ ...result.connection, mandates: result.connection.scope === "Current mandate" ? 1 : 0 });
+      const result = await registerMcpConnection(wallet, createdAgentName, JSON.stringify({ version: 1, mandates: [scope.trim()], agents: {}, tools: ["get_protocol_config", "get_asset", "get_supported_assets", "get_mandate", "list_mandates", "find_compatible_mandate", "quote_payment", "quote_payment_request", "prepare_payment", "check_payment_requirements", "verify_payment_request", "get_payment", "wait_for_payment", ...(allowPayments ? ["execute_payment", "prepare_x402_payment", "execute_x402_payment"] : [])] }));
+      onConnected({ ...result.connection, mandates: 1 });
       setConnectionId(result.connection.id);
       setConnectionName(createdAgentName);
       setConnectionToken(result.token);
       setConfigCopied(false);
-      setDialogOpen(false);
+      (setAllowPayments(false), setDialogOpen(false));
       setAgentName("");
-      setScope("Unscoped");
+      setScope("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -4076,8 +4095,8 @@ function ConnectMcpPanel({ serverUrl, wallet, connections, onConnected, onRevoke
   return <section className="page-panel connect-panel">
     <AiConnectionFlow />
     <div className="dashboard-card connection-config-card"><div className="dashboard-card-heading"><div><span className="section-kicker">CONNECTION CONFIG</span><h2>One MCP endpoint</h2></div><span className="mcp-badge"><span /> MCP · Devnet</span></div><p className="builder-intro">Copy the endpoint into any MCP-compatible AI. Create a named connection to issue a private bearer token and let the AI discover the full ChainPay payment flow.</p><div className="copy-row"><span className="mono">{serverUrl}</span><button className="btn-icon" onClick={() => copyValue(serverUrl)} aria-label="Copy server URL">⧉</button></div>{connectionToken && <div className="token-once"><div className="token-once-heading"><span className="status-pill"><i /> Connection ready</span><span className="chip chip-blue">{connectionName}</span></div><p>Copy the secure config now. The bearer token authenticates this client; the on-chain mandate still enforces mint, amount, recipient, expiry, and total limits.</p></div>}<div className="config-code-wrap"><button className="button button-secondary-light copy-config" onClick={copyConfig}>{configCopied ? "Copied" : connectionToken ? "Copy secure config" : "Copy config"}</button><pre className="schema-block">{config}</pre></div></div>
-    <div className="dashboard-card connected-clients-card"><div className="dashboard-card-heading"><div><span className="section-kicker">CONNECTED CLIENTS</span><h2>Agent connections</h2></div><button className="button button-primary" onClick={() => setDialogOpen(true)}>New connection <Arrow /></button></div>{connections.length ? <div className="connection-list">{connections.map((connection) => <div className="connection-row" key={connection.id}><div><strong>{connection.agentName}</strong><small className="mono">Owner · {shortAddress(connection.wallet)}</small></div><span className="chip chip-muted">{connection.scope}</span><span className="t-body-sm">{connectionSeenLabel(connection.lastSeenAt)}</span><button className="btn-icon" onClick={() => setRevokeId(connection.id)} aria-label={`Revoke ${connection.agentName}`}>×</button><div className="connection-tools">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span>No tools called yet.</span>}</div></div>)}</div> : <div className="page-empty compact-empty"><p>No agents connected yet.</p><button className="button button-primary" onClick={() => setDialogOpen(true)}>New connection <Arrow /></button></div>}</div>
-    {dialogOpen && <div className="app-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDialogOpen(false); }}><div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby="connection-dialog-title"><div className="app-dialog-heading"><span className="section-kicker">NEW CONNECTION</span><h2 id="connection-dialog-title">Pair an agent</h2></div><p>Give this client one endpoint and a private bearer token. It can coordinate policy checks and payment requests, but it never receives your wallet key.</p><label className="field"><span>Agent name</span><input autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="Invoice agent" /></label><label className="field"><span>Scope</span><select value={scope} onChange={(event) => setScope(event.target.value)}><option>Unscoped</option><option disabled={!connections.length}>Current mandate{connections.length ? "" : " · create a connection first"}</option></select></label>{error && <p className="builder-error"><b>Connection failed</b><span>{error}</span></p>}<div className="app-dialog-actions"><button className="button button-secondary-light" onClick={() => setDialogOpen(false)}>Cancel</button><button className="button button-primary" onClick={() => void createConnection()} disabled={!agentName.trim() || creating}>{creating ? "Creating…" : "Create connection"} <Arrow /></button></div></div></div>}
+    <div className="dashboard-card connected-clients-card"><div className="dashboard-card-heading"><div><span className="section-kicker">CONNECTED CLIENTS</span><h2>Agent connections</h2></div><button className="button button-primary" onClick={() => (setAllowPayments(false), setDialogOpen(true))}>New connection <Arrow /></button></div>{connections.length ? <div className="connection-list">{connections.map((connection) => <div className="connection-row" key={connection.id}><div><strong>{connection.agentName}</strong><small className="mono">Owner · {shortAddress(connection.wallet)}</small></div><span className="chip chip-muted">{connectionScopeDetails(connection.scope).label}</span><span className="t-body-sm">{connectionSeenLabel(connection.lastSeenAt)}</span><button className="btn-icon" onClick={() => setRevokeId(connection.id)} aria-label={`Revoke ${connection.agentName}`}>×</button><div className="connection-tools">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span>No tools called yet.</span>}</div></div>)}</div> : <div className="page-empty compact-empty"><p>No agents connected yet.</p><button className="button button-primary" onClick={() => (setAllowPayments(false), setDialogOpen(true))}>New connection <Arrow /></button></div>}</div>
+    {dialogOpen && <div className="app-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) (setAllowPayments(false), setDialogOpen(false)); }}><div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby="connection-dialog-title"><div className="app-dialog-heading"><span className="section-kicker">NEW CONNECTION</span><h2 id="connection-dialog-title">Pair an agent</h2></div><p>Give this client one endpoint and a private bearer token. It can coordinate policy checks and payment requests, but it never receives your wallet key.</p><label className="field"><span>Agent name</span><input autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="Invoice agent" /></label><label className="field"><span>Mandate address</span><input value={scope} onChange={(event) => setScope(event.target.value)} placeholder="Owned mandate address" required /></label><label><input type="checkbox" checked={allowPayments} onChange={(event) => setAllowPayments(event.target.checked)} /> Permit payments within this mandate</label>{error && <p className="builder-error"><b>Connection failed</b><span>{error}</span></p>}<div className="app-dialog-actions"><button className="button button-secondary-light" onClick={() => (setAllowPayments(false), setDialogOpen(false))}>Cancel</button><button className="button button-primary" onClick={() => void createConnection()} disabled={!agentName.trim() || !scope.trim() || creating}>{creating ? "Creating…" : "Create connection"} <Arrow /></button></div></div></div>}
     <ConfirmDialog open={Boolean(revokeId)} title="Revoke this connection?" description="This agent will no longer be able to call ChainPay tools with this connection." confirmLabel="Revoke connection" onClose={() => setRevokeId(null)} onConfirm={() => { const id = revokeId; setRevokeId(null); if (id) void onRevoked(id).then(() => { if (id === connectionId) { setConnectionId(""); setConnectionName(""); setConnectionToken(""); } }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} />
   </section>;
 }
@@ -4392,7 +4411,7 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
     setPrepared(null);
     try {
       const intendedMandate = deriveVersionedMandateAddress(wallet, form.allowedMint.trim(), mandateNonce, PROGRAM_ID);
-      const signer = await provisionManagedSigner(wallet, intendedMandate, walletMessageSigner);
+      const signer = await provisionManagedSigner(wallet, intendedMandate, form.allowedMint.trim(), mandateNonce, walletMessageSigner);
       setManagedSigner(signer);
       setForm((current) => ({ ...current, approvedAgent: signer.public_key }));
       setManagedSignerStatus("ready");

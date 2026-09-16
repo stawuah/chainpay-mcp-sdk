@@ -83,7 +83,7 @@ export async function listMandates(
   args: Record<string, unknown>,
 ) {
   const owner = solanaAddress(args.owner, "owner");
-  const mandates = await context.client.getMandatesByOwner(owner);
+  const mandates = (await context.client.getMandatesByOwner(owner)).filter(mandate => !context.principal?.scope || (context.principal.scope.mandates.includes(mandate.address) && context.principal.scope.agents[mandate.address] === mandate.approvedAgent));
   const sourceCache = new Map<Address, Promise<TokenAccountState>>();
   const displayCache = new Map<Address, Promise<Awaited<ReturnType<typeof displayTokenAmounts>>>>();
   const presented = await Promise.all(mandates.map((mandate) => cachedPresentMandate(context, mandate, sourceCache, displayCache)));
@@ -101,7 +101,7 @@ export async function findCompatibleMandate(
     ? undefined
     : tokenProgram(args.tokenProgram);
   const agent = args.agent === undefined ? undefined : solanaAddress(args.agent, "agent");
-  const mandates = await context.client.getMandatesByOwner(owner);
+  const mandates = (await context.client.getMandatesByOwner(owner)).filter(mandate => !context.principal?.scope || (context.principal.scope.mandates.includes(mandate.address) && context.principal.scope.agents[mandate.address] === mandate.approvedAgent));
   const sourceCache = new Map<Address, Promise<TokenAccountState>>();
   const displayCache = new Map<Address, Promise<Awaited<ReturnType<typeof displayTokenAmounts>>>>();
   const candidates = await Promise.all(mandates.map(async (mandate) => {

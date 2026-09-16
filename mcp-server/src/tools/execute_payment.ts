@@ -59,7 +59,7 @@ export async function executePayment(
     if (!context.backendUrl || !context.backendAuthToken) {
       return toolResult({
         action: "managed_backend_required",
-        message: "Delegated mode requires CHAINPAY_BACKEND_URL and CHAINPAY_BACKEND_AUTH_TOKEN.",
+        message: "Delegated mode requires CHAINPAY_BACKEND_URL and a verified caller session or scoped connection.",
         receiptAddress: prepared.receiptAddress,
       }, true);
     }

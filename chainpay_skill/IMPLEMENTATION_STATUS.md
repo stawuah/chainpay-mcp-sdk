@@ -4,9 +4,10 @@ Updated: 2026-08-25
 
 This file separates implementation/regression evidence from real Devnet
 settlement acceptance. Tests and local HTTP fixtures do not count as settlement.
-Runtime transaction paths do not call Solana transaction simulation: Axum
-validates signed wire bytes, submits directly to Devnet, waits for finality, and
-verifies the payment receipt before reporting success.
+PR01 enables RPC preflight after full wire validation. Axum then waits for
+finality and verifies the receipt before reporting success. Local tests cover
+wallet sessions, scope enforcement and official legacy/v0/v1 decoding; they
+do not establish live settlement or a database restart acceptance.
 
 | Workstream | Implementation | Current evidence | Real acceptance still required |
 |---|---|---|---|

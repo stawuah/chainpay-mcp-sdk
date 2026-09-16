@@ -86,8 +86,8 @@ export class ChainPayClient {
       // payments do not make the creation time look newer than it is.
       const historyCommitment: "confirmed" | "finalized" =
         this.commitment === "finalized" ? "finalized" : "confirmed";
-      for (let page = 0; page < 10; page += 1) {
-        const options: { limit: number; before?: string } = { limit: 1_000 };
+      for (let page = 0; page < 100; page += 1) {
+        const options: { limit: number; before?: string } = { limit: 100 };
         if (before) options.before = before;
         const signatures = await this.connection.getSignaturesForAddress(
           publicKey(mandateAddress),
@@ -96,7 +96,7 @@ export class ChainPayClient {
         );
         if (signatures.length === 0) break;
         oldest = signatures[signatures.length - 1];
-        if (signatures.length < 1_000) break;
+        if (signatures.length < 100) break;
         before = oldest.signature;
       }
 
