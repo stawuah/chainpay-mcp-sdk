@@ -1,3 +1,5 @@
+> **Historical document.** Preserved from the pre-documentation-cleanup fork (2026-09-15). Claims and commands below may be obsolete. Use the [current docs](../README.md), [architecture](../reference/architecture.md), and [implementation status](../project/implementation-status.md). The [product scope](../scope.md) remains authoritative.
+
 # ChainPay — Product Requirements Document
 **Version:** 0.3.0-devnet
 **Status:** Active Development

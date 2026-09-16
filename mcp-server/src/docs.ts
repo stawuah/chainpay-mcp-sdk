@@ -59,133 +59,38 @@ type UseCase = {
 
 const USE_CASES: UseCase[] = [
   {
-    title: "AI accounting assistant",
-    scenario: "Pay invoice #123 from the USDC treasury.",
-    summary: "The assistant retrieves the invoice, asks ChainPay for a policy quote, requests wallet approval, settles the approved amount, and returns a receipt.",
-    outcome: "A reconciled USDC payment and receipt PDA for the accounting system.",
+    title: "Inspect a payment request",
+    scenario: "Check this invoice before asking me to approve a payment.",
+    summary: "An authenticated assistant checks the invoice, reads an owned mandate, and reports whether the exact request fits its limits.",
+    outcome: "A quote or a clear reason to stop. No funds move during inspection.",
     steps: [
-      { from: "Agent", to: "ChainPay MCP", message: "Submit invoice #123, treasury mandate, and amount." },
-      { from: "ChainPay MCP", to: "Merchant", message: "Validate invoice identity and payment request." },
-      { from: "ChainPay MCP", to: "Wallet", message: "Return policy checks and a transaction for approval." },
-      { from: "Wallet", to: "Solana", message: "Sign and settle the USDC transfer." },
-      { from: "Solana", to: "Agent", message: "Return receipt PDA and settlement status." },
+      { from: "Agent", to: "ChainPay MCP", message: "Verify the request and inspect the selected mandate." },
+      { from: "ChainPay MCP", to: "Policy", message: "Check asset, amount, recipient, expiry, and remaining limits." },
+      { from: "ChainPay MCP", to: "Owner", message: "Show the quote or missing requirements before approval." },
     ],
   },
   {
-    title: "AI payroll agent",
-    scenario: "It is Friday. Pay 120 employees.",
-    summary: "The payroll agent creates the payment batch, while ChainPay enforces the payroll wallet, supplied destinations, batch limits, and required approval workflow.",
-    outcome: "A controlled batch settlement with receipts that payroll can reconcile per employee.",
+    title: "Pay a custom x402 resource",
+    scenario: "Prepare access to this trusted Devnet merchant resource.",
+    summary: "A custom x402/1.0 challenge can become a mandate-checked payment. Human mode requires external wallet approval; delegated mode requires a provisioned mandate-bound signer.",
+    outcome: "Settlement proof and a separate merchant delivery result. A paid delivery retry reuses the existing payment ID.",
     steps: [
-      { from: "Agent", to: "ChainPay MCP", message: "Send payroll batch and payroll mandate." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check supplied destinations, daily cap, batch cap, and approvals." },
-      { from: "Policy", to: "Wallet", message: "Request owner approval for the valid batch." },
-      { from: "Wallet", to: "Solana", message: "Sign transfers through the selected token program." },
-      { from: "Solana", to: "Agent", message: "Return per-payment receipts and finality." },
+      { from: "Agent", to: "Merchant", message: "Fetch the allowed resource and read its 402 challenge." },
+      { from: "ChainPay MCP", to: "Policy", message: "Detect custom x402/1.0 and validate the exact request." },
+      { from: "Wallet or provider", to: "Axum", message: "Sign through the selected authorized path." },
+      { from: "Axum", to: "Solana", message: "Submit the validated transaction and verify finality." },
+      { from: "ChainPay MCP", to: "Merchant", message: "Retry the original resource with signature and receipt PDA." },
     ],
   },
   {
-    title: "Robots and machines",
-    scenario: "A delivery robot pays a charging station or a taxi pays a toll.",
-    summary: "The machine does not implement wallet, token-account, or settlement logic. Its application calls the same ChainPay MCP interface used by every other agent.",
-    outcome: "A machine-service payment that remains inside a bounded mandate.",
+    title: "Read a receipt",
+    scenario: "Show the settlement evidence for this payment.",
+    summary: "An authorized caller retrieves the receipt and backend settlement status. A receipt PDA is a program-derived account recording the payment.",
+    outcome: "Exact amount, token, recipient, and settlement evidence. Delivery remains a separate claim.",
     steps: [
-      { from: "Machine", to: "ChainPay MCP", message: "Request payment for charging, parking, toll, or access." },
-      { from: "ChainPay MCP", to: "Service", message: "Resolve the destination and payment demand." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check mandate, asset, amount, and supplied destination." },
-      { from: "Wallet", to: "Solana", message: "Approve and settle the machine-service payment." },
-      { from: "Solana", to: "Machine", message: "Return receipt and service confirmation." },
-    ],
-  },
-  {
-    title: "Customer support AI",
-    scenario: "Refund this customer 45 USDC.",
-    summary: "The support agent routes the refund through ChainPay instead of integrating directly with Stripe or custom blockchain code, keeping the refund inside an approved policy.",
-    outcome: "A verified refund receipt linked to the support case.",
-    steps: [
-      { from: "Support AI", to: "ChainPay MCP", message: "Submit case, customer destination, and refund amount." },
-      { from: "ChainPay MCP", to: "Connector", message: "Resolve merchant demand and refund metadata." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check refund cap, destination, and approval rule." },
-      { from: "Wallet", to: "Solana", message: "Sign and settle the USDC refund." },
-      { from: "Solana", to: "Support AI", message: "Return receipt for the customer record." },
-    ],
-  },
-  {
-    title: "Treasury AI",
-    scenario: "Move 50,000 USDC from operations to payroll.",
-    summary: "Treasury rules decide which wallets can move funds, how much can move per day, which approvals are required, and whether the request is inside business hours.",
-    outcome: "An approved treasury transfer with policy evidence and durable proof.",
-    steps: [
-      { from: "Treasury AI", to: "ChainPay MCP", message: "Request an inter-wallet transfer." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check daily limit, business hours, and approval quorum." },
-      { from: "Policy", to: "Wallet", message: "Present the transfer only after all checks pass." },
-      { from: "Wallet", to: "Solana", message: "Sign the treasury settlement." },
-      { from: "Solana", to: "Treasury AI", message: "Return receipt and reconciliation references." },
-    ],
-  },
-  {
-    title: "AI shopping assistant",
-    scenario: "Buy this software subscription.",
-    summary: "The shopping agent retrieves the invoice and calls ChainPay. The connector resolves the merchant payment path while ChainPay handles policy, approval, settlement, and proof.",
-    outcome: "A subscription payment routed through the merchant’s supported connector.",
-    steps: [
-      { from: "Shopping AI", to: "ChainPay MCP", message: "Submit the subscription invoice and mandate." },
-      { from: "ChainPay MCP", to: "Connector", message: "Resolve Stripe, Pay.sh, x402, or direct settlement." },
-      { from: "ChainPay MCP", to: "Wallet", message: "Return the policy-approved payment transaction." },
-      { from: "Wallet", to: "Solana", message: "Sign the stablecoin settlement." },
-      { from: "Solana", to: "Shopping AI", message: "Return receipt and merchant reference." },
-    ],
-  },
-  {
-    title: "Subscription manager",
-    scenario: "Renew Copilot and cancel unused subscriptions.",
-    summary: "The manager finds invoices and presents only renewals covered by the approved policy. Cancellation is a separate merchant action; ChainPay executes only the payments that pass policy.",
-    outcome: "Approved renewals with receipts and no unapproved recurring spend.",
-    steps: [
-      { from: "Manager AI", to: "ChainPay MCP", message: "Submit renewal invoices selected by the user." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check merchant, amount, cadence, and expiry." },
-      { from: "ChainPay MCP", to: "Connector", message: "Route each approved invoice to its merchant rail." },
-      { from: "Wallet", to: "Solana", message: "Approve the selected subscription payments." },
-      { from: "Solana", to: "Manager AI", message: "Return receipts for the subscription ledger." },
-    ],
-  },
-  {
-    title: "Crypto commerce agent",
-    scenario: "A merchant accepts USDC at checkout.",
-    summary: "Checkout calls ChainPay MCP instead of embedding custom Solana payment logic. The merchant receives a consistent request, settlement, and receipt path.",
-    outcome: "A merchant checkout completed in USDC with a verifiable receipt.",
-    steps: [
-      { from: "Checkout", to: "ChainPay MCP", message: "Create a payment request for the order." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check buyer mandate, mint, recipient, and amount." },
-      { from: "ChainPay MCP", to: "Wallet", message: "Prepare the approved checkout transaction." },
-      { from: "Wallet", to: "Solana", message: "Sign and settle USDC to the merchant account." },
-      { from: "Solana", to: "Checkout", message: "Return receipt and order confirmation." },
-    ],
-  },
-  {
-    title: "Cross-border freelancer platform",
-    scenario: "A client approves a worldwide freelancer payout.",
-    summary: "The platform’s agent prepares payouts worldwide through ChainPay, keeping limits, supplied destinations, token choice, and receipts consistent across the platform.",
-    outcome: "A payout record with recipient-level settlement proof.",
-    steps: [
-      { from: "Platform AI", to: "ChainPay MCP", message: "Submit approved freelancer payout instructions." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check supplied destination, corridor, asset, and payout limits." },
-      { from: "ChainPay MCP", to: "Connector", message: "Resolve payout routing and merchant metadata." },
-      { from: "Wallet", to: "Solana", message: "Sign the stablecoin payout settlement." },
-      { from: "Solana", to: "Platform AI", message: "Return receipts for the payout ledger." },
-    ],
-  },
-  {
-    title: "DAO operations AI",
-    scenario: "Pay contributors after proposal #56 passed.",
-    summary: "The DAO agent checks governance state first. ChainPay settles only when the proposal condition, contributor list, treasury mandate, and spending policy are satisfied.",
-    outcome: "Contributor payments tied to a governance decision and receipt trail.",
-    steps: [
-      { from: "DAO AI", to: "Governance", message: "Read proposal #56 and approved contributor list." },
-      { from: "DAO AI", to: "ChainPay MCP", message: "Submit the payout batch and treasury mandate." },
-      { from: "ChainPay MCP", to: "Policy", message: "Check governance condition, recipients, and limits." },
-      { from: "Wallet", to: "Solana", message: "Sign and settle contributor payments." },
-      { from: "Solana", to: "DAO AI", message: "Return receipts linked to proposal #56." },
+      { from: "Agent", to: "ChainPay MCP", message: "Look up the existing payment ID and receipt address." },
+      { from: "ChainPay MCP", to: "Solana", message: "Read the program-owned receipt account." },
+      { from: "ChainPay MCP", to: "Agent", message: "Return receipt fields and available persisted signature." },
     ],
   },
 ];
@@ -205,12 +110,12 @@ export function renderDocsHtml(): string {
   const connectionConfig = `{
   "mcpServers": {
     "chainpay": {
-      "url": "https://chainpay-mcp.onrender.com/mcp"
+      "url": "https://YOUR_MCP_HOST/mcp"
     }
   }
 }`;
 
-  const demoPrompt = "Use ChainPay to inspect the protocol config, then quote a payment for this demo invoice without executing it.";
+  const demoPrompt = "List ChainPay tools, then call get_protocol_config with no arguments. Report the result or error. Do not prepare, sign, or submit a payment.";
 
   const quoteExample = `{
   "mandate": "MANDATE_PDA",
@@ -232,23 +137,23 @@ export function renderDocsHtml(): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0a0b0d" />
-    <meta name="description" content="The universal payment interface for AI agents. ChainPay connects policy, wallet authorization, x402, stablecoin settlement, and receipts." />
+    <meta name="description" content="Spending limits and payment receipts for AI agents. ChainPay enforces owner-approved spending limits on Solana Devnet and records payment receipts." />
     <link rel="icon" href="/logo.svg" type="image/svg+xml" />
     <link rel="canonical" href="https://chainpay-mcp.onrender.com/docs" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="ChainPay" />
     <meta property="og:url" content="https://chainpay-mcp.onrender.com/docs" />
-    <meta property="og:title" content="The universal payment interface for AI agents." />
-    <meta property="og:description" content="One MCP endpoint for policy enforcement, routing, stablecoin settlement, x402, and receipts." />
+    <meta property="og:title" content="Spending limits and payment receipts for AI agents." />
+    <meta property="og:description" content="Read mandates, prepare authorized payments, and verify receipts on Solana Devnet." />
     <meta property="og:image" content="https://chainpay-mcp.onrender.com/og-image.png" />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://chainpay-mcp.onrender.com/og-image.png" />
-    <meta name="twitter:title" content="The universal payment interface for AI agents." />
-    <meta name="twitter:description" content="One MCP endpoint for policy enforcement, routing, stablecoin settlement, x402, and receipts." />
-    <title>The universal payment interface for AI agents. · ChainPay</title>
+    <meta name="twitter:title" content="Spending limits and payment receipts for AI agents." />
+    <meta name="twitter:description" content="Read mandates, prepare authorized payments, and verify receipts on Solana Devnet." />
+    <title>Spending limits and payment receipts for AI agents. · ChainPay</title>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
       :root {
@@ -311,6 +216,7 @@ export function renderDocsHtml(): string {
       .endpoint-pill code { color: var(--blue); }
       .endpoint-pill span { color: var(--subtle); font-size: 11px; }
       .hero-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr); gap: 23px; align-items: stretch; margin-top: 58px; }
+      .hero-grid > * { min-width: 0; }
       .hero-panel, .info-card, .tool-card, .endpoint-card { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
       .hero-panel { padding: 25px; }
       .panel-kicker { color: var(--subtle); font: 700 10px "SFMono-Regular", Consolas, monospace; letter-spacing: .09em; text-transform: uppercase; }
@@ -677,7 +583,7 @@ export function renderDocsHtml(): string {
     <div class="layout">
       <aside class="sidebar">
         <a class="brand-link" href="#top" aria-label="ChainPay documentation home">${pageLogo}</a>
-        <div class="version"><i></i> DEVNET · MCP 1.0</div>
+        <div class="version"><i></i> DEVNET · MCP TOOLS</div>
         <nav aria-label="Documentation navigation">
           <div class="nav-group">
             <div class="nav-label">Start here</div>
@@ -686,6 +592,7 @@ export function renderDocsHtml(): string {
           </div>
           <div class="nav-group">
             <div class="nav-label">Build with ChainPay</div>
+            <a class="nav-link" href="#authentication"><span>↗</span>Authentication</a>
             <a class="nav-link" href="#agent-payments"><span>↗</span>Agent payments</a>
             <a class="nav-link" href="#x402"><span>↔</span>x402 connector</a>
             <a class="nav-link" href="#stablecoin-flow"><span>◎</span>Stablecoin flow</a>
@@ -718,8 +625,8 @@ export function renderDocsHtml(): string {
         <div class="content">
           <section class="hero" aria-labelledby="hero-title">
             <span class="eyebrow"><i></i> Policy-controlled payments for agents</span>
-            <h1 id="hero-title">The universal payment interface for <em>AI agents.</em></h1>
-            <p class="hero-copy">One MCP endpoint for policy enforcement, wallet authorization, routing, stablecoin settlement, and receipts. Solana is the first settlement layer; connectors keep the agent interface consistent.</p>
+            <h1 id="hero-title">Spending limits for <em>AI agents.</em></h1>
+            <p class="hero-copy">ChainPay lets an owner approve limited token spending on Solana Devnet. Agents use MCP tools to inspect a mandate, prepare a payment, and retrieve its receipt. The on-chain program enforces the spending rules.</p>
             <div class="hero-actions">
               <a class="button button-primary" href="#quickstart">Start building <span>↗</span></a>
               <a class="button button-quiet" href="#tool-reference">Browse tools <span>↓</span></a>
@@ -730,8 +637,8 @@ export function renderDocsHtml(): string {
           <section class="hero-grid" id="quickstart" aria-labelledby="quickstart-title">
             <div class="hero-panel">
               <span class="panel-kicker">01 · Connect an MCP client</span>
-              <h2 id="quickstart-title">One endpoint. Every payment primitive.</h2>
-              <p>Point any MCP-compatible agent at the hosted endpoint. Tool discovery is automatic, and the HTTP transport never receives a seed phrase or private key.</p>
+              <h2 id="quickstart-title">Start with a read-only result.</h2>
+              <p>Replace YOUR_MCP_HOST with your server. This public configuration discovers tools and reads protocol configuration without a token or wallet. Expected: a tool catalog, then configuration or an explicit RPC/account error. A successful discovery does not establish payment availability.</p>
               ${renderCode(connectionConfig)}
               <div class="code-label"><span>Use /mcp in your client config</span><span class="copyable" data-copy="config">Copy</span></div>
               <div class="prompt-example"><span class="code-label"><span>Try this read-only prompt</span><span class="copyable" data-copy="prompt">Copy</span></span>${renderCode(demoPrompt)}</div>
@@ -743,13 +650,19 @@ export function renderDocsHtml(): string {
             </div>
           </section>
 
+          <section class="section" id="authentication" aria-labelledby="authentication-title">
+            <div class="section-heading"><div><h2 id="authentication-title">Authorize private tools.</h2><p>A wallet address is not a login. The owner signs the dashboard’s wallet-message challenge, then creates a connection for selected owned mandates and tools. Copy its one-time token into the client’s private <code>headers.Authorization</code> value as <code>Bearer YOUR_SCOPED_CONNECTION_TOKEN</code>. Never put credentials in a prompt or commit them.</p></div></div>
+            <div class="callout"><strong>First private read:</strong> select <code>get_mandate</code> when creating the connection, then call it with <code>{"address":"YOUR_MANDATE_PDA"}</code>. An unrelated mandate or unselected tool must be rejected. Owner-management tools require an owner session. Login does not authorize spending; human payment signatures and existing delegated mandates remain separate approvals.</div>
+            <p>For stdio, build the repository’s private workspace package and launch <code>mcp-server/dist/server.js</code>. Private calls need <code>CHAINPAY_BACKEND_URL</code> and <code>CHAINPAY_CALLER_TOKEN</code>. Shared service tokens cannot authorize a caller. The source checkout contains the full guide at <code>docs/guides/connect-an-agent.md</code>.</p>
+          </section>
+
           <section class="section" id="agent-payments" aria-labelledby="payments-title">
-            <div class="section-heading"><div><span class="section-index">02 · Agent payments</span><h2 id="payments-title">A payment flow agents can explain.</h2><p>Keep payment decisions inspectable. Preflight first, sign only in the wallet boundary, then submit and observe the receipt.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">02 · Agent payments</span><h2 id="payments-title">A payment flow agents can explain.</h2><p>Check requirements first, review the exact fields, and use an explicitly authorized signer before submission. A quote is advisory; the program enforces the policy.</p></div></div>
             <div class="flow">
               <div class="flow-step"><strong>01</strong><h3>Inspect</h3><p>Read the mandate, protocol config, and asset registry.</p></div>
               <div class="flow-step"><strong>02</strong><h3>Quote</h3><p>Ask for a policy result without signing or submitting.</p></div>
               <div class="flow-step"><strong>03</strong><h3>Prepare</h3><p>Build a mandate-checked transaction plan.</p></div>
-              <div class="flow-step"><strong>04</strong><h3>Execute</h3><p>Relay a wallet-signed transaction through the backend.</p></div>
+              <div class="flow-step"><strong>04</strong><h3>Execute</h3><p>Use explicit human wallet signing or a provisioned delegated signer through Axum.</p></div>
               <div class="flow-step"><strong>05</strong><h3>Confirm</h3><p>Wait for status and fetch the durable receipt.</p></div>
             </div>
             <div class="split" style="margin-top: 18px">
@@ -768,8 +681,8 @@ export function renderDocsHtml(): string {
               <div class="flow-step"><strong>05</strong><h3>Proof</h3><p>After settlement, retry the original resource with an <code>x402/1.0</code> signature plus receipt PDA. That proof is not a partially signed sponsored transaction. Resume with <code>paymentId</code> retries delivery only.</p></div>
             </div>
             <div class="split connector-detail" style="margin-top: 20px">
-              <div class="info-card"><div class="card-icon">↔</div><h3>How agents use it</h3><p>Call <code>execute_x402_payment</code> with the resource, mandate PDA, and approved-agent public key. A custom 402 returns an unsigned transaction. After an external signer approves it, call the tool again with <code>signedTransaction</code>. ChainPay verifies finality and the receipt before retrying the resource. A standard v2 402 returns <code>x402_unsupported_sponsor</code> immediately.</p></div>
-              <div class="callout connector-callout"><strong>Connector boundary</strong><span>Custom x402/1.0 does not bypass ChainPay policy.</span><span>The adapter detects custom vs standard v2 from document shape.</span><span>It binds the custom challenge to a deterministic invoice hash.</span><span>It sends only a wallet-signed custom transaction to:</span><code>/v1/payments</code><span>It is not a key custodian, hosted facilitator, or standard x402 sponsor.</span></div>
+              <div class="info-card"><div class="card-icon">↔</div><h3>How agents use it</h3><p>Call <code>execute_x402_payment</code> with <code>resource</code>, <code>mandate</code>, <code>agent</code>, and explicit <code>signingMode</code>. Human mode returns an unsigned transaction, then accepts its externally signed version. Delegated mode sends the unsigned wire to Axum’s mandate-bound provider signer and rejects supplied signatures. ChainPay verifies settlement before retrying delivery. Standard v2 returns <code>x402_unsupported_sponsor</code>.</p></div>
+              <div class="callout connector-callout"><strong>Connector boundary</strong><span>Custom x402/1.0 does not bypass ChainPay policy.</span><span>The adapter detects custom vs standard v2 from document shape.</span><span>It binds the custom challenge to a deterministic invoice hash.</span><span>Human mode relays a wallet-signed transaction; delegated mode uses Axum’s authenticated managed signer.</span><span>It is not a key custodian, hosted facilitator, or standard x402 sponsor.</span></div>
             </div>
           </section>
 
@@ -789,7 +702,7 @@ export function renderDocsHtml(): string {
           </section>
 
           <section class="section" id="use-cases" aria-labelledby="use-cases-title">
-            <div class="section-heading"><div><span class="section-index">05 · Use cases</span><h2 id="use-cases-title">Every agent payment, one interface.</h2><p>Select a scenario to open its complete flow. Each sequence keeps the agent, ChainPay MCP, connector, wallet, Solana settlement, and receipt boundary visible.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">05 · Use cases</span><h2 id="use-cases-title">Three flows to understand first.</h2><p>These sequences describe the implemented interfaces. A deployed server, registered Devnet asset, wallet, and any required provider still need separate verification. Batch payouts, subscriptions, governance rules, and production connectors are outside the supported scope described here.</p></div></div>
             <div class="use-case-reference">${renderUseCaseReference()}</div>
           </section>
 
@@ -844,7 +757,7 @@ export function renderDocsHtml(): string {
         element.addEventListener("click", async () => {
           const value = element.dataset.copy === "prompt"
             ? ${JSON.stringify(demoPrompt)}
-            : ${JSON.stringify(connectionConfig)}.replace("YOUR_RENDER_HOST", window.location.host);
+            : ${JSON.stringify(connectionConfig)}.replace("https://YOUR_MCP_HOST", window.location.origin);
           await navigator.clipboard?.writeText(value);
           element.textContent = "Copied";
           window.setTimeout(() => { element.textContent = "Copy"; }, 1400);

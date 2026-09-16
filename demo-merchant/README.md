@@ -21,14 +21,43 @@ v2 `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` document is detected from its
 body (`x402Version: 2`) and rejected as `unsupported-sponsor` before any
 signing or settlement path. Header names are not a protocol signal.
 
-Copy `.env.example` values into your environment and provide a real recipient
-token account plus the public key of the approved agent. For local HTTP testing,
-the MCP process must set `CHAINPAY_X402_ALLOW_HTTP=true`; deployed resources
-should use HTTPS.
+## Run locally
+
+First complete the root dependency install in
+[local development](../docs/getting-started/local-development.md). Run these
+commands from the repository root. The process does not automatically load
+`demo-merchant/.env`; the [example](.env.example) is a configuration reference.
+
+Replace the two placeholders with a real Devnet recipient **token account**
+and the public key of the approved agent. The recipient account must belong
+to the selected mint. The default amount is `100000` base units (0.1 Devnet
+USDC at six decimals).
 
 ```bash
+CHAINPAY_X402_RECIPIENT_TOKEN_ACCOUNT=REPLACE_WITH_TOKEN_ACCOUNT \
+CHAINPAY_X402_ALLOWED_AGENT=REPLACE_WITH_AGENT_PUBLIC_KEY \
+CHAINPAY_RPC_URL=https://api.devnet.solana.com \
+PORT=3402 \
 npm --prefix demo-merchant run dev
 ```
+
+Startup queries the live asset registry and fails if the mint is disabled or
+the token program differs. Success prints a listening message for
+`http://127.0.0.1:3402/data`. The server binds to loopback.
+
+In another terminal:
+
+```bash
+curl -i http://127.0.0.1:3402/data
+```
+
+**Expected:** HTTP `402` and an `X-Payment-Required` challenge. This checks the
+unpaid resource, not settlement. Do not use `curl -f` here: 402 is intentional.
+For local HTTP testing through MCP, set `CHAINPAY_X402_ALLOW_HTTP=true` in the
+MCP process. Deployed resources should use HTTPS and MCP's explicit
+`CHAINPAY_X402_ALLOWED_ORIGINS` allowlist.
+
+## Settlement proof and optional seller statement
 
 This service never signs or submits a payment. A real custom-flow acceptance
 run still requires explicit wallet/external-signer approval and a confirmed
@@ -47,3 +76,14 @@ bounded base64 RPC results, with canonical message checks. RPC trust is
 required for chain inclusion; signatures alone do not prove the transaction
 landed. This verifies the custom ChainPay receipt proof. It is not a claim
 of standard x402 facilitator or sponsor-transaction interoperability.
+
+## Tests and further reading
+
+```bash
+npm --prefix demo-merchant test
+```
+
+Tests use local fixtures and do not broadcast payments. Configure optional
+seller statements using the [trusted-seller guide](../docs/guides/trusted-sellers.md).
+For approved end-to-end acceptance, use the
+[Devnet runbook](../docs/project/local-e2e-testing.md).

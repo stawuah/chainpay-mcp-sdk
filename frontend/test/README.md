@@ -1,5 +1,7 @@
 # Frontend regression checks
 
+Run commands in this guide from `frontend/`.
+
 Run the ordinary suite with `npm test`, and TypeScript/Vite checks with `npm run build`.
 
 ## Permission detail browser fixture
@@ -34,3 +36,14 @@ blocked; no wallet or payment is used.
 sequence in both scroll directions, all four visible states, card viewport
 bounds, button text contrast (normal/hover/focus), and reduced-motion teardown.
 It uses the same Playwright override and local server on port 5189.
+
+## Owner onboarding browser check
+
+With a frontend dev server on port 5173 and Google Chrome installed, run
+`npm run test:owner-onboarding-browser`. Set `CHAINPAY_PREVIEW_URL` if you use a
+different port. This runner imports the package-local Playwright installation.
+
+It mounts the actual owner controller and routes with a deliberately fake wallet,
+blocks external services, and checks wallet discovery, connection without login,
+explicit message-signing retries, and navigation to mandate review. It rejects
+financial signing. Screenshots are fixture rendering evidence only.

@@ -1,87 +1,22 @@
 # ChainPay SDK
 
-The SDK is the user and agent-facing boundary for mandate creation, payment
-request preparation, and receipt retrieval on Solana Devnet.
+TypeScript tools for reading mandates and receipts and building Solana payment
+transactions. Wallets and approved signer providers sign outside the SDK.
 
-It must never receive or persist a user's private key. On-chain policy remains
-the authority for every payment.
+**Start with [a read-only SDK example](../docs/guides/use-the-sdk.md).**
 
-## Client capabilities
+From the repository root:
 
-`ChainPayClient` provides the complete protocol-facing surface:
-
-- derive config, mandate, and receipt PDAs;
-- read and validate config, mandate, and receipt account data;
-- detect classic SPL Token versus Token-2022 accounts;
-- derive associated token accounts and prepare ATA creation instructions;
-- build mandate creation plus limited delegate approval;
-- build update, pause, revoke, and delegate-revoke transactions;
-- prepare payment transactions with local policy preflight;
-- verify source balance, owner, delegate identity, and remaining delegated
-  allowance when `preparePayment` loads the mandate source token account;
-- run cumulative batch preflight with `preflightPaymentBatch` (the dashboard
-  batch importer applies the same rules when checking CSV rows);
-- detect duplicate invoice receipts before submission;
-- execute through an injected external-signing/submission adapter.
-
-The SDK returns transaction plans. Wallets or approved signer services remain
-responsible for signing. It never accepts a keypair or seed phrase.
-
-Example:
-
-```ts
-import { ChainPayClient } from "@chainpay/sdk";
-
-const chainpay = new ChainPayClient({
-  rpcUrl: "https://api.devnet.solana.com",
-});
-
-const prepared = await chainpay.preparePayment({
-  mandate,
-  invoiceHash,
-  paymentId,
-  signatureReference,
-  mint,
-  recipient,
-  amount: 1_000_000n,
-}, approvedAgent);
-
-if (!prepared.preflight.valid) {
-  throw new Error("Payment rejected by local preflight");
-}
+```bash
+npm ci --include=dev --ignore-scripts
+npm --prefix sdk run build
+npm --prefix sdk run test
 ```
 
-Batch cumulative checks:
+This is a private npm workspace package, consumed locally as `@chainpay/sdk`.
+Do not assume an npm registry release.
 
-```ts
-import { preflightPaymentBatch, preparePayment } from "@chainpay/sdk";
-
-const batch = preflightPaymentBatch(
-  requests.map((input) => ({
-    request: preparePayment(input),
-    mandate,
-    agent: approvedAgent,
-    sourceContext, // optional; include when the source token account is loaded
-  })),
-  currentSlot,
-);
-
-if (!batch.valid) {
-  throw new Error(batch.batchChecks.filter((check) => !check.ok).map((check) => check.message).join("; "));
-}
-```
-
-Standalone `preflightPayment(...)` without source context performs mandate policy
-checks only. It does not imply a full funding or delegation check.
-
-## Supported transaction reader
-
-`decodeSupportedTransaction(bytes)` uses the official
-`@solana/transactions` and `@solana/transaction-messages` 8.3 codecs for
-legacy/v0/v1. It bounds wire size and checks canonical transaction **and message**
-bytes. The demo merchant requests base64 with `maxSupportedTransactionVersion: 1`
-and passes the returned bytes through this decoder. Raising an RPC flag alone
-is not treated as decoder support. Existing transaction construction stays
-legacy unless `compileV1TransactionBytes` is called with explicit compute-unit
-and loaded-accounts budgets. A generated-mock send on local Agave 4.2.2 is not
-Jupiter acceptance. Public Devnet `requestAirdrop` returned 429 on 2026-09-15.
+- [Integration guide](../docs/guides/use-the-sdk.md): first read, signing boundary, token support, and transaction codecs.
+- [Public exports](src/index.ts), [client methods](src/client.ts), and [types](src/types.ts): implementation reference.
+- [Payment-agent guide](../docs/guides/connect-an-agent.md): MCP integration and caller authorization.
+- [Documentation index](../docs/README.md).
