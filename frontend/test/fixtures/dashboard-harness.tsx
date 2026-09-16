@@ -8,11 +8,13 @@
 // sign or submit a transaction: every handler here is inert. Amounts are fixture
 // base units, not balances.
 import "../../src/polyfills";
+import { chainpayClient, publicReceiptClient } from "../../src/config/client";
+import { PublicKey } from "@solana/web3.js";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import Dashboard from "../../src/dashboard/Dashboard";
 import type { DashboardTab } from "../../src/routing/paths";
-import type { Mandate } from "@chainpay/sdk";
+import type { Mandate, PaymentReceipt } from "@chainpay/sdk";
 import { Router } from "../../src/routing/Router";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
@@ -87,6 +89,38 @@ const CONFIG = {
   supportedMints: [USDC],
   bump: 254,
 };
+
+// Opt-in deterministic network reads for the real three-step review. No signer
+// is supplied, and these fixtures cannot send a transaction.
+if (new URLSearchParams(location.search).has("ready")) {
+  chainpayClient.getCurrentSlot = async () => 399_999_000n;
+  chainpayClient.getMintDecimals = async () => 6;
+  chainpayClient.getTokenProgram = async () => "spl-token";
+  chainpayClient.connection.getRecentPerformanceSamples = async () => [{slot:399999000,numSlots:150,numTransactions:1,samplePeriodSecs:60}];
+  chainpayClient.getSupportedAsset = async () => ({ enabled:true, tokenProgram:"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", mint:USDC }) as never;
+  chainpayClient.getPaymentsByMandate = async () => [];
+  chainpayClient.connection.getAccountInfo = async () => {
+    const data = Buffer.alloc(165);
+    data.set(new PublicKey(USDC).toBytes(), 0);
+    data.set(new PublicKey(OWNER).toBytes(), 32);
+    data[108] = 1;
+    return {data,owner:new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),executable:false,lamports:2039280,rentEpoch:0};
+  };
+}
+
+if (new URLSearchParams(location.search).has("receipts")) {
+  const receipt: PaymentReceipt = {
+    address:"2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1", mandate:MANDATES[0].address,
+    invoiceHash:new Uint8Array(32).fill(1), paymentId:new Uint8Array(32).fill(2), mint:USDC,
+    recipient:OWNER,sourceTokenAccount:OWNER,recipientTokenAccount:OWNER,amount:4500001n,
+    agent:OWNER,executedAtSlot:399999000n,signatureReference:new Uint8Array(32),status:"confirmed",onChainStatus:1,bump:255,
+  };
+  chainpayClient.getPaymentsByMandate = async () => [receipt];
+  chainpayClient.getMintDecimals = async () => 6;
+  publicReceiptClient.readPublicReceipt = async () => ({
+    receipt:{valid:true,receipt}, amount:{baseUnits:"4500001",decimals:6,display:"4.500001",displayKind:"ui-amount"}, currentMandate:{status:"absent"},
+  }) as never;
+}
 
 const EMPTY = new URLSearchParams(location.search).has("empty");
 const noop = async () => {};

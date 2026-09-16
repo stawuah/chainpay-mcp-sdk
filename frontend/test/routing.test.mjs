@@ -17,7 +17,7 @@ const legacy = await load("../src/routing/legacyHash.ts");
 test("parses landing, app tabs, mandate builder, and verify paths", () => {
   assert.deepEqual(paths.parsePathname("/"), { kind: "landing" });
   assert.deepEqual(paths.parsePathname("/app"), { kind: "app", tab: "overview" });
-  assert.deepEqual(paths.parsePathname("/app/receipts"), { kind: "app", tab: "receipts" });
+  assert.deepEqual(paths.parsePathname("/app/receipts"), { kind: "app", tab: "payments" });
   assert.deepEqual(paths.parsePathname("/app/receipts/Receipt1111111111111111111111111111111111111"), {
     kind: "app",
     tab: "receipts",
@@ -61,4 +61,12 @@ test("permission details round-trip without changing legacy routes", () => {
   assert.deepEqual(paths.parsePathname("/unknown-page"), { kind: "public-not-found", path: "/unknown-page" });
   assert.deepEqual(paths.parsePathname("/app/mandates/%ZZ"), { kind: "app", tab: "mandates", mandateDetail: "%ZZ" });
   assert.deepEqual(paths.parsePathname("/app/mandates/a%2Fb"), { kind: "app", tab: "mandates", mandateDetail: "a/b" });
+});
+
+test("owner destinations canonicalize legacy and advanced routes", () => {
+ for (const [legacyPath, canonical] of [["/app/assistant", "/app/requests"], ["/app/tools", "/app/settings/advanced/tools"], ["/app/protocol", "/app/settings/advanced/protocol"], ["/app/receipts", "/app/payments"]]) {
+   const route = paths.parsePathname(legacyPath);
+   assert.equal(paths.buildPath(route), canonical);
+   assert.deepEqual(paths.parsePathname(canonical), route);
+ }
 });

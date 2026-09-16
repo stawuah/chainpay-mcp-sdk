@@ -32,6 +32,10 @@ export function parsePathname(pathname: string): AppRoute {
 
   if (normalized.startsWith("/app/")) {
     const rest = normalized.slice("/app/".length);
+    if (rest === "requests") return { kind: "app", tab: "assistant" };
+    if (rest === "settings/advanced" || rest === "settings/advanced/tools") return { kind: "app", tab: "tools" };
+    if (rest === "settings/advanced/protocol") return { kind: "app", tab: "protocol" };
+    if (rest === "receipts") return { kind: "app", tab: "payments" };
     if (rest === "mandates/new") return { kind: "app", tab: "mandates", mandateBuilder: true };
     if (/^mandates\/[^/]+$/.test(rest)) {
       const encoded = rest.slice("mandates/".length);
@@ -77,6 +81,10 @@ export function buildPath(route: AppRoute): string {
   if (route.mandateBuilder && route.tab === "mandates") return "/app/mandates/new";
   if (route.mandateDetail && route.tab === "mandates") return `/app/mandates/${encodeURIComponent(route.mandateDetail)}`;
   if (route.receiptDetail && route.tab === "receipts") return `/app/receipts/${encodeURIComponent(route.receiptDetail)}`;
+  if (route.tab === "assistant") return "/app/requests";
+  if (route.tab === "tools") return "/app/settings/advanced/tools";
+  if (route.tab === "protocol") return "/app/settings/advanced/protocol";
+  if (route.tab === "receipts") return "/app/payments";
   return `/app/${route.tab}`;
 }
 

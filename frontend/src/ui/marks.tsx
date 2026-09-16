@@ -1,9 +1,10 @@
+import { ArrowRight, ShieldCheck } from "lucide-react";
 export function Arrow() {
-  return <span aria-hidden="true">→</span>;
+  return <ArrowRight size={18} strokeWidth={1.75} aria-hidden="true" />;
 }
 
 export function Shield() {
-  return <span className="shield-icon" aria-hidden="true">◇</span>;
+  return <ShieldCheck className="shield-icon" size={20} strokeWidth={1.75} aria-hidden="true" />;
 }
 
 export function MiniChart({ color }: { color: string }) {

@@ -57,7 +57,7 @@ test("dashboard wiring includes J4b CRUD surfaces", async () => {
   const dashboard = await readFile(new URL("../src/dashboard/Dashboard.tsx", import.meta.url), "utf8");
   assert.match(dashboard, /EDIT LIMITS/);
   assert.match(dashboard, /non-revoked mandate/);
-  assert.match(dashboard, /isDisabled=\{!connectionToken\}/);
+  assert.match(dashboard, /connectionToken &&/);
   assert.match(dashboard, /Register mint/);
   assert.match(dashboard, /receiptDetail/);
   assert.match(dashboard, /x402JobResumable|onCallMcp=\{onCallMcp\}/);

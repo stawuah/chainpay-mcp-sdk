@@ -78,5 +78,5 @@ test("batch ask AI opens Requests tab from dashboard wiring", async () => {
   const dashboard = await readFile(join(frontendRoot, "src/dashboard/Dashboard.tsx"), "utf8");
   assert.match(dashboard, /onAskAgent=\{\(message\) => \{ selectTab\("assistant"\); void askChainPay\(message\); \}\}/);
   assert.match(dashboard, /<X402JobsPanel sessionReady=\{sessionReady\} onSignIn=\{onSignIn\} onCallMcp=\{onCallMcp\} \/>/);
-  assert.match(dashboard, /Recent activity/);
+  assert.match(await readFile(join(frontendRoot, "src/dashboard/OwnerOverview.tsx"), "utf8"), /Recent activity/);
 });

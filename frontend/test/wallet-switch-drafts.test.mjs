@@ -21,6 +21,8 @@ const esbuild = require("esbuild");
  * stands in for that state: it is local useState, exactly like the real component's.
  */
 const STUBS = {
+  "../owner/useOwnerSignIn": 'export function useOwnerSignIn(){return {status:"ready",error:"",signIn(){}}}',
+  "../owner/OwnerEntry": "export function OwnerEntry(){return null}",
   "../settlement": "export function PendingSettlements(){return null}",
   "../routing/useRoute": 'export function useRoute(){return {currentRoute:{kind:"app",tab:"payments"},navigate(){}}}',
   "../wallet/context": "export function useWallet(){return globalThis.__wallet}",
@@ -50,6 +52,7 @@ test("switching wallet accounts does not carry payment drafts to the new wallet"
     platform: "browser",
     jsx: "automatic",
     outfile,
+    loader: { ".css": "empty" },
     external: ["react", "react-dom", "react/jsx-runtime"],
     plugins: [{
       name: "workspace-stubs",

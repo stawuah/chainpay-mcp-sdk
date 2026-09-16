@@ -41,17 +41,38 @@ The deployed endpoints are:
 | MCP tools | `https://chainpay-mcp.onrender.com/tools` | Browser-readable tool catalog |
 | MCP transport | `https://chainpay-mcp.onrender.com/mcp` | Streamable HTTP JSON-RPC endpoint |
 
-If the backend was deployed with `CHAINPAY_HTTP_AUTH_TOKEN`, add this header
-to protected `/v1/*` requests:
+Wallet login requires the current session-enabled backend deployment and explicit
+`CHAINPAY_ALLOWED_ORIGINS` entries on both the backend and MCP services. A wildcard
+may let CORS requests through but does **not** authorize wallet login.
 
-```bash
-export CHAINPAY_AUTH_HEADER="Authorization: Bearer $CHAINPAY_HTTP_AUTH_TOKEN"
-curl -fsS -H "$CHAINPAY_AUTH_HEADER" "$CHAINPAY_BACKEND_URL/v1/config" | jq
+For the hosted frontend and the local development/review ports, use:
+
+```text
+https://chainpay-frontend.onrender.com,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5189,http://127.0.0.1:5189
 ```
 
-Health checks and the wallet-authorized `/rpc` route do not require this
-header. Never put the backend auth token in frontend code or an MCP client
-configuration shared with agents.
+Apply this value in the services' Render environment configuration and redeploy the
+current session-enabled code. The backend also requires the owner-session database
+migration described in `backend/README.md`. Include any other actual frontend origin
+explicitly; never replace the list with `*` to fix sign-in.
+
+Before opening a wallet, verify challenge creation with a public test address:
+
+```bash
+curl -i -X POST \
+  'https://chainpay-backend.onrender.com/v1/auth/challenge?wallet=11111111111111111111111111111111' \
+  -H 'Origin: http://127.0.0.1:5189'
+```
+
+Expect HTTP 200 with a challenge message. This check creates a short-lived challenge
+only; it does not sign in or submit a financial transaction. HTTP 401/403 means the
+service rejected access, not that the user's wallet rejected signing. If even the
+hosted frontend origin fails, inspect the deployed revision and origin configuration.
+A successful `/healthz` alone does not establish that wallet login works.
+
+Private requests require the actual owner's wallet session or a scoped connection
+credential. `CHAINPAY_HTTP_AUTH_TOKEN` is a server-side integration setting, not an
+owner-session bypass. Never place it in frontend code or a Vite environment variable.
 
 ## 2. Verify the deployed services
 

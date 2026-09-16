@@ -97,7 +97,7 @@ export function mandateDisplayName(mandate: Mandate, mandates: Mandate[], stable
     .sort(compareMandatesByCreation)
     .map((candidate) => candidate.address);
   const policyNumber = sameToken.indexOf(mandate.address) + 1;
-  return `${tokenLabel} settlement policy ${policyNumber > 0 ? policyNumber : ""}`.trim();
+  return `${tokenLabel} spending permission ${policyNumber > 0 ? policyNumber : ""}`.trim();
 }
 
 export function compareMandatesByCreation(left: Mandate, right: Mandate) {

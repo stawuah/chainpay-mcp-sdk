@@ -50,7 +50,16 @@ async function signIn() {
   const revision = generation;
   if (!signer?.signMessage) throw new Error("This wallet must support message signing to sign in. Login does not authorize a payment.");
   const response = await fetch(`${backend}/v1/auth/challenge?wallet=${encodeURIComponent(signer.address)}`, { method: "POST" });
-  if (!response.ok) throw new Error("Could not create a wallet login challenge. Try again shortly.");
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error("The sign-in service rejected this dashboard’s access. Its deployment or allowed website addresses need to be updated. Changing wallets will not resolve this.");
+    }
+    if (response.status === 404 || response.status === 405) {
+      throw new Error("This backend does not support the current wallet sign-in flow. The sign-in service needs to be updated.");
+    }
+    if (response.status === 429) throw new Error("Too many sign-in attempts. Wait a minute before trying again.");
+    throw new Error("The sign-in service is temporarily unavailable. Try again shortly.");
+  }
   const challenge = await response.json() as { challenge_id: string; message: string };
   const signature = await signer.signMessage(new TextEncoder().encode(challenge.message));
   if (generation !== revision) throw new Error("Wallet changed during sign in. Try again with the current wallet.");

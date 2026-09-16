@@ -1,5 +1,7 @@
 import { lazy, Suspense } from "react";
-import { PendingSettlements } from "../settlement";
+import { OwnerEntry } from "../owner/OwnerEntry";
+import { useOwnerSignIn } from "../owner/useOwnerSignIn";
+import "./owner-dashboard.css";
 import { useRoute } from "../routing/useRoute";
 import { useWallet } from "../wallet/context";
 import { OwnerWelcome } from "../owner/OwnerWelcome";
@@ -19,12 +21,14 @@ function RouteFallback() {
 export default function AppWorkspace() {
   const { currentRoute, navigate } = useRoute();
   const wallet = useWallet();
+  const signIn = useOwnerSignIn();
   if (currentRoute.kind !== "app") return null;
   if (!wallet.wallet) return <OwnerWelcome />;
 
+  if (signIn.status !== "ready") return <OwnerEntry wallet={wallet.wallet} walletName={wallet.walletName} signing={signIn.status === "signing"} error={signIn.error} onSignIn={() => void signIn.signIn()} onChangeWallet={() => void wallet.changeWallet()} />;
+
   return (
     <>
-      <PendingSettlements wallet={wallet.wallet} />
       <Suspense fallback={<RouteFallback />}>
         {/*
           Keyed by address so switching accounts remounts the dashboard. An account

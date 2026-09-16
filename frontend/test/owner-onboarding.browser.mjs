@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
-const BASE_URL = (process.env.CHAINPAY_PREVIEW_URL || "http://localhost:5173").replace(/\/$/, "");
+const BASE_URL = (process.env.CHAINPAY_PREVIEW_URL || "http://127.0.0.1:5189").replace(/\/$/, "");
 
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -27,7 +27,7 @@ await page.route("**/*", async route => {
 });
 try {
   await page.goto(`${BASE_URL}/test/fixtures/owner-onboarding.html`);
-  await page.getByRole("heading", { name: /Start with.*your wallet/ }).waitFor();
+  await page.getByRole("heading", { name: /Connect your wallet/ }).waitFor();
   for (const width of [320, 390, 768, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, `overflow at ${width}px`);
@@ -40,7 +40,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "/tmp/chainpay-onboarding-mobile.png", fullPage: true });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  assert.equal(await page.locator(".cp-welcome-emblem").evaluate(el => getComputedStyle(el).animationName), "none");
+  assert.equal(await page.locator(".owner-entry-card").evaluate(el => getComputedStyle(el).animationName), "none");
   await page.setViewportSize({ width: 1440, height: 1000 });
   assert.equal(await page.getByRole("button", { name: /Connect wallet/ }).count(), 0);
   assert.equal(await page.getByRole("link", { name: /Get Phantom.*official/ }).count(), 1);
@@ -54,7 +54,7 @@ try {
   await page.getByRole("button", { name: /Fixture Wallet/ }).waitFor({ state: "detached" });
   await page.evaluate(() => window.onboardingFixture.register());
   await page.getByRole("button", { name: /Fixture Wallet.*Connect wallet/ }).click();
-  await page.getByRole("heading", { name: "Your wallet is connected." }).waitFor();
+  await page.getByRole("heading", { name: "Welcome to your workspace" }).waitFor();
   assert.equal(await page.evaluate(() => window.onboardingFixture.state.messages), 0);
   assert.equal(requests.filter(r => r.path.endsWith("/auth/challenge")).length, 0);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -67,7 +67,7 @@ try {
   await page.getByRole("heading", { name: "Set your spending limits." }).waitFor();
   assert.equal(await page.evaluate(() => window.onboardingFixture.state.messages), 2);
   await page.getByRole("button", { name: "Review mandate", exact: true }).click();
-  await page.getByRole("heading", { name: "Set agent spending" }).waitFor();
+  await page.getByRole("heading", { name: "How should payments be approved?" }).waitFor();
   assert.equal(await page.evaluate(() => window.onboardingFixture.state.transactions), 0);
   assert.equal(requests.some(r => /transactions\/submit|managed-signers\/provision|payments\/execute/.test(r.path)), false);
   assert.deepEqual(errors, []);

@@ -59,7 +59,7 @@ function installDom() {
   return dom;
 }
 
-test("dashboard nav lists every sidebar tab including protocol", async () => {
+test("dashboard nav lists owner tasks and keeps advanced routes out of sidebar", async () => {
   const navSource = await readFile(join(srcRoot, "dashboard/nav.ts"), "utf8");
   const pathsSource = await readFile(join(srcRoot, "routing/paths.ts"), "utf8");
   const tabsMatch = pathsSource.match(/export const DASHBOARD_TABS = \[([\s\S]*?)\]/);
@@ -67,11 +67,11 @@ test("dashboard nav lists every sidebar tab including protocol", async () => {
   const sidebarTabs = tabsMatch[1]
     .match(/"([^"]+)"/g)
     ?.map((entry) => entry.slice(1, -1))
-    .filter((tab) => tab !== "connect-mcp") ?? [];
+    .filter((tab) => !["connect-mcp", "receipts", "tools", "protocol"].includes(tab)) ?? [];
   for (const tab of sidebarTabs) {
     assert.match(navSource, new RegExp(`id: "${tab}"`));
   }
-  assert.match(navSource, /id: "protocol"/);
+  assert.equal(navSource.includes('id: "protocol"'), false);
   assert.match(navSource, /dashboardNavCoversAllTabs/);
   assert.match(navSource, /SIDEBAR_DASHBOARD_TABS/);
   assert.match(navSource, /connect-mcp/);
@@ -107,8 +107,8 @@ test("Dashboard source uses published Astryx inventory primitives", async () => 
   assert.match(dashboard, /<RadioList/);
   assert.match(dashboard, /<Popover/);
   assert.match(dashboard, /role="tablist"/);
-  assert.match(dashboard, /panelId="settings-general"/);
-  assert.match(dashboard, /Wallet capability/);
+  assert.match(dashboard, /owner-settings-danger/);
+  assert.match(dashboard, /Wallet compatibility/);
   assert.match(dashboard, /walletCapabilities/);
   assert.match(dashboard, /panelId="receipt-lookup-pda"/);
   assert.equal(dashboard.includes("inputMode=\"decimal\""), false, "Astryx TextInput 0.6.1 has no inputMode prop");
@@ -160,18 +160,18 @@ test("DashboardNav renders ordered workspace and secondary destinations", async 
       }));
     });
     const labels = [...host.querySelectorAll("button")].map((button) => button.textContent ?? "");
-    for (const label of ["Overview", "Agents", "Spending permissions", "Payments", "Receipts", "Requests", "Developer tools", "Protocol", "Settings", "Back to site"]) {
+    for (const label of ["Overview", "Agents", "Spending permissions", "Requests", "Payments", "Settings", "Back to site"]) {
       assert.ok(labels.some((text) => text.includes(label)), `missing ${label}`);
     }
-    assert.deepEqual(labels.slice(0, 6), ["Overview", "Agents", "Spending permissions", "Payments", "Receipts", "Requests"]);
+    assert.deepEqual(labels.slice(0, 6), ["Overview", "Agents", "Spending permissions", "Requests", "Payments", "Settings"]);
     // connect-mcp stays a compatibility route and out of the nav, so the sidebar
     // must not offer it. Keeping this from the stack: nav.ts deliberately filters
     // it via SIDEBAR_DASHBOARD_TABS, and dashboardNavCoversAllTabs() counts on it.
     assert.equal(labels.some((text) => text.includes("Connect MCP")), false);
     assert.equal(labels.some((text) => text.includes("Connect agent")), false);
-    const protocol = [...host.querySelectorAll("button")].find((button) => /Protocol/.test(button.textContent ?? ""));
+    const protocol = [...host.querySelectorAll("button")].find((button) => /Settings/.test(button.textContent ?? ""));
     await act(async () => { protocol.click(); });
-    assert.deepEqual(selected, ["protocol"]);
+    assert.deepEqual(selected, ["settings"]);
 
     await act(async () => {
       reactRoot.render(createElement(DashboardMobileNav, {
@@ -186,7 +186,7 @@ test("DashboardNav renders ordered workspace and secondary destinations", async 
     assert.ok(dialog);
     assert.equal(dialog.getAttribute("aria-label"), "Dashboard navigation");
     const destinations = [...dialog.querySelectorAll("button")].map((button) => button.textContent ?? "");
-    assert.ok(destinations.some((text) => text.includes("Protocol")));
+    assert.ok(destinations.some((text) => text.includes("Settings")));
     dialog.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     const close = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Close");
     await act(async () => { close.click(); });

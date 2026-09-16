@@ -9,15 +9,12 @@ export type DashboardNavItem = {
 };
 
 export const DASHBOARD_NAV_ITEMS: DashboardNavItem[] = [
-  { id: "overview", label: "Overview", icon: "⌂", group: "workspace" },
-  { id: "agents", label: "Agents", icon: "⌁", group: "workspace" },
-  { id: "mandates", label: "Spending permissions", icon: "◇", group: "workspace" },
-  { id: "payments", label: "Payments", icon: "↗", group: "workspace" },
-  { id: "receipts", label: "Receipts", icon: "▤", group: "workspace" },
-  { id: "assistant", label: "Requests", icon: "◉", group: "workspace" },
-  { id: "tools", label: "Developer tools", icon: "⌘", group: "tools" },
-  { id: "protocol", label: "Protocol", icon: "⚖", group: "admin" },
-  { id: "settings", label: "Settings", icon: "⚙", group: "admin" },
+  { id: "overview", label: "Overview", icon: "house", group: "workspace" },
+  { id: "agents", label: "Agents", icon: "bot", group: "workspace" },
+  { id: "mandates", label: "Spending permissions", icon: "shield", group: "workspace" },
+  { id: "assistant", label: "Requests", icon: "inbox", group: "workspace" },
+  { id: "payments", label: "Payments", icon: "payments", group: "workspace" },
+  { id: "settings", label: "Settings", icon: "settings", group: "admin" },
 ];
 
 export function dashboardNavItems(group: DashboardNavItem["group"]) {
@@ -25,7 +22,7 @@ export function dashboardNavItems(group: DashboardNavItem["group"]) {
 }
 
 /** Sidebar-visible tabs. `/app/connect-mcp` remains a compatibility route only. */
-export const SIDEBAR_DASHBOARD_TABS = DASHBOARD_TABS.filter((tab) => tab !== "connect-mcp");
+export const SIDEBAR_DASHBOARD_TABS = DASHBOARD_TABS.filter((tab) => !["connect-mcp", "receipts", "tools", "protocol"].includes(tab));
 
 export function dashboardNavCoversAllTabs() {
   const ids = DASHBOARD_NAV_ITEMS.map((item) => item.id);

@@ -17,7 +17,7 @@ async function loadPurchaseCard() {
     entryPoints: ["src/owner/purchaseCard.ts"],
     bundle: true,
     format: "esm",
-    platform: "neutral",
+    platform: "node",
     outfile,
   });
   const module = await import(`${pathToFileURL(outfile).href}?t=${Date.now()}`);
@@ -96,10 +96,10 @@ test("overview attention counts derive from inbox stages", async () => {
 
 test("dashboard overview uses live purchase stats instead of hard-coded pending zero", async () => {
   const dashboard = await readFile(join(srcRoot, "dashboard/Dashboard.tsx"), "utf8");
-  assert.match(dashboard, /LIVE PURCHASES/);
-  assert.match(dashboard, /inboxCounts\.pendingTotal/);
+  assert.match(dashboard, /<OwnerOverview/);
+  assert.match(dashboard, /attention=\{attentionItems\}/);
   assert.equal(/PENDING PAYMENTS<\/span><strong>0<\/strong>/.test(dashboard), false);
-  assert.match(dashboard, /OverviewLivePurchases/);
+  assert.match(dashboard, /attentionInboxItems\(agentInbox\)/);
   assert.match(dashboard, /PurchaseCard/);
 });
 
@@ -139,3 +139,9 @@ test("a purchase amount is only decimal-formatted when the mints match", async (
   assert.match(purchaseCard, /mint === mandate\?\.allowedMint/);
   assert.match(purchaseCard, /if \(!mintsMatch \|\| mandateDecimals === null\) return `\$\{amount\} base units`/);
 });
+
+ test("attention excludes completed, archived and in-progress requests", async () => {
+ const { attentionInboxItems } = await loadPurchaseCard();
+ const rows = ["waiting_for_approval", "needs_details", "blocked", "receipt_ready", "policy_checked", "approved"].map((stage) => ({ id: stage, stage }));
+ assert.deepEqual(attentionInboxItems(rows).map(row => row.id), ["waiting_for_approval", "needs_details", "blocked"]);
+ });

@@ -154,9 +154,9 @@ test("Dashboard empty overview and settings no longer invent this wallet's payme
   assert.match(dashboard, /FIRST_MANDATE_TITLE/);
   assert.match(dashboard, /EmptyOwnerOverview/);
   assert.match(emptyOverview, /EMPTY_OWNER_ACTIVITY/);
-  assert.match(dashboard, /Owned mandate/);
+  assert.match(dashboard, /Spending permission/);
   assert.match(dashboard, /allowPayments/);
-  assert.match(dashboard, /Permit payments within this mandate/);
+  assert.match(dashboard, /Allow payments/);
   assert.match(dashboard, /Solana Devnet/);
   // The Notifications tab was removed. Its panel said "There is no webhook or
   // email delivery in this build. Nothing here can be saved." — this test's

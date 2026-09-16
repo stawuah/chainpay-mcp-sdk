@@ -130,3 +130,16 @@ test("session subscribers observe login, rejection and owner changes", async t =
   f.setSessionWallet(null);
   assert.equal(observed.at(-1), false);
 });
+
+
+test("challenge deployment rejection never asks the wallet to sign or sends a private request", async t => {
+  let signatures = 0;
+  const f = await fixture(t, { signMessage: async () => { signatures++; return new Uint8Array(64); } });
+  const requests = [];
+  globalThis.fetch = async (url) => { requests.push(String(url)); return Response.json({error:"unauthorized"}, {status:401}); };
+  await assert.rejects(f.authorizedFetch("https://chainpay.example/v1/payments/fixture"), /deployment or allowed website addresses/);
+  assert.equal(signatures, 0);
+  assert.equal(f.hasReadySession(), false);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0], /auth\/challenge/);
+});

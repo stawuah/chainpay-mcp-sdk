@@ -10,7 +10,7 @@ await blockExternal(page);
 await page.goto(`${BASE_URL}/test/fixtures/dashboard-nav.html`);
 await page.getByRole("navigation").waitFor();
 
-const labels = ["Overview", "Spending permissions", "Payments", "Agents", "Receipts", "Requests", "Developer tools", "Protocol", "Settings"];
+const labels = ["Overview", "Agents", "Spending permissions", "Requests", "Payments", "Settings"];
 for (const label of labels) {
   assert.ok(
     await page.getByRole("button", { name: label }).count() > 0,
@@ -26,7 +26,7 @@ await page.getByRole("button", { name: /^Requests/ }).click();
 assert.equal(await page.getByTestId("active-tab").textContent(), "assistant");
 
 await page.goto(`${BASE_URL}/app/connect-mcp`);
-await page.getByRole("heading", { name: /Set up your first mandate|Agents/i }).waitFor();
+await page.getByRole("heading", { name: /Connect your wallet|Agents/i }).waitFor();
 assert.equal((await page.locator("body").innerText()).includes("Connect MCP"), false);
 
 assert.deepEqual(errors, []);

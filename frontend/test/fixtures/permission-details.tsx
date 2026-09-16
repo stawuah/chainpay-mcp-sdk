@@ -11,6 +11,7 @@ import { Router } from "../../src/routing/Router";
 import { MandatesPanel } from "../../src/dashboard/Dashboard";
 import { chainpayClient } from "../../src/config/client";
 
+chainpayClient.connection.getAccountInfo = async () => null;
 chainpayClient.getCurrentSlot = async () => 420000000n;
 chainpayClient.getMintDecimals = async () => { throw new Error("Metadata unavailable fixture"); };
 chainpayClient.connection.getRecentPerformanceSamples = async () => [];

@@ -24,72 +24,61 @@ type CopyContext = {
 const STATIC: Record<Exclude<DashboardTab, "overview" | "mandates">, TabCopy> = {
   agents: {
     kicker: "AGENT ACCESS",
-    title: "Agents.",
+    title: "Agents",
     subtitle:
-      "Pair an external MCP client or use the dashboard assistant. Your mandate sets the spend limit; pairing controls who may call payment tools.",
+      "Manage your agents, their access, and their activity.",
   },
   "connect-mcp": {
     kicker: "AGENT ACCESS",
-    title: "Agents.",
+    title: "Agents",
     subtitle:
-      "Pair an external MCP client or use the dashboard assistant. Your mandate sets the spend limit; pairing controls who may call payment tools.",
+      "Manage your agents, their access, and their activity.",
   },
   payments: {
     kicker: "SETTLEMENT",
-    title: "Route a payment.",
-    subtitle: "Check the request, then approve the payment in your wallet.",
+    title: "Payments",
+    subtitle: "Track payments and open their receipts.",
   },
   receipts: {
     kicker: "PROOF OF PAYMENT",
-    title: "Receipts.",
+    title: "Payment receipt",
     subtitle: "Preview, verify, and send durable proof for every confirmed settlement.",
   },
   assistant: {
     kicker: "PAYMENT REQUESTS",
-    title: "Requests.",
+    title: "Requests",
     subtitle:
-      "Bring an invoice or payment request here. ChainPay verifies it against your mandate and shows what the agent is buying before wallet approval.",
+      "Review what needs you and follow your requests.",
   },
   tools: {
     kicker: "AGENT INTERFACE",
-    title: "Developer tools.",
-    subtitle: "The exact tools agents can call. Nothing else is exposed.",
+    title: "Developer tools",
+    subtitle: "Technical reference for agent integrations. Access depends on the connection’s scope.",
   },
   protocol: {
     kicker: "PROGRAM ADMIN",
-    title: "Protocol setup.",
+    title: "Protocol administration",
     subtitle: "Initialize the protocol asset list from the authority wallet.",
   },
   settings: {
     kicker: "ACCOUNT",
-    title: "Settings.",
-    subtitle: "Solana Devnet status, wallet controls, and account actions.",
+    title: "Settings",
+    subtitle: "Manage your wallet, account access, and advanced tools.",
   },
 };
 
 export function tabCopy(tab: DashboardTab, context: CopyContext): TabCopy {
   if (tab === "overview") {
-    return context.hasMandates
-      ? {
-          kicker: "SPEND OVERVIEW",
-          title: "Overview.",
-          subtitle:
-            "Spend so far against the limit you approved, and anything waiting on you.",
-        }
-      : {
-          kicker: "CONTROL CENTER",
-          title: `${FIRST_MANDATE_TITLE}.`,
-          subtitle: "Connect your wallet, set your limits, then give your agent access.",
-        };
+    return { kicker: "", title: "Overview", subtitle: "Your agents, spending, and what needs you." };
   }
 
   if (tab === "mandates") {
     return {
       kicker: "POLICY CONTROL",
-      title: "Spending permissions.",
+      title: context.mandateCreateOpen ? "New spending permission" : "Spending permissions",
       subtitle: context.mandateCreateOpen
-        ? "Create a policy for an agent to follow before a payment can be signed."
-        : "A mandate is an on-chain spending permission. Review the rules your agent must follow before paying.",
+        ? "A few clear limits. You stay in control."
+        : "Decide how much your agents can spend.",
     };
   }
 

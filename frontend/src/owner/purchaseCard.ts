@@ -171,8 +171,6 @@ export function attentionInboxItems(inbox: AgentInboxItem[]): AgentInboxItem[] {
     item.stage === "waiting_for_approval"
     || item.stage === "needs_details"
     || item.stage === "blocked"
-    || item.stage === "receipt_ready"
-    || item.stage === "policy_checked"
   ));
 }
 

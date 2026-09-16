@@ -13,7 +13,6 @@ export function PageHeader({ copy, action }: { copy: TabCopy; action?: ReactNode
   return (
     <div className="dashboard-heading">
       <div className="dashboard-heading-text">
-        <span className="section-kicker">{copy.kicker}</span>
         <h1 className="t-xl">{copy.title}</h1>
         <p>{copy.subtitle}</p>
       </div>
