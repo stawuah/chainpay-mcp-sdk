@@ -28,7 +28,9 @@ It does not describe every current route or interaction.
 
 The runnable app is Vite and React with Astryx 0.6.1, its neutral theme, and
 StyleX. Extend [ChainPayTheme](../src/theme/ChainPayTheme.tsx) and the existing
-controls instead of introducing another UI system.
+controls instead of introducing another UI system. Tailwind, shadcn/ui and Radix
+were removed from this app deliberately; do not reintroduce any of them, and do
+not add a second component library alongside Astryx.
 
 Follow the actual import order in the app entry points. Theme and overrides
 live in `frontend/src/theme/`; legacy token CSS remains in `frontend/skill/assets/`
@@ -51,6 +53,30 @@ current theme sets 44px small/medium controls and 24px container radii.
   Current mandate state is not a historical policy snapshot.
 - Use real loading, empty, unavailable, rejected, and pending states. Do not fill
   empty dashboards with unmarked sample financial data.
+
+## Exact words and exact numbers
+
+These two are mechanical. A reviewer can grep for them, so there is no judgement
+call and no exception.
+
+**Amounts stay `bigint` or string, end to end.** A u64 token amount must never
+pass through JavaScript `Number`, `parseInt`, `parseFloat` or `toFixed`. Above
+2^53 those silently round, and a rounded amount in a payment UI is a wrong
+amount. Format with the decimals of the payment's own mint -- never another
+mint's, and never a mandate's when the two differ.
+
+**Status words are fixed.** Use exactly these, with this capitalisation, and do
+not invent synonyms:
+
+| subject | permitted values |
+|---|---|
+| mandate | Active, Paused, Revoked |
+| payment | Prepared, Submitted, Confirmed, Failed |
+| receipt | Allowed, Paid, plus the seller-statement states |
+
+"Confirmed" and "Paid" require a finalized signature and a verified on-chain
+receipt. Nothing else may imply settlement -- in particular a seller delivery
+statement is optional and off-chain, and never turns a receipt into Paid.
 
 ## Routes and accessibility
 
