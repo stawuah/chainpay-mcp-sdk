@@ -71,10 +71,10 @@ export function tabCopy(tab: DashboardTab, context: CopyContext): TabCopy {
   if (tab === "overview") {
     return context.hasMandates
       ? {
-          kicker: "CONTROL CENTER",
-          title: "Good to see you.",
+          kicker: "SPEND OVERVIEW",
+          title: "Overview.",
           subtitle:
-            "Live purchases from your agent, checked against the mandate you already approved.",
+            "Spend so far against the limit you approved, and anything waiting on you.",
         }
       : {
           kicker: "CONTROL CENTER",

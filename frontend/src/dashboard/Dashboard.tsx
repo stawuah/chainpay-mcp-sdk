@@ -32,7 +32,9 @@ import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Arrow, Shield, shortAddress } from "../ui/marks";
 import { DashboardMobileNav, DashboardNav } from "./DashboardNav";
 import { PageHeader } from "./PageHeader";
+import { SpendMeter } from "./charts/SpendMeter";
 import { tabCopy } from "./tabCopy";
+import { TOOL_GROUPS, requiredParams, toolGroup } from "./toolGroups";
 import { reviewExactAmount } from "../owner/amounts";
 import { buildConnectionScope, ownedMandateAddresses } from "../owner/connectionScope";
 import { EmptyOwnerOverview } from "../owner/EmptyOwnerOverview";
@@ -981,7 +983,31 @@ export function Dashboard({
                 />
               ) : (
                 <>
-                  <section className="dashboard-stat-grid"><div className="dashboard-stat"><span className="soft-label">ACTIVE MANDATES</span><strong>{mandates.filter((value) => value.status === "active").length}</strong><small>{`${mandates.length} policy account${mandates.length === 1 ? "" : "s"} found on-chain`}</small></div><div className="dashboard-stat"><span className="soft-label">SELECTED SPEND</span><strong className="mono">{spent}</strong><small>{mandateDecimals === null ? "Reading token decimals" : "Selected mandate · Devnet"}</small></div><div className="dashboard-stat"><span className="soft-label">LIVE PURCHASES</span><strong>{inboxCounts.pendingTotal + inboxCounts.receiptReady}</strong><small>{inboxCounts.waiting ? `${inboxCounts.waiting} waiting for wallet approval` : inboxCounts.pendingTotal ? "Needs details or blocked" : inboxCounts.receiptReady ? "Receipt ready in Requests" : "No active agent purchases"}</small></div><div className="dashboard-stat"><span className="soft-label">AGENTS PAIRED</span><strong>{connections.length || (hostedAssistantStatus === "available" ? 1 : 0)}</strong><small>{connections.length ? `${liveConnectionCount} live MCP client${liveConnectionCount === 1 ? "" : "s"}` : hostedAssistantStatus === "available" ? "Dashboard assistant ready" : "Connect an agent to begin"}</small></div></section>
+                  {mandate && mandate.totalLimit > 0n && (
+                    <section className="dashboard-card spend-hero" aria-labelledby="spend-hero-title">
+                      <div className="spend-hero-head">
+                        <div>
+                          <span className="section-kicker">AUTHORIZED SPEND</span>
+                          <h2 id="spend-hero-title">{mandateDisplayName(mandate, mandates, stablecoinOptions)}</h2>
+                        </div>
+                        <span className={`mandate-table-status ${mandate.status}`}>
+                          <span className="mandate-status-check">✓</span>{mandateStatusLabel(mandate.status)}
+                        </span>
+                      </div>
+                      <SpendMeter
+                        spent={mandate.amountSpent}
+                        limit={mandate.totalLimit}
+                        decimals={mandateDecimals}
+                        symbol={stablecoinOptions.find((option) => option.mint === mandate.allowedMint)?.label ?? "tokens"}
+                      />
+                      <dl className="spend-hero-facts">
+                        <div><dt>Max per payment</dt><dd className="t-num">{formatTokenAmount(mandate.maxPerPayment, mandateDecimals)}</dd></div>
+                        <div><dt>Payments made</dt><dd className="t-num">{mandate.paymentCount.toString()}</dd></div>
+                        <div><dt>Expires</dt><dd className="t-num">Slot {mandate.expiresAtSlot.toString()}</dd></div>
+                      </dl>
+                    </section>
+                  )}
+                  <section className="dashboard-stat-grid"><div className="dashboard-stat"><span className="soft-label">ACTIVE MANDATES</span><strong>{mandates.filter((value) => value.status === "active").length}</strong><small>{`${mandates.length} policy account${mandates.length === 1 ? "" : "s"} found on-chain`}</small></div><div className="dashboard-stat"><span className="soft-label">LIVE PURCHASES</span><strong>{inboxCounts.pendingTotal + inboxCounts.receiptReady}</strong><small>{inboxCounts.waiting ? `${inboxCounts.waiting} waiting for wallet approval` : inboxCounts.pendingTotal ? "Needs details or blocked" : inboxCounts.receiptReady ? "Receipt ready in Requests" : "No active agent purchases"}</small></div><div className="dashboard-stat"><span className="soft-label">AGENTS PAIRED</span><strong>{connections.length || (hostedAssistantStatus === "available" ? 1 : 0)}</strong><small>{connections.length ? `${liveConnectionCount} live MCP client${liveConnectionCount === 1 ? "" : "s"}` : hostedAssistantStatus === "available" ? "Dashboard assistant ready" : "Connect an agent to begin"}</small></div></section>
                   <OverviewLivePurchases
                     attentionItems={attentionItems}
                     stablecoinOptions={stablecoinOptions}
@@ -2768,16 +2794,66 @@ function ToolsPanel({ mcpTools }: { mcpTools: McpTool[] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const liveToolNames = new Set(mcpTools.map((tool) => tool.name));
   const tools = mcpTools.length ? [...mcpTools, ...coreToolReferences.filter((tool) => !liveToolNames.has(tool.name))] : coreToolReferences;
-  return <section className="page-panel reference-list">
-    {tools.map((tool) => {
-      const schema = "inputSchema" in tool && tool.inputSchema ? tool.inputSchema : { type: "object", properties: {}, additionalProperties: false };
-      return <article className="dashboard-card reference-card" key={tool.name}>
-        <div className="reference-heading"><span className="chip chip-blue mono">{tool.name}</span><span className="chip chip-muted">All connected agents</span></div>
-        <p>{tool.description ?? "ChainPay agent tool"}</p>
-        <Button type="button" variant="ghost" className="reference-toggle" label={`${expanded === tool.name ? "⌃" : "⌄"} Input schema`} isDisabled={false} onClick={() => setExpanded(expanded === tool.name ? null : tool.name)} aria-expanded={expanded === tool.name} />
-        {expanded === tool.name && <pre className="schema-block">{JSON.stringify(schema, null, 2)}</pre>}
-      </article>;
-    })}
+
+  // Deterministic order. The live list arrives in whatever order the server
+  // returns, so the page used to reshuffle between reads.
+  const grouped = [...TOOL_GROUPS, { id: "other" as const, label: "Other", blurb: "" }]
+    .map((group) => ({
+      group,
+      members: tools
+        .filter((tool) => toolGroup(tool.name) === group.id)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+    .filter((entry) => entry.members.length > 0);
+
+  return <section className="page-panel tools-panel">
+    <p className="tools-surface-note">
+      <b>{tools.length} tools.</b> Nothing else is exposed, and none of them can move funds outside a mandate.
+      Every paired agent can call all of them.
+    </p>
+    {grouped.map(({ group, members }) => (
+      <div className="tool-group" key={group.id}>
+        <div className="tool-group-head">
+          <h2>{group.label}</h2>
+          <span className="chip chip-muted">{members.length}</span>
+          {group.blurb ? <p>{group.blurb}</p> : null}
+        </div>
+        <ul className="tool-rows">
+          {members.map((tool) => {
+            const schema = "inputSchema" in tool && tool.inputSchema ? tool.inputSchema : { type: "object", properties: {}, additionalProperties: false };
+            const required = requiredParams(schema);
+            const open = expanded === tool.name;
+            return (
+              <li className="tool-row" key={tool.name}>
+                <div className="tool-row-main">
+                  <code className="tool-row-name">{tool.name}</code>
+                  <p className="tool-row-desc">{tool.description ?? "ChainPay agent tool"}</p>
+                  {required.length > 0 && (
+                    <p className="tool-row-required">
+                      <span>Requires</span> <code>{required.join(", ")}</code>
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="tool-row-toggle"
+                  label={open ? "Hide schema" : "Input schema"}
+                  isDisabled={false}
+                  onClick={() => setExpanded(open ? null : tool.name)}
+                  aria-expanded={open}
+                />
+                {open && (
+                  <pre className="schema-block" tabIndex={0} aria-label={`Input schema for ${tool.name}`}>
+                    {JSON.stringify(schema, null, 2)}
+                  </pre>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    ))}
   </section>;
 }
 

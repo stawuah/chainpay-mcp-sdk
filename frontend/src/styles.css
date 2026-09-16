@@ -2427,3 +2427,156 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .cp-app .dashboard-network.loading i { background: var(--muted); }
 
 .cp-app .integration-strip { padding-block: 10px; font-size: 11px; }
+
+/* Spend against the authorized limit — the Overview hero.
+
+   The largest type on this page used to be "Good to see you.", which carries no
+   information, while the numbers that answer "are my limits holding?" sat
+   beneath it in 12px tiles. */
+.cp-app .spend-hero { padding: 28px 32px; margin-bottom: 20px; }
+.cp-app .spend-hero-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+.cp-app .spend-hero-head h2 { margin-top: 6px; font-size: 20px; font-weight: 500; letter-spacing: -.02em; }
+
+.spend-meter-headroom { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.spend-meter-headroom .soft-label { align-self: center; }
+.spend-meter-headroom strong {
+  color: var(--ink);
+  font: 500 34px/1 var(--mono);
+  letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+}
+.spend-meter-symbol { color: var(--body); font: 500 15px var(--mono); }
+
+.spend-meter-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 100px;
+  background: var(--strong);
+}
+.spend-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 100px;
+  background: var(--blue);
+  transition: width .4s ease;
+}
+.spend-meter-track.is-exhausted .spend-meter-fill { background: var(--red); }
+@media (prefers-reduced-motion: reduce) {
+  .spend-meter-fill { transition: none; }
+}
+
+.spend-meter-legend {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 10px;
+  color: var(--body);
+  font-size: 12px;
+}
+.spend-meter-legend b { color: var(--ink); font-weight: 600; }
+.spend-meter-legend .t-num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.cp-app .spend-hero-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin: 24px 0 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--line-soft);
+}
+.cp-app .spend-hero-facts div { min-width: 0; }
+.cp-app .spend-hero-facts dt { color: #6a7183; font: 600 10px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.cp-app .spend-hero-facts dd {
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font: 500 14px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.spend-sparkline-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  color: #6a7183;
+  font: 500 10px var(--mono);
+}
+.spend-sparkline.is-empty p { color: var(--muted); font-size: 12px; }
+
+@media (max-width: 720px) {
+  .cp-app .spend-hero { padding: 22px 18px; }
+  .cp-app .spend-hero-facts { grid-template-columns: minmax(0, 1fr); }
+  .spend-meter-headroom strong { font-size: 28px; }
+}
+
+/* When the mint's decimals have not been read, formatTokenAmount correctly
+   falls back to exact base units rather than guessing a decimal count. At the
+   hero's 34px that integer becomes a wall, so the raw state renders smaller and
+   says why. The number is never rounded to make it fit. */
+.spend-meter-headroom.is-raw { margin-bottom: 10px; }
+.spend-meter-headroom.is-raw strong { font-size: 20px; letter-spacing: 0; }
+.spend-meter-raw-note { margin: -6px 0 14px; color: #6a7183; font-size: 11px; line-height: 1.5; }
+.cp-app .dashboard-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* Developer tools: a grouped list, not twelve identical full-width cards.
+   The card layout ran the page past 2,700px and repeated the same chip on
+   every row, which is the "repeated generic feature cards" anti-reference in
+   PRODUCT.md. */
+.cp-app .tools-surface-note {
+  padding: 14px 18px;
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-element, 10px);
+  background: #f7faff;
+  color: var(--body);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.cp-app .tools-surface-note b { color: var(--ink); font-weight: 600; }
+
+.cp-app .tool-group { margin-bottom: 30px; }
+.cp-app .tool-group-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.cp-app .tool-group-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.cp-app .tool-group-head p { flex: 1 1 100%; color: var(--body); font-size: 12px; line-height: 1.5; }
+
+.cp-app .tool-rows { padding: 0; margin: 0; list-style: none; }
+.cp-app .tool-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.cp-app .tool-row:last-child { border-bottom: 0; }
+.cp-app .tool-row-main { min-width: 0; }
+.cp-app .tool-row-name {
+  color: var(--blue);
+  font: 500 13px var(--mono);
+  overflow-wrap: anywhere;
+}
+.cp-app .tool-row-desc { margin-top: 5px; color: var(--body); font-size: 13px; line-height: 1.55; }
+.cp-app .tool-row-required { margin-top: 6px; color: #6a7183; font-size: 11px; }
+.cp-app .tool-row-required code { font: 400 11px var(--mono); overflow-wrap: anywhere; }
+.cp-app .tool-row-toggle { min-height: 34px; white-space: nowrap; }
+.cp-app .tool-row .schema-block {
+  grid-column: 1 / -1;
+  max-width: 100%;
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+@media (max-width: 720px) {
+  .cp-app .tool-row { grid-template-columns: minmax(0, 1fr); }
+  .cp-app .tool-row-toggle { justify-self: start; }
+}

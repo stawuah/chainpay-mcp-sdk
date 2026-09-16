@@ -67,7 +67,7 @@ export function DashboardNav({ tab, approvalCount = 0, toolCount = 0, onSelect, 
           key={item.id}
           item={item}
           current={tab === item.id || (item.id === "agents" && tab === "connect-mcp")}
-          endLabel={item.id === "tools" ? String(toolCount || 4) : undefined}
+          endLabel={item.id === "tools" && toolCount > 0 ? String(toolCount) : undefined}
           onSelect={onSelect}
         />
       ))}
