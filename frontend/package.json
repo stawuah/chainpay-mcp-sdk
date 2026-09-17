@@ -4,17 +4,35 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test:dashboard-preview": "node test/dashboard-redesign.browser.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "test:permission-browser": "node test/permission-details.browser.mjs",
+    "test:landing-browser": "node test/landing.browser.mjs",
+    "test:landing-motion-browser": "node test/landing-motion.browser.mjs",
+    "test:verify-public-browser": "node test/verify-public.browser.mjs",
+    "test:dashboard-nav-browser": "node test/dashboard-nav.browser.mjs",
+    "test:live-purchase-browser": "node test/live-purchase.browser.mjs",
+    "test:record-details-scope-browser": "node test/record-details-scope.browser.mjs",
+    "test:browser": "npm run test:landing-browser && npm run test:landing-motion-browser && npm run test:permission-browser && npm run test:verify-public-browser && npm run test:dashboard-nav-browser && npm run test:live-purchase-browser && npm run test:record-details-scope-browser",
+    "test:owner-onboarding-browser": "node test/owner-onboarding.browser.mjs",
+    "test:dashboard-owner": "node test/dashboard-owner.browser.mjs"
   },
   "dependencies": {
+    "@astryxdesign/core": "0.6.1",
+    "@astryxdesign/theme-neutral": "0.6.1",
     "@chainpay/sdk": "file:../sdk",
-    "@solana/wallet-standard-features": "^1.4.0",
+    "@solana/wallet-standard-features": "1.5.0",
+    "@stylexjs/stylex": "^0.19.0",
     "@wallet-standard/app": "^1.1.1",
     "@wallet-standard/base": "^1.1.1",
     "@wallet-standard/features": "^1.1.1",
     "buffer": "^6.0.3",
+    "gsap": "^3.15.0",
+    "lenis": "^1.3.26",
+    "lucide-react": "1.46.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
@@ -22,7 +40,13 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.6.0",
+    "esbuild": "^0.28.1",
+    "jsdom": "^30.0.1",
+    "playwright": "^1.49.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
+  },
+  "overrides": {
+    "nanoid": "3.3.18"
   }
 }

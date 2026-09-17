@@ -16,7 +16,7 @@ import type {
   TokenProgram,
 } from "./types.js";
 import { DEFAULT_PROGRAM_ID, DEVNET_RPC_URL, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "./constants.js";
-import { decodeMandate, decodePaymentReceipt, decodeProtocolConfig, decodeSupportedAsset } from "./accounts.js";
+import { decodeMandate, decodeProtocolConfig, decodeSupportedAsset } from "./accounts.js";
 import {
   address,
   publicKey,
@@ -24,6 +24,7 @@ import {
 } from "./encoding.js";
 import {
   type CreateMandateInput,
+  buildApproveDelegateInstruction,
   buildCreateMandateTransaction,
   buildInitializeConfigInstruction,
   buildPauseMandateInstruction,
@@ -41,6 +42,17 @@ import {
   type PreparePaymentInput,
 } from "./payment.js";
 import { deriveAssetAddress, deriveConfigAddress, deriveReceiptAddress } from "./pda.js";
+import { paymentPreflightContextFromTokenAccount } from "./token.js";
+import {
+  amountDisplayFromMint,
+  readCurrentMandateFields,
+  readPaymentReceiptAccount,
+  readPublicSettledReceipt,
+  readVerifiedMintDecimals,
+  type CurrentMandateRead,
+  type PublicReceiptProof,
+  type ReceiptReadResult,
+} from "./receipt.js";
 import { inspectTokenCapabilities } from "./token-capabilities.js";
 
 export type PaymentLookup =
@@ -86,8 +98,8 @@ export class ChainPayClient {
       // payments do not make the creation time look newer than it is.
       const historyCommitment: "confirmed" | "finalized" =
         this.commitment === "finalized" ? "finalized" : "confirmed";
-      for (let page = 0; page < 10; page += 1) {
-        const options: { limit: number; before?: string } = { limit: 1_000 };
+      for (let page = 0; page < 100; page += 1) {
+        const options: { limit: number; before?: string } = { limit: 100 };
         if (before) options.before = before;
         const signatures = await this.connection.getSignaturesForAddress(
           publicKey(mandateAddress),
@@ -96,7 +108,7 @@ export class ChainPayClient {
         );
         if (signatures.length === 0) break;
         oldest = signatures[signatures.length - 1];
-        if (signatures.length < 1_000) break;
+        if (signatures.length < 100) break;
         before = oldest.signature;
       }
 
@@ -180,7 +192,79 @@ export class ChainPayClient {
       ? address(lookup)
       : deriveReceiptAddress(lookup.mandate, lookup.invoiceHash, this.programId);
     const account = await this.getProgramAccount(receiptAddress);
-    return account ? decodePaymentReceipt(account.data, account.address) : null;
+    if (!account) return null;
+    const result = readPaymentReceiptAccount(
+      { address: account.address, owner: this.programId, data: account.data },
+      { programId: this.programId, requireSettled: false },
+    );
+    if (!result.valid) throw new Error(result.reason);
+    return result.receipt;
+  }
+
+  /**
+   * Current mandate account fields only. Does not page creation history or
+   * load source token metadata. Public verify uses this for optional
+   * enrichment; failure must not invalidate a settled receipt.
+   */
+  async getCurrentMandateFields(mandateAddress: Address): Promise<CurrentMandateRead> {
+    const currentSlot = await this.getCurrentSlot();
+    try {
+      const account = await this.getProgramAccount(mandateAddress);
+      return readCurrentMandateFields(
+        account ? { address: account.address, owner: this.programId, data: account.data } : null,
+        { programId: this.programId, currentSlot, expectedAddress: mandateAddress },
+      );
+    } catch (error) {
+      return {
+        status: "unavailable",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  async getVerifiedSettledPayment(receiptAddress: Address): Promise<ReceiptReadResult> {
+    const normalized = address(receiptAddress);
+    const info = await this.connection.getAccountInfo(publicKey(normalized), this.commitment);
+    if (!info) {
+      return { valid: false, code: "not_found", reason: "Receipt account not found" };
+    }
+    return readPublicSettledReceipt(
+      { address: normalized, owner: info.owner.toBase58(), data: new Uint8Array(info.data) },
+      { programId: this.programId },
+    );
+  }
+
+  async readPublicReceipt(receiptAddress: Address): Promise<PublicReceiptProof> {
+    const receipt = await this.getVerifiedSettledPayment(receiptAddress);
+    if (!receipt.valid) {
+      return { receipt, amount: null, currentMandate: { status: "absent" } };
+    }
+
+    let mintAccount: { owner: Address; data: Uint8Array } | null = null;
+    try {
+      const mintInfo = await this.connection.getAccountInfo(publicKey(receipt.receipt.mint), this.commitment);
+      if (mintInfo) {
+        mintAccount = { owner: mintInfo.owner.toBase58(), data: new Uint8Array(mintInfo.data) };
+      }
+    } catch {
+      mintAccount = null;
+    }
+
+    let currentMandate: CurrentMandateRead = { status: "absent" };
+    try {
+      currentMandate = await this.getCurrentMandateFields(receipt.receipt.mandate);
+    } catch (error) {
+      currentMandate = {
+        status: "unavailable",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    return {
+      receipt,
+      amount: amountDisplayFromMint(receipt.receipt.amount, mintAccount),
+      currentMandate,
+    };
   }
 
   async getPaymentsByMandate(mandateAddress: Address): Promise<PaymentReceipt[]> {
@@ -207,13 +291,22 @@ export class ChainPayClient {
         // The receipt itself remains verifiable if transaction history is
         // temporarily unavailable. The dashboard can retry enrichment.
       }
-      return decodePaymentReceipt(
-        new Uint8Array(account.account.data),
-        account.pubkey.toBase58(),
-        transactionSignature,
+      const result = readPaymentReceiptAccount(
+        {
+          address: account.pubkey.toBase58(),
+          owner: account.account.owner.toBase58(),
+          data: new Uint8Array(account.account.data),
+        },
+        { programId: this.programId, requireSettled: false, transactionSignature },
       );
+      // The getProgramAccounts filter is dataSize plus a memcmp on the mandate;
+      // it does not check the receipt discriminator. Any program-owned 282-byte
+      // account matching those bytes lands here, and a partially initialized or
+      // future account type would otherwise reject the whole Promise.all and
+      // empty an owner's entire history. Skip the row, keep the rest.
+      return result.valid ? result.receipt : null;
     }));
-    return receipts.sort((left, right) => (
+    return receipts.filter((receipt): receipt is PaymentReceipt => receipt !== null).sort((left, right) => (
       left.executedAtSlot === right.executedAtSlot
         ? right.address.localeCompare(left.address)
         : left.executedAtSlot > right.executedAtSlot ? -1 : 1
@@ -231,12 +324,15 @@ export class ChainPayClient {
   async getMintDecimals(mint: Address): Promise<number> {
     const account = await this.connection.getAccountInfo(publicKey(mint), this.commitment);
     if (!account) throw new Error(`Mint account not found: ${mint}`);
-    const owner = account.owner.toBase58();
-    if (owner !== SPL_TOKEN_PROGRAM_ID && owner !== TOKEN_2022_PROGRAM_ID) {
-      throw new Error(`Mint is not owned by a supported token program: ${owner}`);
+    const decimals = readVerifiedMintDecimals({
+      owner: account.owner.toBase58(),
+      data: new Uint8Array(account.data),
+    });
+    if (!decimals.ok && decimals.reason === "unsupported_owner") {
+      throw new Error(`Mint is not owned by a supported token program: ${account.owner.toBase58()}`);
     }
-    if (account.data.length <= 44) throw new Error("Mint account data is truncated");
-    return account.data[44];
+    if (!decimals.ok) throw new Error("Mint account data is truncated");
+    return decimals.decimals;
   }
 
   async buildCreateMandate(
@@ -330,6 +426,16 @@ export class ChainPayClient {
     };
   }
 
+  buildApproveDelegate(
+    input: Parameters<typeof buildApproveDelegateInstruction>[0],
+  ): PreparedTransaction {
+    return {
+      instructions: [buildApproveDelegateInstruction(input)],
+      requiredSigners: [input.owner],
+      feePayer: input.owner,
+    };
+  }
+
   async preparePayment(
     input: PreparePaymentInput,
     agent?: Address,
@@ -364,12 +470,20 @@ export class ChainPayClient {
     const executionAgent = agent ?? mandate.approvedAgent;
     const receiptAddress = deriveReceiptAddress(mandate.address, request.invoiceHash, this.programId);
     const existingReceipt = await this.getPayment(receiptAddress);
+    const sourceAccountInfo = await this.connection.getAccountInfo(
+      publicKey(mandate.sourceTokenAccount),
+      this.commitment,
+    );
+    const sourceContext = sourceAccountInfo
+      ? paymentPreflightContextFromTokenAccount(new Uint8Array(sourceAccountInfo.data))
+      : undefined;
     const preflight = preflightPayment(
       request,
       mandate,
       currentSlot,
       executionAgent,
       existingReceipt !== null,
+      sourceContext ?? undefined,
     );
     const instruction = buildExecutePaymentInstruction(request, executionAgent, mandate, this.programId);
 

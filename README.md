@@ -1,135 +1,130 @@
-# ChainPay
+<p align="center">
+  <img src="frontend/public/brand/chainpay-symbol.svg" alt="ChainPay Connection logo" width="64" height="64">
+</p>
 
-ChainPay is an agentic, policy-controlled stablecoin payment protocol on
-Solana. It is a payment rail for AI agents, applications, and MCP servers; it
-is not an AI agent and never receives a user's private key.
+<h1 align="center">ChainPay</h1>
 
-## Layout
+<p align="center"><strong>Give agents spending limits. Keep control of your funds.</strong></p>
 
-~~~
-programs/chainpay/               Anchor policy and payment program
-sdk/                             TypeScript mandate/payment SDK
-mcp-server/                      Safe agent/MCP tool boundary
-backend/                         RPC, status, API, and storage boundary
-frontend/                        Wallet-connected React dashboard
-demo-merchant/                   Independent x402 resource/receipt verifier
-backend/migrations/              PostgreSQL/Neon schema migrations
-app/                             Lightweight UI contract scaffold
-docs/scope.md                    Authoritative ChainPay scope
-~~~
+ChainPay lets you give an AI agent permission to make stablecoin payments on
+Solana within limits you approve. The on-chain program checks each payment
+and creates a receipt you can inspect and share.
 
-The root Cargo workspace contains the backend and ChainPay program. Connectors,
-confidential transfers, MEV reduction, and production payment integrations are
-outside the MVP.
+**[Try ChainPay](https://chainpay-frontend.onrender.com/)** ·
+[First payment walkthrough](docs/getting-started/try-chainpay.md) ·
+[Connect an agent](docs/guides/connect-an-agent.md) ·
+[Documentation](docs/README.md)
 
-The protocol authority registers an explicit allowlist of settlement mint
-accounts. Each `SupportedAsset` entry binds one mint to either classic SPL Token
-or Token-2022. Payment preparation then inspects the live mint, source, and
-recipient accounts and fails closed for unsupported transfer-affecting
-extensions. Devnet retains the existing USDC classic-SPL and PYUSD Token-2022
-registry entries and known confirmed settlement baselines.
+**Devnet demo.** This is a test-network project, not a mainnet payment service.
+These docs describe this fork's PR stack. The hosted app currently shows an
+earlier interface. [Run this fork locally](docs/getting-started/local-development.md)
+for the onboarding shown below.
 
-## Setup and checks
+![ChainPay owner setup: a Devnet dashboard with Wallet, Limits, and Agent steps, starting with wallet connection.](docs/assets/owner-setup.png)
 
-From the repository root:
+*Actual owner setup in this fork. No wallet connected; no sample payments or balances.*
 
-~~~bash
-npm install
-make check
-make test
-make build
-make start-backend
-~~~
+## How it works
 
-The dashboard can be invoked with:
+A **mandate** is your on-chain spending permission: which agent can pay,
+which token it can spend, how much it can spend, and when permission expires.
+Your tokens stay in your token account until a permitted payment transfers them.
 
-~~~bash
-make frontend-dev
-~~~
+**You approve limits** → **Agent requests payment** → **Solana checks the rules** → **Receipt**
 
-The original `app/` package remains a lightweight page/component contract
-scaffold; the runnable React dashboard is in `frontend/`.
-Contract-specific checks use `make contract-check`. With the matching Anchor
-1.1.2 CLI, `make contract-build` produces the SBF artifact and generates
-`target/idl/chainpay.json` plus `target/types/chainpay.ts`. `make contract-smoke`
-then runs the classic SPL Token and Token-2022 settlement tests in LiteSVM.
+For example, you could allow an agent to spend up to 1 token per request,
+with a total allowance of 5 tokens. A request for 2 tokens exceeds that
+per-payment limit and is rejected. These numbers are illustrative, not a
+preconfigured or funded demo.
 
-If AVM cannot switch the selected binary automatically, set the CLI explicitly,
-for example:
+**Human approval mode** asks you to sign each payment. **Delegated mode** uses
+an approved external signer within your limits; its live provider setup and
+settlement acceptance are still pending. Connecting a wallet or signing in
+does not authorize a payment.
 
-~~~bash
-make ANCHOR=/home/stephen/.avm/bin/anchor-1.1.2 contract-smoke
-~~~
+## Try your first payment
 
-## Universal MCP and SDK
+Use a Devnet wallet with Devnet SOL for fees and a supported Devnet token
+balance. Start with human approval mode.
 
-The TypeScript SDK and MCP server are now usable independently of the UI:
+1. **Connect and sign in.** Open the app, connect your wallet, and explicitly
+   sign the login message. This proves wallet ownership.
+2. **Set spending limits.** Choose **Approve each payment**, set limits and
+   expiry, and select **Prepare token account**. Review the mandate before
+   approving its creation in your wallet.
+3. **Review a payment.** In Payments, choose the mandate and enter a reference,
+   amount, and **Recipient wallet address** whose token account already exists.
+   Select **Prepare payment**, review the details, then **Approve payment**.
+4. **Inspect the receipt.** After finalized settlement, copy **Receipt PDA**.
+   In **Receipts**, paste it under **Receipt address** and select **Verify**.
+   Open the card's **Public receipt** link to inspect and share it.
 
-~~~bash
-npm run check
-npm --prefix sdk run test
-npm --prefix mcp-server run test
-npm run verify:devnet
-~~~
+**[Follow the complete walkthrough →](docs/getting-started/try-chainpay.md)**
+It explains funding, approvals, expected results, and what to do if a payment
+is still waiting.
 
-With Axum, HTTP MCP, the independent merchant, and Neon running, verify their
-real connections together:
+## Build with ChainPay
 
-~~~bash
-CHAINPAY_BACKEND_URL=https://backend.example.com \
-CHAINPAY_MCP_URL=https://mcp.example.com/mcp \
-CHAINPAY_X402_RESOURCE_URL=https://merchant.example.com/data \
-DATABASE_URL='postgresql://...' \
-npm run verify:stack
-~~~
+| I want to… | Start here |
+| --- | --- |
+| Connect an AI agent | [MCP connection guide](docs/guides/connect-an-agent.md) — discover tools, authenticate, and inspect a mandate |
+| Integrate a TypeScript app | [SDK guide](docs/guides/use-the-sdk.md) — build locally and read protocol state |
+| Accept payment for a resource | [Merchant guide](docs/guides/merchant-integration.md) — verify payment before serving it |
+| Run or contribute to the project | [Local development](docs/getting-started/local-development.md) · [Contributing](CONTRIBUTING.md) |
+| Have a coding agent work on the repo | [AGENTS.md](AGENTS.md) — architecture, setup, checks, and boundaries |
 
-This verifier is read-only. It checks Axum-to-Devnet RPC, MCP live asset and
-receipt reads, the merchant's real 402 and Devnet receipt lookup, and the Neon
-schema. It does not fabricate or broadcast a payment.
+**MCP** (Model Context Protocol) gives an AI client a standard way to discover
+and call tools. ChainPay's MCP server prepares and relays payments; it does
+not give the model your wallet keys. You can also use the SDK directly.
 
-The MCP server speaks standard JSON-RPC MCP over stdio and exposes protocol
-configuration and asset discovery, mandate lifecycle, payment quote/preflight,
-merchant-signed request verification, x402 challenge preparation, signed
-payment relay, and receipt/status tools. Any MCP-capable LLM client can
-discover these tools. Owner actions return wallet-signature plans; payment
-execution returns an unsigned wire transaction for a browser wallet or external
-agent runtime. MCP can relay only an already signed transaction, so the MCP
-process never stores a settlement private key.
+## Under the hood
 
-Set `CHAINPAY_RPC_URL` and optionally `CHAINPAY_PROGRAM_ID` before starting it:
+The React dashboard, TypeScript SDK, and MCP server connect to an Axum relay
+and the Anchor program on Solana. PostgreSQL stores operational records;
+the program enforces spending rules and creates the on-chain receipt.
 
-~~~bash
-CHAINPAY_RPC_URL=https://api.devnet.solana.com npm --prefix mcp-server run dev
-~~~
+[Architecture](docs/reference/architecture.md) ·
+[Settlement and limits](docs/reference/settlement.md) ·
+[Receipts and seller evidence](docs/reference/receipts.md)
 
-The SDK performs PDA derivation, account decoding, token-program detection,
-registry discovery, Token-2022 capability inspection, instruction construction,
-duplicate-receipt checks, and status handling. Axum submits an externally signed
-transaction directly to Devnet, waits for finality, and verifies its receipt.
-The on-chain program remains the final authority for every payment.
+The current x402 connector supports **ChainPay's custom receipt-proof flow**.
+Standard x402 v2 sponsored settlement is not supported. Mainnet payments and
+advanced Token-2022 extensions are outside the current release.
 
-Axum and the HTTP MCP service require `DATABASE_URL` and run the migrations in
-`backend/migrations`. Production does not fall back to an in-memory status
-store. The x402 verifier in `demo-merchant/` returns 402, independently checks a
-finalized receipt and its transaction, and releases the resource only after the
-proof matches.
+See [implementation and verification status](docs/project/implementation-status.md)
+for what is implemented, what has evidence, and what still needs acceptance.
+The [product scope](docs/scope.md) remains authoritative.
 
-Render deployment is defined in [render.yaml](render.yaml). It runs the MCP
-server as a native Node web service with `/healthz` health checks and `/mcp` as
-the remote MCP endpoint.
+## Help and contributors
 
-## Architecture guardrails
+Start with [troubleshooting](docs/getting-started/troubleshooting.md).
+For a reproducible problem, open an issue in the repository you cloned;
+include the branch and failing step, without credentials or wallet secrets.
 
-- Critical payment policy is enforced on-chain.
-- The user remains the owner of funds.
-- The agent only spends through an approved mandate and limited delegate.
-- Every successful payment creates a durable receipt.
-- Supported token accounts must use the configured mint and the same token
-  program as the mint.
-- Tests are regression checks only. Live success is reported only from a
-  finalized Devnet transaction and a verified on-chain receipt.
-- The SDK, MCP server, backend, and app must never store private keys or seed
-  phrases.
+## Last mile (owner journey)
 
-See [docs/scope.md](docs/scope.md) for the authoritative product, technical,
-and delivery scope.
+After a successful payment, the dashboard shows the same human-readable
+**ReceiptCard** as the public verify flow — not Explorer-only success.
+
+- **Stranger verify:** landing **See a receipt** → `/verify` paste or
+  `/verify/:pda` — no wallet required.
+- **Owner deep link:** `/app/receipts/:pda` opens the inbox receipt card when
+  signed in.
+- **Settlement recovery:** in-app **Check settlement**, **Retry same approval**,
+  and **Cancel only if unstarted** — see
+  [settlement recovery](docs/reference/settlement-recovery.md).
+- **Recipient ATA:** payment and batch flows review recipient wallet + derived
+  ATA + rent in a separate sign step before settlement — see
+  [token accounts](docs/reference/token-accounts.md).
+
+Optional local demo receipt (Devnet baseline, readonly):
+
+```bash
+# frontend/.env.local — do not set in production without confirming
+VITE_CHAINPAY_DEMO_RECEIPT_PDA=7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q
+```
+
+ChainPay was started by [Kwasi Awuah](https://github.com/stawuah).
+[Dre](https://github.com/tantshirt)'s fork adds work on onboarding, payment
+review, and usable receipts. [Contribution guidance](CONTRIBUTING.md)
+explains how changes reach the upstream project.

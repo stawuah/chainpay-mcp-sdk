@@ -1,75 +1,131 @@
 # ChainPay backend
 
-The backend is the reliability and orchestration boundary for ChainPay. It
-provides APIs for the app and MCP server, submits Devnet transactions, tracks
-confirmation, and stores non-sensitive off-chain metadata.
+Axum coordinates Devnet payment submission and PostgreSQL metadata. The program
+remains the authority for spending; a wallet login never authorizes a payment.
 
-The backend must never override on-chain mandate policy, hold wallet keys, or
-store seed phrases or raw private keys.
+Start with [local development](../docs/getting-started/local-development.md) for
+installation and the backend → HTTP MCP → frontend startup order.
 
-## Local checks
+## Configuration and checks
 
-~~~bash
-cargo test -p chainpay-backend
-cargo run -p chainpay-backend
-~~~
+Run from the repository root with a dedicated development PostgreSQL database.
+Replace `LOCAL_PASSWORD` with the local role password (URL-encode reserved
+characters); the linked setup guide explains database prerequisites.
+The process reads exported environment variables; it does not load `.env` files.
 
-The backend accepts browser-wallet-signed transactions and unsigned,
-mandate-bound autonomous payment transactions. For autonomous payments it asks
-Privy's managed-wallet API to sign only after validating the complete wire
-message. Privy never exports the Solana private key. Axum then validates the
-provider-signed message again, submits it directly to Solana Devnet, waits for
-finalized status, verifies the payment receipt on-chain, and stores public
-lifecycle metadata with idempotency keys.
-
-## Configuration
-
-~~~bash
+```bash
+CHAINPAY_HTTP_HOST=127.0.0.1 CHAINPAY_HTTP_PORT=8080 \
 CHAINPAY_RPC_URL=https://api.devnet.solana.com \
-CHAINPAY_PROGRAM_ID=3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4 \
-CHAINPAY_HTTP_PORT=8080 \
-DATABASE_URL=postgresql://chainpay:chainpay@127.0.0.1:5432/chainpay \
+CHAINPAY_ALLOWED_ORIGINS=http://localhost:5173 \
+DATABASE_URL='postgresql://chainpay:LOCAL_PASSWORD@127.0.0.1:5432/chainpay_dev' \
 cargo run -p chainpay-backend
-~~~
 
-The backend runs SQL migrations from `backend/migrations` during startup and
-refuses to start without `DATABASE_URL`. In-memory storage is available only to
-unit tests; production never falls back to ephemeral state.
+cargo test -p chainpay-backend
+```
 
-Optional production settings include `CHAINPAY_HTTP_AUTH_TOKEN`,
-`CHAINPAY_ALLOWED_ORIGINS`, `CHAINPAY_CONFIRMATION_TIMEOUT_SECS`, and
-`CHAINPAY_CONFIRMATION_POLL_MS`.
+Startup applies every bundled migration in `backend/migrations`, currently
+`0001` through `0008`. These change schema and remove obsolete simulation columns;
+use a development database for local work. HTTP MCP must use the same database
+and starts after those tables exist. Normal startup requires PostgreSQL;
+in-memory storage is only for local tests.
 
-Autonomous signing is disabled unless all of `PRIVY_APP_ID`,
-`PRIVY_APP_SECRET`, and `PRIVY_POLICY_ID` are configured. The Privy policy must
-restrict the managed wallet to the ChainPay program. When these values are
-configured, `CHAINPAY_HTTP_AUTH_TOKEN` is mandatory and must match the MCP
-server's `CHAINPAY_BACKEND_AUTH_TOKEN`. PostgreSQL stores only the Privy wallet
-ID, policy ID, and public Solana address—never key material.
+Success: `curl -fsS http://127.0.0.1:8080/healthz` returns JSON with
+`status: "ok"` and `cluster: "devnet"`. This is a startup check, not settlement.
 
-## HTTP surface
+Use explicit browser origins, including the scheme and port. `*` does not
+permit wallet login. Session/challenge records and rate limits use the shared
+PostgreSQL store; expired records are removed during authentication traffic.
 
-- `GET /healthz` — backend, cluster, and program health.
-- `GET /v1/config` — public runtime configuration.
-- `POST /rpc` — authenticated, read-only Solana RPC proxy for the SDK.
-- `GET /v1/rpc/latest-blockhash` — current Devnet blockhash.
-- `POST /v1/transactions/submit` — validate, submit, and finalize any wallet-signed transaction.
-- `GET /v1/transactions/:id` — transaction relay status.
-- `POST /v1/payments` — validate, submit, finalize, verify the receipt, and persist a payment relay record.
-- `GET /v1/payments/:id` — payment status and finalized signature.
-- `GET /v1/receipts/:receipt_address` — persisted payment metadata for an on-chain receipt join.
-- `POST /v1/x402-payments/proof` — persist the x402 proof retry outcome after confirmed settlement.
-- `POST /v1/payment-requests/verify` — verify a merchant-signed Ed25519 payment request and derive its invoice hash.
-- `POST /v1/managed-signers/challenge` — create a one-time owner-wallet authorization message bound to an intended mandate PDA.
-- `POST /v1/managed-signers/provision` — verify the owner signature and provision a policy-bound Privy Solana wallet.
-- `POST /v1/managed-payments` — strictly validate, provider-sign, revalidate, submit, finalize, and verify an autonomous payment.
+Privy signing requires `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_POLICY_ID`
+and the existing server-only `CHAINPAY_HTTP_AUTH_TOKEN` configuration. The
+service token does **not** authorize any caller. Forward the actual owner
+session or scoped connection bearer token to private endpoints. Never put
+server credentials in Vite variables.
 
-The MCP server uses `CHAINPAY_BACKEND_URL` and
-`CHAINPAY_BACKEND_AUTH_TOKEN` to call `/v1/payments` after a wallet or approved
-signer has supplied a base64-encoded signed transaction. The on-chain program
-remains the final policy authority.
+## Wallet sessions
 
-The read-only RPC proxy and generic signed-transaction relay are intentionally
-wallet-facing: the transaction signature is the authorization, so browsers do
-not need a server secret. Configure `CHAINPAY_HTTP_AUTH_TOKEN` to protect the
-MCP payment relay and other non-wallet API routes.
+1. `POST /v1/auth/challenge?wallet=<public-key>` (GET remains available to explicit-Origin clients) with an allowed `Origin` returns
+   an exact login message, challenge ID, and five-minute expiry.
+2. Sign that message with the wallet's `signMessage` operation.
+3. `POST /v1/auth/session` with `{challenge_id, signature}` (base64 signature)
+   and the same Origin atomically consumes the challenge and returns an opaque
+   token with a one-hour expiry. Only its SHA-256 hash is persisted.
+4. Send `Authorization: Bearer <token>` for private API calls.
+5. `GET /v1/auth/session` introspects an owner session; `DELETE` revokes it.
+   `GET /v1/auth/principal` also introspects scoped agent connections.
+
+The frontend keeps the token in memory, renews expired sessions through a new
+message signature, and clears/revokes it on wallet switch or disconnect.
+Challenges are limited to 20 per direct peer and 1,000 globally per minute; login
+attempts are limited to 20 per direct peer and 2,000 globally per minute across instances. Caller-selected wallet
+addresses do not consume another owner's allowance. Forwarding headers are not
+trusted; configure requester limits at the trusted edge when sharing a reverse proxy.
+
+## Authorization and routes
+
+Public: `/healthz`, `/v1/config`, `/v1/rpc/latest-blockhash`, `/rpc`,
+`POST /v1/delivery-attestations`, and
+`GET /v1/delivery-attestations/{receiptAddress}`.
+Trusted seller identities are public configuration (see
+[trusted-sellers.md](../docs/guides/trusted-sellers.md)); the signing secret never
+enters this service. A missing or invalid seller statement does not change Paid.
+The RPC proxy only forwards named read methods, bounds batches/history/body and
+response sizes, and restricts program discovery to ChainPay with owner/mandate
+filters (the asset registry uses its fixed account size).
+
+Private endpoints derive the principal from a verified bearer credential:
+
+- `/v1/managed-signers/challenge` and `/provision`: owner session, separate
+  mandate-bound enrollment signature; `mint` and `mandate_nonce` bind the future
+  PDA to the owner before provisioning, and existing mandates must belong to owner.
+- `/v1/payments` and `/v1/managed-payments`: owned mandate and explicit
+  `execute_payment` permission, or `execute_x402_payment` for x402 submissions.
+- `/v1/payments/:id`, `/v1/receipts/:address`: owned/scoped mandate and
+  `get_payment` or `wait_for_payment` permission.
+- `/v1/x402-payments/proof`: `mandate`, idempotency key and
+  `execute_x402_payment` permission are required.
+- `/v1/transactions/submit`: owner-only mandate create+exact delegate approval,
+  update, pause or revoke, homogeneous owner-signed payment batches (up to four),
+  and revoke-all (up to 32; wire-size bound still applies). Every instruction
+  and mandate is checked. Owner ATA setup is restricted to enabled ChainPay
+  assets. Arbitrary signed transactions are rejected.
+- `/v1/transactions/:id`: only the submitting owner can read its record.
+- `/v1/payment-requests/verify`: owner session or permitted connection.
+
+Connection scope is stored as a versioned JSON string in the existing scope
+column: `{version:1, mandates:[...], tools:[...], agents:{mandate:agent}}`.
+Every mandate is checked against current on-chain ownership and approved-agent
+binding. Revoked or legacy `Unscoped` tokens cannot execute; reconnect them.
+Payment idempotency is namespaced by verified wallet and mandate. Old opaque
+transaction records without owner attribution are not readable through the
+private relay status endpoint.
+
+## Transaction versions and validation
+
+Official published `solana-transaction =4.2.0`, `solana-message =4.6.0` and
+`wincode 0.6` decode legacy/v0 and v1 wire layouts. Canonical re-encoding must
+match the supplied bytes; provider-signed messages must equal the reviewed
+unsigned message. Legacy/v0 are bounded to 1,232 bytes, v1 to 4,096 bytes.
+Unresolved address-table transactions are rejected. Production builders remain
+legacy.
+
+Payment transactions contain exactly one execute-payment instruction. Every
+account position, writable/signer role, fee payer, config/asset/receipt PDA,
+agent, source, mint, recipient, token program and amount is checked. Unexpected
+instructions, auxiliary transfers, extra accounts and duplicate accounts are
+rejected. V1 requires explicit positive compute/data limits (at most 1,400,000
+CU and 64 MiB), priority fee at most 100,000 lamports, and a valid bounded heap.
+RPC submission uses preflight; confirmation and receipt verification still
+follow submission.
+
+Tests generate local fixture keys and never broadcast payments. The optional
+`postgres_login_consumes_once_and_survives_store_reconnect` test uses an explicit
+isolated localhost `TEST_DATABASE_URL`; it checks concurrent consumption through
+independent pools, session persistence across store reconnects, and revocation.
+Historical fixture results are recorded in the [implementation status](../chainpay_skill/IMPLEMENTATION_STATUS.md).
+This test does not establish live Devnet settlement or a production database
+restart drill.
+
+Codec availability was checked on 2026-09-15 with `cargo info solana-transaction@4.2.0`
+and `npm view @solana/transactions version`. See the [official Rust codec](https://docs.rs/solana-transaction/4.2.0/solana_transaction/versioned/struct.VersionedTransaction.html)
+and [Solana v1 examples](https://github.com/solana-foundation/transaction-v1-examples).

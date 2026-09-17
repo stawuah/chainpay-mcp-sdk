@@ -1,3 +1,4 @@
+import { submitSettlement } from "./settlement-submit.js";
 import type { ChainPayMcpContext } from "./context.js";
 import { bytesToHex } from "@chainpay/sdk";
 import { materializeUnsignedTransaction, serializeTransaction, toolResult } from "./common.js";
@@ -59,12 +60,12 @@ export async function executePayment(
     if (!context.backendUrl || !context.backendAuthToken) {
       return toolResult({
         action: "managed_backend_required",
-        message: "Delegated mode requires CHAINPAY_BACKEND_URL and CHAINPAY_BACKEND_AUTH_TOKEN.",
+        message: "Delegated mode requires CHAINPAY_BACKEND_URL and a verified caller session or scoped connection.",
         receiptAddress: prepared.receiptAddress,
       }, true);
     }
     const unsignedTransaction = await materializeUnsignedTransaction(context.client, prepared.transaction);
-    const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/managed-payments`, {
+    const response = await submitSettlement(context, `${context.backendUrl.replace(/\/$/, "")}/v1/managed-payments`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -85,15 +86,15 @@ export async function executePayment(
     });
     const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
     if (!response.ok) {
-      return toolResult({ action: "managed_backend_rejected", ...payload }, true);
+      return toolResult({ action: "managed_backend_rejected", httpStatus: response.status, ...payload }, true);
     }
     if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
       return toolResult({
-        action: "managed_backend_not_finalized",
+        action: payload.status === "failed" ? "managed_payment_failed" : "payment_pending",
         ...payload,
         receiptAddress: prepared.receiptAddress,
-        message: "Axum did not return a finalized provider-signed payment and verified receipt.",
-      }, true);
+        message: "Keep payment_id and signature. Use wait_for_payment to reconcile this operation; do not sign or submit a replacement.",
+      }, payload.status === "failed");
     }
     return toolResult({
       action: "managed_payment_settled",
@@ -121,7 +122,7 @@ export async function executePayment(
       );
     }
 
-    const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/payments`, {
+    const response = await submitSettlement(context, `${context.backendUrl.replace(/\/$/, "")}/v1/payments`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -144,15 +145,15 @@ export async function executePayment(
     });
     const payload = await response.json() as Record<string, unknown>;
     if (!response.ok) {
-      return toolResult({ action: "backend_rejected", ...payload }, true);
+      return toolResult({ action: "backend_rejected", httpStatus: response.status, ...payload }, true);
     }
     if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
       return toolResult({
-        action: "backend_not_finalized",
+        action: payload.status === "failed" ? "payment_failed" : "payment_pending",
         ...payload,
         receiptAddress: prepared.receiptAddress,
-        message: "Axum did not return a finalized signature and verified payment receipt.",
-      }, true);
+        message: "Keep payment_id and signature. Use wait_for_payment to reconcile this operation; do not sign or submit a replacement.",
+      }, payload.status === "failed");
     }
     return toolResult({
       action: "backend_relayed",

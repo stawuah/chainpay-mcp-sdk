@@ -2,6 +2,7 @@
 
 .cp-app {
   --blue:#0052ff; --blue-active:#003ecc; --blue-disabled:#a8b8cc; --yellow:#f4b000;
+  --size-element-sm:44px; --size-element-md:44px; --size-element-lg:48px;
   --canvas:#ffffff; --soft:#f7f7f7; --strong:#eef0f3; --dark:#0a0b0d; --dark-elevated:#16181c;
   --hairline:#dee1e6; --ink:#0a0b0d; --body:#5b616e; --muted:#7c828a; --muted-soft:#a8acb3;
   --up:#05b169; --down:#cf202f;

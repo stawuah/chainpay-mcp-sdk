@@ -1,3 +1,4 @@
+import { authorizeTool } from "./authorization.js";
 import { ChainPayClient, publicKey } from "@chainpay/sdk";
 import { createMandate } from "./tools/create_mandate.js";
 import { checkPaymentRequirements } from "./tools/check_payment_requirements.js";
@@ -53,7 +54,7 @@ export function createDefaultContext(): ChainPayMcpContext {
     client,
     ...(agentAddress ? { agentAddress } : {}),
     backendUrl: process.env.CHAINPAY_BACKEND_URL,
-    backendAuthToken: process.env.CHAINPAY_BACKEND_AUTH_TOKEN,
+    backendAuthToken: process.env.CHAINPAY_CALLER_TOKEN,
   };
 }
 
@@ -78,6 +79,14 @@ export async function callTool(
   args: Record<string, unknown> = {},
 ) {
   assertNoPrivateKeyMaterial(args);
+  args = { ...args };
+  if (!context.principal && context.backendUrl && context.backendAuthToken) {
+    const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/auth/principal`, { headers: { Authorization: `Bearer ${context.backendAuthToken}` }, signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error("Verified wallet session or scoped connection required; service credentials cannot authorize a caller");
+    const principal = await response.json() as import("./authorization.js").Principal;
+    context = { ...context, principal };
+  }
+  await authorizeTool(context, name, args);
   switch (name) {
     case "get_mandate":
       return getMandate(context, args);

@@ -1,6 +1,7 @@
 //! Solana JSON-RPC submission and confirmation boundary.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
+use tokio::sync::Semaphore;
 
 use reqwest::Client;
 use serde::{Deserialize, de::DeserializeOwned};
@@ -43,12 +44,18 @@ impl Default for RpcConfig {
 
 #[derive(Debug, Error)]
 pub enum RpcError {
+    #[error("RPC capacity is busy; retry the existing operation later")]
+    Busy,
     #[error("Solana RPC request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(reqwest::Error),
     #[error("Solana RPC returned an invalid response: {0}")]
     Decode(#[from] serde_json::Error),
     #[error("Solana RPC rejected {method}: {message}")]
-    Remote { method: String, message: String },
+    Remote {
+        method: String,
+        message: String,
+        code: i64,
+    },
     #[error("transaction {signature} failed: {message}")]
     TransactionFailed { signature: String, message: String },
     #[error("timed out waiting for transaction {signature} to finalize")]
@@ -59,6 +66,12 @@ pub enum RpcError {
     MissingField(&'static str),
     #[error("Solana RPC returned invalid account data: {0}")]
     InvalidAccountData(String),
+}
+
+impl From<reqwest::Error> for RpcError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -82,13 +95,13 @@ pub struct RpcAccount {
 
 #[derive(Debug, Clone)]
 pub struct RpcClient {
+    in_flight: Arc<Semaphore>,
     http: Client,
     config: RpcConfig,
 }
 
 #[derive(Debug, Deserialize)]
-struct RpcEnvelope<T> {
-    result: Option<T>,
+struct RpcEnvelope {
     error: Option<RpcEnvelopeError>,
 }
 
@@ -140,8 +153,13 @@ impl RpcClient {
     pub fn new(config: RpcConfig) -> Result<Self, RpcError> {
         let http = Client::builder()
             .user_agent("chainpay-backend/0.1")
+            .timeout(Duration::from_secs(20))
             .build()?;
-        Ok(Self { http, config })
+        Ok(Self {
+            http,
+            config,
+            in_flight: Arc::new(Semaphore::new(32)),
+        })
     }
 
     pub fn config(&self) -> &RpcConfig {
@@ -167,10 +185,19 @@ impl RpcClient {
     }
 
     pub async fn account_info(&self, address: &str) -> Result<Option<RpcAccount>, RpcError> {
+        self.account_info_committed(address, &self.config.commitment)
+            .await
+    }
+
+    pub async fn account_info_committed(
+        &self,
+        address: &str,
+        commitment: &str,
+    ) -> Result<Option<RpcAccount>, RpcError> {
         let response: AccountInfoResponse = self
             .call(
                 "getAccountInfo",
-                json!([address, { "commitment": self.config.commitment, "encoding": "base64" }]),
+                json!([address, { "commitment": commitment, "encoding": "base64" }]),
             )
             .await?;
         response
@@ -202,13 +229,27 @@ impl RpcClient {
                 encoded_transaction,
                 {
                     "encoding": "base64",
-                    "skipPreflight": true,
+                    "skipPreflight": false,
                     "maxRetries": 3,
                     "preflightCommitment": self.config.commitment
                 }
             ]),
         )
         .await
+    }
+
+    pub async fn blockhash_valid(&self, blockhash: &str) -> Result<bool, RpcError> {
+        #[derive(Deserialize)]
+        struct Valid {
+            value: bool,
+        }
+        Ok(self
+            .call::<Valid>(
+                "isBlockhashValid",
+                json!([blockhash,{"commitment":"finalized"}]),
+            )
+            .await?
+            .value)
     }
 
     pub async fn signature_status(
@@ -268,6 +309,7 @@ impl RpcClient {
             "getProgramAccounts",
             "getLatestBlockhash",
             "getMultipleAccounts",
+            "getRecentPerformanceSamples",
             "getSignaturesForAddress",
             "getSignatureStatuses",
             "getSlot",
@@ -279,7 +321,12 @@ impl RpcClient {
             return Err(RpcError::UnsupportedProxyMethod(request.method));
         }
 
-        let params = request.params.unwrap_or_else(|| json!([]));
+        // One sample only — never forward an unbounded performance-sample window.
+        let params = if request.method == "getRecentPerformanceSamples" {
+            json!([1])
+        } else {
+            request.params.unwrap_or_else(|| json!([]))
+        };
         let result: Value = self.call(&request.method, params).await?;
         Ok(json!({
             "jsonrpc": "2.0",
@@ -289,9 +336,10 @@ impl RpcClient {
     }
 
     async fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T, RpcError> {
+        let _permit = self.in_flight.try_acquire().map_err(|_| RpcError::Busy)?;
         const MAX_ATTEMPTS: usize = 4;
 
-        let response = {
+        let mut response = {
             let mut attempt = 0;
             loop {
                 let response = self
@@ -309,7 +357,11 @@ impl RpcClient {
                 let status = response.status();
                 let retryable =
                     status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
-                if status.is_success() || !retryable || attempt + 1 >= MAX_ATTEMPTS {
+                if method == "sendTransaction"
+                    || status.is_success()
+                    || !retryable
+                    || attempt + 1 >= MAX_ATTEMPTS
+                {
                     break response.error_for_status()?;
                 }
 
@@ -318,7 +370,17 @@ impl RpcClient {
                 tokio::time::sleep(delay).await;
             }
         };
-        let envelope: RpcEnvelope<T> = response.json().await?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if bytes.len().saturating_add(chunk.len()) > 2_097_152 {
+                return Err(RpcError::InvalidAccountData(
+                    "RPC response exceeds 2 MiB".into(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let raw: Value = serde_json::from_slice(&bytes)?;
+        let envelope: RpcEnvelope = serde_json::from_value(raw.clone())?;
         if let Some(error) = envelope.error {
             let data = error
                 .data
@@ -326,10 +388,12 @@ impl RpcClient {
                 .unwrap_or_default();
             return Err(RpcError::Remote {
                 method: method.to_owned(),
+                code: error.code,
                 message: format!("{} [{}]{}", error.message, error.code, data),
             });
         }
-        envelope.result.ok_or(RpcError::MissingField("result"))
+        let result = raw.get("result").ok_or(RpcError::MissingField("result"))?;
+        Ok(serde_json::from_value(result.clone())?)
     }
 }
 
@@ -350,6 +414,88 @@ fn retry_delay(response: &reqwest::Response, attempt: usize) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn proxy_pins_the_performance_sample_window_and_refuses_other_methods() {
+        // `/rpc` is unauthenticated (it is in the middleware's public allowlist),
+        // so anything reachable through it is reachable by anyone. The onboarding
+        // slot estimate needs getRecentPerformanceSamples; nobody needs to choose
+        // how many samples the backend asks an upstream RPC for.
+        use std::sync::{Arc, Mutex};
+
+        let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().fallback(axum::routing::any(
+            move |axum::Json(body): axum::Json<Value>| {
+                let recorder = recorder.clone();
+                async move {
+                    recorder
+                        .lock()
+                        .unwrap()
+                        .push(body.get("params").cloned().unwrap_or(json!(null)));
+                    axum::Json(json!({"jsonrpc": "2.0", "id": 1, "result": []}))
+                }
+            },
+        ));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let rpc = RpcClient::new(RpcConfig {
+            url: format!("http://{address}"),
+            ..RpcConfig::default()
+        })
+        .unwrap();
+
+        rpc.forward_proxy(JsonRpcProxyRequest {
+            jsonrpc: "2.0".to_owned(),
+            id: json!(1),
+            method: "getRecentPerformanceSamples".to_owned(),
+            params: Some(json!([100_000])),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            &[json!([1])],
+            "a caller-supplied sample window must be replaced, not forwarded"
+        );
+
+        assert!(matches!(
+            rpc.forward_proxy(JsonRpcProxyRequest {
+                jsonrpc: "2.0".to_owned(),
+                id: json!(2),
+                method: "getRecentPrioritizationFees".to_owned(),
+                params: None,
+            })
+            .await,
+            Err(RpcError::UnsupportedProxyMethod(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn transport_error_removes_rpc_url_credentials() {
+        let error = reqwest::Client::new()
+            .get("http://fixture-user:fixture-secret@127.0.0.1:1/?api-key=fixture-key")
+            .send()
+            .await
+            .unwrap_err();
+        let safe = RpcError::from(error).to_string();
+        assert!(!safe.contains("fixture-secret") && !safe.contains("fixture-key"));
+    }
+
+    #[tokio::test]
+    async fn shared_in_flight_capacity_rejects_without_queueing() {
+        let rpc = RpcClient::new(RpcConfig::default()).unwrap();
+        let permits = rpc.in_flight.acquire_many(32).await.unwrap();
+        assert!(matches!(
+            rpc.clone().latest_blockhash().await,
+            Err(RpcError::Busy)
+        ));
+        drop(permits);
+        assert_eq!(rpc.in_flight.available_permits(), 32);
+    }
 
     #[test]
     fn defaults_to_devnet_and_confirmed_commitment() {

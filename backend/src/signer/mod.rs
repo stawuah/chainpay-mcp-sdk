@@ -39,17 +39,28 @@ pub enum SignerConfigError {
     )]
     Incomplete,
     #[error("could not initialize the managed signer HTTP client: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(reqwest::Error),
 }
 
 #[derive(Debug, Error)]
 pub enum SignerProviderError {
     #[error("managed signer provider request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(reqwest::Error),
     #[error("managed signer provider returned HTTP {status}: {message}")]
     Remote { status: StatusCode, message: String },
     #[error("managed signer provider returned invalid data: {0}")]
     InvalidResponse(String),
+}
+
+impl From<reqwest::Error> for SignerConfigError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
+}
+impl From<reqwest::Error> for SignerProviderError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +80,8 @@ struct CreateWalletRequest<'a> {
 
 #[derive(Debug, Deserialize)]
 struct CreateWalletResponse {
+    #[serde(default)]
+    external_id: Option<String>,
     id: String,
     address: String,
     chain_type: String,
@@ -101,6 +114,17 @@ struct SignedTransactionData {
 }
 
 impl PrivySignerProvider {
+    #[cfg(test)]
+    pub(crate) fn fixture(api_url: String) -> Self {
+        Self {
+            http: Client::new(),
+            api_url,
+            app_id: "fixture".into(),
+            app_secret: "fixture".into(),
+            policy_id: "abcdefghijklmnopqrstuvwx".into(),
+        }
+    }
+
     pub fn from_env() -> Result<Option<Self>, SignerConfigError> {
         let app_id = non_empty_env("PRIVY_APP_ID");
         let app_secret = non_empty_env("PRIVY_APP_SECRET");
@@ -114,6 +138,7 @@ impl PrivySignerProvider {
         };
         let http = Client::builder()
             .user_agent("chainpay-backend/0.1 managed-signer")
+            .timeout(std::time::Duration::from_secs(20))
             .build()?;
         Ok(Some(Self {
             http,
@@ -125,6 +150,39 @@ impl PrivySignerProvider {
             app_secret,
             policy_id,
         }))
+    }
+
+    /// Read-only recovery by Privy's immutable, app-unique external identity.
+    /// https://docs.privy.io/wallets/wallets/external-ids
+    pub async fn lookup(
+        &self,
+        owner: &str,
+        mandate: &str,
+    ) -> Result<ProvisionedSigner, SignerProviderError> {
+        let external = external_id(owner, mandate);
+        let response = self
+            .http
+            .get(format!("{}/v1/wallets/ext_wal_{}", self.api_url, external))
+            .basic_auth(&self.app_id, Some(&self.app_secret))
+            .header("privy-app-id", &self.app_id)
+            .send()
+            .await?;
+        let wallet: CreateWalletResponse = decode_response(response).await?;
+        if wallet.external_id.as_deref() != Some(&external)
+            || wallet.chain_type != "solana"
+            || !wallet.policy_ids.contains(&self.policy_id)
+        {
+            return Err(SignerProviderError::InvalidResponse(
+                "Recovered wallet identity or policy differs from original enrollment".into(),
+            ));
+        }
+        validate_provider_id(&wallet.id)?;
+        validate_solana_address(&wallet.address)?;
+        Ok(ProvisionedSigner {
+            public_key: wallet.address,
+            provider_wallet_id: wallet.id,
+            provider_policy_id: self.policy_id.clone(),
+        })
     }
 
     pub async fn provision(
@@ -216,7 +274,7 @@ fn non_empty_env(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn external_id(owner_wallet: &str, mandate_pda: &str) -> String {
+pub(crate) fn external_id(owner_wallet: &str, mandate_pda: &str) -> String {
     let digest = Sha256::digest(format!("{owner_wallet}:{mandate_pda}").as_bytes());
     format!("chainpay_{}", hex(&digest[..24]))
 }
@@ -238,7 +296,7 @@ async fn decode_response<T: for<'de> Deserialize<'de>>(
     response
         .json::<T>()
         .await
-        .map_err(|error| SignerProviderError::InvalidResponse(error.to_string()))
+        .map_err(|error| SignerProviderError::InvalidResponse(error.without_url().to_string()))
 }
 
 fn validate_provider_id(value: &str) -> Result<(), SignerProviderError> {

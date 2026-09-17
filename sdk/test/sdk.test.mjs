@@ -13,6 +13,7 @@ import {
   deriveReceiptAddress,
   deriveX402PaymentReferences,
   preflightPayment,
+  preflightPaymentBatch,
   preparePayment,
 } from "../dist/index.js";
 
@@ -79,7 +80,11 @@ test("builds Anchor-compatible mandate and payment instruction shapes", () => {
   assert.equal(payment.name, "execute_payment");
   assert.equal(payment.keys.length, 10);
   assert.equal(payment.data.length, 112);
-  assert.equal(deriveReceiptAddress(mandateAddress, request.invoiceHash).length, 44);
+  // A base58-encoded 32-byte address is 43 or 44 characters. Assert the property
+  // that matters: it decodes back to 32 bytes and round-trips through base58.
+  const receiptAddress = deriveReceiptAddress(mandateAddress, request.invoiceHash);
+  assert.equal(new PublicKey(receiptAddress).toBytes().length, 32);
+  assert.equal(new PublicKey(receiptAddress).toBase58(), receiptAddress);
 });
 
 test("keeps legacy mandate derivation available while scoping new mandates by mint", () => {
@@ -170,4 +175,100 @@ test("preflight rejects an unapproved agent while accepting a per-payment recipi
   assert.equal(checks.valid, false);
   assert.equal(checks.checks.find((item) => item.name === "approved_agent")?.ok, false);
   assert.equal(checks.checks.find((item) => item.name === "recipient")?.ok, true);
+});
+
+test("preflight adds source-account checks only when context is supplied", () => {
+  const request = preparePayment({
+    mandate: mandateAddress,
+    invoiceHash: Uint8Array.of(...Array(32).fill(1)),
+    paymentId: Uint8Array.of(...Array(32).fill(2)),
+    signatureReference: Uint8Array.of(...Array(32).fill(3)),
+    mint,
+    recipient,
+    amount: 10n,
+  });
+  const mandate = {
+    address: mandateAddress,
+    owner,
+    approvedAgent: agent,
+    sourceTokenAccount: source,
+    allowedMint: mint,
+    maxPerPayment: 10n,
+    totalLimit: 100n,
+    amountSpent: 0n,
+    paymentCount: 0n,
+    expiresAtSlot: 10_000n,
+    maxPaymentCount: 0n,
+    cooldownSlots: 0n,
+    lastPaymentSlot: 0n,
+    paused: false,
+    revoked: false,
+    status: "active",
+  };
+  const withoutContext = preflightPayment(request, mandate, 100n, agent);
+  assert.equal(withoutContext.checks.some((item) => item.name === "source_balance"), false);
+  assert.equal(withoutContext.checks.some((item) => item.name === "delegate_identity"), false);
+
+  const withContext = preflightPayment(request, mandate, 100n, agent, false, {
+    sourceBalance: 100n,
+    sourceOwner: owner,
+    delegate: mandateAddress,
+    delegatedAmount: 50n,
+  });
+  assert.equal(withContext.valid, true);
+  assert.equal(withContext.checks.find((item) => item.name === "source_balance")?.ok, true);
+  assert.equal(withContext.checks.find((item) => item.name === "delegate_identity")?.ok, true);
+  assert.equal(withContext.checks.find((item) => item.name === "delegated_amount")?.ok, true);
+
+  const insufficient = preflightPayment(request, mandate, 100n, agent, false, {
+    sourceBalance: 5n,
+    sourceOwner: owner,
+    delegate: mandateAddress,
+    delegatedAmount: 50n,
+  });
+  assert.equal(insufficient.valid, false);
+  assert.equal(insufficient.checks.find((item) => item.name === "source_balance")?.ok, false);
+});
+
+test("preflightPaymentBatch rejects individually valid rows that exceed cumulative limits", () => {
+  const mandate = {
+    address: mandateAddress,
+    owner,
+    approvedAgent: agent,
+    sourceTokenAccount: source,
+    allowedMint: mint,
+    maxPerPayment: 50n,
+    totalLimit: 100n,
+    amountSpent: 90n,
+    paymentCount: 0n,
+    expiresAtSlot: 10_000n,
+    maxPaymentCount: 0n,
+    cooldownSlots: 0n,
+    lastPaymentSlot: 0n,
+    paused: false,
+    revoked: false,
+    status: "active",
+  };
+  const makeRequest = (invoiceByte) => preparePayment({
+    mandate: mandateAddress,
+    invoiceHash: Uint8Array.of(...Array(31).fill(1), invoiceByte),
+    paymentId: Uint8Array.of(...Array(32).fill(2)),
+    signatureReference: Uint8Array.of(...Array(32).fill(3)),
+    mint,
+    recipient,
+    amount: 10n,
+  });
+  const sourceContext = {
+    sourceBalance: 100n,
+    sourceOwner: owner,
+    delegate: mandateAddress,
+    delegatedAmount: 100n,
+  };
+  const batch = preflightPaymentBatch([
+    { request: makeRequest(4), mandate, agent, sourceContext },
+    { request: makeRequest(5), mandate, agent, sourceContext },
+  ], 100n);
+  assert.equal(batch.entries.every((entry) => entry.preflight.valid), true);
+  assert.equal(batch.valid, false);
+  assert.equal(batch.batchChecks.find((item) => item.name === "batch_total_limit")?.ok, false);
 });

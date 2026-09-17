@@ -21,6 +21,26 @@ test("AI settlement outcome requires confirmed signature and receipt", () => {
   });
   assert.equal(confirmed?.kind, "payment_settled");
 
+  const managed = outcomeFromToolResult({
+    structuredContent: {
+      action: "managed_payment_settled",
+      status: "confirmed",
+      signature: "managed-devnet-signature",
+      receiptAddress: "managed-receipt-pda",
+    },
+  });
+  assert.equal(managed?.kind, "payment_settled");
+
+  const pending = outcomeFromToolResult({
+    structuredContent: {
+      action: "payment_pending",
+      paymentId: "payment_123",
+      status: "submitted",
+      receiptAddress: "pending-receipt-pda",
+    },
+  });
+  assert.equal(pending?.kind, "payment_pending");
+
   const incomplete = outcomeFromToolResult({
     structuredContent: { action: "backend_relayed", status: "confirmed" },
   });

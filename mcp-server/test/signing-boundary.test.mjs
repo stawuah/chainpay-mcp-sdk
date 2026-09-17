@@ -169,3 +169,55 @@ test("MCP rejects private-key-shaped tool arguments before dispatch", async () =
     /Private key material is not accepted by ChainPay MCP/,
   );
 });
+
+test("pending execute preserves operation, signature and exact max-u64 amount without a new approval", async () => {
+  const fixture = paymentFixture();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('{"payment_id":"payment_existing","status":"submitted","signature":"original-signature","amount":"18446744073709551615"}', {status:200,headers:{"Content-Type":"application/json"}});
+  try {
+    const result = await executePayment({backendUrl:"https://fixture.invalid",backendAuthToken:"fixture",client:{preparePayment:async()=>fixture.prepared}}, {...fixture.args,signedTransaction:"same-approved-transaction"});
+    assert.equal(result.isError,undefined);
+    assert.equal(result.structuredContent.action,"payment_pending");
+    assert.equal(result.structuredContent.payment_id,"payment_existing");
+    assert.equal(result.structuredContent.signature,"original-signature");
+    assert.equal(typeof result.structuredContent.amount,"string");
+    assert.equal(BigInt(JSON.parse(JSON.stringify(result.structuredContent)).amount),18446744073709551615n);
+  } finally {globalThis.fetch=originalFetch;}
+});
+
+test("wait_for_payment reconciles the existing operation and keeps transport failures pending", async () => {
+  const { waitForPayment } = await import("../dist/tools/wait_for_payment.js");
+  const originalFetch=globalThis.fetch;
+  const requests=[];
+  globalThis.fetch=async (url,init)=>{requests.push([url,init]);return new Response(JSON.stringify({payment_id:"existing",status:requests.length===1?"submitted":"confirmed",signature:"same-signature",amount:"18446744073709551615"}),{status:200});};
+  try {
+    const context={backendUrl:"https://fixture.invalid",backendAuthToken:"fixture"};
+    const result=await waitForPayment(context,{paymentId:"existing",timeoutMs:"1000",pollMs:"50"});
+    assert.equal(result.structuredContent.status,"confirmed");
+    assert.equal(result.structuredContent.signature,"same-signature");
+    assert.equal(requests.length,2);
+    assert.ok(requests.every(([url,init])=>url.endsWith("/v1/payments/existing") && !init.method));
+    globalThis.fetch=async()=>{throw new Error("fixture timeout")};
+    const pending=await waitForPayment(context,{paymentId:"existing",timeoutMs:"0"});
+    assert.equal(pending.structuredContent.action,"payment_pending");assert.equal(pending.isError,undefined);
+  } finally {globalThis.fetch=originalFetch;}
+});
+
+test("lost Axum response returns the stable authenticated operation reference",async()=>{
+  const {submitSettlement}=await import("../dist/tools/settlement-submit.js");
+  const {createHash}=await import("node:crypto");const old=globalThis.fetch;
+  globalThis.fetch=async()=>{throw new Error("fixture lost response")};
+  try {const response=await submitSettlement({principal:{wallet:"owner",scope:null}},"https://fixture.invalid/v1/payments",{body:JSON.stringify({idempotency_key:"invoice"})});const value=await response.json();assert.equal(value.payment_id,`payment_${createHash("sha256").update("owner:invoice").digest("hex")}`);assert.equal(value.status,"submitted");assert.equal(value.continuation.arguments.paymentId,value.payment_id);}finally{globalThis.fetch=old;}
+});
+
+test("x402 resumes pending then delivers original resource without prepare, signing or submission",async()=>{
+  const {executeX402Payment}=await import("../dist/tools/x402.js");
+  const old=globalThis.fetch,origins=process.env.CHAINPAY_X402_ALLOWED_ORIGINS;
+  process.env.CHAINPAY_X402_ALLOWED_ORIGINS="https://merchant.example";
+  const id=`payment_${"a".repeat(64)}`,calls=[];let finalized=false;
+  const challenge={resource:"https://merchant.example/original",amount:"18446744073709551615",invoiceHash:"11".repeat(32),mint:"mint",recipient:"recipient",network:"solana-devnet",scheme:"exact"};
+  const payment={payment_id:id,status:"submitted",signature:"original-signature",receipt_address:"receipt",mandate:"mandate",agent:"agent"};
+  globalThis.fetch=async(url,init={})=>{calls.push([String(url),init]);if(String(url).endsWith("/x402"))return Response.json({payment:{...payment,status:finalized?"confirmed":"submitted"},resource:challenge.resource,challenge,idempotency_key:"original-key"});if(String(url)===challenge.resource){assert.match(init.headers["X-PAYMENT"],/original-signature/);return Response.json({delivered:true});}if(String(url).endsWith("/proof")){assert.equal(JSON.parse(init.body).idempotency_key,"original-key");return Response.json({});}throw new Error(`unexpected ${url}`);};
+  const context={backendUrl:"https://backend.example",backendAuthToken:"fixture",client:{getPayment:async()=>({status:"confirmed",address:"receipt",mandate:"mandate",agent:"agent",mint:"mint",recipient:"recipient",invoiceHash:Uint8Array.from({length:32},()=>17),amount:18446744073709551615n}),preparePayment:async()=>{throw new Error("must not prepare again")}}};
+  try {const pending=await executeX402Payment(context,{paymentId:id});assert.equal(pending.structuredContent.action,"x402_payment_pending");assert.equal(calls.length,1);finalized=true;const result=await executeX402Payment(context,{paymentId:id});assert.equal(result.structuredContent.action,"x402_verified");assert.equal(calls.filter(([url])=>url===challenge.resource).length,1);assert.ok(calls.every(([url])=>!url.endsWith("/v1/payments")&&!url.endsWith("/managed-payments")));}finally{globalThis.fetch=old;if(origins===undefined)delete process.env.CHAINPAY_X402_ALLOWED_ORIGINS;else process.env.CHAINPAY_X402_ALLOWED_ORIGINS=origins;}
+});

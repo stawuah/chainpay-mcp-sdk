@@ -7,12 +7,15 @@
     "typecheck": "tsc --noEmit",
     "build": "npm --prefix ../sdk run build && tsc",
     "start": "node dist/server.js",
-    "dev": "npm run build && npm start"
+    "dev": "npm run build && npm start",
+    "test": "npm --prefix ../sdk run build && tsc && node --test test/*.test.mjs"
   },
   "dependencies": {
     "@chainpay/sdk": "0.1.0",
     "@solana/web3.js": "^1.98.4",
-    "express": "^5.1.0"
+    "bs58": "^4.0.1",
+    "express": "^5.1.0",
+    "qs": "6.16.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
