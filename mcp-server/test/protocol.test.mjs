@@ -481,6 +481,30 @@ test("frontend helper list/call remains a headerless compatibility path", async 
   });
 });
 
+test("unknown MCP origin is 403; allowed origin can preflight", async () => {
+  await withHttpServer(fixtureContext(), async (base) => {
+    const denied = await fetch(`${base}/mcp`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://evil.example",
+        "Access-Control-Request-Method": "POST",
+      },
+    });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error, "Origin is not allowed");
+
+    const allowed = await fetch(`${base}/mcp`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:5173",
+        "Access-Control-Request-Method": "POST",
+      },
+    });
+    assert.equal(allowed.status, 204);
+    assert.equal(allowed.headers.get("access-control-allow-origin"), "http://localhost:5173");
+  });
+});
+
 test("stdio cancellation suppresses a later tool response", async () => {
   let release;
   const pendingConfig = new Promise((resolve) => {

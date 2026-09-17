@@ -220,6 +220,11 @@ body:has(.dashboard-app) .cp-record-panel :is(.mono,.t-num,.mandate-detail-value
 .owner-entry-card { width: min(460px,100%); margin: 10vh auto 0; padding: 36px; background: #fff; border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 20px; text-align: center; }
 .owner-entry-card > p { color: var(--body); }
 .owner-entry-icon { width: 52px; height: 52px; display: grid; place-items: center; justify-self: center; border-radius: 12px; background: #edf3ff; color: #0052ff; }
+.wallet-brand-mark { display: block; width: 20px; height: 20px; flex: none; object-fit: contain; border-radius: 6px; }
+.wallet-asset-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.wallet-asset-heading .wallet-brand-mark { width: 28px; height: 28px; }
+.owner-entry-wallet-identity, .owner-account-wallet { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.owner-account-wallet .wallet-brand-mark, .owner-entry-icon .wallet-brand-mark { width: 28px; height: 28px; }
 .owner-entry-wallet { display: flex; justify-content: space-between; border-block: 1px solid var(--line); padding: 16px 0; gap: 12px; }
 .owner-entry-wallet strong { font-weight: 500; }
 .owner-settlements { margin-bottom: 24px; }

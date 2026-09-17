@@ -25,7 +25,7 @@ export default function AppWorkspace() {
   if (currentRoute.kind !== "app") return null;
   if (!wallet.wallet) return <OwnerWelcome />;
 
-  if (signIn.status !== "ready") return <OwnerEntry wallet={wallet.wallet} walletName={wallet.walletName} signing={signIn.status === "signing"} error={signIn.error} onSignIn={() => void signIn.signIn()} onChangeWallet={() => void wallet.changeWallet()} />;
+  if (signIn.status !== "ready") return <OwnerEntry wallet={wallet.wallet} walletName={wallet.walletName} walletIcon={wallet.walletIcon} signing={signIn.status === "signing"} error={signIn.error} onSignIn={() => void signIn.signIn()} onChangeWallet={() => void wallet.changeWallet()} />;
 
   return (
     <>
@@ -41,6 +41,7 @@ export default function AppWorkspace() {
           key={wallet.wallet}
           wallet={wallet.wallet}
           walletName={wallet.walletName || "Solana wallet"}
+          walletIcon={wallet.walletIcon}
           walletCapabilities={wallet.walletCapabilities}
           walletSigner={wallet.signTransaction}
           walletMessageSigner={wallet.signMessage}

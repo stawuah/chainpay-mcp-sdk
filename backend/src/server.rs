@@ -17,7 +17,7 @@ use std::{
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{HeaderName, HeaderValue, Request, StatusCode, header},
+    http::{HeaderValue, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -31,7 +31,7 @@ use solana_transaction::versioned::VersionedTransaction;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tower_http::{
-    cors::{AllowOrigin, CorsLayer},
+    cors::{AllowHeaders, AllowOrigin, CorsLayer},
     trace::TraceLayer,
 };
 
@@ -492,15 +492,10 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
             axum::http::Method::OPTIONS,
             axum::http::Method::DELETE,
         ])
-        // `solana-client` is attached to every request web3.js makes. Without it
-        // the browser rejects the preflight and the SDK cannot reach `/rpc` at
-        // all, which surfaces as `TypeError: Failed to fetch` rather than an
-        // HTTP status. The wildcard branch above already allows any header.
-        .allow_headers([
-            header::AUTHORIZATION,
-            header::CONTENT_TYPE,
-            HeaderName::from_static("solana-client"),
-        ])
+        // Mirror requested headers so browser RPC clients (web3.js sends
+        // `solana-client`) and MCP Accept values can preflight without a
+        // one-header-at-a-time allowlist. Origins stay locked above.
+        .allow_headers(AllowHeaders::mirror_request())
 }
 
 async fn health(State(state): State<BackendState>) -> Json<HealthResponse> {
@@ -2533,5 +2528,71 @@ mod tests {
 
         api_task.abort();
         rpc_task.abort();
+    }
+
+    #[tokio::test]
+    async fn rpc_cors_mirrors_solana_client_preflight_from_allowed_origin() {
+        let mut config = BackendConfig::from_env().unwrap();
+        config.auth_token.clear();
+        config.allowed_origins = vec!["https://chainpay-frontend.onrender.com".to_owned()];
+        let state = BackendState::new(config, StatusStore::in_memory()).unwrap();
+        let api_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_address = api_listener.local_addr().unwrap();
+        let api_task = tokio::spawn(async move {
+            axum::serve(api_listener, build_router(state))
+                .await
+                .unwrap();
+        });
+
+        let allowed = reqwest::Client::new()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{api_address}/rpc"),
+            )
+            .header("Origin", "https://chainpay-frontend.onrender.com")
+            .header("Access-Control-Request-Method", "POST")
+            .header(
+                "Access-Control-Request-Headers",
+                "solana-client, content-type",
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let allow_origin = allowed
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok());
+        assert_eq!(allow_origin, Some("https://chainpay-frontend.onrender.com"));
+        let allow_headers = allowed
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(
+            allow_headers.contains("solana-client"),
+            "preflight must allow solana-client, got {allow_headers:?}"
+        );
+        assert!(allow_headers.contains("content-type"));
+
+        let denied = reqwest::Client::new()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{api_address}/rpc"),
+            )
+            .header("Origin", "https://evil.example")
+            .header("Access-Control-Request-Method", "POST")
+            .header("Access-Control-Request-Headers", "solana-client")
+            .send()
+            .await
+            .unwrap();
+        let denied_origin = denied
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok());
+        assert_ne!(denied_origin, Some("https://evil.example"));
+
+        api_task.abort();
     }
 }

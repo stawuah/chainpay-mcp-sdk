@@ -59,8 +59,10 @@ try {
   await page.getByRole('button',{name:'Edit spending limits'}).click();
   assert.equal(await page.getByRole('textbox',{name:'Max per payment',exact:true}).inputValue(),'2.125001');
   await page.goto(`${BASE_URL}/test/fixtures/dashboard-harness.html?tab=overview&ready`);
+  assert.equal(await page.locator('.wallet-chip img.wallet-brand-mark').count(), 1, 'connected chip shows Jupiter mark');
   await page.locator('.wallet-chip').click();
   await page.getByRole('button',{name:'Change account',exact:true}).waitFor();
+  assert.equal(await page.locator('.wallet-asset-popover img.wallet-brand-mark').count(), 1, 'wallet popover shows Jupiter mark');
   await page.waitForTimeout(350);
   await page.screenshot({path:'/tmp/chainpay-owner-wallet-desktop.png'});
   console.log('wallet menu',await page.locator('.wallet-asset-popover').boundingBox());

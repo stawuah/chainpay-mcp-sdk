@@ -52,6 +52,7 @@ type McpToolResponse = { content?: { type: string; text?: string }[]; isError?: 
 export type WalletContextValue = {
   wallet: string;
   walletName: string;
+  walletIcon?: string;
   walletCapabilities: WalletCapabilityReport | null;
   connecting: boolean;
   switchingWalletAccount: boolean;
@@ -84,6 +85,7 @@ export type WalletContextValue = {
 const disconnected: WalletContextValue = {
   wallet: "",
   walletName: "",
+  walletIcon: undefined,
   walletCapabilities: null,
   connecting: false,
   switchingWalletAccount: false,
