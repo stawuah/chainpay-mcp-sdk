@@ -6,14 +6,15 @@ const CHANNELS = 4;
 
 type Rgba = [number, number, number, number];
 
-const GLYPHS: Record<string, string[]> = {
-  A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
-  C: ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
-  H: ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
-  I: ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
-  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
-  P: ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
-  Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+/** Minimal 7-row bitmap for lowercase chainpay wordmark on OG card. */
+const LOWER: Record<string, string[]> = {
+  a: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+  c: ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
+  h: ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
+  i: ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
+  n: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+  p: ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+  y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
 };
 
 function setPixel(pixels: Buffer, x: number, y: number, color: Rgba): void {
@@ -31,6 +32,24 @@ function fillRect(pixels: Buffer, x: number, y: number, width: number, height: n
   }
 }
 
+function fillRoundedRect(pixels: Buffer, x: number, y: number, size: number, radius: number, color: Rgba): void {
+  fillRect(pixels, x + radius, y, size - radius * 2, size, color);
+  fillRect(pixels, x, y + radius, size, size - radius * 2, color);
+  for (let row = 0; row < radius; row += 1) {
+    for (let column = 0; column < radius; column += 1) {
+      const corners = [
+        [x + radius - column - 1, y + radius - row - 1],
+        [x + size - radius + column, y + radius - row - 1],
+        [x + radius - column - 1, y + size - radius + row],
+        [x + size - radius + column, y + size - radius + row],
+      ] as const;
+      if (Math.hypot(column - radius + 0.5, row - radius + 0.5) <= radius) {
+        for (const [px, py] of corners) setPixel(pixels, px, py, color);
+      }
+    }
+  }
+}
+
 function drawGlyph(pixels: Buffer, glyph: string[], x: number, y: number, scale: number, color: Rgba): void {
   glyph.forEach((row, rowIndex) => {
     [...row].forEach((pixel, columnIndex) => {
@@ -42,7 +61,7 @@ function drawGlyph(pixels: Buffer, glyph: string[], x: number, y: number, scale:
 function drawWord(pixels: Buffer, word: string, x: number, y: number, scale: number, color: Rgba): void {
   let cursor = x;
   for (const character of word) {
-    const glyph = GLYPHS[character];
+    const glyph = LOWER[character];
     if (!glyph) {
       cursor += scale * 3;
       continue;
@@ -52,13 +71,37 @@ function drawWord(pixels: Buffer, word: string, x: number, y: number, scale: num
   }
 }
 
-function drawCircle(pixels: Buffer, centerX: number, centerY: number, radius: number, color: Rgba): void {
-  for (let y = centerY - radius; y <= centerY + radius; y += 1) {
-    for (let x = centerX - radius; x <= centerX + radius; x += 1) {
-      const distance = Math.hypot(x - centerX, y - centerY);
-      if (distance >= radius - 3 && distance <= radius + 1) setPixel(pixels, x, y, color);
-    }
+/** Thick white stroke segment for the connection hook mark. */
+function strokeLine(pixels: Buffer, x0: number, y0: number, x1: number, y1: number, width: number, color: Rgba): void {
+  const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
+  for (let step = 0; step <= steps; step += 1) {
+    const t = step / steps;
+    const x = Math.round(x0 + (x1 - x0) * t);
+    const y = Math.round(y0 + (y1 - y0) * t);
+    fillRect(pixels, x - width / 2, y - width / 2, width, width, color);
   }
+}
+
+function drawIconTile(pixels: Buffer, x: number, y: number, size: number): void {
+  const blue: Rgba = [0, 82, 255, 255];
+  const white: Rgba = [255, 255, 255, 255];
+  const radius = Math.round(size * (40 / 180));
+  fillRoundedRect(pixels, x, y, size, radius, blue);
+  const scale = size / 180;
+  const ox = x + 18 * scale;
+  const oy = y + 18 * scale;
+  const s = scale * 0.8;
+  const stroke = Math.max(6, Math.round(28 * s));
+  strokeLine(pixels, ox + 116 * s, oy + 30 * s, ox + 90 * s, oy + 30 * s, stroke, white);
+  strokeLine(pixels, ox + 90 * s, oy + 30 * s, ox + 65 * s, oy + 55 * s, stroke, white);
+  strokeLine(pixels, ox + 65 * s, oy + 55 * s, ox + 34 * s, oy + 80 * s, stroke, white);
+  strokeLine(pixels, ox + 34 * s, oy + 80 * s, ox + 65 * s, oy + 110 * s, stroke, white);
+  const cx = x + size / 2;
+  const cy = y + size / 2;
+  strokeLine(pixels, cx + 26 * s, cy - 30 * s, cx, cy - 30 * s, stroke, white);
+  strokeLine(pixels, cx, cy - 30 * s, cx - 26 * s, cy - 5 * s, stroke, white);
+  strokeLine(pixels, cx - 26 * s, cy - 5 * s, cx - 56 * s, cy + 20 * s, stroke, white);
+  strokeLine(pixels, cx - 56 * s, cy + 20 * s, cx - 25 * s, cy + 50 * s, stroke, white);
 }
 
 function crc32(data: Buffer): number {
@@ -82,24 +125,27 @@ function pngChunk(type: string, data: Buffer): Buffer {
 
 export function createChainPayOgImage(): Buffer {
   const pixels = Buffer.alloc(WIDTH * HEIGHT * CHANNELS, 255);
-  const dark: Rgba = [10, 11, 13, 255];
+  const canvas: Rgba = [248, 249, 251, 255];
+  const card: Rgba = [255, 255, 255, 255];
+  const ink: Rgba = [20, 33, 61, 255];
+  const body: Rgba = [86, 100, 125, 255];
+  const line: Rgba = [219, 226, 239, 255];
   const blue: Rgba = [0, 82, 255, 255];
-  const white: Rgba = [255, 255, 255, 255];
-  const muted: Rgba = [168, 172, 179, 255];
 
-  pixels.fill(255);
-  fillRect(pixels, 0, 0, WIDTH, HEIGHT, dark);
-  fillRect(pixels, 0, 0, 14, HEIGHT, blue);
-  fillRect(pixels, 96, 96, 118, 118, blue);
-  drawCircle(pixels, 155, 155, 32, white);
-  drawCircle(pixels, 148, 148, 10, white);
-  drawWord(pixels, "CHAINPAY", 270, 108, 13, white);
-  fillRect(pixels, 270, 235, 510, 4, blue);
-  fillRect(pixels, 270, 275, 330, 3, muted);
-  fillRect(pixels, 270, 306, 410, 3, muted);
-  fillRect(pixels, 270, 337, 270, 3, muted);
-  fillRect(pixels, 96, 504, 1_008, 1, [57, 61, 67, 255]);
-  fillRect(pixels, 96, 536, 260, 3, blue);
+  fillRect(pixels, 0, 0, WIDTH, HEIGHT, canvas);
+  fillRect(pixels, 72, 96, 1056, 438, card);
+  fillRect(pixels, 72, 96, 1056, 1, line);
+  fillRect(pixels, 72, 533, 1056, 1, line);
+  fillRect(pixels, 72, 96, 1, 438, line);
+  fillRect(pixels, 1127, 96, 1, 438, line);
+
+  drawIconTile(pixels, 128, 210, 168);
+  drawWord(pixels, "chainpay", 340, 248, 11, ink);
+  fillRect(pixels, 340, 318, 420, 4, blue);
+  fillRect(pixels, 340, 350, 560, 3, body);
+  fillRect(pixels, 340, 378, 480, 3, body);
+  fillRect(pixels, 128, 430, 944, 1, line);
+  fillRect(pixels, 128, 458, 240, 3, blue);
 
   const scanlines = Buffer.alloc(HEIGHT * (WIDTH * CHANNELS + 1));
   for (let row = 0; row < HEIGHT; row += 1) {
