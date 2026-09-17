@@ -3,7 +3,6 @@ import {
   SPL_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   bytesToHex,
-  deriveX402PaymentReferences,
   type PaymentReceipt,
   type PreparedPayment,
 } from "@chainpay/sdk";
@@ -21,11 +20,18 @@ import {
   CUSTOM_PROTOCOL,
   CUSTOM_PROTOCOL_LABEL,
   customReceiptProofDocument,
+  parseMppWwwAuthenticate,
   parsePaymentRequiredDocument,
   parsePaymentRequiredFromResponse,
   unsupportedSponsorResult,
   type CustomChallengeOption,
+  type StandardV2Option,
 } from "./x402-protocol.js";
+import {
+  detectedChallengeToPrepareFields,
+  standardV2RecipientTokenAccount,
+} from "@chainpay/sdk";
+import { requirementsFromPreflight } from "./check_payment_requirements.js";
 
 const MAX_RESOURCE_BODY_BYTES = 1_048_576;
 const RESOURCE_TIMEOUT_MS = 10_000;
@@ -132,21 +138,111 @@ async function normalizeCustomChallenge(
     throw new Error("x402 challenge resource does not match the requested resource URL");
   }
   const tokenProgram = await normalizedTokenProgram(context, option.mint, option.tokenProgram);
-  const references = await deriveX402PaymentReferences({
-    mint: option.mint,
-    recipient: option.recipient,
-    amount: option.amount,
-    resource,
+  const fields = await detectedChallengeToPrepareFields(
+    { kind: "custom", option: { ...option, resource }, envelope: {} },
     tokenProgram,
-    ...(option.nonce ? { nonce: option.nonce } : {}),
-    ...(option.expiresAtSlot ? { expiresAtSlot: option.expiresAtSlot } : {}),
-  });
+  );
   return {
     ...option,
     resource,
     tokenProgram,
-    ...references,
+    nonce: fields.nonce,
+    invoiceHash: fields.invoiceHash,
+    paymentId: fields.paymentId,
+    signatureReference: fields.signatureReference,
   };
+}
+
+async function normalizeV2Challenge(
+  context: ChainPayMcpContext,
+  option: StandardV2Option,
+  expectedResource?: string,
+): Promise<NormalizedX402Challenge> {
+  const resource = resourceUrl(option.resource);
+  if (expectedResource && resource !== expectedResource) {
+    throw new Error("x402 challenge resource does not match the requested resource URL");
+  }
+  const tokenProgram = await normalizedTokenProgram(context, option.asset, undefined);
+  const fields = await detectedChallengeToPrepareFields(
+    { kind: "standard-v2", option: { ...option, resource }, envelope: {} },
+    tokenProgram,
+  );
+  return {
+    protocol: CUSTOM_PROTOCOL,
+    protocolLabel: "Standard x402 v2 challenge settled through ChainPay mandate receipt proof",
+    proofKind: "settled-receipt-pda",
+    network: "solana-devnet",
+    scheme: "exact",
+    mint: fields.mint,
+    recipient: fields.recipient,
+    amount: fields.amount,
+    resource,
+    tokenProgram,
+    nonce: fields.nonce,
+    invoiceHash: fields.invoiceHash,
+    paymentId: fields.paymentId,
+    signatureReference: fields.signatureReference,
+  };
+}
+
+function originAllowlisted(resource: string): boolean {
+  const url = new URL(resource);
+  const allowed = (process.env.CHAINPAY_X402_ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  const localDemo = process.env.CHAINPAY_X402_ALLOW_HTTP === "true"
+    && url.protocol === "http:"
+    && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  return localDemo || allowed.includes(url.origin);
+}
+
+async function quoteStandardV2AgainstMandate(
+  context: ChainPayMcpContext,
+  option: StandardV2Option,
+  mandate: string,
+  agent: string,
+) {
+  const tokenProgram = await normalizedTokenProgram(context, option.asset, undefined);
+  const derivedRecipientTokenAccount = standardV2RecipientTokenAccount(option, tokenProgram);
+  let mandateQuote: ReturnType<typeof unsupportedSponsorResult>["mandateQuote"];
+  try {
+    const fields = await detectedChallengeToPrepareFields(
+      { kind: "standard-v2", option, envelope: {} },
+      tokenProgram,
+    );
+    const prepared = await context.client.preparePayment({
+      mandate,
+      invoiceHash: hex32(fields.invoiceHash, "invoiceHash"),
+      paymentId: hex32(fields.paymentId, "paymentId"),
+      signatureReference: hex32(fields.signatureReference, "signatureReference"),
+      mint: fields.mint,
+      recipient: fields.recipient,
+      amount: BigInt(fields.amount),
+      tokenProgram,
+    }, agent);
+    mandateQuote = {
+      status: prepared.preflight.valid ? "ready" : "blocked",
+      preflightValid: prepared.preflight.valid,
+      checks: requirementsFromPreflight(prepared.preflight).checks,
+    };
+  } catch (error) {
+    mandateQuote = {
+      status: "blocked",
+      preflightValid: false,
+      checks: [{
+        key: "policy",
+        label: "Policy",
+        status: "fail",
+        detail: error instanceof Error ? error.message : String(error),
+      }],
+    };
+  }
+  return unsupportedSponsorResult(option, {
+    derivedRecipientTokenAccount,
+    mandateQuote,
+  });
+}
+
+function mppFromResponse(response: Response): ReturnType<typeof parseMppWwwAuthenticate> {
+  return parseMppWwwAuthenticate(response.headers.get("www-authenticate"));
 }
 
 async function prepareChallenge(
@@ -297,9 +393,27 @@ function proofHeader(signature: string, receiptAddress: string): string {
 export async function prepareX402Payment(context: ChainPayMcpContext, args: Record<string, unknown>) {
   const mandate = solanaAddress(args.mandate, "mandate");
   const agent = solanaAddress(args.agent, "agent");
+  const settleIfReceiptMerchant = args.settleIfReceiptMerchant === true;
   const detected = parsePaymentRequiredDocument(requireObject(args.challenge));
   if (detected.kind === "standard-v2") {
-    return toolResult(unsupportedSponsorResult(detected.option), true);
+    if (settleIfReceiptMerchant && originAllowlisted(detected.option.resource)) {
+      const challenge = await normalizeV2Challenge(context, detected.option);
+      const prepared = await prepareChallenge(context, challenge, mandate, agent);
+      if (!prepared.preflight.valid) {
+        return toolResult({ action: "x402_rejected_by_preflight", challenge, receiptAddress: prepared.receiptAddress, preflight: prepared.preflight }, true);
+      }
+      return toolResult({
+        action: "x402_agent_signature_required",
+        challenge,
+        receiptAddress: prepared.receiptAddress,
+        preflight: prepared.preflight,
+        capabilityProfile: prepared.capabilityProfile,
+        transaction: serializeTransaction(prepared.transaction),
+        unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction),
+        message: "Standard x402 v2 challenge on an allowlisted receipt merchant. Sign outside ChainPay, then call execute_x402_payment with signedTransaction.",
+      });
+    }
+    return toolResult(await quoteStandardV2AgainstMandate(context, detected.option, mandate, agent), true);
   }
   const challenge = await normalizeCustomChallenge(context, detected.option);
   const prepared = await prepareChallenge(context, challenge, mandate, agent);
@@ -327,6 +441,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   if (signingMode !== "human" && signingMode !== "delegated") {
     throw new Error("signingMode must be human or delegated");
   }
+  const settleIfReceiptMerchant = args.settleIfReceiptMerchant === true;
   const initial = await fetchResource(resource);
   const initialBody = await limitedResponseBody(initial);
   if (initial.status !== 402) {
@@ -339,10 +454,51 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
     }, !initial.ok);
   }
 
+  const mpp = mppFromResponse(initial);
+  if (mpp) {
+    return toolResult(mpp, true);
+  }
+
   const detected = parsePaymentRequiredFromResponse(initial.headers, initialBody, resource);
   if (detected.kind === "standard-v2") {
     resourceUrl(detected.option.resource);
-    return toolResult(unsupportedSponsorResult(detected.option), true);
+    if (settleIfReceiptMerchant && originAllowlisted(resource)) {
+      const challenge = await normalizeV2Challenge(context, detected.option, resource);
+      const prepared = await prepareChallenge(context, challenge, mandate, agent);
+      if (!prepared.preflight.valid) {
+        return toolResult({ action: "x402_rejected_by_preflight", challenge, receiptAddress: prepared.receiptAddress, preflight: prepared.preflight }, true);
+      }
+      const signedTransaction = typeof args.signedTransaction === "string" ? args.signedTransaction.trim() : "";
+      if (signingMode === "human" && !signedTransaction) {
+        return toolResult({
+          action: "x402_agent_signature_required",
+          challenge,
+          receiptAddress: prepared.receiptAddress,
+          preflight: prepared.preflight,
+          capabilityProfile: prepared.capabilityProfile,
+          transaction: serializeTransaction(prepared.transaction),
+          unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction),
+          message: "Allowlisted receipt merchant returned standard x402 v2. Sign this mandate payment, then call execute_x402_payment again with signedTransaction.",
+        });
+      }
+      if (signingMode === "delegated" && signedTransaction) {
+        return toolResult({
+          action: "delegated_signature_rejected",
+          message: "Delegated x402 accepts only the unsigned transaction prepared by ChainPay; Axum obtains and validates the provider signature.",
+          challenge,
+          receiptAddress: prepared.receiptAddress,
+        }, true);
+      }
+      const settlement = signingMode === "delegated"
+        ? await relayManagedPayment(context, challenge, prepared, mandate, agent)
+        : await relaySignedPayment(context, challenge, prepared, mandate, agent, signedTransaction);
+      if (settlement.status !== "confirmed" || typeof settlement.signature !== "string") {
+        return toolResult({ action: settlement.status === "failed" ? "x402_payment_failed" : "x402_payment_pending", status: settlement.status, resource, challenge, settlement, receiptAddress: prepared.receiptAddress,
+          continuation: { tool: "execute_x402_payment", arguments: { paymentId: settlement.payment_id } }, message: "Resume execute_x402_payment with paymentId to check settlement and deliver the original resource; do not request another approval." }, settlement.status === "failed");
+      }
+      return deliverX402(context, resource, challenge, prepared.receiptAddress, mandate, agent, settlement, `x402:${mandate}:${challenge.invoiceHash}`);
+    }
+    return toolResult(await quoteStandardV2AgainstMandate(context, detected.option, mandate, agent), true);
   }
   const challenge = await normalizeCustomChallenge(context, detected.option, resource);
   const prepared = await prepareChallenge(context, challenge, mandate, agent);

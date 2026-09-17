@@ -13,6 +13,8 @@ export * from "./token.js";
 export * from "./token-capabilities.js";
 export * from "./types.js";
 export * from "./x402.js";
+export * from "./x402-challenge.js";
+export * from "./x402-adapt.js";
 
 export { decodeSupportedTransaction } from "./transaction-reader.js";
 export {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Keypair, SystemProgram } from "@solana/web3.js";
+import { SPL_TOKEN_PROGRAM_ID as SDK_SPL_TOKEN, standardV2RecipientTokenAccount } from "@chainpay/sdk";
 import {
   CUSTOM_PROTOCOL,
   CUSTOM_X402_VERSION,
@@ -300,10 +301,11 @@ test("custom 402-to-proof flow settles once and labels the receipt-proof protoco
   });
 });
 
-test("standard v2 is recognized but unavailable before wallet, signing, or settlement", async () => {
+test("standard v2 is quoted against mandate but does not settle without settleIfReceiptMerchant", async () => {
   await allowOrigin(async () => {
     const owner = address();
-    const envelope = standardV2Envelope({ payTo: owner });
+    const mint = address();
+    const envelope = standardV2Envelope({ payTo: owner, asset: mint });
     const calls = [];
     const old = globalThis.fetch;
     globalThis.fetch = async (url, init = {}) => {
@@ -322,18 +324,16 @@ test("standard v2 is recognized but unavailable before wallet, signing, or settl
       backendUrl: "https://backend.example",
       backendAuthToken: "fixture",
       client: {
-        getSupportedAsset: async () => {
-          throw new Error("must not inspect the asset registry for unsupported v2");
-        },
-        preparePayment: async () => {
-          throw new Error("must not prepare a custom settlement for standard v2");
-        },
-        getCurrentSlot: async () => {
-          throw new Error("must not read slot for standard v2");
-        },
+        getSupportedAsset: async () => ({ enabled: true, tokenProgram: SPL_TOKEN_PROGRAM_ID }),
+        preparePayment: async () => ({
+          receiptAddress: address(),
+          preflight: { valid: true, currentSlot: 1n, checks: [] },
+          transaction: preparedFixture().transaction,
+        }),
+        getCurrentSlot: async () => 1n,
         connection: {
           getLatestBlockhash: async () => {
-            throw new Error("must not request a blockhash for standard v2");
+            throw new Error("must not request a blockhash for quoted v2");
           },
         },
       },
@@ -351,9 +351,12 @@ test("standard v2 is recognized but unavailable before wallet, signing, or settl
       assert.equal(executed.structuredContent.mode, "unsupported-sponsor");
       assert.equal(executed.structuredContent.protocol, STANDARD_V2_PROTOCOL);
       assert.equal(executed.structuredContent.merchantOwner, owner);
-      assert.equal(executed.structuredContent.recipient, undefined);
-      assert.equal(executed.structuredContent.sponsorAvailable, false);
+      assert.equal(executed.structuredContent.wouldSettle, false);
+      assert.equal(executed.structuredContent.reason, "facilitator_required");
+      assert.equal(typeof executed.structuredContent.derivedRecipientTokenAccount, "string");
+      assert.equal(executed.structuredContent.mandateQuote?.preflightValid, true);
       assert.equal(calls.length, 1);
+      assert.equal(calls.some(([url]) => url.endsWith("/v1/payments")), false);
 
       const prepared = await prepareX402Payment(context, {
         challenge: envelope,
@@ -362,6 +365,133 @@ test("standard v2 is recognized but unavailable before wallet, signing, or settl
       });
       assert.equal(prepared.structuredContent.action, "x402_unsupported_sponsor");
       assert.equal(prepared.structuredContent.merchantOwner, owner);
+    } finally {
+      globalThis.fetch = old;
+    }
+  });
+});
+
+test("allowlisted v2 with settleIfReceiptMerchant settles through mandate receipt proof", async () => {
+  await allowOrigin(async () => {
+    const owner = address();
+    const mint = address();
+    const derivedRecipient = standardV2RecipientTokenAccount(
+      { merchantOwner: owner, asset: mint, amount: "100000", resource: RESOURCE, network: SOLANA_DEVNET_CAIP2 },
+      SDK_SPL_TOKEN,
+    );
+    const fixture = preparedFixture();
+    const envelope = standardV2Envelope({ payTo: owner, asset: mint });
+    const calls = [];
+    let preparedInput;
+    const old = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push([String(url), init]);
+      if (String(url) === RESOURCE && !init.headers?.["X-PAYMENT"]) {
+        return new Response("{}", {
+          status: 402,
+          headers: {
+            "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(envelope), "utf8").toString("base64"),
+          },
+        });
+      }
+      if (String(url).endsWith("/v1/payments")) {
+        return Response.json({
+          payment_id: `payment_${"c".repeat(64)}`,
+          status: "confirmed",
+          signature: "v2-settled-signature",
+          receipt_address: fixture.receiptAddress,
+        });
+      }
+      if (String(url) === RESOURCE && init.headers?.["X-PAYMENT"]) {
+        const proof = JSON.parse(init.headers["X-PAYMENT"]);
+        assert.equal(proof.version, CUSTOM_X402_VERSION);
+        assert.equal(proof.payload.signature, "v2-settled-signature");
+        assert.equal(proof.payload.receiptPDA, fixture.receiptAddress);
+        return Response.json({ delivered: true });
+      }
+      if (String(url).endsWith("/proof")) return Response.json({});
+      throw new Error(`unexpected ${url}`);
+    };
+    const context = {
+      backendUrl: "https://backend.example",
+      backendAuthToken: "fixture",
+      client: {
+        getSupportedAsset: async () => ({ enabled: true, tokenProgram: SPL_TOKEN_PROGRAM_ID }),
+        getCurrentSlot: async () => 1n,
+        preparePayment: async (input) => {
+          preparedInput = input;
+          return {
+            receiptAddress: fixture.receiptAddress,
+            preflight: fixture.preflight,
+            transaction: fixture.transaction,
+          };
+        },
+        getPayment: async () => ({
+          status: "confirmed",
+          address: fixture.receiptAddress,
+          mandate: fixture.mandate,
+          agent: fixture.agent,
+          mint,
+          recipient: derivedRecipient,
+          invoiceHash: preparedInput.invoiceHash,
+          amount: 100000n,
+        }),
+        connection: {
+          getLatestBlockhash: async () => {
+            throw new Error("must not fetch a blockhash after a supplied signature");
+          },
+        },
+      },
+    };
+    try {
+      const result = await executeX402Payment(context, {
+        resource: RESOURCE,
+        mandate: fixture.mandate,
+        agent: fixture.agent,
+        signingMode: "human",
+        signedTransaction: "signed-wire",
+        settleIfReceiptMerchant: true,
+      });
+      assert.equal(result.isError, undefined);
+      assert.equal(result.structuredContent.action, "x402_verified");
+      assert.equal(result.structuredContent.challenge.protocol, CUSTOM_PROTOCOL);
+      assert.equal(result.structuredContent.proofKind, "settled-receipt-pda");
+      assert.equal(preparedInput.recipient, derivedRecipient);
+      assert.notEqual(preparedInput.recipient, owner);
+      assert.equal(calls.filter(([url]) => url.endsWith("/v1/payments")).length, 1);
+      assert.equal(calls.filter(([url]) => url === RESOURCE).length, 2);
+    } finally {
+      globalThis.fetch = old;
+    }
+  });
+});
+
+test("MPP WWW-Authenticate returns mpp_unsupported without settlement", async () => {
+  await allowOrigin(async () => {
+    const old = globalThis.fetch;
+    globalThis.fetch = async () => new Response("{}", {
+      status: 402,
+      headers: { "WWW-Authenticate": 'Payment id="abc", method="tempo", intent="charge"' },
+    });
+    const context = {
+      backendUrl: "https://backend.example",
+      backendAuthToken: "fixture",
+      client: {
+        preparePayment: async () => {
+          throw new Error("must not prepare payment for MPP");
+        },
+      },
+    };
+    try {
+      const executed = await executeX402Payment(context, {
+        resource: RESOURCE,
+        mandate: address(),
+        agent: address(),
+        signingMode: "human",
+      });
+      assert.equal(executed.isError, true);
+      assert.equal(executed.structuredContent.action, "mpp_unsupported");
+      assert.equal(executed.structuredContent.intent, "charge");
     } finally {
       globalThis.fetch = old;
     }

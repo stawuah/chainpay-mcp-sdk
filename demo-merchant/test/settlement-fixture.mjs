@@ -27,12 +27,14 @@ export async function makeCustomSettlement(nonce = "fixture-nonce-1") {
     resource: RESOURCE,
     mint: mint.publicKey.toBase58(),
     recipient: recipient.publicKey.toBase58(),
+    merchantOwner: owner.publicKey.toBase58(),
     amount: AMOUNT,
     tokenProgram: "spl-token",
     allowedAgent: agent.publicKey.toBase58(),
     programId: DEFAULT_PROGRAM_ID,
     rpcUrl: "http://127.0.0.1:9",
     nonce,
+    challengeShape: "custom",
   };
   const references = await deriveX402PaymentReferences({
     mint: config.mint,

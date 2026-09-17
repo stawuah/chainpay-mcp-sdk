@@ -258,18 +258,22 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "prepare_x402_payment",
-    description: "Detect a custom ChainPay x402/1.0 receipt-proof challenge (network solana-devnet, payTo is a recipient token account) and prepare a mandate-checked payment. Standard x402 v2 PAYMENT-REQUIRED (x402Version 2, CAIP-2 solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1) is recognized and returned as x402_unsupported_sponsor before wallet or settlement. ChainPay does not operate a standard sponsor/facilitator.",
+    description: "Prepare a mandate-checked payment for an x402 challenge object. Primary agent verb when the challenge is already known. Custom ChainPay x402/1.0 (network solana-devnet, payTo is a recipient token account) prepares settlement. Standard x402 v2 is quoted against the mandate with derived recipient ATA; facilitator merchants return x402_unsupported_sponsor unless settleIfReceiptMerchant is true and the resource origin is allowlisted.",
     inputSchema: {
       type: "object",
       properties: {
         challenge: {
           type: "object",
-          description: "Custom x402/1.0 envelope or accept option (version x402/1.0, network solana-devnet), or a standard x402 v2 PaymentRequired document (x402Version 2). Protocol is detected from document shape, not header name.",
+          description: "PaymentRequired document from HTTP 402 (custom x402/1.0 or standard x402Version 2). Protocol is detected from document shape.",
           additionalProperties: true,
         },
         mandate: { type: "string" },
         agent: { type: "string" },
         signingMode: { type: "string", enum: ["human", "delegated"] },
+        settleIfReceiptMerchant: {
+          type: "boolean",
+          description: "When true, allowlisted origins may settle standard v2 through ChainPay receipt proof instead of a facilitator",
+        },
       },
       required: ["challenge", "mandate", "agent"],
       additionalProperties: false,
@@ -277,15 +281,19 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "execute_x402_payment",
-    description: "Fetch a live 402, detect custom ChainPay x402/1.0 vs standard x402 v2 from document shape, settle only the custom receipt-proof rail, and retry the original resource with an x402/1.0 signature+receiptPDA proof. Standard v2 returns x402_unsupported_sponsor before signing. Resume with paymentId retries delivery only; it does not create a new settlement.",
+    description: "Pay an HTTPS 402 URL from mandate X — the main agent entry point. Fetches the resource, detects x402/1.0 receipt merchants vs standard v2 vs MPP, checks mandate limits, settles through ChainPay, and retries with signature+receiptPDA proof. Resume with paymentId retries delivery only. Use pay.sh separately for facilitator-only or MPP catalogs.",
     inputSchema: {
       type: "object",
       properties: {
         paymentId: { type: "string", description: "Resume an existing settlement and its original merchant delivery; no new approval" },
         signingMode: { type: "string", enum: ["human", "delegated"] },
-        resource: { type: "string", description: "HTTPS x402-gated resource URL" },
+        resource: { type: "string", description: "HTTPS x402-gated resource URL to pay" },
         mandate: { type: "string" },
         agent: { type: "string" },
+        settleIfReceiptMerchant: {
+          type: "boolean",
+          description: "When true, allowlisted receipt merchants may settle standard x402 v2 through ChainPay mandate receipt proof",
+        },
         signedTransaction: {
           type: "string",
           description: "Optional base64 transaction signed outside ChainPay; omit on the first call",

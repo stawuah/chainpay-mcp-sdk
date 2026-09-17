@@ -3,18 +3,23 @@ import { publicKey, type TokenProgram } from "@chainpay/sdk";
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 
+export type ChallengeShape = "custom" | "v2";
+
 export type MerchantConfig = {
   port: number;
   resource: string;
   mint: string;
   /** Custom x402/1.0 payTo: recipient token account, not a merchant owner address. */
   recipient: string;
+  /** Standard x402 v2 payTo: merchant wallet owner (ATA derived at settlement). */
+  merchantOwner: string;
   amount: string;
   tokenProgram: TokenProgram;
   allowedAgent: string;
   programId: string;
   rpcUrl: string;
   nonce?: string;
+  challengeShape: ChallengeShape;
 };
 
 /** Optional PR-07 publisher. Absent when the host key or Axum URL is unset. */
@@ -36,6 +41,20 @@ export type CustomPaymentRequired = {
     resource: string;
     tokenProgram: TokenProgram;
     nonce?: string;
+  }>;
+};
+
+export type StandardV2PaymentRequired = {
+  x402Version: 2;
+  resource: { url: string; description: string; mimeType: string };
+  accepts: Array<{
+    scheme: "exact";
+    network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
+    amount: string;
+    asset: string;
+    payTo: string;
+    maxTimeoutSeconds: number;
+    extra?: { feePayer?: string };
   }>;
 };
 
@@ -100,16 +119,25 @@ export function loadMerchantConfig(env: NodeJS.Dict<string> = process.env): Merc
   ).toString();
   const nonce = env.CHAINPAY_X402_NONCE?.trim() || undefined;
   if (nonce && nonce.length > 128) throw new Error("CHAINPAY_X402_NONCE is too long");
+  const challengeShape = env.CHAINPAY_X402_CHALLENGE_SHAPE?.trim() || "custom";
+  if (challengeShape !== "custom" && challengeShape !== "v2") {
+    throw new Error("CHAINPAY_X402_CHALLENGE_SHAPE must be custom or v2");
+  }
+  const merchantOwner = publicKey(
+    env.CHAINPAY_X402_MERCHANT_OWNER?.trim() || allowedAgent,
+  ).toBase58();
   return {
     port,
     resource,
     mint,
     recipient,
+    merchantOwner,
     amount,
     tokenProgram,
     allowedAgent,
     programId,
     rpcUrl,
+    challengeShape,
     ...(nonce ? { nonce } : {}),
   };
 }
@@ -129,6 +157,35 @@ export function customPaymentRequired(config: MerchantConfig): CustomPaymentRequ
       ...(config.nonce ? { nonce: config.nonce } : {}),
     }],
   };
+}
+
+/** Industry-shaped x402 v2 challenge. payTo is the merchant owner; proof remains receipt-PDA. */
+export function standardV2PaymentRequired(config: MerchantConfig): StandardV2PaymentRequired {
+  return {
+    x402Version: 2,
+    resource: {
+      url: config.resource,
+      description: "ChainPay demo merchant resource",
+      mimeType: "application/json",
+    },
+    accepts: [{
+      scheme: "exact",
+      network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+      amount: config.amount,
+      asset: config.mint,
+      payTo: config.merchantOwner,
+      maxTimeoutSeconds: 300,
+      extra: { feePayer: config.merchantOwner },
+    }],
+  };
+}
+
+export function paymentRequiredForConfig(
+  config: MerchantConfig,
+): CustomPaymentRequired | StandardV2PaymentRequired {
+  return config.challengeShape === "v2"
+    ? standardV2PaymentRequired(config)
+    : customPaymentRequired(config);
 }
 
 export function sanitizedResourceLabel(resource: string): string {

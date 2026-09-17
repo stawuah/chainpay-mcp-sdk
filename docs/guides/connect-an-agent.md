@@ -32,6 +32,29 @@ or payment is needed. A missing module means the build or installation failed.
 
 ## 2. Add ChainPay to your client
 
+**Prefer hosted HTTP** when the dashboard can issue a scoped connection token.
+Local stdio is a fallback for contributors cloning the repository.
+
+For a client that supports remote HTTP servers and custom headers:
+
+```json
+{
+  "mcpServers": {
+    "chainpay": {
+      "url": "https://YOUR_MCP_HOST/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_SCOPED_CONNECTION_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Replace both placeholders. See [ChainPay pay skill](../../.agents/skills/chainpay-pay/SKILL.md)
+for the agent sequence: `get_protocol_config` → mandate read → **`execute_x402_payment`**
+to pay an HTTPS 402 URL from a mandate. pay.sh remains the catalog/facilitator layer for
+generic x402 and MPP APIs; ChainPay adds mandate limits and public receipts.
+
 For a client that launches stdio servers, use this configuration. Replace the
 absolute path with your checkout path:
 
@@ -58,26 +81,11 @@ Restart the client connection and ask:
 explicit missing-account/RPC error. Discovery can succeed while Devnet is
 unavailable. Confirm the configured program and network before continuing.
 
-For a client that supports remote HTTP servers and custom headers:
-
-```json
-{
-  "mcpServers": {
-    "chainpay": {
-      "url": "https://YOUR_MCP_HOST/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_SCOPED_CONNECTION_TOKEN"
-      }
-    }
-  }
-}
-```
-
-Replace both placeholders. Client configuration keys vary; use a client with
-support for one of the [implemented protocol versions](#protocol-reference).
-For public discovery, omit the `headers` object entirely. A placeholder or
-expired token can fail authentication even for an otherwise public read.
-The server's `/tools` route also exposes schemas in a browser.
+Client configuration keys vary; use a client with support for one of the
+[implemented protocol versions](#protocol-reference). For public discovery,
+omit the `headers` object entirely. A placeholder or expired token can fail
+authentication even for an otherwise public read. The server's `/tools` route
+also exposes schemas in a browser.
 
 ## 3. Authorize private reads
 
@@ -161,15 +169,17 @@ ChainPay implements a custom `x402/1.0` receipt-proof flow for paid HTTP resourc
 `network` is `solana-devnet`, `payTo` is a **recipient token account**, and proof
 contains `{signature, receiptPDA}`. It is not a standard x402 facilitator.
 
-`execute_x402_payment` starts with `resource`, `mandate`, `agent`, and an explicit
-`signingMode`. Human mode returns a transaction, then accepts its externally
-signed version. Delegated mode uses Axum's managed signer. Once paid, resume
-with the existing `paymentId` to retry the original delivery without creating
-a new settlement.
+**`execute_x402_payment`** is the primary agent verb: pass `resource`, `mandate`,
+`agent`, and explicit `signingMode`. Human mode returns a transaction, then accepts
+its externally signed version. Delegated mode uses Axum's managed signer. Once paid,
+resume with the existing `paymentId` to retry delivery without creating a new settlement.
 
-Standard x402 v2 exact SVM is recognized from the document shape and rejected
-as `x402_unsupported_sponsor` before signing or settlement. Changing a header
-name cannot turn it into the custom protocol.
+Standard x402 v2 is recognized from document shape. Facilitator merchants return
+`x402_unsupported_sponsor` with a mandate policy quote (amount, derived ATA, limit
+checks). Use pay.sh for those APIs. Allowlisted receipt merchants may pass
+`settleIfReceiptMerchant: true` to settle v2-shaped challenges through the mandate.
+
+MPP (`WWW-Authenticate: Payment`) returns `mpp_unsupported`. Use pay.sh for MPP sandboxes.
 
 Hosted fetches require exact trusted HTTPS merchant origins in
 `CHAINPAY_X402_ALLOWED_ORIGINS`. Development can explicitly enable loopback HTTP
