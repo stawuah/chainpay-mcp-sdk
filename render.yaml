@@ -28,8 +28,11 @@ services:
         sync: false
       - key: PRIVY_POLICY_ID
         sync: false
+      # Comma-separated; parsed by BackendConfig in backend/src/server.rs. The
+      # local entry lets a developer frontend on the default Vite port reach
+      # this service without redeploying.
       - key: CHAINPAY_ALLOWED_ORIGINS
-        value: https://chainpay-frontend.onrender.com
+        value: https://chainpay-frontend.onrender.com,http://localhost:5173
   - type: web
     name: chainpay-mcp
     runtime: node
@@ -46,10 +49,13 @@ services:
         value: 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4
       - key: CHAINPAY_BACKEND_URL
         value: https://chainpay-backend.onrender.com
+      # Read into http.ts but never used; MCP reaches the relay by forwarding the
+      # caller's own session or connection token. Kept as a dashboard value so a
+      # credential is never committed to this public repository if it is wired up.
       - key: CHAINPAY_HTTP_AUTH_TOKEN
-        value: ""
+        sync: false
       - key: CHAINPAY_ALLOWED_ORIGINS
-        value: https://chainpay-frontend.onrender.com
+        value: https://chainpay-frontend.onrender.com,http://localhost:5173
       - key: OPENROUTER_API_KEY
         sync: false
       - key: CHAINPAY_AI_PROVIDER
