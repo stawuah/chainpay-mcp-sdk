@@ -17,7 +17,7 @@ use std::{
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{HeaderValue, Request, StatusCode, header},
+    http::{HeaderName, HeaderValue, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -31,7 +31,7 @@ use solana_transaction::versioned::VersionedTransaction;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tower_http::{
-    cors::{AllowHeaders, AllowOrigin, CorsLayer},
+    cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
 };
 
@@ -492,10 +492,16 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
             axum::http::Method::OPTIONS,
             axum::http::Method::DELETE,
         ])
-        // Mirror requested headers so browser RPC clients (web3.js sends
-        // `solana-client`) and MCP Accept values can preflight without a
-        // one-header-at-a-time allowlist. Origins stay locked above.
-        .allow_headers(AllowHeaders::mirror_request())
+        // Name the headers instead of mirroring the request. `solana-client` is the
+        // only custom header the browser sends here: @solana/web3.js attaches it to
+        // every RPC request, and `accept` is CORS-safelisted so it is never preflighted.
+        // Mirroring would echo back whatever an allowed origin asked for, which tells
+        // a reader nothing about what this service actually accepts.
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            HeaderName::from_static("solana-client"),
+        ])
 }
 
 async fn health(State(state): State<BackendState>) -> Json<HealthResponse> {
@@ -2531,7 +2537,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rpc_cors_mirrors_solana_client_preflight_from_allowed_origin() {
+    async fn rpc_cors_allows_solana_client_preflight_from_allowed_origin() {
         let mut config = BackendConfig::from_env().unwrap();
         config.auth_token.clear();
         config.allowed_origins = vec!["https://chainpay-frontend.onrender.com".to_owned()];
@@ -2553,7 +2559,7 @@ mod tests {
             .header("Access-Control-Request-Method", "POST")
             .header(
                 "Access-Control-Request-Headers",
-                "solana-client, content-type",
+                "solana-client, content-type, x-chainpay-not-allowed",
             )
             .send()
             .await
@@ -2575,6 +2581,13 @@ mod tests {
             "preflight must allow solana-client, got {allow_headers:?}"
         );
         assert!(allow_headers.contains("content-type"));
+        // The service names the headers it accepts rather than echoing the request, so a
+        // header it does not allow must not come back. Without this the test passes on any
+        // build that simply mirrors whatever was asked for.
+        assert!(
+            !allow_headers.contains("x-chainpay-not-allowed"),
+            "allow-headers must not echo an unrecognised request header, got {allow_headers:?}"
+        );
 
         let denied = reqwest::Client::new()
             .request(
