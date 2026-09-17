@@ -27,8 +27,14 @@ function setPixel(pixels: Buffer, x: number, y: number, color: Rgba): void {
 }
 
 function fillRect(pixels: Buffer, x: number, y: number, width: number, height: number, color: Rgba): void {
-  for (let row = y; row < y + height; row += 1) {
-    for (let column = x; column < x + width; column += 1) setPixel(pixels, column, row, color);
+  // Snap to whole pixels. A fractional index into a Buffer is a silent no-op, so an odd
+  // stroke width (x - width / 2) used to discard every pixel of the mark.
+  const left = Math.round(x);
+  const top = Math.round(y);
+  const right = left + Math.round(width);
+  const bottom = top + Math.round(height);
+  for (let row = top; row < bottom; row += 1) {
+    for (let column = left; column < right; column += 1) setPixel(pixels, column, row, color);
   }
 }
 
@@ -96,12 +102,18 @@ function drawIconTile(pixels: Buffer, x: number, y: number, size: number): void 
   strokeLine(pixels, ox + 90 * s, oy + 30 * s, ox + 65 * s, oy + 55 * s, stroke, white);
   strokeLine(pixels, ox + 65 * s, oy + 55 * s, ox + 34 * s, oy + 80 * s, stroke, white);
   strokeLine(pixels, ox + 34 * s, oy + 80 * s, ox + 65 * s, oy + 110 * s, stroke, white);
-  const cx = x + size / 2;
-  const cy = y + size / 2;
-  strokeLine(pixels, cx + 26 * s, cy - 30 * s, cx, cy - 30 * s, stroke, white);
-  strokeLine(pixels, cx, cy - 30 * s, cx - 26 * s, cy - 5 * s, stroke, white);
-  strokeLine(pixels, cx - 26 * s, cy - 5 * s, cx - 56 * s, cy + 20 * s, stroke, white);
-  strokeLine(pixels, cx - 56 * s, cy + 20 * s, cx - 25 * s, cy + 50 * s, stroke, white);
+  // The second hook is the first one rotated 180 degrees about the tile centre
+  // (frontend/src/brand/README.md), i.e. every offset negated. Translating it instead
+  // draws two parallel hooks and loses the Connection mark.
+  const cx = ox + 90 * s;
+  const cy = oy + 90 * s;
+  const rot = (px: number, py: number): [number, number] => [cx - (px - 90) * s, cy - (py - 90) * s];
+  const hook: Array<[number, number]> = [[116, 30], [90, 30], [65, 55], [34, 80], [65, 110]];
+  for (let i = 0; i < hook.length - 1; i += 1) {
+    const [ax, ay] = rot(hook[i][0], hook[i][1]);
+    const [bx, by] = rot(hook[i + 1][0], hook[i + 1][1]);
+    strokeLine(pixels, ax, ay, bx, by, stroke, white);
+  }
 }
 
 function crc32(data: Buffer): number {

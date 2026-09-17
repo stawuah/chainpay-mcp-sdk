@@ -273,10 +273,19 @@ export function createHttpServer(
       return;
     }
 
-    const staticAsset = getStaticAsset(url.pathname);
-    if (staticAsset && req.method === "GET") {
-      writeBinary(res, staticAsset.body, staticAsset.contentType, headers);
-      return;
+    // Read only for GET, and never let a missing file throw out of this async handler:
+    // an unhandled rejection here takes the whole server down.
+    if (req.method === "GET") {
+      let staticAsset;
+      try {
+        staticAsset = getStaticAsset(url.pathname);
+      } catch {
+        staticAsset = undefined;
+      }
+      if (staticAsset) {
+        writeBinary(res, staticAsset.body, staticAsset.contentType, headers);
+        return;
+      }
     }
 
     if (url.pathname === "/og-image.png" && req.method === "GET") {

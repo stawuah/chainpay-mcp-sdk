@@ -151,7 +151,7 @@ export function renderDocsHtml(): string {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="theme-color" content="#0052ff" />
     <meta name="description" content="Connect an agent to ChainPay MCP. Inspect spending permissions, prepare payments, and read receipts on Solana Devnet." />
     <link rel="icon" href="/brand/chainpay-icon.svg" type="image/svg+xml" />
     <link rel="canonical" href="https://chainpay-mcp.onrender.com/docs" />
@@ -170,12 +170,12 @@ export function renderDocsHtml(): string {
     <meta name="twitter:description" content="MCP tools to inspect spending permissions, prepare payments, and read receipts on Solana Devnet." />
     <title>ChainPay MCP docs</title>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
       :root {
         color-scheme: light;
         --ink: #14213d;
         --body: #56647d;
-        --muted: #8a95a8;
+        --muted: #6a7183;
         --line: #dbe2ef;
         --line-soft: #edf0f4;
         --canvas: #ffffff;
@@ -185,6 +185,7 @@ export function renderDocsHtml(): string {
         --blue-active: #003ecc;
         --blue-soft: #edf3ff;
         --green: #05b169;
+        --green-ink: #276347;
         --sidebar: 248px;
         --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
         --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -250,7 +251,8 @@ export function renderDocsHtml(): string {
       .code-block { overflow-x: auto; margin: 16px 0 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink); background: var(--soft); }
       .code-block code { white-space: pre; font-size: 11px; }
       .code-label { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; color: var(--muted); font: 600 10px var(--mono); text-transform: uppercase; }
-      .copyable { cursor: pointer; color: var(--blue); font-weight: 500; }
+      .copyable { padding: 0; border: 0; background: none; cursor: pointer; color: var(--blue); font: inherit; font-weight: 500; }
+      .copyable:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
       .stats-panel { display: grid; gap: 16px; }
       .stat { padding: 24px; }
       .stat strong { display: block; color: var(--ink); font: 500 28px var(--mono); }
@@ -272,17 +274,17 @@ export function renderDocsHtml(): string {
       .flow-step strong { color: var(--blue); font: 600 10px var(--mono); }
       .flow-step h3 { margin-top: 18px; font-size: 15px; font-weight: 500; }
       .flow-step p { margin: 8px 0 0; color: var(--body); font-size: 12px; line-height: 1.55; }
-      .flow-step:not(:last-child)::after { content: "→"; position: absolute; z-index: 1; top: 48px; right: -8px; color: var(--blue); background: #fff; font-weight: 700; }
+      .flow-step:not(:last-child)::after { content: "→"; position: absolute; z-index: 1; top: 48px; right: -8px; color: var(--blue); background: #fff; font-weight: 600; }
       .split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
       .callout { padding: 18px 20px; border-left: 3px solid var(--green); border-radius: 0 var(--radius-control) var(--radius-control) 0; color: var(--body); background: #effaf5; font-size: 13px; line-height: 1.6; }
       .callout strong { color: #08784f; }
       .check-list { display: grid; gap: 10px; margin: 16px 0 0; padding: 0; list-style: none; }
       .check-list li { display: grid; grid-template-columns: 20px 1fr; gap: 8px; color: var(--body); font-size: 13px; }
-      .check-list li::before { content: "✓"; color: var(--green); font-weight: 700; }
+      .check-list li::before { content: "✓"; color: var(--green-ink); font-weight: 600; }
       .table-wrap { overflow: hidden; }
       .endpoint-card { display: grid; grid-template-columns: 74px minmax(0, 1fr) 1fr; gap: 16px; align-items: center; padding: 18px 20px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
       .endpoint-card:last-child { border-bottom: 0; }
-      .method { display: inline-block; width: fit-content; padding: 4px 8px; border-radius: 5px; color: var(--green); background: #e8f8f0; font: 600 10px var(--mono); }
+      .method { display: inline-block; width: fit-content; padding: 4px 8px; border-radius: 5px; color: var(--green-ink); background: #e8f8f0; font: 600 10px var(--mono); }
       .endpoint-card code { color: var(--ink); font-weight: 500; }
       .endpoint-card span:last-child { color: var(--body); font-size: 12px; }
       .tool-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
@@ -331,9 +333,11 @@ export function renderDocsHtml(): string {
       @media (max-width: 960px) {
         .layout { display: block; }
         .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
-        .hero-grid { grid-template-columns: 1fr; }
-        .cards, .split, .tool-grid, .rail-grid { grid-template-columns: 1fr; }
-        .flow { grid-template-columns: 1fr; }
+        /* minmax(0, 1fr) not 1fr: a grid item defaults to min-width auto, so a wide
+           code block stretches the track past the viewport and the page scrolls sideways. */
+        .hero-grid { grid-template-columns: minmax(0, 1fr); }
+        .cards, .split, .tool-grid, .rail-grid { grid-template-columns: minmax(0, 1fr); }
+        .flow { grid-template-columns: minmax(0, 1fr); }
         .flow-step { min-height: 0; border-right: 0; border-bottom: 1px solid var(--line); }
         .flow-step:not(:last-child)::after { content: "↓"; top: auto; right: 20px; bottom: -11px; }
         .section-heading { display: block; }
@@ -346,6 +350,19 @@ export function renderDocsHtml(): string {
         .endpoint-card span:last-child { grid-column: 2; }
         .uml-message { grid-template-columns: 28px minmax(0, max-content) 20px minmax(0, max-content); }
         .uml-message p { grid-column: 2 / -1; margin-top: 4px; }
+      }
+      /* docs/dashboard-redesign.md visual contract: 150-200ms transitions, with a
+         reduced-motion alternative. Both sibling surfaces already do this. */
+      .nav-link, .top-links a, .button, .use-case-detail summary, .copyable {
+        transition: background-color .18s ease, border-color .18s ease, color .18s ease;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: .01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: .01ms !important;
+          scroll-behavior: auto !important;
+        }
       }
     </style>
   </head>
@@ -413,8 +430,8 @@ export function renderDocsHtml(): string {
               <h2 id="quickstart-title">Start with a read-only result.</h2>
               <p>Replace YOUR_MCP_HOST with this server. Paste the config, list tools, then read protocol config. No token. No wallet. No money moves.</p>
               ${renderCode(connectionConfig)}
-              <div class="code-label"><span>Client config</span><span class="copyable" data-copy="config">Copy</span></div>
-              <div class="prompt-example"><span class="code-label"><span>Read-only prompt</span><span class="copyable" data-copy="prompt">Copy</span></span>${renderCode(demoPrompt)}</div>
+              <div class="code-label"><span>Client config</span><button type="button" class="copyable" data-copy="config" aria-label="Copy the client configuration">Copy</button></div>
+              <div class="prompt-example"><span class="code-label"><span>Read-only prompt</span><button type="button" class="copyable" data-copy="prompt" aria-label="Copy the read-only prompt">Copy</button></span>${renderCode(demoPrompt)}</div>
             </div>
             <div class="stats-panel">
               <div class="stat"><strong>${TOOL_DEFINITIONS.length}</strong><span>MCP tools exposed</span></div>
@@ -533,8 +550,17 @@ export function renderDocsHtml(): string {
           const value = element.dataset.copy === "prompt"
             ? ${JSON.stringify(demoPrompt)}
             : ${JSON.stringify(connectionConfig)}.replace("https://YOUR_MCP_HOST", window.location.origin);
-          await navigator.clipboard?.writeText(value);
-          element.textContent = "Copied";
+          if (!navigator.clipboard) {
+            element.textContent = "Copy manually";
+            window.setTimeout(() => { element.textContent = "Copy"; }, 1800);
+            return;
+          }
+          try {
+            await navigator.clipboard.writeText(value);
+            element.textContent = "Copied";
+          } catch {
+            element.textContent = "Copy failed";
+          }
           window.setTimeout(() => { element.textContent = "Copy"; }, 1400);
         });
       });

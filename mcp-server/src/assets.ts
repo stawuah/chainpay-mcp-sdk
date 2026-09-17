@@ -24,7 +24,6 @@ const cache = new Map<string, StaticAsset>();
 
 export function getStaticAsset(routePath: string): StaticAsset | undefined {
   const map: Record<string, string> = {
-    "/brand/chainpay-icon.svg": "assets/chainpay-icon.svg",
     "/assets/brands/usdc.svg": "assets/brands/usdc.svg",
     "/assets/brands/solana.svg": "assets/brands/solana.svg",
     "/assets/brands/pyusd.png": "assets/brands/pyusd.png",
