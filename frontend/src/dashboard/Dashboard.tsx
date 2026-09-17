@@ -142,6 +142,9 @@ import {
   agentFlowSteps,
   coreToolReferences,
   buildMcpClientConfig,
+  buildMcpFirstPrompt,
+  connectionAccessLabel,
+  type McpConnectionHandoff,
 } from "../owner/runtime";
 import { pausedAfterMandateAction } from "../owner/mandateAction";
 
@@ -2743,8 +2746,11 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
   const [connectionId, setConnectionId] = useState("");
   const [connectionName, setConnectionName] = useState("");
   const [connectionToken, setConnectionToken] = useState("");
+  const [connectionHandoff, setConnectionHandoff] = useState<McpConnectionHandoff | null>(null);
   const [configCopied, setConfigCopied] = useState(false);
+  const [promptCopied, setPromptCopied] = useState(false);
   const config = buildMcpClientConfig(serverUrl, connectionToken || undefined);
+  const firstPrompt = connectionHandoff ? buildMcpFirstPrompt(connectionHandoff) : "";
 
   const ownedKey = ownedAddresses.join(",");
   useEffect(() => {
@@ -2755,6 +2761,13 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
     copyValue(config);
     setConfigCopied(true);
     window.setTimeout(() => setConfigCopied(false), 2200);
+  }
+
+  function copyFirstPrompt() {
+    if (!firstPrompt) return;
+    copyValue(firstPrompt);
+    setPromptCopied(true);
+    window.setTimeout(() => setPromptCopied(false), 2200);
   }
 
   function closeDialog() {
@@ -2769,12 +2782,22 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
     setError("");
     try {
       const createdAgentName = agentName.trim();
+      const selectedMandate = ownedMandates.find((mandate) => mandate.address === scope);
       const result = await registerMcpConnection(wallet, createdAgentName, buildConnectionScope(scope, ownedMandates, allowPayments));
       onConnected({ ...result.connection, mandates: 1 });
       setConnectionId(result.connection.id);
       setConnectionName(createdAgentName);
       setConnectionToken(result.token);
+      setConnectionHandoff({
+        agentName: createdAgentName,
+        mandateAddress: scope,
+        mandateLabel: selectedMandate
+          ? mandateDisplayName(selectedMandate, mandates, stablecoinOptions)
+          : undefined,
+        paymentsPermitted: allowPayments,
+      });
       setConfigCopied(false);
+      setPromptCopied(false);
       closeDialog();
       setAgentName("");
       setScope("");
@@ -2786,7 +2809,30 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
   }
 
   return <section className="page-panel connect-panel">
-    {connectionToken && <section className="dashboard-card connection-config-card"><div className="dashboard-card-heading"><h2>Finish connecting {connectionName}</h2><span className="owner-status">Configured</span></div><p>Copy this private configuration into your agent. The token is shown only once.</p><div className="config-code-wrap"><Button label={configCopied ? "Copied" : "Copy connection configuration"} variant="primary" onClick={copyConfig} /><details><summary>View configuration</summary><pre className="schema-block">{config}</pre></details></div></section>}
+    {connectionToken && connectionHandoff && <section className="dashboard-card connection-config-card">
+      <div className="dashboard-card-heading">
+        <h2>Finish connecting {connectionName}</h2>
+        <span className="owner-status">Ready to paste</span>
+      </div>
+      <p className="connection-handoff-intro">Paste the configuration into any MCP client, then send the first prompt so the agent inspects your permission before spending.</p>
+      <div className="connection-handoff-scope">
+        <span className="section-kicker">THIS CONNECTION</span>
+        <p><strong>{connectionHandoff.mandateLabel ?? "Spending permission"}</strong></p>
+        <p>{connectionAccessLabel(connectionHandoff.paymentsPermitted)} · Token shown once · Solana Devnet</p>
+      </div>
+      <ol className="connection-handoff-steps">
+        <li><strong>Copy configuration</strong><span>Paste into your MCP client settings.</span></li>
+        <li><strong>Send first prompt</strong><span>Starts read-only: inspect tools and your permission.</span></li>
+        <li><strong>Ask when ready</strong><span>Payments only after you explicitly request them.</span></li>
+      </ol>
+      <div className="connection-handoff-actions">
+        <Button label={configCopied ? "Copied" : "Copy configuration"} variant="primary" icon={<Copy size={16} />} onClick={copyConfig} />
+        <Button label={promptCopied ? "Copied" : "Copy first prompt"} variant="secondary" icon={<Copy size={16} />} onClick={copyFirstPrompt} />
+      </div>
+      <details className="technical-details"><summary>View configuration</summary><pre className="schema-block">{config}</pre></details>
+      <details className="technical-details"><summary>View first prompt</summary><pre className="schema-block connection-prompt-block">{firstPrompt}</pre></details>
+      <p className="connection-safety-note" role="note"><ShieldCheck className="shield-icon" aria-hidden /> Never paste the connection token into chat, commits, or public prompts. Revoke and recreate if it leaks.</p>
+    </section>}
     <div className="dashboard-card connected-clients-card"><div className="dashboard-card-heading"><h2>Connected agents</h2><Button type="button" variant="primary" label="Connect agent" icon={<Plus size={18} />} onClick={() => { setAllowPayments(false); setDialogOpen(true); }} /></div>{connections.length ? <div className="connection-list">{connections.map((connection) => <article className="owner-connection" key={connection.id}><div className="owner-connection-heading"><span className="owner-row-icon neutral"><Bot /></span><div><h3>{connection.agentName}</h3><p>{connectionSeenLabel(connection.lastSeenAt)}</p></div><span className={`owner-status ${connectionIsLive(connection.lastSeenAt) ? "good" : ""}`}>{connectionIsLive(connection.lastSeenAt) ? "Connected" : "Configured"}</span><Button variant="ghost" label={`Revoke ${connection.agentName}`} onClick={() => setRevokeId(connection.id)} /></div><p>{connectionScopeDetails(connection.scope).label}</p><details className="technical-details"><summary>Connection details and activity</summary><p>Owner: {connection.wallet}</p><p>{connection.mandates} associated spending permission{connection.mandates === 1 ? "" : "s"}</p><div className="connection-tools">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span>No tool activity recorded.</span>}</div></details></article>)}</div> : <div className="owner-small-empty"><Bot /><h3>Your agents will appear here</h3><p>Connect an agent and choose the spending permission it can use.</p></div>}</div>
     <Dialog isOpen={isDialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); else setDialogOpen(true); }} purpose="form" width={480}>
       <Layout
@@ -2795,7 +2841,7 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
         content={
           <LayoutContent>
             <div className="connection-form">
-              <p>Name your agent and choose its access. You will receive a private connection configuration.</p>
+              <p>Name your agent, choose a spending permission, and decide whether it may execute payments. You will receive a private MCP configuration to paste into any client.</p>
               <TextInput label="Agent name" value={agentName} onChange={setAgentName} placeholder="Invoice agent" />
               {mandateOptions.length ? (
                 <Selector
@@ -2830,7 +2876,7 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
         }
       />
     </Dialog>
-    <ConfirmDialog open={Boolean(revokeId)} title="Revoke this connection?" description="This agent will no longer be able to call ChainPay tools with this connection." confirmLabel="Revoke connection" onClose={() => setRevokeId(null)} onConfirm={() => { const id = revokeId; setRevokeId(null); if (id) void onRevoked(id).then(() => { if (id === connectionId) { setConnectionId(""); setConnectionName(""); setConnectionToken(""); } }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} />
+    <ConfirmDialog open={Boolean(revokeId)} title="Revoke this connection?" description="This agent will no longer be able to call ChainPay tools with this connection." confirmLabel="Revoke connection" onClose={() => setRevokeId(null)} onConfirm={() => { const id = revokeId; setRevokeId(null); if (id) void onRevoked(id).then(() => { if (id === connectionId) { setConnectionId(""); setConnectionName(""); setConnectionToken(""); setConnectionHandoff(null); } }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} />
   </section>;
 }
 

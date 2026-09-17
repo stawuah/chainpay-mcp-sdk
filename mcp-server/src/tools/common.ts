@@ -5,6 +5,7 @@ import {
   type ChainPayClient,
   type PreparedTransaction,
 } from "@chainpay/sdk";
+import { formatToolPresentation } from "./presentation.js";
 
 export function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.trim() === "") {
@@ -136,6 +137,6 @@ export function toolResult(data: unknown, isError = false) {
   return {
     isError: isError || undefined,
     structuredContent: safe,
-    content: [{ type: "text", text: JSON.stringify(safe) }],
+    content: [{ type: "text", text: formatToolPresentation(safe, isError) }],
   };
 }

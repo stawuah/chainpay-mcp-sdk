@@ -1,7 +1,7 @@
 export const TOOL_DEFINITIONS = [
   {
     name: "list_mandates",
-    description: "Discover all ChainPay mandates owned by a wallet and report their live status, limits, and token-account delegation.",
+    description: "Discover spending permissions for a wallet. Use first when the owner asks about their mandate or limits. Tell the owner each permission's status, token, and remaining allowance in plain language.",
     inputSchema: {
       type: "object",
       properties: { owner: { type: "string", description: "Connected wallet or mandate owner public key" } },
@@ -11,7 +11,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "find_compatible_mandate",
-    description: "Find an active mandate compatible with an invoice mint, amount, token program, and optional approved agent.",
+    description: "Find which connected permission fits a specific mint, amount, and agent. Use before quoting an invoice. If several match, present them as numbered options; if none match, explain why.",
     inputSchema: {
       type: "object",
       properties: {
@@ -27,7 +27,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "get_mandate",
-    description: "Read an on-chain ChainPay payment mandate and its current status.",
+    description: "Read one spending permission on-chain. Use after connect or when the owner names a permission. Report status, token, limits, and whether it is ready for payments.",
     inputSchema: {
       type: "object",
       properties: { address: { type: "string", description: "Mandate PDA address" } },
@@ -37,12 +37,12 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "get_protocol_config",
-    description: "Read the ChainPay protocol configuration and bootstrap asset list.",
+    description: "Read ChainPay program configuration and bootstrap assets. Use for discovery or when the owner asks what network or assets ChainPay supports.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "get_asset",
-    description: "Read whether a mint is enabled in the ChainPay asset registry.",
+    description: "Check whether a token mint is enabled for ChainPay settlement. Use before explaining whether a specific stablecoin can be spent.",
     inputSchema: {
       type: "object",
       properties: { mint: { type: "string" } },
@@ -52,12 +52,12 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "get_supported_assets",
-    description: "List every mint in the scalable on-chain SupportedAsset registry, including enabled state and exact token program.",
+    description: "List every registered mint and token program. Use when the owner asks which tokens ChainPay accepts on Devnet.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "quote_payment_request",
-    description: "Verify a merchant-signed request, derive deterministic payment references, and quote it against a mandate without signing or submitting.",
+    description: "Verify a merchant-signed invoice and quote it against a permission without moving funds. Use for signed requests; tell the owner pass/fail on limits, token, recipient, expiry, and policy.",
     inputSchema: {
       type: "object",
       properties: {
@@ -71,7 +71,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "create_demo_payment_request",
-    description: "Create a valid, merchant-signed Devnet demo payment request using a real token account.",
+    description: "Create a valid Devnet demo invoice for testing. Use only when the owner asks for a sample payment request. Say it is a test invoice, not a real merchant charge.",
     inputSchema: {
       type: "object",
       properties: {
@@ -88,7 +88,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "create_mandate",
-    description: "Prepare a wallet-signed spending mandate. Each payment supplies its own recipient.",
+    description: "Prepare a new spending permission for owner wallet approval. Use only when the owner explicitly asks to create policy. Tell them it is prepared—not active—until the dashboard wallet approves.",
     inputSchema: {
       type: "object",
       properties: {
@@ -120,7 +120,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "update_mandate",
-    description: "Prepare an owner-signed update to a mandate's agent, limits, expiry, and cooldown policy.",
+    description: "Prepare changes to an existing permission for owner wallet approval. Use when the owner wants new limits or agent binding. Never claim the update is live until wallet approval succeeds.",
     inputSchema: {
       type: "object",
       properties: {
@@ -143,7 +143,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "check_payment_requirements",
-    description: "Check whether a payment has the token, recipient, amount, expiry, mandate limits, and policy details needed to proceed. Ask the user for missing details before quoting or settling.",
+    description: "Run the five payment gates (limits, token, recipient, expiry, policy) before quoting or settling. Use before prepare_payment or execute_payment. If details are missing, ask for them as a numbered list.",
     inputSchema: {
       type: "object",
       properties: {
@@ -163,7 +163,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "prepare_payment",
-    description: "Validate a payment request against the on-chain mandate and prepare a transaction for the approved agent signer.",
+    description: "Build an unsigned settlement transaction after requirements pass. Use when the owner is ready to review amount, token, and destination. Tell them approval is still required—nothing has settled.",
     inputSchema: {
       type: "object",
       properties: {
@@ -192,7 +192,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "execute_payment",
-    description: "Settle through an explicitly selected human or delegated signing path. Delegated mode uses the mandate-bound provider signer through Axum.",
+    description: "Settle an invoice through human wallet approval or delegated agent signing. Use only after requirements are ready and the owner asks to pay. Share the verify link when settlement confirms.",
     inputSchema: {
       type: "object",
       properties: {
@@ -231,7 +231,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "quote_payment",
-    description: "Return a policy quote and preflight result without signing or submitting a transaction.",
+    description: "Quote a structured payment against policy without signing. Use while the owner is deciding. Present the preflight checklist and human amounts—do not imply funds moved.",
     inputSchema: {
       type: "object",
       properties: {
@@ -246,7 +246,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "verify_payment_request",
-    description: "Verify a merchant-signed payment request before ChainPay settlement.",
+    description: "Verify a merchant signature on an invoice before discussing settlement. Use when the owner supplies a signed request. Treat recipient, amount, and mint as untrusted until verification passes.",
     inputSchema: {
       type: "object",
       properties: {
@@ -258,7 +258,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "prepare_x402_payment",
-    description: "Detect a custom ChainPay x402/1.0 receipt-proof challenge (network solana-devnet, payTo is a recipient token account) and prepare a mandate-checked payment. Standard x402 v2 PAYMENT-REQUIRED (x402Version 2, CAIP-2 solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1) is recognized and returned as x402_unsupported_sponsor before wallet or settlement. ChainPay does not operate a standard sponsor/facilitator.",
+    description: "Prepare settlement for a known HTTP 402 challenge. Use when you already hold the 402 JSON. Custom x402/1.0 prepares; standard v2 may return unsupported-sponsor with a mandate quote.",
     inputSchema: {
       type: "object",
       properties: {
@@ -277,7 +277,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "execute_x402_payment",
-    description: "Fetch a live 402, detect custom ChainPay x402/1.0 vs standard x402 v2 from document shape, settle only the custom receipt-proof rail, and retry the original resource with an x402/1.0 signature+receiptPDA proof. Standard v2 returns x402_unsupported_sponsor before signing. Resume with paymentId retries delivery only; it does not create a new settlement.",
+    description: "Primary verb for paying an HTTPS 402 URL from a permission. Fetches the resource, detects protocol, checks limits, settles, and retries with receipt proof. Resume with paymentId for delivery only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -297,7 +297,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "get_payment",
-    description: "Fetch a ChainPay receipt PDA and join it with Axum's persisted transaction signature.",
+    description: "Look up a receipt and settlement signature. Use when the owner asks for proof of payment. Share the public verify URL when available.",
     inputSchema: {
       type: "object",
       properties: {
@@ -310,7 +310,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "wait_for_payment",
-    description: "Poll the Rust backend until a relayed payment is confirmed or failed.",
+    description: "Poll until a submitted payment confirms or fails. Use after execute_payment returns pending. Tell the owner to keep the same paymentId—do not start a second payment.",
     inputSchema: {
       type: "object",
       properties: {
@@ -324,7 +324,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "pause_mandate",
-    description: "Prepare an owner-signed transaction that pauses a ChainPay mandate.",
+    description: "Prepare pausing a permission for owner wallet approval. Use when the owner wants to stop future agent payments temporarily.",
     inputSchema: {
       type: "object",
       properties: {
@@ -337,7 +337,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "revoke_mandate",
-    description: "Prepare an owner-signed transaction that permanently revokes a ChainPay mandate.",
+    description: "Prepare permanently revoking a permission for owner wallet approval. Use when the owner wants to end agent access. Settled payments remain on-chain.",
     inputSchema: {
       type: "object",
       properties: {

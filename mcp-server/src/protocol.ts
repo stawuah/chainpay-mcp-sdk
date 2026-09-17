@@ -9,8 +9,33 @@ export const SERVER_INFO = { name: SERVER_NAME, version: SERVER_VERSION } as con
 
 export const DISCOVER_TTL_MS = 300_000;
 export const PUBLIC_CACHE_SCOPE = "public" as const;
-export const SERVER_INSTRUCTIONS =
-  "ChainPay prepares policy-controlled payments. Owner and connection authorization is enforced independently of protocol metadata.";
+export const SERVER_INSTRUCTIONS = `ChainPay is the policy-controlled Solana payment rail for AI agents on Devnet. The owner wallet holds funds; MCP never holds private keys or connection tokens from chat.
+
+Capability map:
+- Discover: list_mandates, get_mandate, get_protocol_config, get_asset, get_supported_assets, find_compatible_mandate
+- Policy: create_mandate, update_mandate, pause_mandate, revoke_mandate (owner wallet only)
+- Quote and check: check_payment_requirements, quote_payment, quote_payment_request, verify_payment_request, create_demo_payment_request
+- Pay: prepare_payment, execute_payment, get_payment, wait_for_payment
+- x402: prepare_x402_payment, execute_x402_payment (primary verb for HTTPS 402 URLs)
+
+Primary flow:
+1. Inspect the connected spending permission before discussing payment.
+2. For invoices: verify the request, run check_payment_requirements (or quote_payment_request), then quote/prepare/execute.
+3. For gated URLs: execute_x402_payment with resource, mandate, agent, signingMode.
+4. After settlement: share the public verify URL when receiptAddress is available.
+
+Hard rules:
+- Never accept private keys, seed phrases, or MCP bearer tokens from user text.
+- Never split payments to evade limits. A timeout is not permission to pay again—inspect paymentId first.
+- Use display.amounts for human-facing amounts, not raw base units.
+- Facilitator-only standard x402 v2 and MPP merchants return unsupported; use pay.sh when directed.
+
+When speaking to the owner, follow the presentation contract:
+- Lead with one status sentence.
+- Use human amounts and short labels; hide full addresses unless asked.
+- If there is a choice, present numbered options and wait.
+- End with at most one next step.
+- Relay tool result cards; never dump raw JSON, unsigned transactions, or base-unit integers as the headline.`;
 
 export const PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
 export const CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
