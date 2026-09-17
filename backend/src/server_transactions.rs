@@ -58,6 +58,7 @@ const REQUEST_HEAP_FRAME: u8 = 1;
 const SET_COMPUTE_UNIT_LIMIT: u8 = 2;
 const SET_COMPUTE_UNIT_PRICE: u8 = 3;
 const SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT: u8 = 4;
+const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 
 /// The ChainPay instructions of a transaction, with compute-budget instructions
 /// removed.
@@ -83,11 +84,20 @@ fn is_compute_budget(tx: &VersionedTransaction, program_id_index: u8) -> bool {
     matches!(key(tx, program_id_index), Ok(program) if program == COMPUTE_BUDGET_PROGRAM)
 }
 
-/// Bound every compute-budget instruction the same way `common` bounds a V1
-/// message config. An owner signs these in their own wallet, but the relay still
-/// refuses to broadcast an unbounded priority fee charged to that owner.
+/// The largest priority fee the relay will broadcast on an owner's behalf, in
+/// lamports. A wallet sets the fee as a rate, so the rate alone says nothing
+/// about what the owner pays; only the rate multiplied by the compute limit
+/// does. 0.01 SOL clears devnet and mainnet congestion by a wide margin while
+/// still refusing a fee that would drain the wallet paying it.
+const MAX_PRIORITY_FEE_LAMPORTS: u128 = 10_000_000;
+
+/// Bound every compute-budget instruction, the way `common` bounds a V1 message
+/// config. An owner signs these in their own wallet, but the relay still refuses
+/// to broadcast a priority fee that could empty the account paying it.
 fn validate_compute_budget(tx: &VersionedTransaction) -> Result<(), ApiError> {
     let mut seen = Vec::new();
+    let mut unit_limit = None;
+    let mut unit_price = None;
     for ix in tx.message.instructions() {
         if !is_compute_budget(tx, ix.program_id_index) {
             continue;
@@ -101,10 +111,14 @@ fn validate_compute_budget(tx: &VersionedTransaction) -> Result<(), ApiError> {
         }
         seen.push(selector);
         let bounded = match selector {
-            SET_COMPUTE_UNIT_LIMIT => {
-                read_u32(&ix.data).is_some_and(|value| value > 0 && value <= 1_400_000)
-            }
-            SET_COMPUTE_UNIT_PRICE => read_u64(&ix.data).is_some_and(|value| value <= 100_000),
+            SET_COMPUTE_UNIT_LIMIT => read_u32(&ix.data).is_some_and(|value| {
+                unit_limit = Some(value);
+                value > 0 && value <= MAX_COMPUTE_UNIT_LIMIT
+            }),
+            SET_COMPUTE_UNIT_PRICE => read_u64(&ix.data).is_some_and(|value| {
+                unit_price = Some(value);
+                true
+            }),
             SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT => {
                 read_u32(&ix.data).is_some_and(|value| value > 0 && value <= 64 * 1024 * 1024)
             }
@@ -113,8 +127,23 @@ fn validate_compute_budget(tx: &VersionedTransaction) -> Result<(), ApiError> {
             _ => false,
         };
         if !bounded {
+            // Naming the variant and its payload size keeps an unrecognised
+            // wallet instruction diagnosable from the message alone.
+            return Err(bad(&format!(
+                "Compute budget instruction {selector} with {} data bytes is not a bounded compute or data limit",
+                ix.data.len()
+            )));
+        }
+    }
+    // A priority fee costs price-per-compute-unit times the units requested,
+    // scaled from micro-lamports. Without an explicit limit the runtime may use
+    // its per-transaction maximum, so that is what the fee has to be judged by.
+    if let Some(price) = unit_price {
+        let units = u128::from(unit_limit.unwrap_or(MAX_COMPUTE_UNIT_LIMIT));
+        let lamports = u128::from(price).saturating_mul(units) / 1_000_000;
+        if lamports > MAX_PRIORITY_FEE_LAMPORTS {
             return Err(bad(
-                "Compute budget instructions require bounded compute, data and priority fee limits",
+                "Priority fee exceeds the amount the relay will pay from the owner wallet",
             ));
         }
     }
@@ -1244,9 +1273,20 @@ pub(super) mod tests {
         owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
     }
 
+    /// A wallet raises its fee rate steeply when the network is busy. The rate on
+    /// its own is meaningless; only the rate times the compute limit is a cost,
+    /// and this one is a fraction of a cent.
     #[test]
-    fn an_unbounded_priority_fee_is_still_refused() {
-        let (tx, wallet) = ata_with_leading_compute_budget(100_001);
+    fn a_congestion_priority_fee_is_accepted() {
+        let (tx, wallet) = ata_with_leading_compute_budget(1_000_000);
+        owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+    }
+
+    #[test]
+    fn a_priority_fee_that_would_drain_the_owner_is_refused() {
+        // 50 lamports per compute unit over the maximum compute limit is 0.07 SOL
+        // in fees for a token account that costs a fraction of that to create.
+        let (tx, wallet) = ata_with_leading_compute_budget(50_000_000);
         assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
     }
 
