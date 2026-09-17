@@ -63,6 +63,7 @@ import { loadWalletDrafts, saveWalletDrafts, type BatchCsvPayment } from "../wal
 import { chunkPreparedTransactions } from "../wallet/transactionChunks";
 import { createRecipientTokenAccount, type RecipientAtaReview } from "../wallet/recipientAta";
 import { estimatedSlotsForDays, mandateExpiryLabel, parseExpirySlot } from "../owner/slotEstimate";
+import { retryRead } from "../owner/retryRead";
 import { useOwnerSignIn } from "../owner/useOwnerSignIn";
 import { useSlotEstimate } from "../owner/useSlotEstimate";
 import { X402JobsPanel } from "../spend/X402JobsPanel";
@@ -3186,11 +3187,10 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
 
   useEffect(() => {
     let active = true;
-    void chainpayClient.getCurrentSlot().then((slot) => {
-      if (active) setCurrentSlot(slot);
-    }).catch(() => {
-      if (active) setCurrentSlot(null);
-    });
+    void retryRead(() => chainpayClient.getCurrentSlot(), { cancelled: () => !active })
+      .then((slot) => {
+        if (active) setCurrentSlot(slot);
+      });
     return () => { active = false; };
   }, []);
 
