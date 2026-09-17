@@ -17,7 +17,7 @@ use std::{
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{HeaderValue, Request, StatusCode, header},
+    http::{HeaderName, HeaderValue, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -492,7 +492,15 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
             axum::http::Method::OPTIONS,
             axum::http::Method::DELETE,
         ])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        // `solana-client` is attached to every request web3.js makes. Without it
+        // the browser rejects the preflight and the SDK cannot reach `/rpc` at
+        // all, which surfaces as `TypeError: Failed to fetch` rather than an
+        // HTTP status. The wildcard branch above already allows any header.
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            HeaderName::from_static("solana-client"),
+        ])
 }
 
 async fn health(State(state): State<BackendState>) -> Json<HealthResponse> {
