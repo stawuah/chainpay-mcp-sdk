@@ -27,6 +27,10 @@ function statusIcon(status: string): string {
   }
 }
 
+function toStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
 function formatChecklist(checks: unknown): string[] {
   if (!Array.isArray(checks)) return [];
   return checks
@@ -151,20 +155,47 @@ function formatRequirements(record: RecordLike): string {
 }
 
 function formatApprovalRequired(record: RecordLike): string {
+  // The tools do not agree on where these live. prepare_payment nests them under
+  // `payment` and emits no `display` at all; x402 uses `challenge`; the demo request uses
+  // `request`/`display`. A card that silently omits the amount and the destination is
+  // worse than no card, so read every shape the tools actually produce.
   const display = isRecord(record.display) ? record.display : undefined;
-  const symbol = pickString(display?.symbol) ?? "tokens";
-  const amount = isRecord(display?.amounts) ? pickString(display.amounts.amount) : undefined;
-  const mandate = pickString(record.mandate, isRecord(record.request) ? record.request.mandate : undefined);
+  const payment = isRecord(record.payment) ? record.payment : undefined;
+  const request = isRecord(record.request) ? record.request : undefined;
+  const challenge = isRecord(record.challenge) ? record.challenge : undefined;
+
+  const symbol = pickString(display?.symbol, display?.token) ?? "tokens";
+  const humanAmount = isRecord(display?.amounts)
+    ? pickString(display.amounts.amount)
+    : pickString(display?.amount);
+  // Only base units are available on the prepare paths. Never present one as a human
+  // amount and never invent a decimal count: say what it is.
+  const baseUnits = humanAmount
+    ? undefined
+    : pickString(payment?.amount, challenge?.amount, request?.amount)
+      ?? (typeof payment?.amount === "bigint" || typeof payment?.amount === "number"
+        ? String(payment.amount)
+        : undefined);
+
+  const mandate = pickString(record.mandate, payment?.mandate, request?.mandate, challenge?.mandate);
   const recipient = pickString(
     record.recipient,
-    isRecord(record.request) ? record.request.recipient : undefined,
+    payment?.recipient,
+    request?.recipient,
+    challenge?.recipient,
   );
+  const mint = pickString(payment?.mint, challenge?.mint, record.mint);
+  const receiptAddress = pickString(record.receiptAddress, record.receipt_address);
 
   const lines = [
     "**Approval required** — review before signing.",
-    ...(amount ? [`- Amount: **${amount} ${symbol}**`] : []),
+    ...(humanAmount ? [`- Amount: **${humanAmount} ${symbol}**`] : []),
+    ...(!humanAmount && baseUnits
+      ? [`- Amount: **${baseUnits}** base units${mint ? ` of \`${shortAddress(mint)}\`` : ""} (exact on-chain value)`]
+      : []),
     ...(recipient ? [`- Destination: \`${shortAddress(recipient)}\``] : []),
     ...(mandate ? [`- Permission: \`${shortAddress(mandate)}\``] : []),
+    ...(receiptAddress ? [`- Receipt to be created: \`${shortAddress(receiptAddress)}\``] : []),
     "",
     "**Options**",
     "1. Approve in the owner wallet",
@@ -176,16 +207,31 @@ function formatApprovalRequired(record: RecordLike): string {
 }
 
 function formatSettled(record: RecordLike): string {
-  const receiptAddress = pickString(record.receiptAddress, record.receipt_address);
-  const signature = pickString(record.signature);
+  // execute_x402_payment nests these under `receipt` and `settlement`; execute_payment
+  // puts them at the top level. Reading only the top level dropped the receipt, the
+  // signature and the verify link from every x402 success card.
+  const receipt = isRecord(record.receipt) ? record.receipt : undefined;
+  const settlement = isRecord(record.settlement) ? record.settlement : undefined;
+  const receiptAddress = pickString(
+    record.receiptAddress,
+    record.receipt_address,
+    receipt?.address,
+    receipt?.receiptAddress,
+    settlement?.receipt_address,
+  );
+  const signature = pickString(record.signature, settlement?.signature);
   const receiptUrl = receiptUrlForAddress(receiptAddress);
+  const delivered = record.resourceResponse !== undefined && record.resourceResponse !== null;
   const lines = [
     "**Payment settled** on Solana Devnet.",
     ...(receiptAddress ? [`- Receipt: \`${shortAddress(receiptAddress)}\``] : []),
     ...(signature ? [`- Signature: \`${shortAddress(signature)}\``] : []),
     ...(receiptUrl ? [`- Verify: ${receiptUrl}`] : []),
+    ...(delivered ? ["- The merchant accepted the receipt proof and returned the resource."] : []),
     "",
-    "**Next step:** Share the verify link or open the receipt in ChainPay.",
+    delivered
+      ? "**Next step:** Give the owner the resource, then the verify link."
+      : "**Next step:** Share the verify link or open the receipt in ChainPay.",
   ];
   return lines.join("\n");
 }
@@ -195,11 +241,24 @@ function formatBlocked(record: RecordLike): string {
   const message = pickString(record.message, record.reason, record.error) ?? "This request cannot proceed.";
   const lines = [`**Stopped — ${action.replaceAll("_", " ")}**`, "", message];
 
+  // Without this the owner is told only that something cannot proceed. The preflight
+  // already knows which limit failed; say so.
+  const requirements = isRecord(record.requirements) ? record.requirements : undefined;
+  const preflight = isRecord(record.preflight) ? record.preflight : undefined;
+  const checks = formatChecklist(
+    record.checks ?? requirements?.checks ?? preflight?.checks,
+  );
+  if (checks.length) lines.push("", "**Checks**", ...checks);
+  const missing = toStringList(record.missing ?? requirements?.missing);
+  if (missing.length) {
+    lines.push("", "**Missing:**", ...missing.map((item, index) => `${index + 1}. ${item}`));
+  }
+
   if (action === "x402_unsupported_sponsor") {
-    lines.push("", "This merchant needs a facilitator (for example pay.sh). ChainPay can quote the mandate limit but cannot settle standard x402 v2 here.");
-    lines.push("", "**Next step:** Use pay.sh for facilitator merchants, or pay a ChainPay receipt merchant with \`settleIfReceiptMerchant\` when allowlisted.");
+    lines.push("", "ChainPay can quote this against the mandate but cannot settle it here: the merchant expects a facilitator to countersign, and ChainPay settles by on-chain receipt proof instead.");
+    lines.push("", "**Next step:** This is pay.sh's job, not ChainPay's. Use the pay.sh MCP server if it is connected; otherwise hand the owner the resource URL and point them at the pay.sh panel in the ChainPay dashboard. There is no facilitator tool here, so do not retry.");
   } else if (action === "mpp_unsupported") {
-    lines.push("", "**Next step:** Use pay.sh for MPP (WWW-Authenticate: Payment) APIs.");
+    lines.push("", "**Next step:** MPP (WWW-Authenticate: Payment) merchants are pay.sh's job. Use the pay.sh MCP server if it is connected, otherwise hand the owner the URL and the dashboard's pay.sh panel. Do not retry here.");
   } else if (action.includes("preflight") || action === "requirements_blocked" || action === "payment_request_rejected") {
     lines.push("", "**Next step:** Fix the failed checks or choose a different spending permission.");
   } else if (action === "payment_pending" || action === "x402_payment_pending") {
