@@ -1,6 +1,7 @@
 //! Complete supported instruction-set validation before any RPC submission.
 use super::*;
 use solana_address::Address;
+use solana_message::compiled_instruction::CompiledInstruction;
 use std::str::FromStr;
 
 fn bad(message: &str) -> ApiError {
@@ -52,6 +53,87 @@ const APPROVE_CHECKED: u8 = 13;
 const REVOKE_DELEGATE: u8 = 5;
 const ATA_PROGRAM: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
+const COMPUTE_BUDGET_PROGRAM: &str = "ComputeBudget111111111111111111111111111111";
+const REQUEST_HEAP_FRAME: u8 = 1;
+const SET_COMPUTE_UNIT_LIMIT: u8 = 2;
+const SET_COMPUTE_UNIT_PRICE: u8 = 3;
+const SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT: u8 = 4;
+
+/// The ChainPay instructions of a transaction, with compute-budget instructions
+/// removed.
+///
+/// Wallets attach their own compute-budget instructions when they add a priority
+/// fee, and they place them first. Every validator here addresses instructions by
+/// position, so they must all see the same compute-budget-free view or an
+/// injected instruction silently shifts what each position means. A V1 message
+/// carries these limits in its message config instead, and `common` bounds them
+/// there; this is the legacy-message equivalent.
+///
+/// Compute-budget instructions cannot touch accounts or move funds. `common`
+/// checks that each one is well formed and bounded before anything reaches here.
+fn payload_instructions(tx: &VersionedTransaction) -> Vec<&CompiledInstruction> {
+    tx.message
+        .instructions()
+        .iter()
+        .filter(|ix| !is_compute_budget(tx, ix.program_id_index))
+        .collect()
+}
+
+fn is_compute_budget(tx: &VersionedTransaction, program_id_index: u8) -> bool {
+    matches!(key(tx, program_id_index), Ok(program) if program == COMPUTE_BUDGET_PROGRAM)
+}
+
+/// Bound every compute-budget instruction the same way `common` bounds a V1
+/// message config. An owner signs these in their own wallet, but the relay still
+/// refuses to broadcast an unbounded priority fee charged to that owner.
+fn validate_compute_budget(tx: &VersionedTransaction) -> Result<(), ApiError> {
+    let mut seen = Vec::new();
+    for ix in tx.message.instructions() {
+        if !is_compute_budget(tx, ix.program_id_index) {
+            continue;
+        }
+        if !ix.accounts.is_empty() || ix.data.is_empty() {
+            return Err(bad("Malformed compute budget instruction"));
+        }
+        let selector = ix.data[0];
+        if seen.contains(&selector) {
+            return Err(bad("Duplicate compute budget instruction"));
+        }
+        seen.push(selector);
+        let bounded = match selector {
+            SET_COMPUTE_UNIT_LIMIT => {
+                read_u32(&ix.data).is_some_and(|value| value > 0 && value <= 1_400_000)
+            }
+            SET_COMPUTE_UNIT_PRICE => read_u64(&ix.data).is_some_and(|value| value <= 100_000),
+            SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT => {
+                read_u32(&ix.data).is_some_and(|value| value > 0 && value <= 64 * 1024 * 1024)
+            }
+            REQUEST_HEAP_FRAME => read_u32(&ix.data)
+                .is_some_and(|value| (32_768..=262_144).contains(&value) && value % 1024 == 0),
+            _ => false,
+        };
+        if !bounded {
+            return Err(bad(
+                "Compute budget instructions require bounded compute, data and priority fee limits",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn read_u32(data: &[u8]) -> Option<u32> {
+    if data.len() != 5 {
+        return None;
+    }
+    Some(u32::from_le_bytes(data[1..5].try_into().ok()?))
+}
+
+fn read_u64(data: &[u8]) -> Option<u64> {
+    if data.len() != 9 {
+        return None;
+    }
+    Some(u64::from_le_bytes(data[1..9].try_into().ok()?))
+}
 
 fn discriminator(data: &[u8]) -> Option<[u8; 8]> {
     if data.len() < 8 {
@@ -75,7 +157,7 @@ fn validate_approve_checked(
     source: &str,
     mint: &str,
 ) -> Result<(), ApiError> {
-    let ix = &tx.message.instructions()[position];
+    let ix = &payload_instructions(tx)[position];
     token_program(&key(tx, ix.program_id_index)?)?;
     if ix.accounts.len() != 4 || ix.data.len() != 10 || ix.data[0] != APPROVE_CHECKED {
         return Err(bad("Unexpected delegate approval"));
@@ -102,8 +184,8 @@ fn validate_ata_creation(
     wallet: &str,
     owner_must_be_wallet: bool,
 ) -> Result<(), ApiError> {
-    let ix = &tx.message.instructions()[0];
-    if tx.message.instructions().len() != 1 || !ix.data.is_empty() || ix.accounts.len() != 6 {
+    let ix = &payload_instructions(tx)[0];
+    if payload_instructions(tx).len() != 1 || !ix.data.is_empty() || ix.accounts.len() != 6 {
         return Err(bad("Only standalone associated-token setup is supported"));
     }
     let accounts = ix
@@ -155,10 +237,10 @@ fn validate_ata_creation(
 }
 
 fn validate_delegate_repair(tx: &VersionedTransaction, wallet: &str) -> Result<(), ApiError> {
-    if tx.message.instructions().len() != 1 {
+    if payload_instructions(tx).len() != 1 {
         return Err(bad("Delegate repair must be a single approval instruction"));
     }
-    let accounts = tx.message.instructions()[0]
+    let accounts = payload_instructions(tx)[0]
         .accounts
         .iter()
         .map(|index| key(tx, *index))
@@ -173,8 +255,8 @@ fn validate_delegate_repair(tx: &VersionedTransaction, wallet: &str) -> Result<(
 }
 
 fn validate_delegate_removal(tx: &VersionedTransaction, wallet: &str) -> Result<(), ApiError> {
-    let ix = &tx.message.instructions()[0];
-    if tx.message.instructions().len() != 1
+    let ix = &payload_instructions(tx)[0];
+    if payload_instructions(tx).len() != 1
         || ix.data.len() != 1
         || ix.data[0] != REVOKE_DELEGATE
         || ix.accounts.len() != 2
@@ -207,8 +289,8 @@ fn validate_initialize_config(
     wallet: &str,
     program: &str,
 ) -> Result<(), ApiError> {
-    let ix = &tx.message.instructions()[0];
-    if tx.message.instructions().len() != 1
+    let ix = &payload_instructions(tx)[0];
+    if payload_instructions(tx).len() != 1
         || ix.data.len() != 104
         || ix.accounts.len() != 3
         || tx.message.static_account_keys().len() != 4
@@ -238,8 +320,8 @@ fn validate_register_asset(
     wallet: &str,
     program: &str,
 ) -> Result<(), ApiError> {
-    let ix = &tx.message.instructions()[0];
-    if tx.message.instructions().len() != 1
+    let ix = &payload_instructions(tx)[0];
+    if payload_instructions(tx).len() != 1
         || ix.data.len() != 40
         || ix.accounts.len() != 6
         || tx.message.static_account_keys().len() != 7
@@ -273,8 +355,8 @@ fn validate_set_asset_status(
     wallet: &str,
     program: &str,
 ) -> Result<(), ApiError> {
-    let ix = &tx.message.instructions()[0];
-    if tx.message.instructions().len() != 1
+    let ix = &payload_instructions(tx)[0];
+    if payload_instructions(tx).len() != 1
         || ix.data.len() != 9
         || ix.accounts.len() != 3
         || tx.message.static_account_keys().len() != 4
@@ -302,7 +384,7 @@ fn validate_management_instruction(
     position: usize,
     wallet: &str,
 ) -> Result<(), ApiError> {
-    let ix = &tx.message.instructions()[position];
+    let ix = &payload_instructions(tx)[position];
     let expected = if ix.data[..8] == UPDATE_MANDATE {
         81
     } else {
@@ -385,9 +467,18 @@ pub(super) fn common(tx: &VersionedTransaction) -> Result<(), ApiError> {
             "Address-table transactions require resolved accounts and are not supported",
         ));
     }
-    if tx.message.instructions().is_empty() || tx.message.instructions().len() > 32 {
+    if tx.message.instructions().len() > 32 {
         return Err(bad("Unexpected instruction count"));
     }
+    // Every validator below indexes the compute-budget-free view, so that view is
+    // what must be non-empty. A transaction carrying nothing but compute-budget
+    // instructions would otherwise index past the end of it.
+    if payload_instructions(tx).is_empty() {
+        return Err(bad("Unexpected instruction count"));
+    }
+    validate_compute_budget(tx)?;
+    // The compute-budget program is referenced by its own instructions, so the
+    // full instruction list is what accounts for every static key.
     let mut referenced = std::collections::HashSet::new();
     for ix in tx.message.instructions() {
         referenced.insert(ix.program_id_index);
@@ -407,7 +498,7 @@ pub(super) fn payment(
     common(tx)?;
     // The shipped payment builder emits exactly one execute_payment. No auxiliary
     // transfer, approval, memo, or compute instruction is needed for this flow.
-    if tx.message.instructions().len() != 1 || tx.message.static_account_keys().len() != 11 {
+    if payload_instructions(tx).len() != 1 || tx.message.static_account_keys().len() != 11 {
         return Err(bad(
             "Payments require exactly one execute_payment instruction",
         ));
@@ -421,7 +512,7 @@ fn payment_at(
     program: &str,
     position: usize,
 ) -> Result<(), ApiError> {
-    let ix = &tx.message.instructions()[position];
+    let ix = &payload_instructions(tx)[position];
     if key(tx, ix.program_id_index)? != program
         || ix.data.len() != 112
         || ix.data[..8] != [86, 4, 7, 7, 120, 139, 232, 139]
@@ -503,11 +594,11 @@ pub(super) fn batch_payment_requests(
     tx: &VersionedTransaction,
     program: &str,
 ) -> Result<Vec<PaymentSubmissionRequest>, ApiError> {
-    if tx.message.instructions().len() > 4 {
+    if payload_instructions(tx).len() > 4 {
         return Err(bad("Payment batches are limited to four instructions"));
     }
     let mut requests = Vec::new();
-    for (position, ix) in tx.message.instructions().iter().enumerate() {
+    for (position, ix) in payload_instructions(tx).iter().enumerate() {
         if ix.accounts.len() != 10 || ix.data.len() != 112 {
             return Err(bad("Invalid batch payment instruction"));
         }
@@ -551,7 +642,7 @@ pub(super) fn owner(
     if key(tx, 0)? != wallet {
         return Err(bad("Owner must sign and pay transaction fees"));
     }
-    let instructions = tx.message.instructions();
+    let instructions = payload_instructions(tx);
     let ix = &instructions[0];
     if key(tx, ix.program_id_index)? == program
         && ix.data.starts_with(&[86, 4, 7, 7, 120, 139, 232, 139])
@@ -1086,6 +1177,104 @@ pub(super) mod tests {
             message,
         };
         owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+    }
+
+    /// Wallets add a priority fee by prepending their own compute-budget
+    /// instructions, which shifts every ChainPay instruction one position later.
+    /// Validating the raw list rejects the transaction the owner actually signed.
+    fn ata_with_leading_compute_budget(
+        price_micro_lamports: u64,
+    ) -> (VersionedTransaction, String) {
+        let signer = SigningKey::from_bytes(&[9; 32]);
+        let wallet = Address::from(signer.verifying_key().to_bytes()).to_string();
+        let mint = Address::from([5; 32]).to_string();
+        let ata_program = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+        let ata = pda(
+            ata_program,
+            &[
+                &address_bytes(&wallet).unwrap(),
+                &address_bytes(SPL_TOKEN_PROGRAM_ID).unwrap(),
+                &[5; 32],
+            ],
+        )
+        .unwrap();
+        let mut price = vec![SET_COMPUTE_UNIT_PRICE];
+        price.extend_from_slice(&price_micro_lamports.to_le_bytes());
+        let message = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 5,
+            },
+            account_keys: [
+                wallet.clone(),
+                ata,
+                mint,
+                SPL_TOKEN_PROGRAM_ID.into(),
+                "11111111111111111111111111111111".into(),
+                ata_program.into(),
+                COMPUTE_BUDGET_PROGRAM.into(),
+            ]
+            .map(|s| Address::from_str(&s).unwrap())
+            .to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![
+                CompiledInstruction {
+                    program_id_index: 6,
+                    accounts: vec![],
+                    data: price,
+                },
+                CompiledInstruction {
+                    program_id_index: 5,
+                    accounts: vec![0, 1, 0, 2, 4, 3],
+                    data: vec![],
+                },
+            ],
+        });
+        let tx = VersionedTransaction {
+            signatures: vec![signer.sign(&message.serialize()).to_bytes().into()],
+            message,
+        };
+        (tx, wallet)
+    }
+
+    #[test]
+    fn wallet_added_priority_fee_does_not_reject_the_owner_transaction() {
+        let (tx, wallet) = ata_with_leading_compute_budget(1_000);
+        owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+    }
+
+    #[test]
+    fn an_unbounded_priority_fee_is_still_refused() {
+        let (tx, wallet) = ata_with_leading_compute_budget(100_001);
+        assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
+    }
+
+    #[test]
+    fn a_transaction_of_only_compute_budget_instructions_is_refused() {
+        let signer = SigningKey::from_bytes(&[11; 32]);
+        let wallet = Address::from(signer.verifying_key().to_bytes()).to_string();
+        let message = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 1,
+            },
+            account_keys: [wallet.clone(), COMPUTE_BUDGET_PROGRAM.into()]
+                .map(|s| Address::from_str(&s).unwrap())
+                .to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 1,
+                accounts: vec![],
+                data: vec![SET_COMPUTE_UNIT_LIMIT, 0x40, 0x0d, 0x03, 0x00],
+            }],
+        });
+        let tx = VersionedTransaction {
+            signatures: vec![signer.sign(&message.serialize()).to_bytes().into()],
+            message,
+        };
+        assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
     }
 
     #[test]
