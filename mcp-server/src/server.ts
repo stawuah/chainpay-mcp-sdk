@@ -7,6 +7,7 @@ import {
   INVALID_REQUEST,
   METHOD_NOT_FOUND,
   SERVER_INFO,
+  SERVER_INSTRUCTIONS,
   authorizationHttpStatus,
   classifyProtocol,
   decorateModernResult,
@@ -34,6 +35,7 @@ import process from "node:process";
 export {
   CURRENT_PROTOCOL_VERSION,
   SERVER_INFO,
+  SERVER_INSTRUCTIONS,
   parseJsonRpcMessage,
   decodeMcpNameHeader,
   classifyProtocol,
@@ -130,7 +132,7 @@ function handleLegacy(
         protocolVersion: negotiateLegacyProtocolVersion(message.params),
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: SERVER_INFO.name, version: SERVER_INFO.version },
-        instructions: "ChainPay prepares and routes policy-controlled Solana payments. Wallet signatures and signer adapters remain outside MCP.",
+        instructions: SERVER_INSTRUCTIONS,
       });
     case "ping":
       return jsonRpcSuccess(id, {});

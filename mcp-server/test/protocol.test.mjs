@@ -11,6 +11,7 @@ import {
   PARSE_ERROR,
   PROTOCOL_VERSION_KEY,
   SERVER_INFO_KEY,
+  SERVER_INSTRUCTIONS,
   SUPPORTED_PROTOCOL_VERSIONS,
   UNSUPPORTED_PROTOCOL_VERSION,
   decodeMcpNameHeader,
@@ -91,6 +92,16 @@ async function frontendCompatibilityHelper(base, method, params, token) {
   return payload.result;
 }
 
+test("legacy initialize and modern discover share the same server instructions", async () => {
+  const server = createMcpServer(fixtureContext());
+  const initialized = await server.handle({ jsonrpc: "2.0", id: 1, method: "initialize" });
+  const discovered = await server.handle(modernRequest("discover-instructions", "server/discover"));
+  assert.equal(initialized.result.instructions, SERVER_INSTRUCTIONS);
+  assert.equal(discovered.result.instructions, SERVER_INSTRUCTIONS);
+  assert.match(SERVER_INSTRUCTIONS, /Privy-held agent wallet/);
+  assert.match(SERVER_INSTRUCTIONS, /owner keeps the tokens/i);
+});
+
 test("implements MCP initialize and tool discovery", async () => {
   const server = createMcpServer({
     client: {
@@ -99,6 +110,7 @@ test("implements MCP initialize and tool discovery", async () => {
   });
   const initialized = await server.handle({ jsonrpc: "2.0", id: 1, method: "initialize" });
   assert.equal(initialized.result.serverInfo.name, "chainpay-mcp");
+  assert.equal(initialized.result.instructions, SERVER_INSTRUCTIONS);
 
   const tools = await server.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   assert.ok(tools.result.tools.some((tool) => tool.name === "execute_payment"));

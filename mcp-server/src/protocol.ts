@@ -10,7 +10,7 @@ export const SERVER_INFO = { name: SERVER_NAME, version: SERVER_VERSION } as con
 export const DISCOVER_TTL_MS = 300_000;
 export const PUBLIC_CACHE_SCOPE = "public" as const;
 export const SERVER_INSTRUCTIONS =
-  "ChainPay prepares policy-controlled payments. Owner and connection authorization is enforced independently of protocol metadata.";
+  "ChainPay prepares policy-controlled Solana payments. The owner keeps the tokens. After they approve a mandate, a Privy-held agent wallet can sign later payments by itself. That wallet only needs SOL for fees, not the spendable balance. Mandate limits still apply. Connecting an MCP client is not spending approval.";
 
 export const PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
 export const CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
