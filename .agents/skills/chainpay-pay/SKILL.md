@@ -66,7 +66,12 @@ For **allowlisted receipt merchants** that verify ChainPay receipts despite v2-s
 "settleIfReceiptMerchant": true
 ```
 
-Only when `CHAINPAY_X402_ALLOWED_ORIGINS` includes the merchant origin.
+The flag only confirms your intent. The operator decides which merchants can settle, by
+listing them in `CHAINPAY_X402_RECEIPT_MERCHANTS` — a deliberate subset of the fetch
+allowlist, because a merchant being readable is no evidence that it understands a ChainPay
+receipt PDA. If the origin is not on that list, you get `x402_unsupported_sponsor` with the
+mandate quote no matter what you pass, and nothing is settled. Do not ask the owner to add a
+merchant to it in order to get past a refusal.
 
 ### MPP (WWW-Authenticate: Payment)
 

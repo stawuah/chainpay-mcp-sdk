@@ -8,6 +8,7 @@ explicitly approved Devnet run after Dre authorizes a wallet signature.
 - Devnet wallet with SOL and supported token balance
 - Active mandate with approved agent
 - Demo merchant or allowlisted origin in `CHAINPAY_X402_ALLOWED_ORIGINS`
+- For a standard x402 v2 settlement, that same origin also in `CHAINPAY_X402_RECEIPT_MERCHANTS`
 - MCP HTTP with scoped connection token, or stdio with `CHAINPAY_CALLER_TOKEN`
 - For v2-shaped merchant challenges: `CHAINPAY_X402_CHALLENGE_SHAPE=v2` on demo-merchant
 

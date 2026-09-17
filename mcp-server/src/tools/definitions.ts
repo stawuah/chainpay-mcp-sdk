@@ -258,7 +258,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "prepare_x402_payment",
-    description: "Prepare a mandate-checked payment for an x402 challenge object. Primary agent verb when the challenge is already known. Custom ChainPay x402/1.0 (network solana-devnet, payTo is a recipient token account) prepares settlement. Standard x402 v2 is quoted against the mandate with derived recipient ATA; facilitator merchants return x402_unsupported_sponsor unless settleIfReceiptMerchant is true and the resource origin is allowlisted.",
+    description: "Prepare a mandate-checked payment for an x402 challenge object. Primary agent verb when the challenge is already known. Custom ChainPay x402/1.0 (network solana-devnet, payTo is a recipient token account) prepares settlement. Standard x402 v2 is quoted against the mandate with derived recipient ATA; facilitator merchants return x402_unsupported_sponsor unless settleIfReceiptMerchant is true and the resource origin is listed in CHAINPAY_X402_RECEIPT_MERCHANTS.",
     inputSchema: {
       type: "object",
       properties: {
@@ -272,7 +272,7 @@ export const TOOL_DEFINITIONS = [
         signingMode: { type: "string", enum: ["human", "delegated"] },
         settleIfReceiptMerchant: {
           type: "boolean",
-          description: "When true, allowlisted origins may settle standard v2 through ChainPay receipt proof instead of a facilitator",
+          description: "Confirms the caller intends settlement. Only origins listed in CHAINPAY_X402_RECEIPT_MERCHANTS can settle standard v2 through ChainPay receipt proof; this flag alone grants nothing",
         },
       },
       required: ["challenge", "mandate", "agent"],
@@ -292,7 +292,7 @@ export const TOOL_DEFINITIONS = [
         agent: { type: "string" },
         settleIfReceiptMerchant: {
           type: "boolean",
-          description: "When true, allowlisted receipt merchants may settle standard x402 v2 through ChainPay mandate receipt proof",
+          description: "Confirms the caller intends settlement. Only origins listed in CHAINPAY_X402_RECEIPT_MERCHANTS can settle standard x402 v2 through ChainPay mandate receipt proof; this flag alone grants nothing",
         },
         signedTransaction: {
           type: "string",

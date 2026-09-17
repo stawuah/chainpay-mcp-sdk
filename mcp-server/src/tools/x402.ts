@@ -185,13 +185,30 @@ async function normalizeV2Challenge(
   };
 }
 
-function originAllowlisted(resource: string): boolean {
-  const url = new URL(resource);
-  const allowed = (process.env.CHAINPAY_X402_ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-  const localDemo = process.env.CHAINPAY_X402_ALLOW_HTTP === "true"
-    && url.protocol === "http:"
-    && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-  return localDemo || allowed.includes(url.origin);
+/**
+ * Settling a standard x402 v2 challenge is not the same permission as being allowed to
+ * fetch a resource. `CHAINPAY_X402_ALLOWED_ORIGINS` says "ChainPay may read this merchant";
+ * this says "this merchant verifies a ChainPay receipt PDA and will deliver against it".
+ *
+ * `resourceUrl` has already rejected every origin outside the read allowlist by the time
+ * a settle gate runs, so checking the read allowlist again always returned true and the
+ * effective gate was the caller's own `settleIfReceiptMerchant` argument. This list is
+ * separate, is never satisfied by the local-HTTP demo escape hatch, and fails closed when
+ * unset: no receipt merchants configured means no v2 settlement.
+ */
+function receiptMerchantAllowlisted(resource: string): boolean {
+  const configured = (process.env.CHAINPAY_X402_RECEIPT_MERCHANTS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (configured.length === 0) return false;
+  let origin: string;
+  try {
+    origin = new URL(resource).origin;
+  } catch {
+    return false;
+  }
+  return configured.includes(origin);
 }
 
 async function quoteStandardV2AgainstMandate(
@@ -396,7 +413,7 @@ export async function prepareX402Payment(context: ChainPayMcpContext, args: Reco
   const settleIfReceiptMerchant = args.settleIfReceiptMerchant === true;
   const detected = parsePaymentRequiredDocument(requireObject(args.challenge));
   if (detected.kind === "standard-v2") {
-    if (settleIfReceiptMerchant && originAllowlisted(detected.option.resource)) {
+    if (settleIfReceiptMerchant && receiptMerchantAllowlisted(detected.option.resource)) {
       const challenge = await normalizeV2Challenge(context, detected.option);
       const prepared = await prepareChallenge(context, challenge, mandate, agent);
       if (!prepared.preflight.valid) {
@@ -462,7 +479,7 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   const detected = parsePaymentRequiredFromResponse(initial.headers, initialBody, resource);
   if (detected.kind === "standard-v2") {
     resourceUrl(detected.option.resource);
-    if (settleIfReceiptMerchant && originAllowlisted(resource)) {
+    if (settleIfReceiptMerchant && receiptMerchantAllowlisted(resource)) {
       const challenge = await normalizeV2Challenge(context, detected.option, resource);
       const prepared = await prepareChallenge(context, challenge, mandate, agent);
       if (!prepared.preflight.valid) {

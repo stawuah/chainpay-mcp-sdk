@@ -87,13 +87,31 @@ function preparedFixture() {
   };
 }
 
-function allowOrigin(run) {
-  const previous = process.env.CHAINPAY_X402_ALLOWED_ORIGINS;
-  process.env.CHAINPAY_X402_ALLOWED_ORIGINS = "https://merchant.example";
+function withEnv(values, run) {
+  const previous = new Map(Object.keys(values).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   return run().finally(() => {
-    if (previous === undefined) delete process.env.CHAINPAY_X402_ALLOWED_ORIGINS;
-    else process.env.CHAINPAY_X402_ALLOWED_ORIGINS = previous;
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
+}
+
+/** ChainPay may read this merchant. It says nothing about settling against it. */
+function allowOrigin(run) {
+  return withEnv({ CHAINPAY_X402_ALLOWED_ORIGINS: "https://merchant.example" }, run);
+}
+
+/** ChainPay may read this merchant AND it verifies a ChainPay receipt PDA. */
+function allowReceiptMerchant(run) {
+  return withEnv({
+    CHAINPAY_X402_ALLOWED_ORIGINS: "https://merchant.example",
+    CHAINPAY_X402_RECEIPT_MERCHANTS: "https://merchant.example",
+  }, run);
 }
 
 test("parses custom x402/1.0 receipt-proof challenges from shape, not header name", () => {
@@ -372,7 +390,7 @@ test("standard v2 is quoted against mandate but does not settle without settleIf
 });
 
 test("allowlisted v2 with settleIfReceiptMerchant settles through mandate receipt proof", async () => {
-  await allowOrigin(async () => {
+  await allowReceiptMerchant(async () => {
     const owner = address();
     const mint = address();
     const derivedRecipient = standardV2RecipientTokenAccount(
@@ -460,6 +478,104 @@ test("allowlisted v2 with settleIfReceiptMerchant settles through mandate receip
       assert.notEqual(preparedInput.recipient, owner);
       assert.equal(calls.filter(([url]) => url.endsWith("/v1/payments")).length, 1);
       assert.equal(calls.filter(([url]) => url === RESOURCE).length, 2);
+    } finally {
+      globalThis.fetch = old;
+    }
+  });
+});
+
+test("a readable merchant that is not a receipt merchant never settles, even with the flag", async () => {
+  // The read allowlist says ChainPay may fetch this merchant. It does not say the merchant
+  // verifies a ChainPay receipt PDA. Before CHAINPAY_X402_RECEIPT_MERCHANTS existed, the
+  // settle gate re-checked the read allowlist, which resourceUrl had already enforced, so
+  // the only real condition was the caller's own settleIfReceiptMerchant argument.
+  await allowOrigin(async () => {
+    const owner = address();
+    const mint = address();
+    const envelope = standardV2Envelope({ payTo: owner, asset: mint });
+    const calls = [];
+    const old = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push([String(url), init]);
+      if (String(url) === RESOURCE) {
+        return new Response("{}", {
+          status: 402,
+          headers: {
+            "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(envelope), "utf8").toString("base64"),
+          },
+        });
+      }
+      throw new Error(`unexpected ${url}`);
+    };
+    const context = {
+      backendUrl: "https://backend.example",
+      backendAuthToken: "fixture",
+      client: {
+        // Read-only work is fine on the refusal path: it produces the mandate quote that
+        // replaces the old dead end. What must not happen is a settlement.
+        getSupportedAsset: async () => ({ enabled: true, tokenProgram: SPL_TOKEN_PROGRAM_ID }),
+        getCurrentSlot: async () => 1n,
+        preparePayment: async () => preparedFixture(),
+        getPayment: async () => { throw new Error("must not read a settled payment"); },
+        connection: {
+          getLatestBlockhash: async () => { throw new Error("must not fetch a blockhash"); },
+        },
+      },
+    };
+    try {
+      const result = await executeX402Payment(context, {
+        resource: RESOURCE,
+        mandate: address(),
+        agent: address(),
+        signingMode: "delegated",
+        settleIfReceiptMerchant: true,
+      });
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent.action, "x402_unsupported_sponsor");
+      // One fetch: the challenge itself. Nothing was relayed and nothing settled.
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0][0], RESOURCE);
+      assert.equal(calls.filter(([url]) => url.endsWith("/v1/payments")).length, 0);
+      assert.equal(calls.filter(([, init]) => init.headers?.["X-PAYMENT"]).length, 0);
+    } finally {
+      globalThis.fetch = old;
+    }
+  });
+});
+
+test("an empty receipt-merchant list fails closed", async () => {
+  await withEnv({
+    CHAINPAY_X402_ALLOWED_ORIGINS: "https://merchant.example",
+    CHAINPAY_X402_RECEIPT_MERCHANTS: "   ",
+  }, async () => {
+    const envelope = standardV2Envelope({ payTo: address(), asset: address() });
+    const old = globalThis.fetch;
+    globalThis.fetch = async () => new Response("{}", {
+      status: 402,
+      headers: {
+        "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(envelope), "utf8").toString("base64"),
+      },
+    });
+    const context = {
+      backendUrl: "https://backend.example",
+      backendAuthToken: "fixture",
+      client: {
+        getSupportedAsset: async () => ({ enabled: true, tokenProgram: SPL_TOKEN_PROGRAM_ID }),
+        getCurrentSlot: async () => 1n,
+        preparePayment: async () => preparedFixture(),
+        getPayment: async () => { throw new Error("must not read a settled payment"); },
+      },
+    };
+    try {
+      const result = await executeX402Payment(context, {
+        resource: RESOURCE,
+        mandate: address(),
+        agent: address(),
+        signingMode: "delegated",
+        settleIfReceiptMerchant: true,
+      });
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent.action, "x402_unsupported_sponsor");
     } finally {
       globalThis.fetch = old;
     }
