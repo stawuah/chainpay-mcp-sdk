@@ -1415,7 +1415,7 @@ async fn submit_transaction(
     let key = format!("{}:{}", principal.wallet, request.idempotency_key);
     let id = deterministic_id("transaction", &key);
     let mut receipts = Vec::new();
-    if transaction.message.instructions()[0]
+    if transactions::payload_instructions(&transaction)[0]
         .data
         .starts_with(&[86, 4, 7, 7, 120, 139, 232, 139])
     {
@@ -1612,16 +1612,16 @@ async fn validate_owner_live(
         [69, 131, 248, 29, 105, 50, 139, 30]
         | [192, 108, 97, 124, 56, 229, 236, 3]
         | [252, 97, 140, 119, 67, 43, 177, 108] => {
-            for ix in transaction.message.instructions() {
+            for ix in transactions::payload_instructions(transaction) {
                 if transactions::key(transaction, ix.program_id_index)? != *program_id {
                     continue;
                 }
                 let mandate = account_at(transaction, &ix.accounts, 0)?;
                 auth::mandate(&state, &principal, &mandate, "update_mandate").await?;
                 if first.data[..8] == [69, 131, 248, 29, 105, 50, 139, 30]
-                    && transaction.message.instructions().len() == 2
+                    && transactions::payload_instructions(transaction).len() == 2
                 {
-                    let approve = &transaction.message.instructions()[1];
+                    let approve = transactions::payload_instructions(transaction)[1];
                     let source = account_at(transaction, &approve.accounts, 0)?;
                     let mint = account_at(transaction, &approve.accounts, 1)?;
                     validate_live_mandate_token_binding(&state, &mandate, &source, &mint).await?;
@@ -1852,7 +1852,7 @@ fn validate_single_signer_transaction(
             "managed signer must be the only required signer and fee payer".to_owned(),
         ));
     }
-    if transaction.message.instructions().len() != 1 {
+    if transactions::payload_instructions(transaction).len() != 1 {
         return Err(ApiError::BadRequest(
             "managed payments may contain only one ChainPay execute_payment instruction".to_owned(),
         ));
@@ -1887,7 +1887,14 @@ async fn validate_live_payment_at(
     position: usize,
     mandate: &str,
 ) -> Result<(), ApiError> {
-    let ix = &tx.message.instructions()[position];
+    let instructions = transactions::payload_instructions(tx);
+    // A malformed transaction must be refused, not allowed to take the worker
+    // down with it. There is no panic guard on the router, so an index here that
+    // is not checked ends the request with no response at all: the caller sees a
+    // closed connection rather than a rejection, and cannot tell the two apart.
+    let ix = *instructions
+        .get(position)
+        .ok_or_else(|| ApiError::BadRequest("Payment instruction is missing".into()))?;
     let keys = tx.message.static_account_keys();
     let account = state
         .rpc
@@ -1900,7 +1907,18 @@ async fn validate_live_payment_at(
         state.rpc.current_slot().await?,
     )?;
     for (position, range) in [(4, 40..72), (5, 104..136), (6, 72..104)] {
-        if keys[ix.accounts[position] as usize].as_ref() != &account.data[range] {
+        let key = ix
+            .accounts
+            .get(position)
+            .and_then(|index| keys.get(*index as usize))
+            .ok_or_else(|| {
+                ApiError::BadRequest("Payment instruction accounts are missing".into())
+            })?;
+        let expected = account
+            .data
+            .get(range)
+            .ok_or_else(|| ApiError::BadRequest("Mandate account is truncated".into()))?;
+        if key.as_ref() != expected {
             return Err(ApiError::BadRequest(
                 "Payment agent/mint/source differs from on-chain mandate".into(),
             ));

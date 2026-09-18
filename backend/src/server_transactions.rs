@@ -72,7 +72,7 @@ const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 ///
 /// Compute-budget instructions cannot touch accounts or move funds. `common`
 /// checks that each one is well formed and bounded before anything reaches here.
-fn payload_instructions(tx: &VersionedTransaction) -> Vec<&CompiledInstruction> {
+pub(super) fn payload_instructions(tx: &VersionedTransaction) -> Vec<&CompiledInstruction> {
     tx.message
         .instructions()
         .iter()
