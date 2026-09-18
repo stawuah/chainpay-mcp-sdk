@@ -6,6 +6,7 @@ import { PublicKey, type Transaction } from "@solana/web3.js";
 import { AGENT_URL, BACKEND_URL, DEVNET_PYUSD_TOKEN_2022_MINT, DEVNET_USDC_MINT, MCP_URL, PROGRAM_ID } from "../config/public";
 import { chainpayClient } from "../config/client";
 import { tokenProgramAccountType } from "./tokenAccounts";
+import { settlementKey } from "./settlementKey";
 
 export type Action = "Send" | "Receive" | "Approve mandate" | "Receipts";
 export type Range = "1H" | "1D" | "1W" | "1M" | "1Y" | "All";
@@ -367,7 +368,7 @@ export async function mcpRequest<T>(method: string, params?: Record<string, unkn
 
 export async function callMcpTool(name: string, args: Record<string, unknown>) {
   if (name !== "execute_payment" || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
-  const operation = await beginSettlement(BACKEND_URL, "payments", `${String(args.mandate)}:${String(args.invoiceHash)}`, typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
+  const operation = await beginSettlement(BACKEND_URL, "payments", settlementKey(String(args.mandate), String(args.invoiceHash)), typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
   let result: McpToolResponse;
   try { result = await mcpRequest<McpToolResponse>("tools/call", { name, arguments: args }, operation); }
   catch (error) {
