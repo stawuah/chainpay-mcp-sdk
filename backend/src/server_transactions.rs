@@ -84,6 +84,22 @@ fn is_compute_budget(tx: &VersionedTransaction, program_id_index: u8) -> bool {
     matches!(key(tx, program_id_index), Ok(program) if program == COMPUTE_BUDGET_PROGRAM)
 }
 
+/// How many static account keys belong to the ChainPay instructions.
+///
+/// A wallet that adds a priority fee also adds the compute-budget program to the
+/// key list. Every exact key count below describes the accounts a ChainPay
+/// action needs, so they are all counted against this rather than the raw list.
+/// The compute-budget program is only ever a program id: `common` rejects a
+/// compute-budget instruction that carries accounts, so nothing else can hide
+/// behind this key.
+fn payload_account_keys(tx: &VersionedTransaction) -> usize {
+    tx.message
+        .static_account_keys()
+        .iter()
+        .filter(|address| address.to_string() != COMPUTE_BUDGET_PROGRAM)
+        .count()
+}
+
 /// The largest priority fee the relay will broadcast on an owner's behalf, in
 /// lamports. A wallet sets the fee as a rate, so the rate alone says nothing
 /// about what the owner pays; only the rate multiplied by the compute limit
@@ -289,7 +305,7 @@ fn validate_delegate_removal(tx: &VersionedTransaction, wallet: &str) -> Result<
         || ix.data.len() != 1
         || ix.data[0] != REVOKE_DELEGATE
         || ix.accounts.len() != 2
-        || tx.message.static_account_keys().len() != 3
+        || payload_account_keys(tx) != 3
     {
         return Err(bad(
             "Delegate removal must be a standalone revoke instruction",
@@ -322,7 +338,7 @@ fn validate_initialize_config(
     if payload_instructions(tx).len() != 1
         || ix.data.len() != 104
         || ix.accounts.len() != 3
-        || tx.message.static_account_keys().len() != 4
+        || payload_account_keys(tx) != 4
     {
         return Err(bad("Invalid protocol initialization transaction"));
     }
@@ -353,7 +369,7 @@ fn validate_register_asset(
     if payload_instructions(tx).len() != 1
         || ix.data.len() != 40
         || ix.accounts.len() != 6
-        || tx.message.static_account_keys().len() != 7
+        || payload_account_keys(tx) != 7
     {
         return Err(bad("Invalid asset registration transaction"));
     }
@@ -388,7 +404,7 @@ fn validate_set_asset_status(
     if payload_instructions(tx).len() != 1
         || ix.data.len() != 9
         || ix.accounts.len() != 3
-        || tx.message.static_account_keys().len() != 4
+        || payload_account_keys(tx) != 4
         || ix.data[8] > 1
     {
         return Err(bad("Invalid asset status transaction"));
@@ -527,7 +543,7 @@ pub(super) fn payment(
     common(tx)?;
     // The shipped payment builder emits exactly one execute_payment. No auxiliary
     // transfer, approval, memo, or compute instruction is needed for this flow.
-    if payload_instructions(tx).len() != 1 || tx.message.static_account_keys().len() != 11 {
+    if payload_instructions(tx).len() != 1 || payload_account_keys(tx) != 11 {
         return Err(bad(
             "Payments require exactly one execute_payment instruction",
         ));
@@ -697,7 +713,7 @@ pub(super) fn owner(
                 return Err(bad("Duplicate mandate revocation"));
             }
         }
-        if tx.message.static_account_keys().len() != mandates.len() + 2 {
+        if payload_account_keys(tx) != mandates.len() + 2 {
             return Err(bad("Unexpected revoke-all account"));
         }
         return Ok(());
@@ -734,7 +750,7 @@ pub(super) fn owner(
         Some(REGISTER_ASSET) => validate_register_asset(tx, wallet, program),
         Some(SET_ASSET_STATUS) => validate_set_asset_status(tx, wallet, program),
         Some(CREATE_MANDATE) => {
-            if tx.message.static_account_keys().len() != 9
+            if payload_account_keys(tx) != 9
                 || ix.data.len() != 176
                 || a.len() != 8
                 || a[3] != wallet
@@ -793,7 +809,7 @@ pub(super) fn owner(
                     &key(tx, instructions[1].accounts[1])?,
                 )
             } else if instructions.len() == 1 {
-                if tx.message.static_account_keys().len() != 3 {
+                if payload_account_keys(tx) != 3 {
                     return Err(bad("Invalid mandate management transaction"));
                 }
                 Ok(())
@@ -804,7 +820,7 @@ pub(super) fn owner(
             }
         }
         Some(PAUSE_MANDATE) | Some(REVOKE_MANDATE) => {
-            if tx.message.static_account_keys().len() != 3 || instructions.len() != 1 {
+            if payload_account_keys(tx) != 3 || instructions.len() != 1 {
                 return Err(bad("Invalid mandate management transaction"));
             }
             validate_management_instruction(tx, 0, wallet)
@@ -1265,6 +1281,114 @@ pub(super) mod tests {
             message,
         };
         (tx, wallet)
+    }
+
+    /// Reproduce what a wallet does to a finished transaction: append its own
+    /// program to the key list and put a priority-fee instruction in front.
+    /// Appending leaves every existing account index valid, and raising the
+    /// readonly-unsigned count by one keeps the writable boundary where it was,
+    /// so nothing about the ChainPay instructions changes.
+    fn with_wallet_priority_fee(
+        tx: &VersionedTransaction,
+        signer: &SigningKey,
+    ) -> VersionedTransaction {
+        let VersionedMessage::Legacy(legacy) = &tx.message else {
+            panic!("fixture is a legacy message");
+        };
+        let mut legacy = legacy.clone();
+        legacy
+            .account_keys
+            .push(Address::from_str(COMPUTE_BUDGET_PROGRAM).unwrap());
+        legacy.header.num_readonly_unsigned_accounts += 1;
+        let mut price = vec![SET_COMPUTE_UNIT_PRICE];
+        price.extend_from_slice(&1_000_000u64.to_le_bytes());
+        legacy.instructions.insert(
+            0,
+            CompiledInstruction {
+                program_id_index: (legacy.account_keys.len() - 1) as u8,
+                accounts: vec![],
+                data: price,
+            },
+        );
+        let message = VersionedMessage::Legacy(legacy);
+        VersionedTransaction {
+            signatures: vec![signer.sign(&message.serialize()).to_bytes().into()],
+            message,
+        }
+    }
+
+    /// A wallet's priority fee also adds its program to the account keys, so an
+    /// exact key count has to describe the ChainPay accounts rather than the raw
+    /// list. Counting the raw list rejected every mandate a real wallet signed.
+    #[test]
+    fn create_mandate_survives_a_wallet_priority_fee() {
+        let (_, request, signer) = fixture(0);
+        let wallet = request.agent.unwrap();
+        let mint = bs58::encode([5; 32]).into_string();
+        let source = bs58::encode([6; 32]).into_string();
+        let mut nonce = [0; 32];
+        nonce[..8].copy_from_slice(b"CPNONCE!");
+        nonce[8] = 1;
+        let mandate = future_mandate(
+            DEFAULT_PROGRAM_ID,
+            &wallet,
+            &mint,
+            &bs58::encode(nonce).into_string(),
+        )
+        .unwrap();
+        let config = pda(DEFAULT_PROGRAM_ID, &[b"config"]).unwrap();
+        let asset = pda(DEFAULT_PROGRAM_ID, &[b"asset", &[5; 32]]).unwrap();
+        let mut data = vec![230, 170, 158, 68, 33, 169, 16, 158];
+        data.extend_from_slice(&signer.verifying_key().to_bytes());
+        data.extend_from_slice(&[6; 32]);
+        data.extend_from_slice(&[5; 32]);
+        for n in [10u64, 100, 1000, 0, 0] {
+            data.extend_from_slice(&n.to_le_bytes());
+        }
+        data.extend_from_slice(&nonce);
+        let mut approval = vec![13];
+        approval.extend_from_slice(&100u64.to_le_bytes());
+        approval.push(6);
+        let message = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 6,
+            },
+            account_keys: [
+                wallet.clone(),
+                mandate,
+                source,
+                config,
+                asset,
+                mint,
+                SPL_TOKEN_PROGRAM_ID.into(),
+                "11111111111111111111111111111111".into(),
+                DEFAULT_PROGRAM_ID.into(),
+            ]
+            .map(|s| Address::from_str(&s).unwrap())
+            .to_vec(),
+            recent_blockhash: Default::default(),
+            instructions: vec![
+                CompiledInstruction {
+                    program_id_index: 8,
+                    accounts: vec![3, 4, 1, 0, 5, 2, 6, 7],
+                    data,
+                },
+                CompiledInstruction {
+                    program_id_index: 6,
+                    accounts: vec![2, 5, 1, 0],
+                    data: approval,
+                },
+            ],
+        });
+        let tx = VersionedTransaction {
+            signatures: vec![signer.sign(&message.serialize()).to_bytes().into()],
+            message,
+        };
+        owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+        let signed_by_wallet = with_wallet_priority_fee(&tx, &signer);
+        owner(&signed_by_wallet, &wallet, DEFAULT_PROGRAM_ID).unwrap();
     }
 
     #[test]
