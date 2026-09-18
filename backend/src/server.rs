@@ -501,6 +501,11 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
             header::CONTENT_TYPE,
             HeaderName::from_static("solana-client"),
         ])
+        // Both headers above make the browser preflight every request the SDK
+        // and the dashboard send. Without a lifetime the preflight is repeated
+        // for each one, doubling the round trips a page makes for its whole
+        // session.
+        .max_age(std::time::Duration::from_secs(600))
 }
 
 async fn health(State(state): State<BackendState>) -> Json<HealthResponse> {
