@@ -5,6 +5,7 @@ import type { ChainPayInstruction, Mandate, PaymentReceipt, PreparedMandate, Pre
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import { AGENT_URL, BACKEND_URL, DEVNET_PYUSD_TOKEN_2022_MINT, DEVNET_USDC_MINT, MCP_URL, PROGRAM_ID } from "../config/public";
 import { chainpayClient } from "../config/client";
+import { tokenProgramAccountType } from "./tokenAccounts";
 
 export type Action = "Send" | "Receive" | "Approve mandate" | "Receipts";
 export type Range = "1H" | "1D" | "1W" | "1M" | "1Y" | "All";
@@ -867,8 +868,19 @@ export async function resolvePaymentDestination(
   const expectedProgram = tokenProgram === "token-2022" ? TOKEN_2022_PROGRAM_ID : SPL_TOKEN_PROGRAM_ID;
   const existing = await getAccountInfoOrNull(destination);
   if (existing && (existing.owner.toBase58() === SPL_TOKEN_PROGRAM_ID || existing.owner.toBase58() === TOKEN_2022_PROGRAM_ID)) {
-    if (existing.owner.toBase58() !== expectedProgram || existing.data.length < 165) {
+    // A mint names the stablecoin; it can never receive a payment. Say so
+    // before the program check, because pasting a mint is a different mistake
+    // from pasting the wrong kind of token account and deserves its own words.
+    if (tokenProgramAccountType(existing.data) === "mint") {
+      throw new Error("That is the token's mint address, which names the stablecoin itself. Enter the recipient's wallet address instead.");
+    }
+    if (existing.owner.toBase58() !== expectedProgram || tokenProgramAccountType(existing.data) !== "account") {
       throw new Error("That destination does not match the selected stablecoin.");
+    }
+    // A token account holds exactly one mint. Sending to one opened for another
+    // stablecoin fails on chain, so it is refused here with the reason.
+    if (new PublicKey(existing.data.slice(0, 32)).toBase58() !== mint) {
+      throw new Error("That token account belongs to a different stablecoin.");
     }
     return { address: destination.toBase58() };
   }

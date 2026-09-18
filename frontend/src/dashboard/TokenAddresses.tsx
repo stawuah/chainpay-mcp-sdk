@@ -21,8 +21,8 @@ export function TokenAddresses({ options }: { options: StablecoinOption[] }) {
     <div className="owner-settings-heading">
       <span className="owner-row-icon neutral"><ReceiptText /></span>
       <div>
-        <h2>Token addresses</h2>
-        <p>The mint address identifies a token when you set up a payment.</p>
+        <h2>Token mint addresses</h2>
+        <p>A mint address names the stablecoin itself, for agent and merchant configuration. It is never a payment destination — pay a recipient's wallet address.</p>
       </div>
     </div>
     {options.length === 0
