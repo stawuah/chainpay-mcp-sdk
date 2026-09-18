@@ -55,6 +55,10 @@ function installDom() {
 
 const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const PYUSD = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM";
+const WALLET = "7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q";
+// Derived from WALLET and each mint by the SDK, which the component calls for real.
+const USDC_ACCOUNT = "3Fd8V7E95c5AkvBiDpRGMMm8tAFrPRE8co1HeX76ua4i";
+const PYUSD_ACCOUNT = "9rhdsFzTuLu2EaW3DFGFq94fSS9ubQEmeP3XcCeTykJX";
 const options = [
   { value: USDC, mint: USDC, label: "USDC", detail: "Classic SPL Token", tokenProgram: "spl-token" },
   { value: PYUSD, mint: PYUSD, label: "PYUSD", detail: "Token-2022 · capability checked at payment", tokenProgram: "token-2022" },
@@ -92,11 +96,11 @@ async function mount(props) {
 const buttons = (host) => [...host.querySelectorAll("button")];
 const labels = (host) => buttons(host).map((b) => b.textContent ?? "");
 
-test("every enabled token is listed with its full mint address", async () => {
-  const { host, cleanup } = await mount({ options });
+test("every enabled token lists the account that receives it and the mint that names it", async () => {
+  const { host, cleanup } = await mount({ options, wallet: WALLET });
   try {
     const codes = [...host.querySelectorAll("code")].map((node) => node.textContent);
-    assert.deepEqual(codes, [USDC, PYUSD]);
+    assert.deepEqual(codes, [USDC_ACCOUNT, USDC, PYUSD_ACCOUNT, PYUSD]);
     const text = host.textContent ?? "";
     assert.match(text, /USDC/);
     assert.match(text, /PYUSD/);
@@ -109,31 +113,39 @@ test("every enabled token is listed with its full mint address", async () => {
 });
 
 test("each token has its own copy action naming that token", async () => {
-  const { host, cleanup } = await mount({ options });
+  const { host, cleanup } = await mount({ options, wallet: WALLET });
   try {
-    assert.deepEqual(labels(host), ["Copy USDC address", "Copy PYUSD address"]);
+    assert.deepEqual(labels(host), [
+      "Copy USDC account", "Copy USDC mint",
+      "Copy PYUSD account", "Copy PYUSD mint",
+    ]);
   } finally {
     await cleanup();
   }
 });
 
-test("copying a token copies its mint, not its label", async () => {
-  const { host, rerender, cleanup } = await mount({ options });
+test("the account button copies the token account and the mint button copies the mint", async () => {
+  const { host, rerender, cleanup } = await mount({ options, wallet: WALLET });
   try {
-    await act(async () => { buttons(host)[1].click(); });
+    await act(async () => { buttons(host)[2].click(); });
     await rerender();
-    assert.deepEqual(globalThis.__copied, [PYUSD]);
+    await act(async () => { buttons(host)[3].click(); });
+    await rerender();
+    assert.deepEqual(globalThis.__copied, [PYUSD_ACCOUNT, PYUSD]);
   } finally {
     await cleanup();
   }
 });
 
-test("copying one token does not report success under another", async () => {
-  const { host, rerender, cleanup } = await mount({ options });
+test("copying one address does not report success under another", async () => {
+  const { host, rerender, cleanup } = await mount({ options, wallet: WALLET });
   try {
     await act(async () => { buttons(host)[0].click(); });
     await rerender();
-    assert.deepEqual(labels(host), ["Copied", "Copy PYUSD address"]);
+    assert.deepEqual(labels(host), [
+      "Copied", "Copy USDC mint",
+      "Copy PYUSD account", "Copy PYUSD mint",
+    ]);
     const statuses = [...host.querySelectorAll("[role='status']")].map((node) => node.textContent);
     assert.deepEqual(statuses, ["Copied"]);
   } finally {
@@ -142,7 +154,7 @@ test("copying one token does not report success under another", async () => {
 });
 
 test("a refused clipboard tells the owner to select the address instead of claiming success", async () => {
-  const { host, rerender, cleanup } = await mount({ options });
+  const { host, rerender, cleanup } = await mount({ options, wallet: WALLET });
   try {
     globalThis.__copyOk = false;
     await act(async () => { buttons(host)[0].click(); });
@@ -156,7 +168,7 @@ test("a refused clipboard tells the owner to select the address instead of claim
 });
 
 test("an empty registry says so rather than rendering an empty card", async () => {
-  const { host, cleanup } = await mount({ options: [] });
+  const { host, cleanup } = await mount({ options: [], wallet: WALLET });
   try {
     assert.equal(host.querySelectorAll("code").length, 0);
     assert.equal(buttons(host).length, 0);
