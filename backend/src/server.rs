@@ -262,9 +262,14 @@ impl IntoResponse for ApiError {
             Self::ManagedSignerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Catalog(_) => StatusCode::BAD_GATEWAY,
         };
-        let body = Json(json!({
-            "error": self.to_string(),
-        }));
+        let message = self.to_string();
+        // The relay refuses a request in a dozen places and, until this line,
+        // recorded none of them. A caller saw only a status code, and a refused
+        // payment could not be explained from the service's own logs at all.
+        // Errors are the whole point of the line, so every one is written,
+        // including the ones a healthy client causes.
+        eprintln!("[chainpay] {} {}", status.as_u16(), message);
+        let body = Json(json!({ "error": message }));
         (status, body).into_response()
     }
 }
