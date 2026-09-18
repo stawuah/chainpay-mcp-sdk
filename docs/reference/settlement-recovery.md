@@ -19,6 +19,12 @@ Never clear an uncertain reservation manually.
 
 ## Browser and MCP
 
+- The browser displays HTTP, JSON-RPC and tool errors from payment submission
+  immediately. An unreadable or lost response, including the browser's 120-second
+  MCP timeout, keeps the original approval as an unknown outcome with its error
+  visible. It does not silently wait for a completion event or automatically resend.
+  Only explicit preflight or relay validation rejection marks it failed before
+  submission; a missing payment ID alone is not evidence that nothing was sent.
 - Keep `payment_id` / `transaction_id` after a timeout. MCP returns the deterministic payment ID even when the Axum response is lost. `wait_for_payment` reads the existing operation.
 - The browser stores public signed transaction bytes and operation references, never wallet private keys or session tokens. Its recovery card survives reloads. “Check settlement” updates the original waiting form/inbox and refreshes the dashboard; completed history is capped at 30 and dismissible.
 - An unavailable/404 status is not proof that the request never arrived. “Cancel only if unstarted” calls `POST /v1/operations/cancel-unstarted` with `{kind:"payments"|"transactions",key:<original unscoped key>}`. An atomic cancellation reservation prevents a delayed request from starting. Cancellation fails if any operation reservation exists. Never clear an uncertain reservation manually.

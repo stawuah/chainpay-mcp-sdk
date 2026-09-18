@@ -1,4 +1,4 @@
-import { beginSettlement, awaitSettlement, forgetUnsentOperation, rejectBeforeSubmission, type Settlement } from "../settlement";
+import { beginSettlement, awaitSettlement, forgetUnsentOperation, rejectBeforeSubmission, publishSettlement, PendingSettlementError, type Operation, type Settlement } from "../settlement";
 import { authorizedFetch, RequestNotSentError, type WalletBinding } from "../session";
 import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveVersionedMandateAddress, toWeb3Transaction } from "@chainpay/sdk";
 import type { ChainPayInstruction, Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, SupportedAsset, TokenProgram } from "@chainpay/sdk";
@@ -360,9 +360,19 @@ export async function mcpRequest<T>(method: string, params?: Record<string, unkn
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
+    // Allow the relay's 90s cold-start budget plus preparation, but do not leave
+    // a browser waiting forever for an MCP response that never arrives.
+    signal: AbortSignal.timeout(120_000),
   }, binding, mode);
-  const payload = await response.json() as { result?: T; error?: { message?: string } };
-  if (!response.ok || payload.error) throw new Error(payload.error?.message ?? `MCP request failed (${response.status})`);
+  let payload: { result?: T; error?: string | { message?: string } };
+  try { payload = await response.json(); }
+  catch { throw new Error(`MCP returned an unreadable response (HTTP ${response.status})`); }
+  if (!payload || typeof payload !== "object") throw new Error(`MCP returned an invalid response (HTTP ${response.status})`);
+  if (!response.ok || payload.error) {
+    const reason = typeof payload.error === "string" ? payload.error : payload.error?.message;
+    throw new Error(reason || `MCP request failed (HTTP ${response.status})`);
+  }
+  if (payload.result === undefined || payload.result === null) throw new Error("MCP response did not include a result");
   return payload.result as T;
 }
 
@@ -376,6 +386,14 @@ function toolFailureReason(result: McpToolResponse): string {
   return text || "the agent tool reported an error without a reason";
 }
 
+function unresolvedPayment(operation: Operation, reason: string, first?: Settlement): never {
+  const error = `Payment outcome is unknown: ${reason}. Use Check status to reconcile the original approval. Do not approve a replacement.`;
+  publishSettlement(operation, { ...first, status: "unknown", error });
+  // End the submit handler so the form can display the error now. Recovery
+  // retains the operation and signed bytes and updates the original form later.
+  throw new PendingSettlementError(error);
+}
+
 export async function callMcpTool(name: string, args: Record<string, unknown>) {
   if (name !== "execute_payment" || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
   const operation = await beginSettlement(BACKEND_URL, "payments", settlementKey(String(args.mandate), String(args.invoiceHash)), typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
@@ -383,22 +401,25 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
   try { result = await mcpRequest<McpToolResponse>("tools/call", { name, arguments: args }, operation); }
   catch (error) {
     if (error instanceof RequestNotSentError) { forgetUnsentOperation(operation); throw error; }
-    result = { structuredContent: await awaitSettlement(operation, undefined, 0) };
+    unresolvedPayment(operation, error instanceof Error ? error.message : "No response from MCP");
   }
   const first = result.structuredContent as Settlement | undefined;
-  if (result.isError && ["rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String((result.structuredContent as { action?: string })?.action))) { rejectBeforeSubmission(operation); return result; }
-  if (result.isError && [400, 401, 403, 404, 422].includes(Number((result.structuredContent as { httpStatus?: number })?.httpStatus))) { rejectBeforeSubmission(operation); return result; }
-  // A tool error that names no payment id never reached the relay, so there is
-  // nothing to poll for. Falling through to polling a reservation that was never
-  // made leaves the owner watching an id that returns 404 forever, with the
-  // reason the tool actually gave discarded. Only an outcome carrying this
-  // operation's id is a submission worth waiting on.
-  if (result.isError && first?.payment_id !== operation.id) {
-    console.error("[chainpay] execute_payment did not submit %s: %o", operation.id, result.structuredContent ?? result);
-    rejectBeforeSubmission(operation, toolFailureReason(result));
-    return result;
+  if (first?.payment_id !== operation.id) {
+    const details = result.structuredContent as { action?: string; httpStatus?: number } | undefined;
+    const rejectedBeforeRelay = ["rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String(details?.action));
+    const rejectedByRelay = ["backend_rejected", "managed_backend_rejected"].includes(String(details?.action)) && [400, 401, 403, 404, 422].includes(Number(details?.httpStatus));
+    if (result.isError && (rejectedBeforeRelay || rejectedByRelay)) {
+      rejectBeforeSubmission(operation, toolFailureReason(result));
+      return result;
+    }
+    // A tool exception may occur while decoding the relay response after it
+    // accepted the payment. A missing/mismatched ID is not proof of non-submission.
+    unresolvedPayment(operation, result.isError ? toolFailureReason(result) : "MCP did not identify this payment operation");
   }
-  const settled = await awaitSettlement(operation, first?.payment_id === operation.id ? first : undefined);
+  if (first.status === "unknown" || (result.isError && first.status !== "failed")) {
+    unresolvedPayment(operation, toolFailureReason(result), first);
+  }
+  const settled = await awaitSettlement(operation, first);
   return { ...result, isError: false, structuredContent: { ...(result.structuredContent as Record<string, unknown>), ...settled, receiptAddress: settled.receipt_address ?? (result.structuredContent as { receiptAddress?: string })?.receiptAddress } };
 }
 

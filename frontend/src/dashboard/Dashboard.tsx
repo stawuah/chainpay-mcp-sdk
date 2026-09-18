@@ -1538,6 +1538,21 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
   const hasDelegatedActiveMandate = mandates.some((candidate) => candidate.status === "active" && candidate.approvedAgent !== wallet);
 
   useEffect(() => {
+    const recovered = (event: Event) => {
+      const operation = (event as CustomEvent<Operation>).detail;
+      if (operation.wallet !== wallet || operation.key !== settlementOperationKey.current) return;
+      if (operation.status === "failed") {
+        setError(operation.result?.error ?? "The original payment failed.");
+      } else if (operation.status === "confirmed" && operation.result?.signature && prepared && operation.result.receipt_address === prepared.receiptAddress) {
+        setSignature(operation.result.signature);
+        setError("");
+      }
+    };
+    window.addEventListener(settlementTerminalEvent, recovered);
+    return () => window.removeEventListener(settlementTerminalEvent, recovered);
+  }, [wallet, prepared]);
+
+  useEffect(() => {
     if (selectedPaymentMandate && mandate?.address !== selectedPaymentMandate.address) {
       onSelectMandate(selectedPaymentMandate);
     }
@@ -1802,8 +1817,8 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
         </div>
         <div className="payment-policy-note"><Shield /><span>Policy limit: <b>{formatTokenAmount(selectedPaymentMandate.maxPerPayment, mintDecimals)}</b> per payment · <b>{formatTokenAmount(selectedPaymentMandate.totalLimit, mintDecimals)}</b> total · {selectedPaymentMandate.status}</span></div>
         {recipientAtaReview && <div className="dashboard-card recipient-ata-review"><span className="section-kicker">RECIPIENT ACCOUNT</span><h3>Create the recipient token account first</h3><p>ChainPay will not prepend account creation to the payment transaction. Review the derived account, pay SOL rent from your wallet, then prepare the payment again.</p><div className="review-list"><div><span>Recipient wallet</span><strong className="mono">{shortAddress(recipientAtaReview.ownerWallet)}</strong></div><div><span>Token account</span><strong className="mono">{shortAddress(recipientAtaReview.tokenAccount)}</strong></div><div><span>Stablecoin mint</span><strong className="mono">{shortAddress(recipientAtaReview.mint)}</strong></div></div><Button type="button" variant="primary" label={recipientAtaStatus === "creating" ? "Creating account…" : "Create recipient account"} isDisabled={recipientAtaStatus === "creating" || !walletSigner} onClick={() => void createRecipientAccount()} /></div>}
-        <div className="builder-actions"><Button type="button" variant="primary" label={status === "preparing" ? "Checking payment…" : "Prepare payment"} isDisabled={status === "preparing" || status === "signing"} onClick={() => void prepare()} /><span className="builder-safety"><Shield /> Wallet approval required to settle</span></div>
-        {error && <div className="builder-error"><b>Payment blocked</b><span>{error}</span></div>}
+        <div className="builder-actions"><Button type="button" variant="primary" label={status === "preparing" ? "Checking payment…" : "Prepare payment"} isDisabled={status === "preparing" || status === "signing" || status === "pending"} onClick={() => void prepare()} /><span className="builder-safety"><Shield /> Wallet approval required to settle</span></div>
+        {error && <div className="builder-error" role="alert"><b>{status === "pending" ? "Payment outcome unknown" : "Payment blocked"}</b><span>{error}</span></div>}
         {signature && prepared && <>
           <div className="success-box"><span>✓</span><div><b>Payment confirmed on Devnet</b><p className="receipt-public-url">Public receipt: <a href={publicReceiptPath(prepared.receiptAddress)}>{publicReceiptPath(prepared.receiptAddress)}</a></p></div></div>
           <details className="receipt-technical payment-settlement-details">
