@@ -366,6 +366,16 @@ export async function mcpRequest<T>(method: string, params?: Record<string, unkn
   return payload.result as T;
 }
 
+/** The clearest sentence a failed tool result offers, for the owner to read. */
+function toolFailureReason(result: McpToolResponse): string {
+  const structured = result.structuredContent as { error?: unknown; message?: unknown; action?: unknown } | undefined;
+  for (const candidate of [structured?.error, structured?.message, structured?.action]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  const text = result.content?.map((part) => part.text ?? "").join(" ").trim();
+  return text || "the agent tool reported an error without a reason";
+}
+
 export async function callMcpTool(name: string, args: Record<string, unknown>) {
   if (name !== "execute_payment" || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
   const operation = await beginSettlement(BACKEND_URL, "payments", settlementKey(String(args.mandate), String(args.invoiceHash)), typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
@@ -378,6 +388,16 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
   const first = result.structuredContent as Settlement | undefined;
   if (result.isError && ["rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String((result.structuredContent as { action?: string })?.action))) { rejectBeforeSubmission(operation); return result; }
   if (result.isError && [400, 401, 403, 404, 422].includes(Number((result.structuredContent as { httpStatus?: number })?.httpStatus))) { rejectBeforeSubmission(operation); return result; }
+  // A tool error that names no payment id never reached the relay, so there is
+  // nothing to poll for. Falling through to polling a reservation that was never
+  // made leaves the owner watching an id that returns 404 forever, with the
+  // reason the tool actually gave discarded. Only an outcome carrying this
+  // operation's id is a submission worth waiting on.
+  if (result.isError && first?.payment_id !== operation.id) {
+    console.error("[chainpay] execute_payment did not submit %s: %o", operation.id, result.structuredContent ?? result);
+    rejectBeforeSubmission(operation, toolFailureReason(result));
+    return result;
+  }
   const settled = await awaitSettlement(operation, first?.payment_id === operation.id ? first : undefined);
   return { ...result, isError: false, structuredContent: { ...(result.structuredContent as Record<string, unknown>), ...settled, receiptAddress: settled.receipt_address ?? (result.structuredContent as { receiptAddress?: string })?.receiptAddress } };
 }
