@@ -28,15 +28,37 @@ export async function submitSettlement(context: ChainPayMcpContext, endpoint: st
   const body = JSON.parse(String(init.body)) as { idempotency_key: string };
   const wallet = context.principal?.wallet;
   try { return await fetch(endpoint, { ...init, signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS) }); }
-  catch {
-    if (!wallet) throw new Error("Submission outcome is unknown; the authenticated owner must reconcile the original idempotency key");
+  catch (cause) {
+    // The reason is the only thing that distinguishes a relay too slow to answer
+    // from one that was never reached, and discarding it leaves a stranded
+    // payment with no way to tell those apart. AbortSignal.timeout raises
+    // TimeoutError, so a timeout names itself.
+    const transport = describeTransportFailure(cause);
+    console.error(`[chainpay] settlement submission failed: ${transport}`);
+    if (!wallet) throw new Error(`Submission outcome is unknown (${transport}); the authenticated owner must reconcile the original idempotency key`);
     const paymentId = `payment_${createHash("sha256").update(`${wallet}:${body.idempotency_key}`).digest("hex")}`;
     return Response.json({
       action: "payment_outcome_unknown",
       status: "unknown",
       payment_id: paymentId,
-      error: "No response from the relay, so this payment may have settled or may never have been sent. Check its status: if the relay has no record of it the request never started and can be cancelled, and if it does, recover it with the original signed bytes. Do not approve a replacement.",
+      transport_error: transport,
+      error: `No response from the relay (${transport}), so this payment may have settled or may never have been sent. Check its status: if the relay has no record of it the request never started and can be cancelled, and if it does, recover it with the original signed bytes. Do not approve a replacement.`,
       continuation: { tool: "wait_for_payment", arguments: { paymentId } },
     });
   }
+}
+
+/**
+ * A short reason for a failed submission, safe to hand to the browser.
+ *
+ * Only the error's own name and message are used: the endpoint and the request
+ * carry the owner's authorization and signed bytes, and neither belongs in a
+ * response or a log line.
+ */
+function describeTransportFailure(cause: unknown): string {
+  if (cause instanceof Error) {
+    const name = cause.name === "TimeoutError" ? `timed out after ${SUBMIT_TIMEOUT_MS / 1000}s` : cause.name;
+    return cause.message && cause.name !== "TimeoutError" ? `${name}: ${cause.message}` : name;
+  }
+  return "unknown transport failure";
 }

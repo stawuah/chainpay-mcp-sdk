@@ -24,6 +24,12 @@ export function publishSettlement(operation: Operation, result?: Settlement): Op
   const incoming = result ? { ...operation, result, status: result.status ?? "submitted", signature: result.signature ?? operation.signature } : operation;
   const next = old && terminal(old.status) ? old : incoming;
   if (terminal(next.status)) delete next.wire;
+  // An operation that never resolves is the hardest failure to diagnose from the
+  // outside, so every reason the relay or MCP gives is written where an owner
+  // reporting the problem can copy it, alongside the id they are polling.
+  if (next.result?.error) {
+    console.error("[chainpay] settlement %s (%s): %s", next.id, next.status, next.result.error);
+  }
   const others = rows.filter((row) => row.id !== next.id);
   const pending = others.filter((row) => !terminal(row.status));
   const history = others.filter((row) => terminal(row.status)).slice(-29);
