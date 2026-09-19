@@ -12,6 +12,12 @@
  */
 export type KnownAsset = {
   label: string;
+  /**
+   * The currency this asset settles in, drawn when the issuer's own mark is not
+   * available. A glyph states the unit without standing in for a brand: a mark
+   * invented for an issuer, shown beside an amount, misidentifies the money.
+   */
+  glyph: string;
   /** Lower sorts first, so the assets an owner expects lead the list. */
   order: number;
   /** Every mint that is this asset, across clusters. */
@@ -21,6 +27,7 @@ export type KnownAsset = {
 export const KNOWN_ASSETS: readonly KnownAsset[] = [
   {
     label: "USDC",
+    glyph: "$",
     order: 0,
     mints: [
       "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", // devnet
@@ -29,6 +36,7 @@ export const KNOWN_ASSETS: readonly KnownAsset[] = [
   },
   {
     label: "PYUSD",
+    glyph: "$",
     order: 1,
     mints: [
       "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM", // devnet, Token-2022
@@ -37,6 +45,7 @@ export const KNOWN_ASSETS: readonly KnownAsset[] = [
   },
   {
     label: "EURC",
+    glyph: "€",
     order: 2,
     mints: [
       "HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr", // devnet
@@ -44,6 +53,7 @@ export const KNOWN_ASSETS: readonly KnownAsset[] = [
   },
   {
     label: "USDG",
+    glyph: "$",
     order: 3,
     mints: [
       "4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7", // devnet, Token-2022

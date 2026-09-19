@@ -16,8 +16,6 @@ import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedToken
 import type { Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, TokenProgram } from "@chainpay/sdk";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import solWalletImage from "../assets/brands/solana.svg";
-import usdcWalletImage from "../assets/brands/usdc.svg";
-import pyusdWalletImage from "../assets/brands/pyusd.png";
 import { buildPath, type DashboardTab } from "../routing/paths";
 import { useRoute } from "../routing/useRoute";
 import { RecordDetails } from "../ui/RecordDetails";
@@ -184,23 +182,17 @@ export type DashboardProps = {
 };
 
 type WalletAssetSummary = {
-  symbol: "SOL" | "USDC" | "PYUSD";
+  symbol: string;
+  /** Empty for SOL, which is not an SPL mint. */
+  mint: string;
   address: string;
   balance: string;
   exists: boolean;
   loading: boolean;
 };
 
-const walletAssetDefinitions: Array<{ symbol: "USDC" | "PYUSD"; mint: string; tokenProgram: TokenProgram }> = [
-  { symbol: "USDC", mint: DEVNET_USDC_MINT, tokenProgram: "spl-token" },
-  { symbol: "PYUSD", mint: DEVNET_PYUSD_TOKEN_2022_MINT, tokenProgram: "token-2022" },
-];
-
-const walletAssetImages = {
-  SOL: solWalletImage,
-  USDC: usdcWalletImage,
-  PYUSD: pyusdWalletImage,
-} as const;
+// Balances follow the on-chain registry rather than a list kept here, so an
+// asset the protocol authority enables shows up without a release.
 
 export function Dashboard({
   wallet,
@@ -341,9 +333,10 @@ export function Dashboard({
         .map((item) => [item.allowedMint, item.sourceTokenAccount] as const),
     );
     const initialAssets: WalletAssetSummary[] = [
-      { symbol: "SOL", address: wallet, balance: "—", exists: true, loading: true },
-      ...walletAssetDefinitions.map((asset) => ({
-        symbol: asset.symbol,
+      { symbol: "SOL", mint: "", address: wallet, balance: "—", exists: true, loading: true },
+      ...stablecoinOptions.map((asset) => ({
+        symbol: asset.label,
+        mint: asset.mint,
         address: sourceByMint.get(asset.mint) ?? deriveAssociatedTokenAddress(wallet, asset.mint, asset.tokenProgram),
         balance: "—",
         exists: false,
@@ -356,19 +349,20 @@ export function Dashboard({
       const solPromise = chainpayClient.connection.getBalance(new PublicKey(wallet), "confirmed")
         .then((lamports): WalletAssetSummary => ({
           symbol: "SOL",
+          mint: "",
           address: wallet,
           balance: formatTokenAmount(BigInt(lamports), 9),
           exists: true,
           loading: false,
         }));
-      const tokenPromises = walletAssetDefinitions.map(async (asset): Promise<WalletAssetSummary> => {
+      const tokenPromises = stablecoinOptions.map(async (asset): Promise<WalletAssetSummary> => {
         const address = sourceByMint.get(asset.mint) ?? deriveAssociatedTokenAddress(wallet, asset.mint, asset.tokenProgram);
         const account = await getAccountInfoOrNull(new PublicKey(address));
         if (!account || tokenAccountValidationError(account, asset.mint, wallet, asset.tokenProgram)) {
-          return { symbol: asset.symbol, address, balance: "0", exists: false, loading: false };
+          return { symbol: asset.label, mint: asset.mint, address, balance: "0", exists: false, loading: false };
         }
         const balance = await chainpayClient.connection.getTokenAccountBalance(new PublicKey(address), "confirmed");
-        return { symbol: asset.symbol, address, balance: balance.value.uiAmountString ?? balance.value.amount, exists: true, loading: false };
+        return { symbol: asset.label, mint: asset.mint, address, balance: balance.value.uiAmountString ?? balance.value.amount, exists: true, loading: false };
       });
       const states = await Promise.allSettled([solPromise, ...tokenPromises]);
       if (!active) return;
@@ -380,7 +374,7 @@ export function Dashboard({
     }
     void loadWalletAssets();
     return () => { active = false; };
-  }, [wallet, walletAssetSourceKey, walletMenuOpen]);
+  }, [wallet, walletAssetSourceKey, walletMenuOpen, stablecoinOptions]);
 
   useEffect(() => {
     if (wallet) persistAgentInbox(wallet, agentInbox);
@@ -930,7 +924,7 @@ export function Dashboard({
                     <section className="wallet-asset-popover">
                       <div className="wallet-asset-header"><div className="wallet-asset-heading"><WalletBrandMark name={walletName} icon={walletIcon} size={28} /><div><span className="soft-label">CONNECTED WALLET</span><strong>{walletName}</strong></div></div><span className="wallet-network-pill"><i /> Devnet</span></div>
                       <button type="button" className="wallet-owner-address" onClick={() => void copyWalletAddress(wallet)} title="Copy connected wallet address"><span><strong>{shortAddress(wallet)}</strong><small>{copiedWalletAddress === wallet ? "Address copied" : "Copy wallet address"}</small></span><Copy size={16} /></button>
-                      <div className="wallet-asset-list">{walletAssets.map((asset) => <div className="owner-wallet-asset" key={asset.symbol}><img src={walletAssetImages[asset.symbol]} alt="" /><span>{asset.symbol}</span><strong>{asset.loading ? "Loading…" : asset.balance}</strong></div>)}</div>
+                      <div className="wallet-asset-list">{walletAssets.map((asset) => <div className="owner-wallet-asset" key={asset.symbol}>{asset.mint ? <TokenIcon mint={asset.mint} size={24} /> : <img src={solWalletImage} alt="" />}<span>{asset.symbol}</span><strong>{asset.loading ? "Loading…" : asset.balance}</strong></div>)}</div>
                       <div className="wallet-asset-actions">
                         <Button type="button" variant="secondary" label={switchingWalletAccount ? "Opening wallet…" : "Change account"} isDisabled={switchingWalletAccount} onClick={() => { setWalletMenuOpen(false); onChangeAccount(); }} />
                         <Button type="button" variant="secondary" label="Change wallet" isDisabled={false} onClick={() => { setWalletMenuOpen(false); onChangeWallet(); }} />

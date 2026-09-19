@@ -53,9 +53,25 @@ test("named assets lead the list and an unnamed mint sorts last", () => {
 });
 
 test("naming an asset does not enable it", () => {
-  // The table is presentation. If this ever gains a field that gates payment,
-  // the on-chain registry has been duplicated in a place no one audits.
+  // The table is presentation: label, glyph, sort position, and which mints are
+  // the same asset. Whether an asset can be paid is decided by the registry
+  // account on chain. A field here that reads like a gate means that decision
+  // has been duplicated somewhere no one audits, so name the shapes outright
+  // rather than freezing the key list, which would fail on any new label field.
+  const gating = ["enabled", "disabled", "active", "allowed", "supported", "payable", "status"];
   for (const asset of KNOWN_ASSETS) {
-    assert.deepEqual(Object.keys(asset).sort(), ["label", "mints", "order"]);
+    for (const key of Object.keys(asset)) {
+      assert.equal(gating.includes(key.toLowerCase()), false, `${asset.label} carries a gating field: ${key}`);
+    }
+    assert.equal(typeof asset.label, "string");
+    assert.equal(typeof asset.glyph, "string");
+    assert.equal(Array.isArray(asset.mints), true);
   }
+});
+
+test("every named asset can be drawn, with artwork or a currency glyph", () => {
+  for (const asset of KNOWN_ASSETS) {
+    assert.ok(asset.glyph.length > 0, `${asset.label} has no glyph to fall back to`);
+  }
+  assert.equal(KNOWN_ASSETS.find((a) => a.label === "EURC").glyph, "€");
 });

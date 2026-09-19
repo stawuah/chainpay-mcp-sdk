@@ -326,6 +326,8 @@ body:has(.dashboard-app) .cp-record-panel :is(.mono,.t-num,.mandate-detail-value
 /* Review refinement: recognizable assets and a centered navigation handle. */
 .owner-token-icon { flex-shrink: 0; display: inline-grid; place-items: center; vertical-align: middle; color: #66758a; }
 .owner-token-icon img { width: 100%; height: 100%; object-fit: contain; }
+/* Drawn when an issuer's own mark is unavailable: the currency, not a logo. */
+.owner-token-glyph { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; background: #eef2f8; color: #46566d; font-weight: 600; line-height: 1; }
 .owner-token-heading { display: flex; align-items: center; gap: 12px; }
 .dashboard-app.cp-app .dashboard-sidebar { overflow: visible; }
 .dashboard-app.cp-app .sidebar-collapse-toggle { position: absolute; top: 50%; right: -17px; transform: translateY(-50%); z-index: 30; width: 34px; min-height: 44px; padding: 8px; background: white; border: 1px solid #dce3ed; border-radius: 10px; box-shadow: 0 2px 6px #17243a08; }
