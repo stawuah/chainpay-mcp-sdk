@@ -92,6 +92,15 @@ test("AppShell does not statically import wallet connect or SDK client", async (
   assert.match(source, /lazy\(\(\) => import\("\.\/verify\/VerifyPage"\)\)/);
 });
 
+test("shared token UI does not import the dashboard owner layer", async () => {
+  // Vite places src/ui in app-shared and src/owner in dashboard. Crossing that
+  // boundary made both generated chunks import each other, so AppShell failed
+  // before React could render either the landing page or /app.
+  const { visited } = await collectSpecifiers("ui/TokenIcon.tsx");
+  const ownerModules = [...visited].filter((file) => file.includes("/src/owner/"));
+  assert.deepEqual(ownerModules, [], "app-shared token UI must not pull in the dashboard owner chunk");
+});
+
 test("a component stylesheet does not restyle the whole app", async () => {
   // record-details.css is imported by RecordDetails.tsx. App-wide selectors in it
   // took effect the moment that component was imported, so one panel restyled the

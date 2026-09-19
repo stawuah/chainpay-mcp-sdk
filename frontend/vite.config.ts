@@ -13,6 +13,7 @@ export default defineConfig({
             || id.includes("/src/routing/")
             || id.includes("/src/wallet/public-session")
             || id.includes("/src/config/public")
+            || id.includes("/src/config/knownAssets")
           ) return "app-shared";
           if (
             id.includes("/src/session")

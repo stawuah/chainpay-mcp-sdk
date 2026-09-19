@@ -2,7 +2,7 @@ import { Coins } from "lucide-react";
 import usdc from "../assets/brands/usdc.svg";
 import pyusd from "../assets/brands/pyusd.png";
 import solana from "../assets/brands/solana.svg";
-import { KNOWN_ASSETS, knownAsset } from "../owner/knownAssets";
+import { KNOWN_ASSETS, knownAsset } from "../config/knownAssets";
 
 // Identify known mints, not arbitrary user-supplied symbols. Artwork is keyed by
 // the asset's label rather than each mint, so one file covers every cluster's

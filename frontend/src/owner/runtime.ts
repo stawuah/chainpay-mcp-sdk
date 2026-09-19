@@ -7,7 +7,7 @@ import { AGENT_URL, BACKEND_URL, DEVNET_PYUSD_TOKEN_2022_MINT, DEVNET_USDC_MINT,
 import { chainpayClient } from "../config/client";
 import { tokenProgramAccountType } from "./tokenAccounts";
 import { settlementKey } from "./settlementKey";
-import { assetOrder, knownAsset } from "./knownAssets";
+import { assetOrder, knownAsset } from "../config/knownAssets";
 
 export type Action = "Send" | "Receive" | "Approve mandate" | "Receipts";
 export type Range = "1H" | "1D" | "1W" | "1M" | "1Y" | "All";
