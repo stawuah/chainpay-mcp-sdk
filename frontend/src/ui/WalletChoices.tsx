@@ -3,6 +3,7 @@ import phantom from "../assets/brands/phantom.svg";
 import solflare from "../assets/brands/solflare.svg";
 import jupiter from "../assets/brands/jupiter.svg";
 import metamask from "../assets/brands/metamask.svg";
+import { resolveConnectedWalletIcon } from "../wallet/icons";
 import type { WalletPickerOption } from "./WalletPickerDialog";
 import "./wallet-choices.css";
 
@@ -33,7 +34,7 @@ export function WalletChoices({ wallets, connecting, error, onSelect, onRefresh 
           <p className="cp-wallet-list-label">Available in this browser</p>
           <div className="cp-wallet-rows">
             {wallets.map((wallet) => {
-              const icon = wallet.icon || walletDirectory.find((item) => item.name.toLowerCase() === wallet.name.toLowerCase())?.icon;
+              const icon = resolveConnectedWalletIcon(wallet.name, wallet.icon);
               return <button type="button" className="cp-wallet-row" key={wallet.id} disabled={connecting} onClick={() => { setSelected(wallet.id); onSelect(wallet.id); }}>
                 <span className="cp-wallet-logo">{icon ? <img src={icon} alt="" /> : <span aria-hidden="true">↗</span>}</span>
                 <span className="cp-wallet-row-copy"><strong>{wallet.name}</strong><small>{connecting && selected === wallet.id ? "Waiting for your wallet…" : "Connect wallet"}</small></span>

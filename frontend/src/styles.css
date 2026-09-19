@@ -344,6 +344,8 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .wallet-menu { position: relative; }
 .wallet-asset-popover { width: min(430px, calc(100vw - 32px)); position: absolute; top: calc(100% + 11px); right: 0; z-index: 40; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius-card); background: #fff; box-shadow: 0 16px 40px rgba(10, 11, 13, .12); }
 .wallet-asset-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.wallet-asset-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.wallet-brand-mark { display: block; object-fit: contain; border-radius: 6px; flex: none; }
 .wallet-asset-header strong { display: block; margin-top: 5px; color: var(--ink); font-size: 15px; font-weight: 600; }
 .wallet-network-pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 100px; color: var(--green); background: #e9f8f1; font: 500 9px var(--mono); text-transform: uppercase; }
 .wallet-network-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }

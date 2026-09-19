@@ -19,6 +19,7 @@ import {
   reportWalletCapabilities,
   type WalletCapabilityReport,
 } from "./capabilities";
+import { resolveConnectedWalletIcon } from "./icons";
 
 const DEVNET_CHAIN = "solana:devnet";
 
@@ -45,6 +46,7 @@ export type ChainPayWalletOption = {
 export type ChainPayWallet = {
   address: string;
   name: string;
+  icon?: string;
   capabilities: WalletCapabilityReport;
   signTransaction: (transaction: Transaction) => Promise<Transaction>;
   signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
@@ -88,6 +90,7 @@ function walletAdapter(wallet: StandardSolanaWallet, account: WalletAccount, acc
   return {
     address: account.address,
     name: wallet.name,
+    icon: resolveConnectedWalletIcon(wallet.name, wallet.icon),
     capabilities: reportWalletCapabilities({
       source: "wallet-standard",
       name: wallet.name,
@@ -161,6 +164,7 @@ function legacyWalletAdapter(provider: LegacyProvider, address: string, name: st
   return {
     address,
     name,
+    icon: resolveConnectedWalletIcon(name),
     capabilities: reportLegacyInjectedWallet({ name, address }),
     signTransaction: provider.signTransaction.bind(provider),
     signMessage: provider.signMessage
@@ -198,7 +202,7 @@ export function getChainPayWalletOptions(
   const options: ChainPayWalletOption[] = standardWallets().map((wallet) => ({
     id: `standard:${wallet.name}`,
     name: wallet.name,
-    icon: wallet.icon,
+    icon: resolveConnectedWalletIcon(wallet.name, wallet.icon),
     standard: true,
   }));
   const names = new Set(options.map((option) => option.name.toLowerCase()));
@@ -208,7 +212,7 @@ export function getChainPayWalletOptions(
       ? legacyProvider
       : undefined;
   if (phantom && !names.has("phantom")) {
-    options.push({ id: "legacy:phantom", name: "Phantom", standard: false });
+    options.push({ id: "legacy:phantom", name: "Phantom", icon: resolveConnectedWalletIcon("Phantom"), standard: false });
     names.add("phantom");
   }
   if (legacyProvider && legacyProvider !== phantom && !names.has("injected solana wallet")) {

@@ -109,7 +109,8 @@ test("Dashboard source uses published Astryx inventory primitives", async () => 
   assert.match(dashboard, /role="tablist"/);
   assert.match(dashboard, /owner-settings-danger/);
   assert.match(dashboard, /Wallet compatibility/);
-  assert.match(dashboard, /walletCapabilities/);
+  assert.match(dashboard, /WalletBrandMark/);
+  assert.match(dashboard, /walletIcon/);
   assert.match(dashboard, /panelId="receipt-lookup-pda"/);
   assert.equal(dashboard.includes("inputMode=\"decimal\""), false, "Astryx TextInput 0.6.1 has no inputMode prop");
 });

@@ -497,10 +497,11 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
             axum::http::Method::OPTIONS,
             axum::http::Method::DELETE,
         ])
-        // `solana-client` is attached to every request web3.js makes. Without it
-        // the browser rejects the preflight and the SDK cannot reach `/rpc` at
-        // all, which surfaces as `TypeError: Failed to fetch` rather than an
-        // HTTP status. The wildcard branch above already allows any header.
+        // Name the headers instead of mirroring the request. `solana-client` is the
+        // only custom header the browser sends here: @solana/web3.js attaches it to
+        // every RPC request, and `accept` is CORS-safelisted so it is never preflighted.
+        // Mirroring would echo back whatever an allowed origin asked for, which tells
+        // a reader nothing about what this service actually accepts.
         .allow_headers([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
@@ -2561,5 +2562,78 @@ mod tests {
 
         api_task.abort();
         rpc_task.abort();
+    }
+
+    #[tokio::test]
+    async fn rpc_cors_allows_solana_client_preflight_from_allowed_origin() {
+        let mut config = BackendConfig::from_env().unwrap();
+        config.auth_token.clear();
+        config.allowed_origins = vec!["https://chainpay-frontend.onrender.com".to_owned()];
+        let state = BackendState::new(config, StatusStore::in_memory()).unwrap();
+        let api_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_address = api_listener.local_addr().unwrap();
+        let api_task = tokio::spawn(async move {
+            axum::serve(api_listener, build_router(state))
+                .await
+                .unwrap();
+        });
+
+        let allowed = reqwest::Client::new()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{api_address}/rpc"),
+            )
+            .header("Origin", "https://chainpay-frontend.onrender.com")
+            .header("Access-Control-Request-Method", "POST")
+            .header(
+                "Access-Control-Request-Headers",
+                "solana-client, content-type, x-chainpay-not-allowed",
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let allow_origin = allowed
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok());
+        assert_eq!(allow_origin, Some("https://chainpay-frontend.onrender.com"));
+        let allow_headers = allowed
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(
+            allow_headers.contains("solana-client"),
+            "preflight must allow solana-client, got {allow_headers:?}"
+        );
+        assert!(allow_headers.contains("content-type"));
+        // The service names the headers it accepts rather than echoing the request, so a
+        // header it does not allow must not come back. Without this the test passes on any
+        // build that simply mirrors whatever was asked for.
+        assert!(
+            !allow_headers.contains("x-chainpay-not-allowed"),
+            "allow-headers must not echo an unrecognised request header, got {allow_headers:?}"
+        );
+
+        let denied = reqwest::Client::new()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{api_address}/rpc"),
+            )
+            .header("Origin", "https://evil.example")
+            .header("Access-Control-Request-Method", "POST")
+            .header("Access-Control-Request-Headers", "solana-client")
+            .send()
+            .await
+            .unwrap();
+        let denied_origin = denied
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok());
+        assert_ne!(denied_origin, Some("https://evil.example"));
+
+        api_task.abort();
     }
 }

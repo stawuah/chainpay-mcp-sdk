@@ -132,7 +132,7 @@ function Harness() {
   return (
     <Dashboard
       wallet={OWNER}
-      walletName="Design Harness"
+      walletName="Jupiter"
       walletCapabilities={null}
       mandate={EMPTY ? null : MANDATES[0]}
       mandates={EMPTY ? [] : MANDATES}

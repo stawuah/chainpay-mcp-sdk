@@ -7,6 +7,7 @@ import {
   INVALID_REQUEST,
   METHOD_NOT_FOUND,
   SERVER_INFO,
+  SERVER_INSTRUCTIONS,
   authorizationHttpStatus,
   classifyProtocol,
   decorateModernResult,
@@ -20,7 +21,6 @@ import {
   parseErrorResponse,
   parseJsonRpcMessage,
   responseId,
-  SERVER_INSTRUCTIONS,
   toolExecutionError,
   type JsonRpcId,
   type JsonRpcResponse,
@@ -35,6 +35,7 @@ import process from "node:process";
 export {
   CURRENT_PROTOCOL_VERSION,
   SERVER_INFO,
+  SERVER_INSTRUCTIONS,
   parseJsonRpcMessage,
   decodeMcpNameHeader,
   classifyProtocol,

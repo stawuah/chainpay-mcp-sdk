@@ -11,6 +11,7 @@ import {
   PARSE_ERROR,
   PROTOCOL_VERSION_KEY,
   SERVER_INFO_KEY,
+  SERVER_INSTRUCTIONS,
   SUPPORTED_PROTOCOL_VERSIONS,
   UNSUPPORTED_PROTOCOL_VERSION,
   decodeMcpNameHeader,
@@ -91,6 +92,20 @@ async function frontendCompatibilityHelper(base, method, params, token) {
   return payload.result;
 }
 
+test("legacy initialize and modern discover share the same server instructions", async () => {
+  const server = createMcpServer(fixtureContext());
+  const initialized = await server.handle({ jsonrpc: "2.0", id: 1, method: "initialize" });
+  const discovered = await server.handle(modernRequest("discover-instructions", "server/discover"));
+  assert.equal(initialized.result.instructions, SERVER_INSTRUCTIONS);
+  assert.equal(discovered.result.instructions, SERVER_INSTRUCTIONS);
+  // Assert the promises the instructions must keep, not one wording of them.
+  // The phrasing is rewritten often; what must not disappear is that the owner
+  // holds the funds and that the server never asks for key material.
+  assert.match(SERVER_INSTRUCTIONS, /owner wallet holds the funds/i);
+  assert.match(SERVER_INSTRUCTIONS, /never holds, receives, or asks for private keys/i);
+  assert.match(SERVER_INSTRUCTIONS, /delegated signing/i);
+});
+
 test("implements MCP initialize and tool discovery", async () => {
   const server = createMcpServer({
     client: {
@@ -99,6 +114,7 @@ test("implements MCP initialize and tool discovery", async () => {
   });
   const initialized = await server.handle({ jsonrpc: "2.0", id: 1, method: "initialize" });
   assert.equal(initialized.result.serverInfo.name, "chainpay-mcp");
+  assert.equal(initialized.result.instructions, SERVER_INSTRUCTIONS);
 
   const tools = await server.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   assert.ok(tools.result.tools.some((tool) => tool.name === "execute_payment"));
@@ -466,6 +482,30 @@ test("frontend helper list/call remains a headerless compatibility path", async 
       frontendCompatibilityHelper(base, "tools/call", { name: "list_mandates", arguments: { owner: Keypair.generate().publicKey.toBase58() } }),
       /Sign in/,
     );
+  });
+});
+
+test("unknown MCP origin is 403; allowed origin can preflight", async () => {
+  await withHttpServer(fixtureContext(), async (base) => {
+    const denied = await fetch(`${base}/mcp`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://evil.example",
+        "Access-Control-Request-Method": "POST",
+      },
+    });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error, "Origin is not allowed");
+
+    const allowed = await fetch(`${base}/mcp`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:5173",
+        "Access-Control-Request-Method": "POST",
+      },
+    });
+    assert.equal(allowed.status, 204);
+    assert.equal(allowed.headers.get("access-control-allow-origin"), "http://localhost:5173");
   });
 });
 
