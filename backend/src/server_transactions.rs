@@ -166,6 +166,41 @@ fn validate_compute_budget(tx: &VersionedTransaction) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Hold a mandate's delegate approval to the limit the same transaction states.
+///
+/// A mandate says what an agent may spend in total; the token approval beside it
+/// says what the mandate PDA may move out of the source account. Nothing tied
+/// the two together, so one transaction could state a small limit on chain and
+/// approve an unlimited token allowance, and the relay would broadcast it.
+///
+/// That is not a way to overspend — the delegate is the mandate PDA, only the
+/// ChainPay program can sign for it, and the program enforces the mandate's own
+/// limits on every payment. It is that an owner approving a bounded mandate
+/// should not leave a larger standing allowance on their token account than the
+/// mandate it was granted for. Less than the limit stays valid: a repair
+/// approves only the allowance a partly spent mandate has left.
+fn validate_delegated_amount(
+    approval: &CompiledInstruction,
+    total_limit: &[u8],
+) -> Result<(), ApiError> {
+    let approved = approval
+        .data
+        .get(1..9)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or_else(|| bad("Unexpected delegate approval"))?;
+    let limit = total_limit
+        .try_into()
+        .map(u64::from_le_bytes)
+        .map_err(|_| bad("Invalid mandate total limit"))?;
+    if approved > limit {
+        return Err(bad(
+            "Delegate approval exceeds the mandate's total spend limit",
+        ));
+    }
+    Ok(())
+}
+
 fn read_u32(data: &[u8]) -> Option<u32> {
     if data.len() != 5 {
         return None;
@@ -787,6 +822,9 @@ pub(super) fn owner(
                 return Err(bad("Unexpected delegate approval"));
             }
             validate_approve_checked(tx, 1, wallet, &a[2], &a[5], &a[4])?;
+            // create_mandate states its total limit at 112..120; the approval
+            // beside it must not delegate more than the mandate it belongs to.
+            validate_delegated_amount(instructions[1], &ix.data[112..120])?;
             for (position, index) in ix.accounts.iter().enumerate() {
                 role(tx, *index, matches!(position, 2 | 3 | 5), position == 3)?;
             }
@@ -807,7 +845,10 @@ pub(super) fn owner(
                     &a[0],
                     &key(tx, instructions[1].accounts[0])?,
                     &key(tx, instructions[1].accounts[1])?,
-                )
+                )?;
+                // update_mandate states the limit it is setting at 48..56, and an
+                // update that lowers the limit must lower the approval with it.
+                validate_delegated_amount(instructions[1], &ix.data[48..56])
             } else if instructions.len() == 1 {
                 if payload_account_keys(tx) != 3 {
                     return Err(bad("Invalid mandate management transaction"));
@@ -1148,11 +1189,25 @@ pub(super) mod tests {
             message,
         };
         owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
-        for allowance in [1u64, 50, 200] {
+        // The mandate's total limit is 100. A repair delegates only what a partly
+        // spent mandate has left, so anything up to the limit stays valid.
+        for allowance in [1u64, 50, 100] {
             if let VersionedMessage::Legacy(m) = &mut tx.message {
                 m.instructions[1].data[1..9].copy_from_slice(&allowance.to_le_bytes());
             }
             owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+        }
+        // Above it the approval would leave a standing allowance larger than the
+        // mandate it was granted for, which is what this transaction claims to
+        // authorise. u64::MAX is the unlimited approval the gap allowed.
+        for allowance in [101u64, u64::MAX] {
+            if let VersionedMessage::Legacy(m) = &mut tx.message {
+                m.instructions[1].data[1..9].copy_from_slice(&allowance.to_le_bytes());
+            }
+            assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
+        }
+        if let VersionedMessage::Legacy(m) = &mut tx.message {
+            m.instructions[1].data[1..9].copy_from_slice(&100u64.to_le_bytes());
         }
         if let VersionedMessage::Legacy(m) = &mut tx.message {
             m.instructions[1].accounts[2] = 0;
@@ -1698,6 +1753,68 @@ pub(super) mod tests {
             message.instructions[0].accounts[2] = 0;
         }
         assert!(owner(&bad_recipient, &wallet, DEFAULT_PROGRAM_ID).is_err());
+    }
+
+    /// An update states the limit it is setting, and the approval beside it must
+    /// not delegate more than that. Lowering a mandate's limit while approving a
+    /// larger allowance would leave the token account carrying authority the
+    /// mandate no longer claims.
+    #[test]
+    fn a_mandate_update_cannot_approve_more_than_the_limit_it_sets() {
+        let (_, request, signer) = fixture(0);
+        let wallet = request.agent.unwrap();
+        let keys = [
+            wallet.clone(),
+            bs58::encode([2; 32]).into_string(),
+            bs58::encode([6; 32]).into_string(),
+            bs58::encode([5; 32]).into_string(),
+            SPL_TOKEN_PROGRAM_ID.into(),
+            DEFAULT_PROGRAM_ID.into(),
+        ]
+        .map(|value| Address::from_str(&value).unwrap())
+        .to_vec();
+        let build = |limit: u64, approved: u64| {
+            let mut update_data = UPDATE_MANDATE.to_vec();
+            update_data.extend_from_slice(&signer.verifying_key().to_bytes());
+            for value in [10_u64, limit, 1000, 0, 0] {
+                update_data.extend_from_slice(&value.to_le_bytes());
+            }
+            update_data.push(0);
+            let mut approval = vec![APPROVE_CHECKED];
+            approval.extend_from_slice(&approved.to_le_bytes());
+            approval.push(6);
+            let message = VersionedMessage::Legacy(Message {
+                header: MessageHeader {
+                    num_required_signatures: 1,
+                    num_readonly_signed_accounts: 0,
+                    num_readonly_unsigned_accounts: 2,
+                },
+                account_keys: keys.clone(),
+                recent_blockhash: Default::default(),
+                instructions: vec![
+                    CompiledInstruction {
+                        program_id_index: 5,
+                        accounts: vec![1, 0],
+                        data: update_data,
+                    },
+                    CompiledInstruction {
+                        program_id_index: 4,
+                        accounts: vec![2, 3, 1, 0],
+                        data: approval,
+                    },
+                ],
+            });
+            VersionedTransaction {
+                signatures: vec![signer.sign(&message.serialize()).to_bytes().into()],
+                message,
+            }
+        };
+        owner(&build(100, 100), &wallet, DEFAULT_PROGRAM_ID).unwrap();
+        owner(&build(100, 40), &wallet, DEFAULT_PROGRAM_ID).unwrap();
+        assert!(owner(&build(100, 101), &wallet, DEFAULT_PROGRAM_ID).is_err());
+        assert!(owner(&build(100, u64::MAX), &wallet, DEFAULT_PROGRAM_ID).is_err());
+        // Lowering the limit lowers what may be approved alongside it.
+        assert!(owner(&build(40, 100), &wallet, DEFAULT_PROGRAM_ID).is_err());
     }
 
     #[test]
