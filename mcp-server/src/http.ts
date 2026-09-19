@@ -2,8 +2,9 @@ import { requestContext, authorizeMandate, AuthorizationError, parseScope } from
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { createDefaultContext, TOOL_DEFINITIONS } from "./index.js";
+import { getStaticAsset } from "./assets.js";
 import { renderDocsHtml } from "./docs.js";
-import { CHAINPAY_LOGO_SVG } from "./logo.js";
+import { CHAINPAY_ICON_SVG, CHAINPAY_LOGO_SVG } from "./logo.js";
 import { createChainPayOgImage } from "./og-image.js";
 import { runChainPayAgent, type ChainPayAgentRequest } from "./agent.js";
 import { createMcpServer } from "./server.js";
@@ -80,6 +81,16 @@ function writePng(res: ServerResponse, image: Buffer, headers: Record<string, st
     ...headers,
   });
   res.end(image);
+}
+
+function writeBinary(res: ServerResponse, body: Buffer, contentType: string, headers: Record<string, string> = {}) {
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Cache-Control": "public, max-age=86400",
+    "Content-Length": body.length.toString(),
+    ...headers,
+  });
+  res.end(body);
 }
 
 function writeHtml(res: ServerResponse, html: string, headers: Record<string, string> = {}) {
@@ -260,6 +271,26 @@ export function createHttpServer(
     if (url.pathname === "/logo.svg" && req.method === "GET") {
       writeSvg(res, CHAINPAY_LOGO_SVG, headers);
       return;
+    }
+
+    if (url.pathname === "/brand/chainpay-icon.svg" && req.method === "GET") {
+      writeSvg(res, CHAINPAY_ICON_SVG, headers);
+      return;
+    }
+
+    // Read only for GET, and never let a missing file throw out of this async handler:
+    // an unhandled rejection here takes the whole server down.
+    if (req.method === "GET") {
+      let staticAsset;
+      try {
+        staticAsset = getStaticAsset(url.pathname);
+      } catch {
+        staticAsset = undefined;
+      }
+      if (staticAsset) {
+        writeBinary(res, staticAsset.body, staticAsset.contentType, headers);
+        return;
+      }
     }
 
     if (url.pathname === "/og-image.png" && req.method === "GET") {

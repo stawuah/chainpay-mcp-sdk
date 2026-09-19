@@ -61,7 +61,8 @@ and [configuration reference](../docs/reference/configuration.md) in the reposit
 | `POST /mcp` | JSON-RPC; discovery/public reads available without a token, private tools authorized per caller |
 | `GET`, `POST /connections`; `DELETE /connections/:id` | Owner-session connection management |
 | `GET /inbox`, `POST /agent/chat` | Owner-session history and assistant |
-| `GET /logo.svg`, `/og-image.png` | Public documentation assets |
+| `GET /logo.svg`, `/brand/chainpay-icon.svg`, `/og-image.png` | Public brand assets for docs and link unfurlers |
+| `GET /assets/brands/*` | Official token marks used on the docs page (USDC, Solana, PYUSD) |
 
 The [protocol reference](../docs/guides/connect-an-agent.md#protocol-reference)
 describes supported versions, headers, discovery, and transport limitations.
