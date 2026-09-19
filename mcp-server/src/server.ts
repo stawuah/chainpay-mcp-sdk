@@ -20,6 +20,7 @@ import {
   parseErrorResponse,
   parseJsonRpcMessage,
   responseId,
+  SERVER_INSTRUCTIONS,
   toolExecutionError,
   type JsonRpcId,
   type JsonRpcResponse,
@@ -130,7 +131,7 @@ function handleLegacy(
         protocolVersion: negotiateLegacyProtocolVersion(message.params),
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: SERVER_INFO.name, version: SERVER_INFO.version },
-        instructions: "ChainPay prepares and routes policy-controlled Solana payments. Wallet signatures and signer adapters remain outside MCP.",
+        instructions: SERVER_INSTRUCTIONS,
       });
     case "ping":
       return jsonRpcSuccess(id, {});

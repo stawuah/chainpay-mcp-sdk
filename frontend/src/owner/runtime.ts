@@ -314,16 +314,12 @@ export function mcpConnectionsUrl(wallet: string) {
   return `${MCP_URL.replace(/\/mcp\/?$/, "")}/connections?wallet=${encodeURIComponent(wallet)}`;
 }
 
-export function buildMcpClientConfig(serverUrl: string, token?: string) {
-  return JSON.stringify({
-    mcpServers: {
-      chainpay: {
-        url: serverUrl,
-        ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
-      },
-    },
-  }, null, 2);
-}
+export {
+  buildMcpClientConfig,
+  buildMcpFirstPrompt,
+  connectionAccessLabel,
+  type McpConnectionHandoff,
+} from "./mcpHandoff.js";
 
 export async function fetchMcpConnections(wallet: string): Promise<AgentConnection[]> {
   const response = await authorizedFetch(mcpConnectionsUrl(wallet), {}, undefined, "passive");
