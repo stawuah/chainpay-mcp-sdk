@@ -11,7 +11,7 @@ async function load(relative) {
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 }
 
-const { KNOWN_ASSETS, knownAsset, assetOrder, UNKNOWN_ASSET_ORDER } = await load("../src/owner/knownAssets.ts");
+const { KNOWN_ASSETS, knownAsset, assetOrder, UNKNOWN_ASSET_ORDER } = await load("../src/config/knownAssets.ts");
 
 // Verified against Solana Devnet RPC before registration: both are initialized
 // mints with 6 decimals. EURC is a plain 82-byte SPL mint; USDG is Token-2022
