@@ -39,7 +39,8 @@ Health check: /healthz
 | `CHAINPAY_ALLOWED_ORIGINS` | Explicit allowed browser origins |
 | `CHAINPAY_HTTP_PORT` | Local HTTP port override |
 | `CHAINPAY_AI_PROVIDER=openrouter`, `OPENROUTER_API_KEY` | Optional inbox assistant provider |
-| `CHAINPAY_X402_ALLOWED_ORIGINS` | Exact trusted HTTPS merchant origins, comma-separated |
+| `CHAINPAY_X402_ALLOWED_ORIGINS` | Exact trusted HTTPS merchant origins ChainPay may fetch, comma-separated |
+| `CHAINPAY_X402_RECEIPT_MERCHANTS` | Subset of those origins that verify a ChainPay receipt PDA and deliver against it. Only these can settle a standard x402 v2 challenge. Unset means no v2 settlement |
 
 Use HTTPS when hosted. Production startup refuses an in-memory fallback if the
 database is missing. Tokens are hashed at rest. The assistant invokes the same

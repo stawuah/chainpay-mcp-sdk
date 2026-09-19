@@ -52,7 +52,7 @@ Stack: `dre/pr-20-owner-onboarding` → `dre/journey-close-j1` (#22) →
 | J6b public policy observation | **Blocked** | Kwasi-owned Axum worker; public card shows **current** mandate limits with honest labeling |
 | J6c owner webhooks / email | **Blocked** | Settings → Notifications is read-only: “There is no webhook or email delivery in this build.” Future delivery is an Axum worker, not a missing Save button |
 | J7 program asks | **Blocked** | Written asks only — listed below |
-| J8 demo evidence | Partial | Readonly baseline USDC receipt PDA `7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q` loads on `/verify`; new signed demo requires Dre authorization |
+| J8 demo evidence | Partial | Readonly baseline USDC receipt PDA `7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q` loads on `/verify`; MCP/SDK control-layer shipped (x402 parsers in SDK, mandate quote on v2, MPP detect, agent skill, acceptance checklist in [acceptance-x402-mcp.md](../guides/acceptance-x402-mcp.md)); live signed MCP 402 → receipt still requires Dre authorization |
 | DG1–DG3 data gaps | **Blocked** | No invented purchase description, no historical snapshot backfill, agent shown as address unless program adds a name |
 
 ### Open program asks (Kwasi)

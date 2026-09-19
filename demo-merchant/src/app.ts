@@ -1,6 +1,6 @@
 import express, { type Express, type Request, type Response } from "express";
 import type { X402PaymentReferences } from "@chainpay/sdk";
-import { customPaymentRequired, type MerchantConfig } from "./config.js";
+import { paymentRequiredForConfig, type MerchantConfig } from "./config.js";
 import { createDeliveryController, type DeliveryController, type DeliveryPublisher } from "./delivery.js";
 import {
   detectAndParsePaymentHeader,
@@ -25,7 +25,7 @@ export function createMerchantApp(
   references: X402PaymentReferences,
   deps: MerchantAppDependencies,
 ): MerchantApp {
-  const challenge = customPaymentRequired(config);
+  const challenge = paymentRequiredForConfig(config);
   const delivery = createDeliveryController({
     programId: config.programId,
     publisher: deps.publisher,
@@ -46,7 +46,11 @@ export function createMerchantApp(
 
     if (paymentHeaders.length === 0) {
       const encoded = Buffer.from(JSON.stringify(challenge), "utf8").toString("base64");
-      return response.status(402).set("X-Payment-Required", encoded).json(challenge);
+      const headers: Record<string, string> = { "X-Payment-Required": encoded };
+      if ("x402Version" in challenge && challenge.x402Version === 2) {
+        headers["PAYMENT-REQUIRED"] = encoded;
+      }
+      return response.status(402).set(headers).json(challenge);
     }
 
     try {

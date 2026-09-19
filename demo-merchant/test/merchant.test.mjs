@@ -6,7 +6,7 @@ import test from "node:test";
 import { Keypair } from "@solana/web3.js";
 import { DEFAULT_PROGRAM_ID } from "@chainpay/sdk";
 import { createMerchantApp } from "../dist/app.js";
-import { customPaymentRequired } from "../dist/config.js";
+import { customPaymentRequired, standardV2PaymentRequired } from "../dist/config.js";
 import {
   bindServedResponseLifecycle,
   serializeJsonBody,
@@ -82,6 +82,27 @@ test("standard v2 documents are detected from body, not header name, and never p
   } catch (error) {
     assert.equal(error.category, "invalid_proof");
   }
+});
+
+test("v2 challenge shape uses merchant owner payTo and x402Version 2", () => {
+  const fixture = {
+    port: 3402,
+    resource: RESOURCE,
+    mint: Keypair.generate().publicKey.toBase58(),
+    recipient: Keypair.generate().publicKey.toBase58(),
+    merchantOwner: Keypair.generate().publicKey.toBase58(),
+    amount: AMOUNT,
+    tokenProgram: "spl-token",
+    allowedAgent: Keypair.generate().publicKey.toBase58(),
+    programId: DEFAULT_PROGRAM_ID,
+    rpcUrl: "http://127.0.0.1:9",
+    challengeShape: "v2",
+  };
+  const challenge = standardV2PaymentRequired(fixture);
+  assert.equal(challenge.x402Version, 2);
+  assert.equal(challenge.accepts[0].payTo, fixture.merchantOwner);
+  assert.notEqual(challenge.accepts[0].payTo, fixture.recipient);
+  assert.equal(challenge.accepts[0].network, SOLANA_DEVNET_CAIP2);
 });
 
 test("custom 402 challenge uses recipient token account and exact integer amount", async () => {

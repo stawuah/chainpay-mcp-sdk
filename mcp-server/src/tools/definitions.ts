@@ -264,12 +264,16 @@ export const TOOL_DEFINITIONS = [
       properties: {
         challenge: {
           type: "object",
-          description: "Custom x402/1.0 envelope or accept option (version x402/1.0, network solana-devnet), or a standard x402 v2 PaymentRequired document (x402Version 2). Protocol is detected from document shape, not header name.",
+          description: "PaymentRequired document from HTTP 402 (custom x402/1.0 or standard x402Version 2). Protocol is detected from document shape.",
           additionalProperties: true,
         },
         mandate: { type: "string" },
         agent: { type: "string" },
         signingMode: { type: "string", enum: ["human", "delegated"] },
+        settleIfReceiptMerchant: {
+          type: "boolean",
+          description: "Confirms the caller intends settlement. Only origins listed in CHAINPAY_X402_RECEIPT_MERCHANTS can settle standard v2 through ChainPay receipt proof; this flag alone grants nothing",
+        },
       },
       required: ["challenge", "mandate", "agent"],
       additionalProperties: false,
@@ -283,9 +287,13 @@ export const TOOL_DEFINITIONS = [
       properties: {
         paymentId: { type: "string", description: "Resume an existing settlement and its original merchant delivery; no new approval" },
         signingMode: { type: "string", enum: ["human", "delegated"] },
-        resource: { type: "string", description: "HTTPS x402-gated resource URL" },
+        resource: { type: "string", description: "HTTPS x402-gated resource URL to pay" },
         mandate: { type: "string" },
         agent: { type: "string" },
+        settleIfReceiptMerchant: {
+          type: "boolean",
+          description: "Confirms the caller intends settlement. Only origins listed in CHAINPAY_X402_RECEIPT_MERCHANTS can settle standard x402 v2 through ChainPay mandate receipt proof; this flag alone grants nothing",
+        },
         signedTransaction: {
           type: "string",
           description: "Optional base64 transaction signed outside ChainPay; omit on the first call",

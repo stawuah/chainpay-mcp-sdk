@@ -49,6 +49,10 @@ private routes public. Server processes read their environment; copying the
 - **Managed signing:** Privy configuration in the [backend guide](../../backend/README.md).
   Configuration alone is not evidence of an accepted delegated payment.
 - **Merchant fetches:** exact origins in `CHAINPAY_X402_ALLOWED_ORIGINS`.
+- **Standard x402 v2 settlement:** exact origins in `CHAINPAY_X402_RECEIPT_MERCHANTS`, a
+  deliberate subset of the fetch allowlist. Being readable is not evidence that a merchant
+  understands a ChainPay receipt PDA, so settlement needs its own list. Unset or empty means
+  standard v2 is quoted and refused, never settled.
   `CHAINPAY_X402_ALLOW_HTTP=true` allows loopback HTTP for development only.
 - **Seller statements:** public identity mappings in [trusted sellers](../guides/trusted-sellers.md).
   Statement signing stays on the merchant host.
