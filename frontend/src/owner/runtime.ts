@@ -7,7 +7,6 @@ import { AGENT_URL, BACKEND_URL, DEVNET_PYUSD_TOKEN_2022_MINT, DEVNET_USDC_MINT,
 import { chainpayClient } from "../config/client";
 import { tokenProgramAccountType } from "./tokenAccounts";
 import { settlementKey } from "./settlementKey";
-import { assetOrder, knownAsset } from "./knownAssets";
 
 export type Action = "Send" | "Receive" | "Approve mandate" | "Receipts";
 export type Range = "1H" | "1D" | "1W" | "1M" | "1Y" | "All";
@@ -77,12 +76,19 @@ export function buildStablecoinOptions(assets: SupportedAsset[]): StablecoinOpti
     .filter((asset) => asset.enabled && (asset.tokenProgram === SPL_TOKEN_PROGRAM_ID || asset.tokenProgram === TOKEN_2022_PROGRAM_ID))
     .map((asset) => ({
       value: asset.mint,
-      label: knownAsset(asset.mint)?.label ?? `Token ${shortAddress(asset.mint)}`,
+      label: asset.mint === DEVNET_USDC_MINT
+        ? "USDC"
+        : asset.mint === DEVNET_PYUSD_TOKEN_2022_MINT
+          ? "PYUSD"
+          : `Token ${shortAddress(asset.mint)}`,
       detail: asset.tokenProgram === TOKEN_2022_PROGRAM_ID ? "Token-2022 · capability checked at payment" : "Classic SPL Token",
       mint: asset.mint,
       tokenProgram: asset.tokenProgram === TOKEN_2022_PROGRAM_ID ? "token-2022" as const : "spl-token" as const,
     }))
-    .sort((left, right) => assetOrder(left.mint) - assetOrder(right.mint) || left.label.localeCompare(right.label));
+    .sort((left, right) => {
+      const rank = (mint: string) => mint === DEVNET_USDC_MINT ? 0 : mint === DEVNET_PYUSD_TOKEN_2022_MINT ? 1 : 2;
+      return rank(left.mint) - rank(right.mint) || left.label.localeCompare(right.label);
+    });
 }
 
 export function mandateDisplayName(mandate: Mandate, mandates: Mandate[], stablecoinOptions: StablecoinOption[]) {
