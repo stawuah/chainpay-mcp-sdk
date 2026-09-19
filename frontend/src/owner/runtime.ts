@@ -1,10 +1,12 @@
-import { beginSettlement, awaitSettlement, forgetUnsentOperation, rejectBeforeSubmission, type Settlement } from "../settlement";
+import { beginSettlement, awaitSettlement, forgetUnsentOperation, rejectBeforeSubmission, publishSettlement, PendingSettlementError, type Operation, type Settlement } from "../settlement";
 import { authorizedFetch, RequestNotSentError, type WalletBinding } from "../session";
 import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveVersionedMandateAddress, toWeb3Transaction } from "@chainpay/sdk";
 import type { ChainPayInstruction, Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, SupportedAsset, TokenProgram } from "@chainpay/sdk";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import { AGENT_URL, BACKEND_URL, DEVNET_PYUSD_TOKEN_2022_MINT, DEVNET_USDC_MINT, MCP_URL, PROGRAM_ID } from "../config/public";
 import { chainpayClient } from "../config/client";
+import { tokenProgramAccountType } from "./tokenAccounts";
+import { settlementKey } from "./settlementKey";
 
 export type Action = "Send" | "Receive" | "Approve mandate" | "Receipts";
 export type Range = "1H" | "1D" | "1W" | "1M" | "1Y" | "All";
@@ -312,16 +314,12 @@ export function mcpConnectionsUrl(wallet: string) {
   return `${MCP_URL.replace(/\/mcp\/?$/, "")}/connections?wallet=${encodeURIComponent(wallet)}`;
 }
 
-export function buildMcpClientConfig(serverUrl: string, token?: string) {
-  return JSON.stringify({
-    mcpServers: {
-      chainpay: {
-        url: serverUrl,
-        ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
-      },
-    },
-  }, null, 2);
-}
+export {
+  buildMcpClientConfig,
+  buildMcpFirstPrompt,
+  connectionAccessLabel,
+  type McpConnectionHandoff,
+} from "./mcpHandoff.js";
 
 export async function fetchMcpConnections(wallet: string): Promise<AgentConnection[]> {
   const response = await authorizedFetch(mcpConnectionsUrl(wallet), {}, undefined, "passive");
@@ -358,25 +356,66 @@ export async function mcpRequest<T>(method: string, params?: Record<string, unkn
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
+    // Allow the relay's 90s cold-start budget plus preparation, but do not leave
+    // a browser waiting forever for an MCP response that never arrives.
+    signal: AbortSignal.timeout(120_000),
   }, binding, mode);
-  const payload = await response.json() as { result?: T; error?: { message?: string } };
-  if (!response.ok || payload.error) throw new Error(payload.error?.message ?? `MCP request failed (${response.status})`);
+  let payload: { result?: T; error?: string | { message?: string } };
+  try { payload = await response.json(); }
+  catch { throw new Error(`MCP returned an unreadable response (HTTP ${response.status})`); }
+  if (!payload || typeof payload !== "object") throw new Error(`MCP returned an invalid response (HTTP ${response.status})`);
+  if (!response.ok || payload.error) {
+    const reason = typeof payload.error === "string" ? payload.error : payload.error?.message;
+    throw new Error(reason || `MCP request failed (HTTP ${response.status})`);
+  }
+  if (payload.result === undefined || payload.result === null) throw new Error("MCP response did not include a result");
   return payload.result as T;
+}
+
+/** The clearest sentence a failed tool result offers, for the owner to read. */
+function toolFailureReason(result: McpToolResponse): string {
+  const structured = result.structuredContent as { error?: unknown; message?: unknown; action?: unknown } | undefined;
+  for (const candidate of [structured?.error, structured?.message, structured?.action]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  const text = result.content?.map((part) => part.text ?? "").join(" ").trim();
+  return text || "the agent tool reported an error without a reason";
+}
+
+function unresolvedPayment(operation: Operation, reason: string, first?: Settlement): never {
+  const error = `Payment outcome is unknown: ${reason}. Use Check status to reconcile the original approval. Do not approve a replacement.`;
+  publishSettlement(operation, { ...first, status: "unknown", error });
+  // End the submit handler so the form can display the error now. Recovery
+  // retains the operation and signed bytes and updates the original form later.
+  throw new PendingSettlementError(error);
 }
 
 export async function callMcpTool(name: string, args: Record<string, unknown>) {
   if (name !== "execute_payment" || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
-  const operation = await beginSettlement(BACKEND_URL, "payments", `${String(args.mandate)}:${String(args.invoiceHash)}`, typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
+  const operation = await beginSettlement(BACKEND_URL, "payments", settlementKey(String(args.mandate), String(args.invoiceHash)), typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
   let result: McpToolResponse;
   try { result = await mcpRequest<McpToolResponse>("tools/call", { name, arguments: args }, operation); }
   catch (error) {
     if (error instanceof RequestNotSentError) { forgetUnsentOperation(operation); throw error; }
-    result = { structuredContent: await awaitSettlement(operation, undefined, 0) };
+    unresolvedPayment(operation, error instanceof Error ? error.message : "No response from MCP");
   }
   const first = result.structuredContent as Settlement | undefined;
-  if (result.isError && ["rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String((result.structuredContent as { action?: string })?.action))) { rejectBeforeSubmission(operation); return result; }
-  if (result.isError && [400, 401, 403, 404, 422].includes(Number((result.structuredContent as { httpStatus?: number })?.httpStatus))) { rejectBeforeSubmission(operation); return result; }
-  const settled = await awaitSettlement(operation, first?.payment_id === operation.id ? first : undefined);
+  if (first?.payment_id !== operation.id) {
+    const details = result.structuredContent as { action?: string; httpStatus?: number } | undefined;
+    const rejectedBeforeRelay = ["rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String(details?.action));
+    const rejectedByRelay = ["backend_rejected", "managed_backend_rejected"].includes(String(details?.action)) && [400, 401, 403, 404, 422].includes(Number(details?.httpStatus));
+    if (result.isError && (rejectedBeforeRelay || rejectedByRelay)) {
+      rejectBeforeSubmission(operation, toolFailureReason(result));
+      return result;
+    }
+    // A tool exception may occur while decoding the relay response after it
+    // accepted the payment. A missing/mismatched ID is not proof of non-submission.
+    unresolvedPayment(operation, result.isError ? toolFailureReason(result) : "MCP did not identify this payment operation");
+  }
+  if (first.status === "unknown" || (result.isError && first.status !== "failed")) {
+    unresolvedPayment(operation, toolFailureReason(result), first);
+  }
+  const settled = await awaitSettlement(operation, first);
   return { ...result, isError: false, structuredContent: { ...(result.structuredContent as Record<string, unknown>), ...settled, receiptAddress: settled.receipt_address ?? (result.structuredContent as { receiptAddress?: string })?.receiptAddress } };
 }
 
@@ -867,8 +906,19 @@ export async function resolvePaymentDestination(
   const expectedProgram = tokenProgram === "token-2022" ? TOKEN_2022_PROGRAM_ID : SPL_TOKEN_PROGRAM_ID;
   const existing = await getAccountInfoOrNull(destination);
   if (existing && (existing.owner.toBase58() === SPL_TOKEN_PROGRAM_ID || existing.owner.toBase58() === TOKEN_2022_PROGRAM_ID)) {
-    if (existing.owner.toBase58() !== expectedProgram || existing.data.length < 165) {
+    // A mint names the stablecoin; it can never receive a payment. Say so
+    // before the program check, because pasting a mint is a different mistake
+    // from pasting the wrong kind of token account and deserves its own words.
+    if (tokenProgramAccountType(existing.data) === "mint") {
+      throw new Error("That is the token's mint address, which names the stablecoin itself. Enter the recipient's wallet address instead.");
+    }
+    if (existing.owner.toBase58() !== expectedProgram || tokenProgramAccountType(existing.data) !== "account") {
       throw new Error("That destination does not match the selected stablecoin.");
+    }
+    // A token account holds exactly one mint. Sending to one opened for another
+    // stablecoin fails on chain, so it is refused here with the reason.
+    if (new PublicKey(existing.data.slice(0, 32)).toBase58() !== mint) {
+      throw new Error("That token account belongs to a different stablecoin.");
     }
     return { address: destination.toBase58() };
   }

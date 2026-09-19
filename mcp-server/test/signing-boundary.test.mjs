@@ -203,11 +203,34 @@ test("wait_for_payment reconciles the existing operation and keeps transport fai
   } finally {globalThis.fetch=originalFetch;}
 });
 
-test("lost Axum response returns the stable authenticated operation reference",async()=>{
+test("a lost Axum response reports an unknown outcome, never a submission",async()=>{
   const {submitSettlement}=await import("../dist/tools/settlement-submit.js");
   const {createHash}=await import("node:crypto");const old=globalThis.fetch;
   globalThis.fetch=async()=>{throw new Error("fixture lost response")};
-  try {const response=await submitSettlement({principal:{wallet:"owner",scope:null}},"https://fixture.invalid/v1/payments",{body:JSON.stringify({idempotency_key:"invoice"})});const value=await response.json();assert.equal(value.payment_id,`payment_${createHash("sha256").update("owner:invoice").digest("hex")}`);assert.equal(value.status,"submitted");assert.equal(value.continuation.arguments.paymentId,value.payment_id);}finally{globalThis.fetch=old;}
+  try {const response=await submitSettlement({principal:{wallet:"owner",scope:null}},"https://fixture.invalid/v1/payments",{body:JSON.stringify({idempotency_key:"invoice"})});const value=await response.json();assert.equal(value.payment_id,`payment_${createHash("sha256").update("owner:invoice").digest("hex")}`);// Claiming "submitted" for a request that may never have been sent leaves the
+  // owner polling an id the relay has no record of, seeing only 404 forever.
+  assert.equal(value.status,"unknown");
+  assert.notEqual(value.status,"submitted");
+  assert.equal(value.action,"payment_outcome_unknown");
+  assert.match(value.error,/may have settled or may never have been sent/);
+  // The reason the submission failed is the only thing separating a relay too
+  // slow to answer from one never reached, so it must survive to the caller.
+  assert.equal(value.transport_error,"Error: fixture lost response");
+  assert.match(value.error,/fixture lost response/);assert.equal(value.continuation.arguments.paymentId,value.payment_id);}finally{globalThis.fetch=old;}
+});
+
+test("a submission that times out says so, instead of naming some other failure",async()=>{
+  const {submitSettlement}=await import("../dist/tools/settlement-submit.js");const old=globalThis.fetch;
+  // AbortSignal.timeout rejects with this, and it is the only signal that
+  // separates a relay too slow to answer from one that was never reached.
+  globalThis.fetch=async()=>{throw new DOMException("signal timed out","TimeoutError");};
+  try {
+    const response=await submitSettlement({principal:{wallet:"owner",scope:null}},"https://fixture.invalid/v1/payments",{body:JSON.stringify({idempotency_key:"invoice"})});
+    const value=await response.json();
+    assert.match(value.transport_error,/timed out after 90s/);
+    assert.match(value.error,/timed out after 90s/);
+    assert.equal(value.status,"unknown");
+  } finally {globalThis.fetch=old;}
 });
 
 test("x402 resumes pending then delivers original resource without prepare, signing or submission",async()=>{

@@ -24,6 +24,12 @@ export function publishSettlement(operation: Operation, result?: Settlement): Op
   const incoming = result ? { ...operation, result, status: result.status ?? "submitted", signature: result.signature ?? operation.signature } : operation;
   const next = old && terminal(old.status) ? old : incoming;
   if (terminal(next.status)) delete next.wire;
+  // An operation that never resolves is the hardest failure to diagnose from the
+  // outside, so every reason the relay or MCP gives is written where an owner
+  // reporting the problem can copy it, alongside the id they are polling.
+  if (next.result?.error) {
+    console.error("[chainpay] settlement %s (%s): %s", next.id, next.status, next.result.error);
+  }
   const others = rows.filter((row) => row.id !== next.id);
   const pending = others.filter((row) => !terminal(row.status));
   const history = others.filter((row) => terminal(row.status)).slice(-29);
@@ -139,9 +145,9 @@ export function PendingSettlements({ wallet }: { wallet: string }) {
   const run = (action: () => Promise<unknown>) => { setChecking(true); void action().then(() => setMessage("Settlement status updated.")).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error))).finally(() => setChecking(false)); };
   const operations = rows.filter((row) => row.wallet === wallet);
   if (!operations.length) return null;
-  return <section className="dashboard-card owner-settlements" aria-live="polite"><h2>Payment & approval updates</h2><p className="owner-muted">Recovery keeps your original approval and never requests a new wallet signature.</p>{operations.map((operation) => <div className="owner-settlement-row" key={operation.id}><strong>{operation.status === "confirmed" ? "Confirmed" : operation.status === "failed" ? "Could not complete" : "Waiting for confirmation"}</strong>{operation.result?.error && <p role="alert">{operation.result.error}</p>}<div className="owner-inline-actions">{terminal(operation.status) ? <button onClick={() => dismissSettlement(operation.id)}>Dismiss</button> : <><button disabled={checking} onClick={() => run(() => reconcileSettlement(operation))}>Check status</button>{operation.wire && <button disabled={checking} onClick={() => run(() => retrySameApproval(operation))}>Retry same signed approval</button>}<button disabled={checking} onClick={() => run(() => cancelUnstarted(operation))}>Cancel only if unstarted</button></>}</div><details className="owner-disclosure"><summary>Technical details</summary><p>Operation ID</p><code>{operation.id}</code>{operation.signature && <><p>Transaction signature</p><code>{operation.signature}</code></>}</details></div>)}{message && <p role="status">{message}</p>}</section>;
+  return <section className="dashboard-card owner-settlements" aria-live="polite"><h2>Payment & approval updates</h2><p className="owner-muted">Recovery keeps your original approval and never requests a new wallet signature.</p>{operations.map((operation) => <div className="owner-settlement-row" key={operation.id}><strong>{operation.status === "confirmed" ? "Confirmed" : operation.status === "failed" ? "Could not complete" : operation.status === "unknown" ? "Outcome unknown — check status" : "Waiting for confirmation"}</strong>{operation.result?.error && <p role="alert">{operation.result.error}</p>}<div className="owner-inline-actions">{terminal(operation.status) ? <button onClick={() => dismissSettlement(operation.id)}>Dismiss</button> : <><button disabled={checking} onClick={() => run(() => reconcileSettlement(operation))}>Check status</button>{operation.wire && <button disabled={checking} onClick={() => run(() => retrySameApproval(operation))}>Retry same signed approval</button>}<button disabled={checking} onClick={() => run(() => cancelUnstarted(operation))}>Cancel only if unstarted</button></>}</div><details className="owner-disclosure"><summary>Technical details</summary><p>Operation ID</p><code>{operation.id}</code>{operation.signature && <><p>Transaction signature</p><code>{operation.signature}</code></>}</details></div>)}{message && <p role="status">{message}</p>}</section>;
 }
-export function rejectBeforeSubmission(operation: Operation) { publishSettlement(operation, { status: "failed", error: "Request rejected before submission" }); }
+export function rejectBeforeSubmission(operation: Operation, reason?: string) { publishSettlement(operation, { status: "failed", error: reason ? `Request rejected before submission: ${reason}` : "Request rejected before submission" }); }
 export class PendingSettlementError extends Error {}
 export function isPendingSettlement(error: unknown): boolean { return error instanceof PendingSettlementError; }
 export function forgetUnsentOperation(operation: Operation) { localStorage.setItem(storageKey, JSON.stringify(read().filter((row) => row.id !== operation.id))); window.dispatchEvent(new Event(storageKey)); }

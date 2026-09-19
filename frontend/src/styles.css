@@ -1761,6 +1761,16 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .connection-safety-note { display: flex; align-items: flex-start; gap: 9px; padding: 12px 14px; margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; color: var(--body); background: var(--soft); font-size: 11px; line-height: 1.5; }
 .connection-safety-note .shield-icon { flex: 0 0 auto; font-size: 17px; }
 .connection-config-card, .connected-clients-card, .settings-card { padding: 24px; }
+.connection-handoff-intro { max-width: 640px; margin: 0 0 18px; color: var(--body); font-size: 13px; line-height: 1.6; }
+.connection-handoff-scope { padding: 16px 18px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--soft); }
+.connection-handoff-scope p { margin: 6px 0 0; color: var(--body); font-size: 12px; line-height: 1.55; }
+.connection-handoff-scope p:first-of-type { margin-top: 10px; color: var(--ink); font-size: 15px; }
+.connection-handoff-steps { display: grid; gap: 12px; margin: 0 0 18px; padding: 0; list-style: none; counter-reset: handoff; }
+.connection-handoff-steps li { display: grid; gap: 4px; padding-left: 34px; position: relative; color: var(--body); font-size: 12px; line-height: 1.55; }
+.connection-handoff-steps li::before { counter-increment: handoff; content: counter(handoff); position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: var(--blue); background: var(--blue-soft); font: 600 11px var(--mono); }
+.connection-handoff-steps strong { color: var(--ink); font-size: 13px; }
+.connection-handoff-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.connection-prompt-block { white-space: pre-wrap; }
 .config-code-wrap { position: relative; padding-top: 14px; margin-top: 12px; }
 .config-code-wrap .schema-block { margin-top: 0; padding-top: 56px; }
 .copy-config { position: absolute; top: 26px; right: 12px; z-index: 1; min-height: 34px; padding: 8px 13px; font-size: 12px; }

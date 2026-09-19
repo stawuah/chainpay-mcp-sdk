@@ -244,6 +244,11 @@ export function createHttpServer(
       ...cors,
       "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Mcp-Method, Mcp-Name, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID",
       "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+      // Every authenticated request carries an Authorization header, so the
+      // browser preflights it. Without a lifetime it may not reuse the result,
+      // and the dashboard's connection poll then spends two round trips where
+      // one would do, for the whole time a workspace is open.
+      "Access-Control-Max-Age": "600",
     };
 
     if (req.method === "OPTIONS") {

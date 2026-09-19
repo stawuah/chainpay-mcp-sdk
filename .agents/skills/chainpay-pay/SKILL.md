@@ -22,9 +22,24 @@ ChainPay is the **control layer**: mandates, settlement, receipt PDAs. pay.sh is
 }
 ```
 
-Owner creates the scoped token in the dashboard **Connect MCP** flow. Never paste tokens or private keys into prompts.
+Owner creates the scoped token in the dashboard **Agents → Connect agent** flow. Copy the configuration and **first prompt** from the finish card. Never paste tokens or private keys into chat.
 
 Local stdio fallback: build `mcp-server/dist/server.js` and set `CHAINPAY_RPC_URL`, `CHAINPAY_BACKEND_URL`, `CHAINPAY_CALLER_TOKEN`.
+
+## First prompt (after dashboard connect)
+
+Send a read-only prompt like this (replace names and mandate PDA):
+
+```
+You are connected to ChainPay as "Invoice agent".
+
+Start read-only:
+1. Confirm ChainPay tools are available (tools/list).
+2. Call get_mandate with address "MANDATE_PDA" for the connected spending permission.
+3. Report in plain language: mandate status, token, remaining allowance, per-payment cap, and what I can ask next.
+
+Do not prepare, sign, or submit a payment until I explicitly ask.
+```
 
 ## Read-only first
 
@@ -66,12 +81,7 @@ For **allowlisted receipt merchants** that verify ChainPay receipts despite v2-s
 "settleIfReceiptMerchant": true
 ```
 
-The flag only confirms your intent. The operator decides which merchants can settle, by
-listing them in `CHAINPAY_X402_RECEIPT_MERCHANTS` — a deliberate subset of the fetch
-allowlist, because a merchant being readable is no evidence that it understands a ChainPay
-receipt PDA. If the origin is not on that list, you get `x402_unsupported_sponsor` with the
-mandate quote no matter what you pass, and nothing is settled. Do not ask the owner to add a
-merchant to it in order to get past a refusal.
+Only when `CHAINPAY_X402_ALLOWED_ORIGINS` includes the merchant origin.
 
 ### MPP (WWW-Authenticate: Payment)
 
@@ -90,6 +100,14 @@ Returns `mpp_unsupported`. Use pay.sh for debugger.pay.sh and MPP sandbox APIs.
 - Never split payments to evade limits
 - Timeout ≠ permission to pay again; inspect `paymentId` first
 - pay.sh catalog URLs are for **limit estimates** in the dashboard; live price comes from the 402 challenge
+
+## Presentation contract (when talking to the owner)
+
+- Lead with one status sentence; use human amounts from `display.amounts`, not base units
+- Hide full addresses unless the owner asks for technical details
+- If there is a choice, present numbered options and wait
+- End with at most one next step
+- Relay MCP tool result cards; never dump raw JSON or unsigned transactions as the headline
 
 ## AP2 mental model (documentation only)
 

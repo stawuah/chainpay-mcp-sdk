@@ -72,14 +72,21 @@ absolute path with your checkout path:
 }
 ```
 
-Restart the client connection and ask:
+After the dashboard **Agents → Connect agent** flow, copy both the MCP
+configuration and the **first prompt** from the finish card. For a public
+discovery check without a token, send:
 
 > List ChainPay's tools, then call get_protocol_config with no arguments. Report
 > the result or error. Do not prepare, sign, or submit a payment.
 
-**Expected:** the tool catalog, followed by the protocol configuration or an
-explicit missing-account/RPC error. Discovery can succeed while Devnet is
-unavailable. Confirm the configured program and network before continuing.
+For a scoped private connection, prefer the dashboard first prompt: inspect
+`tools/list`, then `get_mandate` for the selected spending permission, and
+report status, token, remaining allowance, and what the owner can ask next—
+without preparing or submitting a payment.
+
+**Expected:** the tool catalog and mandate summary in plain language, or an
+explicit RPC/auth error. Discovery can succeed while Devnet is unavailable.
+Confirm the configured program and network before continuing.
 
 Client configuration keys vary; use a client with support for one of the
 [implemented protocol versions](#protocol-reference). For public discovery,

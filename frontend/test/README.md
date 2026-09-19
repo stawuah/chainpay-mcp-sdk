@@ -4,6 +4,18 @@ Run commands in this guide from `frontend/`.
 
 Run the ordinary suite with `npm test`, and TypeScript/Vite checks with `npm run build`.
 
+## Payment submission browser check
+
+With the frontend dev server on port 5189, run
+`node test/payment-submission.browser.mjs`. It uses the actual dashboard and
+submission handler with fake account reads, an inert wallet and intercepted
+service responses. It covers the legacy JSON-RPC error after approval, immediate
+error display, retained recovery bytes after a 404, and recovery restoring the
+original receipt link without another approval. Desktop and mobile screenshots
+are saved under `/tmp/chainpay-payment-error-*.png`. These fixtures are not live
+payment evidence. `mcp-submission.test.mjs` covers other submission error formats
+and confirmed responses in the ordinary suite.
+
 ## Permission detail browser fixture
 
 Start `npm run dev -- --host 127.0.0.1 --port 5189`. With Playwright and Google Chrome
