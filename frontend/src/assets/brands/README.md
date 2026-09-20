@@ -16,7 +16,9 @@ Retrieved 2026-09-15. No recoloring, cropping, tracing, outlines or logo shadows
 ## Wanted: EURC and USDG
 
 Both are registered and enabled on Devnet. Neither has artwork here, so each
-draws its currency glyph instead of a mark. A glyph states the unit; it does not
+Both are registered and enabled on Devnet. Neither has artwork here, so each
+shows the neutral coin mark instead of an issuer's own. That mark makes no
+claim about who issued the money. Nothing is broken until these arrive.
 stand in for an issuer. Nothing is broken until these arrive.
 
 - `eurc.svg` — Circle's own EURC token mark. Same brand kit that supplied
