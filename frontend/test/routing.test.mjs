@@ -29,6 +29,11 @@ test("parses landing, app tabs, mandate builder, and verify paths", () => {
     kind: "verify",
     receiptPda: "abcDEF1234567890abcDEF1234567890ab",
   });
+  assert.deepEqual(paths.parsePathname("/embed/overview"), { kind: "embed-overview", owner: "" });
+  assert.deepEqual(paths.parsePathname("/embed/overview/Owner1111111111111111111111111111111111111"), {
+    kind: "embed-overview",
+    owner: "Owner1111111111111111111111111111111111111",
+  });
 });
 
 test("builds canonical paths and keeps tab whitelist", () => {
@@ -36,6 +41,7 @@ test("builds canonical paths and keeps tab whitelist", () => {
   assert.equal(paths.buildPath({ kind: "app", tab: "overview" }), "/app/overview");
   assert.equal(paths.buildPath({ kind: "app", tab: "mandates", mandateBuilder: true }), "/app/mandates/new");
   assert.equal(paths.buildPath({ kind: "verify", receiptPda: "PdaAddress1111111111111111111111111111" }), "/verify/PdaAddress1111111111111111111111111111");
+  assert.equal(paths.buildPath({ kind: "embed-overview", owner: "Owner1111111111111111111111111111111111111" }), "/embed/overview/Owner1111111111111111111111111111111111111");
   for (const tab of paths.DASHBOARD_TABS) assert.equal(paths.isDashboardTab(tab), true);
   assert.equal(paths.isDashboardTab("inbox"), false);
 });

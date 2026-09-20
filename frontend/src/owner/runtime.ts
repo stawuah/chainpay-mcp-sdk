@@ -231,6 +231,11 @@ export const coreToolReferences = [
     inputSchema: { type: "object", properties: { request: { type: "object" }, mandate: { type: "string" }, agent: { type: "string" } }, required: ["request", "mandate", "agent"], additionalProperties: false },
   },
   {
+    name: "get_spend_overview",
+    description: "Show spend, remaining allowance, and recent receipts for the connected wallet.",
+    inputSchema: { type: "object", properties: { owner: { type: "string" }, mandate: { type: "string" } }, additionalProperties: false },
+  },
+  {
     name: "get_mandate",
     description: "Read an on-chain ChainPay payment mandate and its current status.",
     inputSchema: { type: "object", properties: { address: { type: "string", description: "Mandate PDA address" } }, required: ["address"], additionalProperties: false },
@@ -254,6 +259,11 @@ export const coreToolReferences = [
     name: "execute_payment",
     description: "Settle through an explicit human or delegated signing path.",
     inputSchema: { type: "object", properties: { mandate: { type: "string" }, agent: { type: "string" }, recipient: { type: "string" }, amount: { type: "string" }, signingMode: { type: "string", enum: ["human", "delegated"] }, signedTransaction: { type: "string" } }, required: ["mandate", "agent", "recipient", "amount", "signingMode"], additionalProperties: false },
+  },
+  {
+    name: "list_receipts",
+    description: "List recent on-chain receipts for the connected wallet or one permission.",
+    inputSchema: { type: "object", properties: { owner: { type: "string" }, mandate: { type: "string" }, limit: { type: "string" } }, additionalProperties: false },
   },
   {
     name: "get_payment",

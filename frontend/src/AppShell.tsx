@@ -8,6 +8,11 @@ import { usePublicWallet } from "./wallet/public-session";
 const WalletController = lazy(() => import("./wallet/WalletController"));
 const AppWorkspace = lazy(() => import("./dashboard/AppWorkspace"));
 const VerifyPage = lazy(() => import("./verify/VerifyPage"));
+const EmbedOverview = lazy(() => import("./embed/EmbedOverview"));
+
+function isWalletlessRoute(kind: string) {
+  return kind === "verify" || kind === "embed-overview";
+}
 
 function RouteFallback() {
   return (
@@ -25,6 +30,14 @@ function Routes() {
     return (
       <Suspense fallback={<RouteFallback />}>
         <VerifyPage receiptPda={currentRoute.receiptPda} />
+      </Suspense>
+    );
+  }
+
+  if (currentRoute.kind === "embed-overview") {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <EmbedOverview owner={currentRoute.owner} />
       </Suspense>
     );
   }
@@ -71,11 +84,10 @@ function Shell() {
     />
   );
 
-  // /verify/<pda> exists so a finance reader with no wallet can open a receipt.
-  // Mounting WalletController around every route pulled its chunk —
-  // @solana/web3.js and @wallet-standard — onto that page anyway. The landing
-  // keeps it, because it does offer a connect action; verify never signs.
-  if (currentRoute.kind === "verify") {
+  // /verify/<pda> and /embed/overview exist so a finance reader with no wallet
+  // can open a receipt or spend snapshot. Mounting WalletController around
+  // every route pulled its chunk onto those pages anyway.
+  if (isWalletlessRoute(currentRoute.kind)) {
     return (
       <Suspense fallback={<RouteFallback />}>
         <Routes />

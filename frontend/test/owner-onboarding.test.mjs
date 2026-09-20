@@ -82,6 +82,8 @@ test("connection scope is limited to owned mandates and allowPayments is explici
   const readOnly = JSON.parse(scope.buildConnectionScope("owner-mandate", ownedMandates, false));
   assert.deepEqual(readOnly.mandates, ["owner-mandate"]);
   assert.equal(readOnly.tools.includes("execute_payment"), false);
+  assert.equal(readOnly.tools.includes("get_spend_overview"), true);
+  assert.equal(readOnly.tools.includes("list_receipts"), true);
 
   // mcp-server/src/authorization.ts pins scope.agents[mandate] against the
   // mandate's current approvedAgent. An empty map made that comparison

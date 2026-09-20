@@ -4,6 +4,7 @@ export * from "./constants.js";
 export * from "./delivery.js";
 export * from "./encoding.js";
 export * from "./mandate.js";
+export * from "./ops-snapshot.js";
 export * from "./payment.js";
 export * from "./payment-request.js";
 export * from "./pda.js";

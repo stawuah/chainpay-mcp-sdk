@@ -12,10 +12,10 @@ export const PUBLIC_CACHE_SCOPE = "public" as const;
 export const SERVER_INSTRUCTIONS = `ChainPay is the policy-controlled Solana payment rail for AI agents on Devnet. The owner wallet holds the funds. MCP never holds, receives, or asks for private keys, seed phrases, or connection tokens.
 
 Capability map:
-- Discover: list_mandates, get_mandate, get_protocol_config, get_asset, get_supported_assets, find_compatible_mandate
+- Discover: list_mandates, get_spend_overview, get_mandate, get_protocol_config, get_asset, get_supported_assets, find_compatible_mandate
 - Policy: create_mandate, update_mandate, pause_mandate, revoke_mandate
 - Quote and check: check_payment_requirements, quote_payment, quote_payment_request, verify_payment_request, create_demo_payment_request
-- Pay: prepare_payment, execute_payment, get_payment, wait_for_payment
+- Pay: prepare_payment, execute_payment, list_receipts, get_payment, wait_for_payment
 - x402: prepare_x402_payment, execute_x402_payment (primary verb for HTTPS 402 URLs)
 
 Connection scope:
@@ -30,7 +30,7 @@ Signing paths:
 - Delegated mode does not widen the policy. Per-payment cap, total allowance, payment count, cooldown, expiry, approved agent, and mandate status are enforced on-chain by the program on every payment.
 
 Primary flow:
-1. Inspect the connected spending permission before discussing any payment.
+1. Inspect spend first: call get_spend_overview, then list_receipts if the owner asks for history. Inspect one permission with get_mandate only when they name it.
 2. For invoices: verify the request, run check_payment_requirements (or quote_payment_request), then quote, then prepare, then execute.
 3. For gated URLs: execute_x402_payment with resource, mandate, agent, signingMode.
 4. After settlement: report the receipt address and share the public verify URL when one is returned.

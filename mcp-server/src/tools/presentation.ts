@@ -1,3 +1,12 @@
+import {
+  formatOpsMarkdown,
+  formatPaymentLookupMarkdown,
+  formatReceiptListMarkdown,
+  receiptUrlForAddress as snapshotReceiptUrl,
+  type OpsReceiptList,
+  type OpsSnapshot,
+  type PaymentLookupCard,
+} from "@chainpay/sdk";
 import { receiptUrlForAddress } from "../outcome.js";
 
 type RecordLike = Record<string, unknown>;
@@ -331,8 +340,36 @@ function fallbackPresentation(data: unknown, isError: boolean, headline?: string
   return `${title}\n\n\`\`\`json\n${json}\n\`\`\``;
 }
 
+function formatPaymentLookup(record: RecordLike): string {
+  const onChain = isRecord(record.onChain) ? record.onChain : undefined;
+  const display = isRecord(record.display) ? record.display : undefined;
+  const amounts = isRecord(display?.amounts) ? display.amounts : undefined;
+  const card: PaymentLookupCard = {
+    kind: "payment_lookup",
+    found: record.found === true,
+    receiptAddress: pickString(record.receiptAddress, onChain?.address),
+    amount: pickString(amounts?.amount),
+    symbol: pickString(display?.symbol),
+    status: pickString(onChain?.status, record.status),
+    signature: pickString(
+      isRecord(record.offChain) ? record.offChain.transactionSignature : undefined,
+      onChain?.transactionSignature,
+    ),
+    mandate: pickString(onChain?.mandate),
+    receiptUrl: receiptUrlForAddress(pickString(record.receiptAddress, onChain?.address))
+      ?? snapshotReceiptUrl(pickString(record.receiptAddress, onChain?.address), process.env.CHAINPAY_APP_URL),
+  };
+  return formatPaymentLookupMarkdown(card);
+}
+
 export function formatToolPresentation(data: unknown, isError = false): string {
   if (!isRecord(data)) return fallbackPresentation(data, isError);
+  if (data.kind === "spend_overview") return formatOpsMarkdown(data as OpsSnapshot);
+  if (data.kind === "receipt_list") return formatReceiptListMarkdown(data as OpsReceiptList);
+  if (data.kind === "payment_lookup" || (data.found === true && data.onChain !== undefined)) {
+    return formatPaymentLookup(data);
+  }
+  if (data.found === false && data.receiptAddress !== undefined) return formatPaymentLookup(data);
   if (Array.isArray(data.mandates) && data.owner !== undefined) return formatMandateList(data);
   if (data.compatible !== undefined && Array.isArray(data.candidates)) return formatCompatibleMandate(data);
   if (data.found === true && data.mandate !== undefined) return formatSingleMandate(data);

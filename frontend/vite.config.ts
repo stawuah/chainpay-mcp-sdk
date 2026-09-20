@@ -24,6 +24,7 @@ export default defineConfig({
           ) return "wallet";
           if (id.includes("/src/dashboard/") || id.includes("/src/owner/") || id.includes("/src/receipts/") || id.includes("/src/config/client") || id.includes("/sdk/") || id.includes("/src/settlement")) return "dashboard";
           if (id.includes("/src/verify/")) return "verify";
+          if (id.includes("/src/embed/")) return "embed";
           return undefined;
         },
       },

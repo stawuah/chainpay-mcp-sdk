@@ -80,9 +80,9 @@ discovery check without a token, send:
 > the result or error. Do not prepare, sign, or submit a payment.
 
 For a scoped private connection, prefer the dashboard first prompt: inspect
-`tools/list`, then `get_mandate` for the selected spending permission, and
-report status, token, remaining allowance, and what the owner can ask next—
-without preparing or submitting a payment.
+`tools/list`, then `get_spend_overview` (or `get_mandate` if that tool is
+missing), and report status, token, remaining allowance, recent receipts, and
+what the owner can ask next—without preparing or submitting a payment.
 
 **Expected:** the tool catalog and mandate summary in plain language, or an
 explicit RPC/auth error. Discovery can succeed while Devnet is unavailable.

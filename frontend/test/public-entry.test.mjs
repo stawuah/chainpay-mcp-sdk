@@ -90,6 +90,7 @@ test("AppShell does not statically import wallet connect or SDK client", async (
   assert.match(source, /lazy\(\(\) => import\("\.\/wallet\/WalletController"\)\)/);
   assert.match(source, /lazy\(\(\) => import\("\.\/dashboard\/AppWorkspace"\)\)/);
   assert.match(source, /lazy\(\(\) => import\("\.\/verify\/VerifyPage"\)\)/);
+  assert.match(source, /lazy\(\(\) => import\("\.\/embed\/EmbedOverview"\)\)/);
 });
 
 test("shared token UI does not import the dashboard owner layer", async () => {
@@ -156,11 +157,13 @@ test("the verify route renders without mounting WalletController", async () => {
   // WalletController is not enough if the shell mounts it on every route: the
   // chunk still downloads. The shell must branch before it.
   const source = await readFile(resolve(root, "AppShell.tsx"), "utf8");
-  const verifyBranch = source.indexOf('currentRoute.kind === "verify"');
+  const walletless = source.indexOf("isWalletlessRoute");
   const walletMount = source.indexOf("<WalletController>");
-  assert.notEqual(verifyBranch, -1, "AppShell must special-case the verify route");
+  assert.notEqual(walletless, -1, "AppShell must special-case wallet-free public routes");
+  assert.match(source, /kind === "verify"/);
+  assert.match(source, /kind === "embed-overview"/);
   assert.ok(
-    verifyBranch < walletMount,
-    "the verify route must return before WalletController is mounted",
+    walletless < walletMount,
+    "wallet-free routes must return before WalletController is mounted",
   );
 });

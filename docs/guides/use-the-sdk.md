@@ -57,12 +57,14 @@ read; verify the selected cluster and program before continuing.
 | Need | SDK entry point |
 | --- | --- |
 | Read an owner's mandates | `getMandatesByOwner(owner)` |
+| Read spend, remaining, and recent receipts | `loadOpsSnapshot(client, { owner })` |
 | Read one mandate | `getMandate(address)` |
 | Inspect allowed assets | `getSupportedAssets()` or `getSupportedAsset(mint)` |
 | Read a decoded payment receipt | `getPayment(receiptAddress)` |
 | Verify a settled receipt for public display | `readPublicReceipt(receiptAddress)` |
 | Prepare owner permission | `buildCreateMandate(input, owner)` |
 | Prepare a payment and inspect policy | `preparePayment(input, approvedAgent)` |
+| Terminal without the dashboard | `npx --prefix sdk chainpay status --owner <wallet>` |
 
 A PDA is a program-derived account address. A receipt PDA records a settlement;
 its address is derived from the mandate and invoice hash. Use validated receipt
@@ -106,6 +108,26 @@ Codec tests and generated local transactions establish implementation behavior.
 They do not establish acceptance by a deployed provider or Jupiter. See
 [implementation status](../project/implementation-status.md) for
 evidence and remaining live verification.
+
+## Terminal without the dashboard
+
+After the SDK build, the same snapshot the MCP cards use is available as a
+read-only CLI. It never signs or stores keys. Pause and revoke only print the
+owner-approval next step.
+
+```bash
+node sdk/dist/cli.js status --owner <wallet>
+node sdk/dist/cli.js receipts --owner <wallet>
+node sdk/dist/cli.js receipt <receipt-pda>
+node sdk/dist/cli.js pause <mandate> --owner <wallet>
+```
+
+`CHAINPAY_OWNER`, `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, and
+`CHAINPAY_APP_URL` are optional environment defaults. Add `--json` for the
+machine snapshot.
+
+A compact public widget also lives at `/embed/overview/<owner>` — spend meters
+and the latest receipt card, no wallet.
 
 ## Check your integration
 

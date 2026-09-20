@@ -119,6 +119,8 @@ test("implements MCP initialize and tool discovery", async () => {
   const tools = await server.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   assert.ok(tools.result.tools.some((tool) => tool.name === "execute_payment"));
   assert.ok(tools.result.tools.some((tool) => tool.name === "get_payment"));
+  assert.ok(tools.result.tools.some((tool) => tool.name === "get_spend_overview"));
+  assert.ok(tools.result.tools.some((tool) => tool.name === "list_receipts"));
   assert.ok(tools.result.tools.some((tool) => tool.name === "get_supported_assets"));
 });
 
