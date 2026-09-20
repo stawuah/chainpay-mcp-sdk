@@ -4,16 +4,9 @@ import { loadOpsSnapshot, type OpsSnapshot } from "@chainpay/sdk";
 import { publicReceiptClient } from "../config/client";
 import { SpendMeter } from "../dashboard/charts/SpendMeter";
 import { LoadedReceiptCard } from "../receipts/InboxReceipt";
-import { isPlausibleReceiptPda } from "../receipts/model";
+import { isPlausibleSolanaAddress } from "../receipts/model";
+import { useRoute } from "../routing/useRoute";
 import "./embed-overview.css";
-
-function navigateToOwner(owner: string) {
-  const path = owner.trim()
-    ? `/embed/overview/${encodeURIComponent(owner.trim())}`
-    : "/embed/overview";
-  window.history.pushState({}, "", path);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
 
 function OwnerEntry({ onSubmit }: { onSubmit: (owner: string) => void }) {
   const [value, setValue] = useState("");
@@ -41,8 +34,10 @@ function OwnerEntry({ onSubmit }: { onSubmit: (owner: string) => void }) {
 }
 
 export function EmbedOverview({ owner }: { owner: string }) {
+  const { navigate } = useRoute();
+  const navigateToOwner = (next: string) => navigate({ kind: "embed-overview", owner: next.trim() });
   const trimmed = owner.trim();
-  const plausible = trimmed.length > 0 && isPlausibleReceiptPda(trimmed);
+  const plausible = trimmed.length > 0 && isPlausibleSolanaAddress(trimmed);
   const [state, setState] = useState<
     | { kind: "idle" }
     | { kind: "loading" }

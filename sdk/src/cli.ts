@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ChainPayClient } from "./client.js";
 import { address } from "./encoding.js";
 import {
@@ -10,8 +12,8 @@ import {
   receiptListFromSnapshot,
   receiptUrlForAddress,
   tokenLabel,
-  humanTokenAmount,
 } from "./ops-snapshot.js";
+import type { Mandate, PreparedTransaction } from "./types.js";
 
 type Flags = {
   owner?: string;
@@ -24,7 +26,7 @@ type Flags = {
 
 function usage(): string {
   return [
-    "chainpay — read spend, receipts, and prepare pause/revoke without signing.",
+    "chainpay — read spend and receipts, and prepare pause/revoke without signing.",
     "",
     "Usage:",
     "  chainpay status [--owner <wallet>]",
@@ -34,6 +36,7 @@ function usage(): string {
     "  chainpay revoke <mandate> --owner <wallet>",
     "",
     "Flags: --owner --mandate --rpc --program --json --help",
+    "       --json prints the snapshot, or for pause/revoke the unsigned transaction.",
     "Env:   CHAINPAY_OWNER CHAINPAY_RPC_URL CHAINPAY_PROGRAM_ID CHAINPAY_APP_URL",
     "",
     "This CLI never signs, stores keys, or submits a transaction.",
@@ -80,6 +83,26 @@ function ownerFrom(flags: Flags, env: Env): string {
   return address(owner);
 }
 
+function mandateFilterFrom(flags: Flags): ((mandate: Mandate) => boolean) | undefined {
+  if (!flags.mandate) return undefined;
+  const wanted = address(flags.mandate);
+  return (mandate) => mandate.address === wanted;
+}
+
+/** The same shape the MCP pause_mandate tool returns, so a wallet flow can take either. */
+function serializeTransaction(transaction: PreparedTransaction) {
+  return {
+    feePayer: transaction.feePayer,
+    requiredSigners: transaction.requiredSigners,
+    instructions: transaction.instructions.map((item) => ({
+      name: item.name,
+      programId: item.programId,
+      keys: item.keys,
+      dataBase64: Buffer.from(item.data).toString("base64"),
+    })),
+  };
+}
+
 function print(value: unknown, text: string, asJson: boolean | undefined): void {
   if (asJson) {
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -102,7 +125,7 @@ export async function runChainPayCli(argv: string[], env: Env = process.env): Pr
     const owner = ownerFrom(flags, env);
     const snapshot = await loadOpsSnapshot(client, {
       owner,
-      mandateFilter: flags.mandate ? [address(flags.mandate)] : undefined,
+      mandateFilter: mandateFilterFrom(flags),
       appUrl,
     });
     print(snapshot, formatOpsAnsi(snapshot), flags.json);
@@ -113,7 +136,7 @@ export async function runChainPayCli(argv: string[], env: Env = process.env): Pr
     const owner = ownerFrom(flags, env);
     const snapshot = await loadOpsSnapshot(client, {
       owner,
-      mandateFilter: flags.mandate ? [address(flags.mandate)] : undefined,
+      mandateFilter: mandateFilterFrom(flags),
       appUrl,
     });
     const list = receiptListFromSnapshot(snapshot);
@@ -122,23 +145,18 @@ export async function runChainPayCli(argv: string[], env: Env = process.env): Pr
   }
 
   if (command === "receipt") {
-    const raw = positional[0] ?? flags.mandate;
+    const raw = positional[0];
     if (!raw) throw new Error("Pass a receipt PDA: chainpay receipt <pda>");
     const receiptAddress = address(raw);
     const proof = await client.readPublicReceipt(receiptAddress);
-    const found = proof.receipt.valid;
-    const symbol = found ? tokenLabel(proof.receipt.receipt.mint) : undefined;
-    const amount = proof.amount
-      ? humanTokenAmount(proof.receipt.valid ? proof.receipt.receipt.amount : 0n, proof.amount.decimals).display
-      : undefined;
     const card = {
       kind: "payment_lookup" as const,
-      found,
+      found: proof.receipt.valid,
       receiptAddress,
-      ...(found
+      ...(proof.receipt.valid
         ? {
-          amount,
-          symbol,
+          amount: proof.amount?.display,
+          symbol: tokenLabel(proof.receipt.receipt.mint),
           status: proof.receipt.receipt.status,
           mandate: proof.receipt.receipt.mandate,
           receiptUrl: receiptUrlForAddress(receiptAddress, appUrl),
@@ -146,7 +164,7 @@ export async function runChainPayCli(argv: string[], env: Env = process.env): Pr
         : {}),
     };
     print(card, formatPaymentLookupAnsi(card), flags.json);
-    return found ? 0 : 1;
+    return card.found ? 0 : 1;
   }
 
   if (command === "pause" || command === "revoke") {
@@ -154,13 +172,14 @@ export async function runChainPayCli(argv: string[], env: Env = process.env): Pr
     const raw = positional[0] ?? flags.mandate;
     if (!raw) throw new Error(`Pass a mandate PDA: chainpay ${command} <mandate> --owner <wallet>`);
     const mandate = address(raw);
-    if (command === "pause") client.buildPauseMandate(owner, mandate);
-    else client.buildRevokeMandate(owner, mandate);
+    const transaction = command === "pause"
+      ? client.buildPauseMandate(owner, mandate)
+      : client.buildRevokeMandate(owner, mandate);
     const card = {
       action: "owner_wallet_signature_required" as const,
       mandate,
       owner,
-      message: formatPreparePolicyAnsi(command, mandate),
+      transaction: serializeTransaction(transaction),
     };
     print(card, formatPreparePolicyAnsi(command, mandate), flags.json);
     return 0;
@@ -170,9 +189,11 @@ export async function runChainPayCli(argv: string[], env: Env = process.env): Pr
   return 1;
 }
 
-const invokedDirectly = import.meta.url === `file://${process.argv[1]}`
-  || process.argv[1]?.endsWith("/cli.js")
-  || process.argv[1]?.endsWith("\\cli.js");
+// Compare paths, not URLs: a space in the directory name is percent-encoded in
+// import.meta.url and literal in argv, and a suffix match would also fire for
+// any other package's cli.js that happens to import this module.
+const invokedDirectly = process.argv[1] !== undefined
+  && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
 if (invokedDirectly) {
   runChainPayCli(process.argv.slice(2)).then((code) => {

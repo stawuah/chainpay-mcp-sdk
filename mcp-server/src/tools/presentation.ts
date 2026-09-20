@@ -2,7 +2,6 @@ import {
   formatOpsMarkdown,
   formatPaymentLookupMarkdown,
   formatReceiptListMarkdown,
-  receiptUrlForAddress as snapshotReceiptUrl,
   type OpsReceiptList,
   type OpsSnapshot,
   type PaymentLookupCard,
@@ -356,8 +355,7 @@ function formatPaymentLookup(record: RecordLike): string {
       onChain?.transactionSignature,
     ),
     mandate: pickString(onChain?.mandate),
-    receiptUrl: receiptUrlForAddress(pickString(record.receiptAddress, onChain?.address))
-      ?? snapshotReceiptUrl(pickString(record.receiptAddress, onChain?.address), process.env.CHAINPAY_APP_URL),
+    receiptUrl: receiptUrlForAddress(pickString(record.receiptAddress, onChain?.address)),
   };
   return formatPaymentLookupMarkdown(card);
 }
@@ -366,10 +364,7 @@ export function formatToolPresentation(data: unknown, isError = false): string {
   if (!isRecord(data)) return fallbackPresentation(data, isError);
   if (data.kind === "spend_overview") return formatOpsMarkdown(data as OpsSnapshot);
   if (data.kind === "receipt_list") return formatReceiptListMarkdown(data as OpsReceiptList);
-  if (data.kind === "payment_lookup" || (data.found === true && data.onChain !== undefined)) {
-    return formatPaymentLookup(data);
-  }
-  if (data.found === false && data.receiptAddress !== undefined) return formatPaymentLookup(data);
+  if (data.kind === "payment_lookup") return formatPaymentLookup(data);
   if (Array.isArray(data.mandates) && data.owner !== undefined) return formatMandateList(data);
   if (data.compatible !== undefined && Array.isArray(data.candidates)) return formatCompatibleMandate(data);
   if (data.found === true && data.mandate !== undefined) return formatSingleMandate(data);

@@ -14,6 +14,10 @@ export default defineConfig({
             || id.includes("/src/wallet/public-session")
             || id.includes("/src/config/public")
             || id.includes("/src/config/knownAssets")
+            // The asset table has no imports of its own; keeping it here stops
+            // app-shared depending on the dashboard chunk that holds the SDK.
+            || id.includes("/sdk/dist/known-assets")
+            || id.includes("/sdk/src/known-assets")
           ) return "app-shared";
           if (
             id.includes("/src/session")

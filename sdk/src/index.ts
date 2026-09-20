@@ -3,6 +3,7 @@ export * from "./client.js";
 export * from "./constants.js";
 export * from "./delivery.js";
 export * from "./encoding.js";
+export * from "./known-assets.js";
 export * from "./mandate.js";
 export * from "./ops-snapshot.js";
 export * from "./payment.js";

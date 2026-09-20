@@ -18,7 +18,7 @@ export async function getPayment(
   const receipt = await context.client.getPayment(
     receiptAddress ?? { mandate: mandate as string, invoiceHash: invoiceHash as Uint8Array },
   );
-  if (!receipt) return toolResult({ found: false, receiptAddress }, true);
+  if (!receipt) return toolResult({ kind: "payment_lookup", found: false, receiptAddress }, true);
 
   const display = await displayTokenAmounts(context.client, receipt.mint, {
     amount: receipt.amount,
@@ -48,6 +48,7 @@ export async function getPayment(
     }
   }
   return toolResult({
+    kind: "payment_lookup",
     found: true,
     receiptAddress: receipt.address,
     onChain: receipt,

@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import type { Mandate } from "@chainpay/sdk";
 import type { ChainPayMcpContext } from "./tools/context.js";
 import type { McpConnectionRegistry } from "./connections.js";
 
@@ -31,6 +32,19 @@ export async function requestContext(base: ChainPayMcpContext, req: IncomingMess
     const active = await fetch(`${base.backendUrl!.replace(/\/$/, "")}/v1/auth/session`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
     if (!active.ok) throw new AuthorizationError("Wallet session expired. Sign in again.");
   } };
+}
+
+/**
+ * Whether a scoped connection may see this mandate at all. The scope pins the
+ * agent that was approved when the owner connected; a mandate whose agent has
+ * since changed stays hidden until the owner reconnects. Every list-shaped read
+ * (list_mandates, find_compatible_mandate, get_spend_overview, list_receipts)
+ * must apply this same test, so they never disagree about what exists.
+ */
+export function mandateInScope(context: ChainPayMcpContext): (mandate: Mandate) => boolean {
+  const scope = context.principal?.scope;
+  if (!scope) return () => true;
+  return (mandate) => scope.mandates.includes(mandate.address) && scope.agents[mandate.address] === mandate.approvedAgent;
 }
 
 export async function authorizeMandate(context: ChainPayMcpContext, address: string) {

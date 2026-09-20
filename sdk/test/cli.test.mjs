@@ -37,3 +37,33 @@ test("cli binary --help exits 0", () => {
 test("status without owner fails closed", async () => {
   await assert.rejects(runChainPayCli(["status"], {}), /CHAINPAY_OWNER|Pass --owner/);
 });
+
+// Real base58 keys: the CLI validates addresses before it builds anything.
+const OWNER_KEY = "4wvWX75iKx7TkT6B3mcazKZURywk3znTmCNfftcZ9Shp";
+const MANDATE_KEY = "GQ3Xh4QnLcZ3sGVxkLYX65tHh79ALx9ecjfLU3KaL7M3";
+
+test("pause --json prints the unsigned transaction and never submits", async () => {
+  const chunks = [];
+  const original = process.stdout.write;
+  process.stdout.write = (chunk) => {
+    chunks.push(String(chunk));
+    return true;
+  };
+  let code;
+  try {
+    code = await runChainPayCli([
+      "pause", MANDATE_KEY,
+      "--owner", OWNER_KEY,
+      "--json",
+    ], {});
+  } finally {
+    process.stdout.write = original;
+  }
+  assert.equal(code, 0);
+  const card = JSON.parse(chunks.join(""));
+  assert.equal(card.action, "owner_wallet_signature_required");
+  assert.deepEqual(card.transaction.requiredSigners, [OWNER_KEY]);
+  assert.equal(card.mandate, MANDATE_KEY);
+  assert.equal(card.transaction.instructions[0].name, "pause_mandate");
+  assert.match(card.transaction.instructions[0].dataBase64, /^[A-Za-z0-9+/]+=*$/);
+});

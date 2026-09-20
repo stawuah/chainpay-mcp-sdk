@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import * as sdk from "@chainpay/sdk";
 
@@ -11,14 +12,18 @@ const bundle = await build({
     contents: `export { callMcpTool } from "./src/owner/runtime";
       export { configureSession, setSessionWallet, ensureSessionReady } from "./src/session";
       export { listStoredOperations, reconcileSettlement, PendingSettlementError } from "./src/settlement";`,
-    resolveDir: new URL("..", import.meta.url).pathname,
+    // fileURLToPath, not .pathname: a space in the checkout path stays
+    // percent-encoded in a pathname and esbuild then resolves nothing.
+    resolveDir: fileURLToPath(new URL("..", import.meta.url)),
     loader: "ts",
   },
   bundle: true, write: false, platform: "node", format: "cjs",
   packages: "external", define: { "import.meta.env": "{}" },
 });
 const require = createRequire(import.meta.url);
-const loadDependency = name => name === "@chainpay/sdk" ? sdk : require(name);
+// The SDK index re-exports every subpath (e.g. @chainpay/sdk/known-assets),
+// so one loaded copy serves them all.
+const loadDependency = name => name === "@chainpay/sdk" || name.startsWith("@chainpay/sdk/") ? sdk : require(name);
 const args = {
   mandate: "fixture-mandate", invoiceHash: "ab".repeat(32),
   signingMode: "human", signedTransaction: "fixture-approved-bytes",

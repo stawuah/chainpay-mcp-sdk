@@ -8,8 +8,10 @@ owner can create a spending permission in one, and they are separate:
    off later. Every payment carries that account and is rejected unless it is
    enabled, so disabling a mint stops new payments in it immediately without
    touching anyone's mandates.
-2. **The dashboard can name it.** `frontend/src/owner/knownAssets.ts` maps a mint
-   to a label and a sort position.
+2. **The product can name it.** `sdk/src/known-assets.ts` maps a mint to a label
+   and a sort position. The dashboard, the MCP cards, the CLI and the public
+   embed all read that one table, so a row added there names the asset on every
+   surface at once.
 
 Only the first decides whether an asset can be paid. A mint that is enabled on
 chain but absent from the table still works; it is labelled by its address.

@@ -1,16 +1,18 @@
 import type { ChainPayClient } from "./client.js";
+import { assetLabel } from "./known-assets.js";
 import { formatExactTokenAmount } from "./receipt.js";
 import type { Address, Mandate, MandateStatus, PaymentReceipt, PaymentStatus } from "./types.js";
 
-/** Known Devnet demonstration mints. Unknown mints stay "tokens". */
-const TOKEN_LABELS: Record<string, string> = {
-  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU": "USDC",
-  "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM": "PYUSD",
-};
-
 export const DEFAULT_RECEIPT_LIMIT = 10;
 
-export type OpsAttentionKind = "expiring_soon" | "paused" | "exhausted" | "revoked";
+/**
+ * "Expires within about a day". Solana produces roughly 216,000 slots a day at
+ * ~400 ms each; the dashboard measures the live rate, this surface only needs
+ * a warning threshold.
+ */
+export const DEFAULT_EXPIRING_SOON_SLOTS = 216_000n;
+
+export type OpsAttentionKind = "expiring_soon" | "paused" | "exhausted" | "revoked" | "expired";
 
 export type OpsMintTotal = {
   mint: Address;
@@ -90,7 +92,8 @@ export type PaymentLookupCard = {
 
 export type LoadOpsSnapshotInput = {
   owner: Address;
-  mandateFilter?: readonly Address[];
+  /** Keep only the mandates this caller may see. Absent means every mandate the owner has. */
+  mandateFilter?: (mandate: Mandate) => boolean;
   receiptLimit?: number;
   appUrl?: string;
   currentSlot?: bigint;
@@ -98,7 +101,7 @@ export type LoadOpsSnapshotInput = {
 };
 
 export function tokenLabel(mint: Address): string {
-  return TOKEN_LABELS[mint] ?? "tokens";
+  return assetLabel(mint);
 }
 
 export function shortAddress(value: string | undefined): string {
@@ -141,7 +144,7 @@ export function buildOpsSnapshot(input: {
   expiringSoonSlots?: bigint;
 }): OpsSnapshot {
   const receiptLimit = input.receiptLimit ?? DEFAULT_RECEIPT_LIMIT;
-  const soon = input.expiringSoonSlots;
+  const soon = input.expiringSoonSlots ?? DEFAULT_EXPIRING_SOON_SLOTS;
   const mandates = input.mandates.map((mandate) => {
     const decimals = input.decimalsByMint[mandate.allowedMint] ?? null;
     const symbol = tokenLabel(mandate.allowedMint);
@@ -225,6 +228,12 @@ export function buildOpsSnapshot(input: {
         mandate: mandate.address,
         detail: "Revoked — settled receipts remain; the agent cannot spend.",
       });
+    } else if (mandate.status === "expired") {
+      attention.push({
+        kind: "expired",
+        mandate: mandate.address,
+        detail: "Expired — the agent cannot spend. Create a new permission in the dashboard.",
+      });
     } else if (mandate.status === "active" && remainingBase(mandate) === 0n && mandate.totalLimit > 0n) {
       attention.push({
         kind: "exhausted",
@@ -234,7 +243,6 @@ export function buildOpsSnapshot(input: {
     } else if (
       mandate.status === "active"
       && input.currentSlot !== undefined
-      && soon !== undefined
       && mandate.expiresAtSlot > input.currentSlot
       && mandate.expiresAtSlot - input.currentSlot <= soon
     ) {
@@ -263,9 +271,7 @@ export async function loadOpsSnapshot(
 ): Promise<OpsSnapshot> {
   const owner = options.owner;
   const loaded = await client.getMandatesByOwner(owner);
-  const mandates = options.mandateFilter
-    ? loaded.filter((mandate) => options.mandateFilter!.includes(mandate.address))
-    : loaded;
+  const mandates = options.mandateFilter ? loaded.filter(options.mandateFilter) : loaded;
   const receipts = (await Promise.all(mandates.map((mandate) => client.getPaymentsByMandate(mandate.address)))).flat();
   const mints = [...new Set([
     ...mandates.map((mandate) => mandate.allowedMint),

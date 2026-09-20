@@ -227,6 +227,7 @@ test("formatToolPresentation renders spend overview and receipt list cards", () 
 test("get_payment lookup renders the receipt card instead of fenced JSON", () => {
   process.env.CHAINPAY_APP_URL = "https://chainpay.example";
   const text = formatToolPresentation({
+    kind: "payment_lookup",
     found: true,
     receiptAddress: RECEIPT,
     onChain: { address: RECEIPT, mandate: MANDATE, status: "confirmed", transactionSignature: "Sig1111111111111111111111111111111111111111" },
@@ -237,6 +238,12 @@ test("get_payment lookup renders the receipt card instead of fenced JSON", () =>
   assert.match(text, /4\.5 USDC/);
   assert.match(text, /verify/);
   assert.doesNotMatch(text, /```json/);
+});
+
+test("a get_payment miss by mandate and invoice hash is a missing receipt, not a missing permission", () => {
+  const text = formatToolPresentation({ kind: "payment_lookup", found: false, receiptAddress: undefined }, true);
+  assert.match(text, /Receipt not found/);
+  assert.doesNotMatch(text, /Spending permission not found/);
 });
 
 test("an unsupported sponsor card does not promise a tool this server does not have", () => {

@@ -77,9 +77,12 @@ export type ReceiptStamp = {
   tone: StampTone;
 };
 
-export function isPlausibleReceiptPda(value: string): boolean {
+/** Base58 of the right length. Says nothing about what the address is. */
+export function isPlausibleSolanaAddress(value: string): boolean {
   return SOLANA_ADDRESS_PATTERN.test(value.trim());
 }
+
+export const isPlausibleReceiptPda = isPlausibleSolanaAddress;
 
 export function classifyReceiptPda(value: string): "empty" | "malformed" | "plausible" {
   const trimmed = value.trim();

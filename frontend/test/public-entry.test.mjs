@@ -97,9 +97,15 @@ test("shared token UI does not import the dashboard owner layer", async () => {
   // Vite places src/ui in app-shared and src/owner in dashboard. Crossing that
   // boundary made both generated chunks import each other, so AppShell failed
   // before React could render either the landing page or /app.
-  const { visited } = await collectSpecifiers("ui/TokenIcon.tsx");
+  const { visited, specifiers } = await collectSpecifiers("ui/TokenIcon.tsx");
   const ownerModules = [...visited].filter((file) => file.includes("/src/owner/"));
   assert.deepEqual(ownerModules, [], "app-shared token UI must not pull in the dashboard owner chunk");
+  // The SDK proper sits in the dashboard chunk too. The asset table is the one
+  // SDK module app-shared may reach, and vite.config.ts places it there.
+  const sdkImports = specifiers.filter((value) => value.includes("@chainpay/sdk"));
+  assert.deepEqual([...new Set(sdkImports)], ["@chainpay/sdk/known-assets"]);
+  const vite = await readFile(resolve(root, "../vite.config.ts"), "utf8");
+  assert.match(vite, /\/sdk\/dist\/known-assets/);
 });
 
 test("a component stylesheet does not restyle the whole app", async () => {

@@ -112,8 +112,10 @@ evidence and remaining live verification.
 ## Terminal without the dashboard
 
 After the SDK build, the same snapshot the MCP cards use is available as a
-read-only CLI. It never signs or stores keys. Pause and revoke only print the
-owner-approval next step.
+read-only CLI. It never signs, stores keys, or submits. Pause and revoke print
+the owner-approval next step; with `--json` they also print the unsigned
+transaction (the same shape the MCP `pause_mandate` tool returns) for a wallet
+flow to sign.
 
 ```bash
 node sdk/dist/cli.js status --owner <wallet>
@@ -124,7 +126,8 @@ node sdk/dist/cli.js pause <mandate> --owner <wallet>
 
 `CHAINPAY_OWNER`, `CHAINPAY_RPC_URL`, `CHAINPAY_PROGRAM_ID`, and
 `CHAINPAY_APP_URL` are optional environment defaults. Add `--json` for the
-machine snapshot.
+machine snapshot. Token symbols come from the same table the dashboard uses,
+`sdk/src/known-assets.ts`, so an asset named once is named everywhere.
 
 A compact public widget also lives at `/embed/overview/<owner>` — spend meters
 and the latest receipt card, no wallet.

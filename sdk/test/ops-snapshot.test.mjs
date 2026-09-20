@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  DEFAULT_EXPIRING_SOON_SLOTS,
   buildOpsSnapshot,
   formatOpsAnsi,
   formatOpsMarkdown,
@@ -104,15 +105,49 @@ test("attention flags paused, exhausted, and expiring mandates", () => {
   assert.equal(exhausted.attention[0].kind, "exhausted");
   assert.equal(exhausted.totals[0].remaining, "0");
 
+  // No caller passes expiringSoonSlots, so the default must be what fires.
   const expiring = buildOpsSnapshot({
     owner: OWNER,
-    mandates: [mandate({ expiresAtSlot: 300_100n })],
+    mandates: [mandate({ expiresAtSlot: 300_000n + DEFAULT_EXPIRING_SOON_SLOTS })],
     receipts: [],
     decimalsByMint: { [USDC]: 6 },
     currentSlot: 300_000n,
-    expiringSoonSlots: 216_000n,
   });
   assert.equal(expiring.attention[0].kind, "expiring_soon");
+
+  const later = buildOpsSnapshot({
+    owner: OWNER,
+    mandates: [mandate({ expiresAtSlot: 300_001n + DEFAULT_EXPIRING_SOON_SLOTS })],
+    receipts: [],
+    decimalsByMint: { [USDC]: 6 },
+    currentSlot: 300_000n,
+  });
+  assert.deepEqual(later.attention, []);
+
+  // getMandatesByOwner already derives "expired"; the snapshot must say why
+  // the mandate dropped out of the remaining total instead of hiding it.
+  const expired = buildOpsSnapshot({
+    owner: OWNER,
+    mandates: [mandate({ status: "expired", expiresAtSlot: 100n })],
+    receipts: [],
+    decimalsByMint: { [USDC]: 6 },
+    currentSlot: 300_000n,
+  });
+  assert.equal(expired.attention[0].kind, "expired");
+  assert.equal(expired.totals[0].remaining, "0");
+  assert.match(formatOpsMarkdown(expired), /Expired/);
+});
+
+test("labels come from the shared asset table, so USDG reads the same as the dashboard", () => {
+  const USDG = "4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7";
+  const snapshot = buildOpsSnapshot({
+    owner: OWNER,
+    mandates: [mandate({ allowedMint: USDG })],
+    receipts: [],
+    decimalsByMint: { [USDG]: 6 },
+  });
+  assert.equal(snapshot.mandates[0].symbol, "USDG");
+  assert.equal(snapshot.totals[0].symbol, "USDG");
 });
 
 test("formatters render cards instead of raw JSON", () => {

@@ -1,15 +1,22 @@
-import { loadOpsSnapshot, receiptListFromSnapshot } from "@chainpay/sdk";
+import { loadOpsSnapshot, receiptListFromSnapshot, type Mandate } from "@chainpay/sdk";
+import { mandateInScope } from "../authorization.js";
 import type { ChainPayMcpContext } from "./context.js";
 import { solanaAddress, toolResult, unsignedInteger } from "./common.js";
 
-function scopedMandateFilter(context: ChainPayMcpContext, requested?: string): string[] | undefined {
-  const scope = context.principal?.scope;
-  if (requested) {
-    if (scope && !scope.mandates.includes(requested)) return [];
-    return [requested];
-  }
-  if (!scope) return undefined;
-  return scope.mandates.filter((address) => scope.agents[address]);
+// authorizeTool has already proved a requested mandate is owned, in scope and
+// still bound to the approved agent. Without one, the snapshot shows exactly
+// the mandates list_mandates would.
+function mandateFilter(context: ChainPayMcpContext, requested?: string): (mandate: Mandate) => boolean {
+  const inScope = mandateInScope(context);
+  if (!requested) return inScope;
+  return (mandate) => mandate.address === requested && inScope(mandate);
+}
+
+function receiptLimit(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  const limit = unsignedInteger(value, "limit");
+  if (limit === 0n) throw new Error("limit must be at least 1");
+  return Number(limit);
 }
 
 export async function getSpendOverview(
@@ -20,7 +27,7 @@ export async function getSpendOverview(
   const requested = args.mandate === undefined ? undefined : solanaAddress(args.mandate, "mandate");
   const snapshot = await loadOpsSnapshot(context.client, {
     owner,
-    mandateFilter: scopedMandateFilter(context, requested),
+    mandateFilter: mandateFilter(context, requested),
     appUrl: process.env.CHAINPAY_APP_URL,
   });
   return toolResult(snapshot);
@@ -32,11 +39,10 @@ export async function listReceipts(
 ) {
   const owner = solanaAddress(args.owner, "owner");
   const requested = args.mandate === undefined ? undefined : solanaAddress(args.mandate, "mandate");
-  const limit = args.limit === undefined ? undefined : Number(unsignedInteger(args.limit, "limit"));
   const snapshot = await loadOpsSnapshot(context.client, {
     owner,
-    mandateFilter: scopedMandateFilter(context, requested),
-    receiptLimit: limit,
+    mandateFilter: mandateFilter(context, requested),
+    receiptLimit: receiptLimit(args.limit),
     appUrl: process.env.CHAINPAY_APP_URL,
   });
   return toolResult(receiptListFromSnapshot(snapshot));

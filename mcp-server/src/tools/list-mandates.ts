@@ -1,6 +1,7 @@
 import { PublicKey } from "@solana/web3.js";
 import type { Address, Mandate, TokenProgram } from "@chainpay/sdk";
 import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@chainpay/sdk";
+import { mandateInScope } from "../authorization.js";
 import type { ChainPayMcpContext } from "./context.js";
 import { solanaAddress, tokenProgram, toolResult, unsignedInteger } from "./common.js";
 import { displayTokenAmounts } from "./token-amount.js";
@@ -83,7 +84,7 @@ export async function listMandates(
   args: Record<string, unknown>,
 ) {
   const owner = solanaAddress(args.owner, "owner");
-  const mandates = (await context.client.getMandatesByOwner(owner)).filter(mandate => !context.principal?.scope || (context.principal.scope.mandates.includes(mandate.address) && context.principal.scope.agents[mandate.address] === mandate.approvedAgent));
+  const mandates = (await context.client.getMandatesByOwner(owner)).filter(mandateInScope(context));
   const sourceCache = new Map<Address, Promise<TokenAccountState>>();
   const displayCache = new Map<Address, Promise<Awaited<ReturnType<typeof displayTokenAmounts>>>>();
   const presented = await Promise.all(mandates.map((mandate) => cachedPresentMandate(context, mandate, sourceCache, displayCache)));
@@ -101,7 +102,7 @@ export async function findCompatibleMandate(
     ? undefined
     : tokenProgram(args.tokenProgram);
   const agent = args.agent === undefined ? undefined : solanaAddress(args.agent, "agent");
-  const mandates = (await context.client.getMandatesByOwner(owner)).filter(mandate => !context.principal?.scope || (context.principal.scope.mandates.includes(mandate.address) && context.principal.scope.agents[mandate.address] === mandate.approvedAgent));
+  const mandates = (await context.client.getMandatesByOwner(owner)).filter(mandateInScope(context));
   const sourceCache = new Map<Address, Promise<TokenAccountState>>();
   const displayCache = new Map<Address, Promise<Awaited<ReturnType<typeof displayTokenAmounts>>>>();
   const candidates = await Promise.all(mandates.map(async (mandate) => {
