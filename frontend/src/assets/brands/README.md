@@ -13,6 +13,32 @@ Retrieved 2026-09-15. No recoloring, cropping, tracing, outlines or logo shadows
   performing at render time, done once at build time instead. No recolor, no crop,
   no trace. Re-fetch the URL above for the untouched original.
 
+## Wanted: EURC and USDG
+
+Both are registered and enabled on Devnet. Neither has artwork here, so each
+Both are registered and enabled on Devnet. Neither has artwork here, so each
+shows the neutral coin mark instead of an issuer's own. That mark makes no
+claim about who issued the money. Nothing is broken until these arrive.
+stand in for an issuer. Nothing is broken until these arrive.
+
+- `eurc.svg` — Circle's own EURC token mark. Same brand kit that supplied
+  `usdc.svg`: https://www.circle.com/pressroom
+- `usdg.png` or `usdg.svg` — Paxos' own Global Dollar mark. Same documentation
+  family that supplied `pyusd.png`: https://docs.paxos.com/guides/stablecoin/usdg
+
+For each file:
+
+1. Put it in this folder, unmodified. If it must be resampled, say so in its
+   entry the way `pyusd.png` does, and change nothing else about the image.
+2. Add an entry above with the exact source URL and the page that links it.
+3. Add one line to `artworkByLabel` in `frontend/src/ui/TokenIcon.tsx`, keyed by
+3. Add one line to `artworkByLabel` in `frontend/src/ui/TokenIcon.tsx`, keyed by
+   the label (`EURC`, `USDG`) exactly as the known-assets table spells it, not by
+   a mint. One file covers every cluster.
+
+That is the whole change. The glyph disappears on its own once the label has
+artwork.
+
 All trademarks belong to their respective owners. No generated or traced logos.
 
 ## Official wallet artwork · 2026-09-15
