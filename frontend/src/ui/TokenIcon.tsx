@@ -1,6 +1,8 @@
 import { Coins } from "lucide-react";
 import usdc from "../assets/brands/usdc.svg";
 import pyusd from "../assets/brands/pyusd.png";
+import eurc from "../assets/brands/eurc.svg";
+import usdg from "../assets/brands/usdg.svg";
 import solana from "../assets/brands/solana.svg";
 import { KNOWN_ASSETS, knownAsset } from "../config/knownAssets";
 
@@ -12,6 +14,8 @@ import { KNOWN_ASSETS, knownAsset } from "../config/knownAssets";
 const artworkByLabel: Record<string, string> = {
   USDC: usdc,
   PYUSD: pyusd,
+  EURC: eurc,
+  USDG: usdg,
 };
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";

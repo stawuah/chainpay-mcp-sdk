@@ -3,7 +3,7 @@ import { authorizedFetch, RequestNotSentError, type WalletBinding } from "../ses
 import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveVersionedMandateAddress, toWeb3Transaction } from "@chainpay/sdk";
 import type { ChainPayInstruction, Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, SupportedAsset, TokenProgram } from "@chainpay/sdk";
 import { PublicKey, type Transaction } from "@solana/web3.js";
-import { AGENT_URL, BACKEND_URL, DEVNET_PYUSD_TOKEN_2022_MINT, DEVNET_USDC_MINT, MCP_URL, PROGRAM_ID } from "../config/public";
+import { AGENT_URL, BACKEND_URL, DEVNET_EURC_MINT, DEVNET_PYUSD_TOKEN_2022_MINT, DEVNET_USDC_MINT, DEVNET_USDG_TOKEN_2022_MINT, MCP_URL, PROGRAM_ID } from "../config/public";
 import { chainpayClient } from "../config/client";
 import { tokenProgramAccountType } from "./tokenAccounts";
 import { settlementKey } from "./settlementKey";
@@ -950,8 +950,10 @@ export async function resolvePaymentDestination(
 export {
   AGENT_URL,
   BACKEND_URL,
+  DEVNET_EURC_MINT,
   DEVNET_PYUSD_TOKEN_2022_MINT,
   DEVNET_USDC_MINT,
+  DEVNET_USDG_TOKEN_2022_MINT,
   MCP_URL,
   PROGRAM_ID,
   chainpayClient,

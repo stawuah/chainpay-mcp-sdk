@@ -18,6 +18,8 @@ import { PublicKey, type Transaction } from "@solana/web3.js";
 import solWalletImage from "../assets/brands/solana.svg";
 import usdcWalletImage from "../assets/brands/usdc.svg";
 import pyusdWalletImage from "../assets/brands/pyusd.png";
+import eurcWalletImage from "../assets/brands/eurc.svg";
+import usdgWalletImage from "../assets/brands/usdg.svg";
 import { buildPath, type DashboardTab } from "../routing/paths";
 import { useRoute } from "../routing/useRoute";
 import { RecordDetails } from "../ui/RecordDetails";
@@ -73,8 +75,10 @@ import { catalogQuoteForProvider, fetchPayshCatalog, type PayshCatalogProvider }
 import {
   AGENT_URL,
   BACKEND_URL,
+  DEVNET_EURC_MINT,
   DEVNET_PYUSD_TOKEN_2022_MINT,
   DEVNET_USDC_MINT,
+  DEVNET_USDG_TOKEN_2022_MINT,
   MCP_URL,
   PROGRAM_ID,
   chainpayClient,
@@ -184,22 +188,26 @@ export type DashboardProps = {
 };
 
 type WalletAssetSummary = {
-  symbol: "SOL" | "USDC" | "PYUSD";
+  symbol: "SOL" | "USDC" | "PYUSD" | "EURC" | "USDG";
   address: string;
   balance: string;
   exists: boolean;
   loading: boolean;
 };
 
-const walletAssetDefinitions: Array<{ symbol: "USDC" | "PYUSD"; mint: string; tokenProgram: TokenProgram }> = [
+const walletAssetDefinitions: Array<{ symbol: "USDC" | "PYUSD" | "EURC" | "USDG"; mint: string; tokenProgram: TokenProgram }> = [
   { symbol: "USDC", mint: DEVNET_USDC_MINT, tokenProgram: "spl-token" },
   { symbol: "PYUSD", mint: DEVNET_PYUSD_TOKEN_2022_MINT, tokenProgram: "token-2022" },
+  { symbol: "EURC", mint: DEVNET_EURC_MINT, tokenProgram: "spl-token" },
+  { symbol: "USDG", mint: DEVNET_USDG_TOKEN_2022_MINT, tokenProgram: "token-2022" },
 ];
 
 const walletAssetImages = {
   SOL: solWalletImage,
   USDC: usdcWalletImage,
   PYUSD: pyusdWalletImage,
+  EURC: eurcWalletImage,
+  USDG: usdgWalletImage,
 } as const;
 
 export function Dashboard({
