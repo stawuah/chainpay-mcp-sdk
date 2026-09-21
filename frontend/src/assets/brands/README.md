@@ -32,7 +32,6 @@ For each file:
    entry the way `pyusd.png` does, and change nothing else about the image.
 2. Add an entry above with the exact source URL and the page that links it.
 3. Add one line to `artworkByLabel` in `frontend/src/ui/TokenIcon.tsx`, keyed by
-3. Add one line to `artworkByLabel` in `frontend/src/ui/TokenIcon.tsx`, keyed by
    the label (`EURC`, `USDG`) exactly as the known-assets table spells it, not by
    a mint. One file covers every cluster.
 
