@@ -27,6 +27,8 @@ export function getStaticAsset(routePath: string): StaticAsset | undefined {
     "/assets/brands/usdc.svg": "assets/brands/usdc.svg",
     "/assets/brands/solana.svg": "assets/brands/solana.svg",
     "/assets/brands/pyusd.png": "assets/brands/pyusd.png",
+    "/assets/brands/eurc.svg": "assets/brands/eurc.svg",
+    "/assets/brands/usdg.svg": "assets/brands/usdg.svg",
   };
   const relative = map[routePath];
   if (!relative) return undefined;

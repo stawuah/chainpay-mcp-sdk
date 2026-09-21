@@ -72,3 +72,13 @@ test("an unnamed mint is labelled with the neutral word, not a guessed ticker", 
   assert.equal(assetLabel(DEVNET.USDG), "USDG");
   assert.equal(assetLabel("So11111111111111111111111111111111111111112"), "tokens");
 });
+
+test("every named asset has verified artwork", async () => {
+  // TokenIcon falls back to a neutral mark rather than invent one, so a named
+  // asset with no artwork is silent — this is the only thing that reads it.
+  const source = await readFile(new URL("../src/ui/TokenIcon.tsx", import.meta.url), "utf8");
+  const artwork = source.slice(source.indexOf("artworkByLabel"), source.indexOf("SOL_MINT"));
+  for (const asset of KNOWN_ASSETS) {
+    assert.match(artwork, new RegExp(`\\b${asset.label}:`), `${asset.label} has no artwork`);
+  }
+});

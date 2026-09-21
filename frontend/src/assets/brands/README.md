@@ -4,6 +4,7 @@ Retrieved 2026-09-15. No recoloring, cropping, tracing, outlines or logo shadows
 
 - `solana.svg`: https://solana.com/src/img/branding/solanaLogoMark.svg — linked by https://solana.com/branding . Preserve clearspace and original gradient.
 - `usdc.svg`: `Token Logo/USDC Token.svg` from https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/Pressroom/brandkit/logo-downloads/usdc.zip — linked by https://www.circle.com/pressroom . Token mark displayed at least 32px high with clearspace.
+- `eurc.svg`: `Token Logo/EURC Token.svg` from https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/Pressroom/brandkit/logo-downloads/eurc.zip — linked by https://www.circle.com/pressroom (retrieved 2026-09-21). Same kit layout, and the same clearspace and 32px minimum rule, as `usdc.svg`.
 - `pyusd.png`: https://mintcdn.com/paxos-0ac97319/Vwn6v0Q_snwFVgjM/images/pyusd_logo.png — embedded by issuer documentation https://docs.paxos.com/guides/stablecoin/pyusd .
   The supplied file is 513x512, 16-bit RGBA, 35.7 kB. It is displayed at 36px and
   44px (`.asset-mark` in landing.css), so shipping 513px at 16-bit sent roughly
@@ -12,32 +13,14 @@ Retrieved 2026-09-15. No recoloring, cropping, tracing, outlines or logo shadows
   Alpha is preserved. That is a resample only — the same operation the browser was
   performing at render time, done once at build time instead. No recolor, no crop,
   no trace. Re-fetch the URL above for the untouched original.
-
-## Wanted: EURC and USDG
-
-Both are registered and enabled on Devnet. Neither has artwork here, so each
-Both are registered and enabled on Devnet. Neither has artwork here, so each
-shows the neutral coin mark instead of an issuer's own. That mark makes no
-claim about who issued the money. Nothing is broken until these arrive.
-stand in for an issuer. Nothing is broken until these arrive.
-
-- `eurc.svg` — Circle's own EURC token mark. Same brand kit that supplied
-  `usdc.svg`: https://www.circle.com/pressroom
-- `usdg.png` or `usdg.svg` — Paxos' own Global Dollar mark. Same documentation
-  family that supplied `pyusd.png`: https://docs.paxos.com/guides/stablecoin/usdg
-
-For each file:
-
-1. Put it in this folder, unmodified. If it must be resampled, say so in its
-   entry the way `pyusd.png` does, and change nothing else about the image.
-2. Add an entry above with the exact source URL and the page that links it.
-3. Add one line to `artworkByLabel` in `frontend/src/ui/TokenIcon.tsx`, keyed by
-3. Add one line to `artworkByLabel` in `frontend/src/ui/TokenIcon.tsx`, keyed by
-   the label (`EURC`, `USDG`) exactly as the known-assets table spells it, not by
-   a mint. One file covers every cluster.
-
-That is the whole change. The glyph disappears on its own once the label has
-artwork.
+- `usdg.svg`: `USDG Token/SVG/GDN_USDG_Token.svg` from the "USDG Token Logo" download on https://globaldollar.com/brand (retrieved 2026-09-21); that button resolves to https://framerusercontent.com/assets/llo5qqG8OQbvOU2QpFJPTdUyn0.zip . Stored byte-for-byte as supplied.
+  Paxos' own USDG documentation embeds a raster; the Global Dollar brand page is
+  the issuer's vector source and states the usage rules, so it was used instead.
+  The page permits the token mark only in its primary green-on-green colorway
+  (`#314012` disc, `#C7E36C` mark) and asks that clearspace be kept, so it is not
+  recolored for ChainPay's dark surfaces and the reversed mark is not substituted.
+  The same page publishes this mark as a 32x32 PNG; the vector is used because the
+  landing strip draws it at 44px.
 
 All trademarks belong to their respective owners. No generated or traced logos.
 
