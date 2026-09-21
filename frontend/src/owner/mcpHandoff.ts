@@ -21,8 +21,10 @@ export function buildMcpFirstPrompt(handoff: McpConnectionHandoff): string {
     "",
     "Start read-only:",
     "1. Confirm ChainPay tools are available (tools/list).",
-    `2. Call get_mandate with address "${handoff.mandateAddress}" for ${permissionLabel}.`,
-    "3. Report in plain language: mandate status, token, remaining allowance, per-payment cap, and what I can ask next.",
+    "2. Call get_spend_overview. If that tool is missing, call get_mandate"
+      + ` with address "${handoff.mandateAddress}" for ${permissionLabel}.`,
+    "3. Report in plain language: mandate status, token, remaining allowance, per-payment cap, recent receipts, and what I can ask next.",
+    "4. Offer to call list_receipts or prepare a pause. Pause and revoke still need my wallet in the dashboard.",
     "",
     accessLine,
     "Do not prepare, sign, or submit a payment until I explicitly ask.",

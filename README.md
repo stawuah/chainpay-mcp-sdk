@@ -106,6 +106,7 @@ include the branch and failing step, without credentials or wallet secrets.
 After a successful payment, the dashboard shows the same human-readable
 **ReceiptCard** as the public verify flow — not Explorer-only success.
 
+- **In-context ops:** MCP `get_spend_overview` / `list_receipts`, `chainpay status` in the terminal, or `/embed/overview/<owner>` — same spend and receipts without opening the dashboard. Pause and revoke still sign in the owner wallet.
 - **Stranger verify:** landing **See a receipt** → `/verify` paste or
   `/verify/:pda` — no wallet required.
 - **Owner deep link:** `/app/receipts/:pda` opens the inbox receipt card when

@@ -113,6 +113,7 @@ MCP tools:
 
 ~~~
 get_mandate
+get_spend_overview
 get_protocol_config
 get_asset
 create_mandate
@@ -122,6 +123,7 @@ quote_payment
 verify_payment_request
 prepare_x402_payment
 execute_payment
+list_receipts
 get_payment
 wait_for_payment
 pause_mandate

@@ -90,15 +90,22 @@ test("AppShell does not statically import wallet connect or SDK client", async (
   assert.match(source, /lazy\(\(\) => import\("\.\/wallet\/WalletController"\)\)/);
   assert.match(source, /lazy\(\(\) => import\("\.\/dashboard\/AppWorkspace"\)\)/);
   assert.match(source, /lazy\(\(\) => import\("\.\/verify\/VerifyPage"\)\)/);
+  assert.match(source, /lazy\(\(\) => import\("\.\/embed\/EmbedOverview"\)\)/);
 });
 
 test("shared token UI does not import the dashboard owner layer", async () => {
   // Vite places src/ui in app-shared and src/owner in dashboard. Crossing that
   // boundary made both generated chunks import each other, so AppShell failed
   // before React could render either the landing page or /app.
-  const { visited } = await collectSpecifiers("ui/TokenIcon.tsx");
+  const { visited, specifiers } = await collectSpecifiers("ui/TokenIcon.tsx");
   const ownerModules = [...visited].filter((file) => file.includes("/src/owner/"));
   assert.deepEqual(ownerModules, [], "app-shared token UI must not pull in the dashboard owner chunk");
+  // The SDK proper sits in the dashboard chunk too. The asset table is the one
+  // SDK module app-shared may reach, and vite.config.ts places it there.
+  const sdkImports = specifiers.filter((value) => value.includes("@chainpay/sdk"));
+  assert.deepEqual([...new Set(sdkImports)], ["@chainpay/sdk/known-assets"]);
+  const vite = await readFile(resolve(root, "../vite.config.ts"), "utf8");
+  assert.match(vite, /\/sdk\/dist\/known-assets/);
 });
 
 test("a component stylesheet does not restyle the whole app", async () => {
@@ -156,11 +163,13 @@ test("the verify route renders without mounting WalletController", async () => {
   // WalletController is not enough if the shell mounts it on every route: the
   // chunk still downloads. The shell must branch before it.
   const source = await readFile(resolve(root, "AppShell.tsx"), "utf8");
-  const verifyBranch = source.indexOf('currentRoute.kind === "verify"');
+  const walletless = source.indexOf("isWalletlessRoute");
   const walletMount = source.indexOf("<WalletController>");
-  assert.notEqual(verifyBranch, -1, "AppShell must special-case the verify route");
+  assert.notEqual(walletless, -1, "AppShell must special-case wallet-free public routes");
+  assert.match(source, /kind === "verify"/);
+  assert.match(source, /kind === "embed-overview"/);
   assert.ok(
-    verifyBranch < walletMount,
-    "the verify route must return before WalletController is mounted",
+    walletless < walletMount,
+    "wallet-free routes must return before WalletController is mounted",
   );
 });

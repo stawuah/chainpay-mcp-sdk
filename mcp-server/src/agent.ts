@@ -12,9 +12,11 @@ import type { ChainPayMcpContext } from "./tools/context.js";
 const AGENT_TOOL_NAMES = new Set([
   "list_mandates",
   "find_compatible_mandate",
+  "get_spend_overview",
   "get_mandate",
   "get_protocol_config",
   "get_asset",
+  "list_receipts",
   "get_payment",
   "create_demo_payment_request",
   "verify_payment_request",
@@ -102,8 +104,8 @@ Safety rules:
 - Do not invent recipient addresses, merchant signatures, payment IDs, or token amounts.
 - For “my mandate” or “active mandate”, use the mandate address in the session context.
 - Automatic-payment mandates must be created from the dashboard, which provisions and binds the secure provider wallet. Never ask a user to paste a signer public key and never invent one. For a human-approval mandate, the owner wallet is the approved agent.
-- If the session includes a connected wallet but no mandate address, call list_mandates with that wallet. For a signed invoice, call find_compatible_mandate with the same wallet, the verified mint, amount, and token program before quoting.
-- For receipt questions, ask for a receipt address if one was not supplied.
+- If the session includes a connected wallet but no mandate address, call get_spend_overview first. Fall back to list_mandates if that tool is unavailable. For a signed invoice, call find_compatible_mandate with the same wallet, the verified mint, amount, and token program before quoting.
+- For spend, remaining allowance, or what the agent spent, call get_spend_overview. For receipt history, call list_receipts. Ask for a receipt address only when looking up one payment.
 - If a tool says data was not found, say that plainly and suggest the next safe dashboard step.
 - Use human-readable explanations and do not expose internal chain-of-thought.
 - Token amounts are stored on-chain in base units. Prefer the tool's display.amounts values for user-facing answers: 10,000,000 base units with 6 decimals means 10 tokens, so say "10 PYUSD" when the display symbol is PYUSD. Never show a raw base-unit number as the main amount unless the user asks for technical details.

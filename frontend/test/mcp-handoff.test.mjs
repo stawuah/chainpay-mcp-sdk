@@ -27,6 +27,8 @@ test("buildMcpFirstPrompt includes mandate and read-only guardrails", async () =
     paymentsPermitted: false,
   });
   assert.match(prompt, /Invoice agent/);
+  assert.match(prompt, /get_spend_overview/);
+  assert.match(prompt, /list_receipts/);
   assert.match(prompt, /Mandate1111111111111111111111111111111111111/);
   assert.match(prompt, /Research USDC/);
   assert.match(prompt, /Do not prepare, sign, or submit a payment/);

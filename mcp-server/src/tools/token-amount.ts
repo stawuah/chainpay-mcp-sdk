@@ -1,13 +1,7 @@
-import type { Address, ChainPayClient } from "@chainpay/sdk";
-
-const TOKEN_LABELS: Record<string, string> = {
-  // ChainPay Devnet assets.
-  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU": "USDC",
-  "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM": "PYUSD",
-};
+import { assetLabel, type Address, type ChainPayClient } from "@chainpay/sdk";
 
 export function tokenLabel(mint: Address): string {
-  return TOKEN_LABELS[mint] ?? "tokens";
+  return assetLabel(mint);
 }
 
 export function formatTokenAmount(value: bigint, decimals: number): string {

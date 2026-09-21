@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import type { Mandate } from "@chainpay/sdk";
 import type { ChainPayMcpContext } from "./tools/context.js";
 import type { McpConnectionRegistry } from "./connections.js";
 
@@ -33,6 +34,19 @@ export async function requestContext(base: ChainPayMcpContext, req: IncomingMess
   } };
 }
 
+/**
+ * Whether a scoped connection may see this mandate at all. The scope pins the
+ * agent that was approved when the owner connected; a mandate whose agent has
+ * since changed stays hidden until the owner reconnects. Every list-shaped read
+ * (list_mandates, find_compatible_mandate, get_spend_overview, list_receipts)
+ * must apply this same test, so they never disagree about what exists.
+ */
+export function mandateInScope(context: ChainPayMcpContext): (mandate: Mandate) => boolean {
+  const scope = context.principal?.scope;
+  if (!scope) return () => true;
+  return (mandate) => scope.mandates.includes(mandate.address) && scope.agents[mandate.address] === mandate.approvedAgent;
+}
+
 export async function authorizeMandate(context: ChainPayMcpContext, address: string) {
   const principal = context.principal;
   if (!principal) throw new AuthorizationError("Verified wallet or scoped connection required");
@@ -52,7 +66,7 @@ export async function authorizeTool(context: ChainPayMcpContext, name: string, a
   for (const field of ["owner", "wallet", "ownerWallet"]) {
     if (args[field] !== undefined && args[field] !== principal.wallet) throw new AuthorizationError("Wallet differs from verified owner");
   }
-  if (["list_mandates", "find_compatible_mandate", "create_mandate"].includes(name)) args.owner = principal.wallet;
+  if (["list_mandates", "find_compatible_mandate", "create_mandate", "get_spend_overview", "list_receipts"].includes(name)) args.owner = principal.wallet;
   // Existing-operation resume is authorized again by Axum against the stored
   // owner and mandate. It never prepares or signs a new payment.
   if (name === "execute_x402_payment" && typeof args.paymentId === "string") return;
@@ -66,7 +80,7 @@ export async function authorizeTool(context: ChainPayMcpContext, name: string, a
     const mandate = await authorizeMandate(context, address);
     context.agentAddress = mandate.approvedAgent;
     if (args.agent !== undefined && args.agent !== mandate.approvedAgent) throw new AuthorizationError("Agent differs from approved mandate agent");
-  } else if (!PUBLIC_TOOLS.has(name) && !["list_mandates", "find_compatible_mandate", "create_mandate", "create_demo_payment_request", "quote_payment_request", "wait_for_payment"].includes(name)) {
+  } else if (!PUBLIC_TOOLS.has(name) && !["list_mandates", "find_compatible_mandate", "create_mandate", "create_demo_payment_request", "quote_payment_request", "wait_for_payment", "get_spend_overview", "list_receipts"].includes(name)) {
     throw new AuthorizationError("An explicit owned mandate is required");
   }
 }

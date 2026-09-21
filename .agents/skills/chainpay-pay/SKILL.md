@@ -44,7 +44,7 @@ Do not prepare, sign, or submit a payment until I explicitly ask.
 ## Read-only first
 
 1. `get_protocol_config`
-2. `list_mandates` with owner wallet, or `get_mandate` with mandate PDA
+2. `get_spend_overview` for remaining allowance and recent receipts, or `get_mandate` / `list_mandates` if that tool is missing
 3. Stop if mandate is paused, revoked, or expired
 
 ## Pay a 402 URL (primary verb)
@@ -91,6 +91,7 @@ Returns `mpp_unsupported`. Use pay.sh for debugger.pay.sh and MPP sandbox APIs.
 
 - `check_payment_requirements` — before paying from a merchant-signed request
 - `prepare_x402_payment` — when you already hold the 402 JSON body
+- `get_spend_overview` / `list_receipts` — spend, remaining allowance, and receipt history without the dashboard
 - `get_payment` / `wait_for_payment` — after settlement
 - `create_mandate` — owner-signed; agent does not call without explicit owner approval
 

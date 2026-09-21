@@ -160,6 +160,92 @@ test("a blocked result keeps the reason the preflight gave", () => {
   assert.match(text, /5 USDC cap/);
 });
 
+test("formatToolPresentation renders spend overview and receipt list cards", () => {
+  process.env.CHAINPAY_APP_URL = "https://chainpay.example";
+  const overview = formatToolPresentation({
+    kind: "spend_overview",
+    owner: "Owner111111111111111111111111111111111111111",
+    totals: [{ mint: MINT, symbol: "USDC", decimals: 6, spent: "4.5", remaining: "95.5", spentBase: "4500000", remainingBase: "95500000" }],
+    mandates: [{
+      address: MANDATE,
+      status: "active",
+      mint: MINT,
+      symbol: "USDC",
+      decimals: 6,
+      spent: "4.5",
+      remaining: "95.5",
+      totalLimit: "100",
+      maxPerPayment: "10",
+      spentBase: "4500000",
+      remainingBase: "95500000",
+      totalLimitBase: "100000000",
+      maxPerPaymentBase: "10000000",
+      expiresAtSlot: "500000",
+      approvedAgent: AGENT,
+    }],
+    receipts: [{
+      address: RECEIPT,
+      mandate: MANDATE,
+      amount: "4.5",
+      amountBase: "4500000",
+      symbol: "USDC",
+      decimals: 6,
+      status: "confirmed",
+      executedAtSlot: "200",
+      recipientTokenAccount: RECIPIENT,
+      receiptUrl: `https://chainpay.example/verify/${RECEIPT}`,
+    }],
+    attention: [],
+    note: "Totals are mandate allowances, not wallet balance.",
+  });
+  assert.match(overview, /Spending overview/);
+  assert.match(overview, /4\.5 USDC/);
+  assert.match(overview, /verify/);
+  assert.doesNotMatch(overview, /^\{/);
+
+  const list = formatToolPresentation({
+    kind: "receipt_list",
+    owner: "Owner111111111111111111111111111111111111111",
+    count: 1,
+    receipts: [{
+      address: RECEIPT,
+      mandate: MANDATE,
+      amount: "4.5",
+      amountBase: "4500000",
+      symbol: "USDC",
+      decimals: 6,
+      status: "confirmed",
+      executedAtSlot: "200",
+      recipientTokenAccount: RECIPIENT,
+      receiptUrl: `https://chainpay.example/verify/${RECEIPT}`,
+    }],
+  });
+  assert.match(list, /1 receipt/);
+  assert.match(list, /4\.5 USDC/);
+});
+
+test("get_payment lookup renders the receipt card instead of fenced JSON", () => {
+  process.env.CHAINPAY_APP_URL = "https://chainpay.example";
+  const text = formatToolPresentation({
+    kind: "payment_lookup",
+    found: true,
+    receiptAddress: RECEIPT,
+    onChain: { address: RECEIPT, mandate: MANDATE, status: "confirmed", transactionSignature: "Sig1111111111111111111111111111111111111111" },
+    offChain: { transactionSignature: "Sig1111111111111111111111111111111111111111" },
+    display: { symbol: "USDC", amounts: { amount: "4.5" } },
+  });
+  assert.match(text, /Payment receipt/);
+  assert.match(text, /4\.5 USDC/);
+  assert.match(text, /verify/);
+  assert.doesNotMatch(text, /```json/);
+});
+
+test("a get_payment miss by mandate and invoice hash is a missing receipt, not a missing permission", () => {
+  const text = formatToolPresentation({ kind: "payment_lookup", found: false, receiptAddress: undefined }, true);
+  assert.match(text, /Receipt not found/);
+  assert.doesNotMatch(text, /Spending permission not found/);
+});
+
 test("an unsupported sponsor card does not promise a tool this server does not have", () => {
   const text = formatToolPresentation({
     action: "x402_unsupported_sponsor",

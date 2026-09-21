@@ -12,6 +12,7 @@ import { getAsset } from "./tools/get_asset.js";
 import { getSupportedAssets } from "./tools/get_supported_assets.js";
 import { getProtocolConfig } from "./tools/get_protocol_config.js";
 import { findCompatibleMandate, listMandates } from "./tools/list-mandates.js";
+import { getSpendOverview, listReceipts } from "./tools/ops-snapshot.js";
 import { pauseMandate, revokeMandate } from "./tools/mandate-control.js";
 import { preparePayment } from "./tools/prepare_payment.js";
 import { quotePayment } from "./tools/quote_payment.js";
@@ -60,7 +61,9 @@ export function createDefaultContext(): ChainPayMcpContext {
 
 export const tools = {
     getMandate,
+    getSpendOverview,
     listMandates,
+    listReceipts,
     findCompatibleMandate,
     createDemoPaymentRequest,
     quotePaymentRequest,
@@ -90,8 +93,12 @@ export async function callTool(
   switch (name) {
     case "get_mandate":
       return getMandate(context, args);
+    case "get_spend_overview":
+      return getSpendOverview(context, args);
     case "list_mandates":
       return listMandates(context, args);
+    case "list_receipts":
+      return listReceipts(context, args);
     case "find_compatible_mandate":
       return findCompatibleMandate(context, args);
     case "get_protocol_config":

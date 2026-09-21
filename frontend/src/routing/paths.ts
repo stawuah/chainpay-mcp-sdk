@@ -18,7 +18,8 @@ export type AppRoute =
   | { kind: "app"; tab: DashboardTab; mandateBuilder?: boolean; mandateDetail?: string; receiptDetail?: string }
   | { kind: "app-not-found"; path: string }
   | { kind: "public-not-found"; path: string }
-  | { kind: "verify"; receiptPda: string };
+  | { kind: "verify"; receiptPda: string }
+  | { kind: "embed-overview"; owner: string };
 
 export function isDashboardTab(value: string): value is DashboardTab {
   return (DASHBOARD_TABS as readonly string[]).includes(value);
@@ -69,6 +70,18 @@ export function parsePathname(pathname: string): AppRoute {
     }
   }
 
+  if (normalized === "/embed/overview") return { kind: "embed-overview", owner: "" };
+
+  if (normalized.startsWith("/embed/overview/")) {
+    const encoded = normalized.slice("/embed/overview/".length);
+    if (encoded.includes("/")) return { kind: "public-not-found", path: normalized };
+    try {
+      return { kind: "embed-overview", owner: decodeURIComponent(encoded) };
+    } catch {
+      return { kind: "embed-overview", owner: encoded };
+    }
+  }
+
   return { kind: "public-not-found", path: normalized };
 }
 
@@ -76,6 +89,9 @@ export function buildPath(route: AppRoute): string {
   if (route.kind === "landing") return "/";
   if (route.kind === "verify") {
     return route.receiptPda ? `/verify/${encodeURIComponent(route.receiptPda)}` : "/verify";
+  }
+  if (route.kind === "embed-overview") {
+    return route.owner ? `/embed/overview/${encodeURIComponent(route.owner)}` : "/embed/overview";
   }
   if (route.kind === "app-not-found" || route.kind === "public-not-found") return route.path;
   if (route.mandateBuilder && route.tab === "mandates") return "/app/mandates/new";

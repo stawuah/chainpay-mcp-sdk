@@ -11,7 +11,10 @@ async function load(relative) {
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 }
 
-const { KNOWN_ASSETS, knownAsset, assetOrder, UNKNOWN_ASSET_ORDER } = await load("../src/config/knownAssets.ts");
+// The table lives in the SDK so every surface names a mint the same way;
+// frontend/src/config/knownAssets.ts only re-exports it.
+const { KNOWN_ASSETS, knownAsset, assetOrder, assetLabel, UNKNOWN_ASSET_ORDER } = await load("../../sdk/src/known-assets.ts");
+const reexport = await readFile(new URL("../src/config/knownAssets.ts", import.meta.url), "utf8");
 
 // Verified against Solana Devnet RPC before registration: both are initialized
 // mints with 6 decimals. EURC is a plain 82-byte SPL mint; USDG is Token-2022
@@ -58,4 +61,14 @@ test("naming an asset does not enable it", () => {
   for (const asset of KNOWN_ASSETS) {
     assert.deepEqual(Object.keys(asset).sort(), ["label", "mints", "order"]);
   }
+});
+
+test("the dashboard re-exports the SDK table instead of keeping a copy", () => {
+  assert.match(reexport, /from "@chainpay\/sdk\/known-assets"/);
+  assert.doesNotMatch(reexport, /mints:/, "a second mint table would drift from the SDK's");
+});
+
+test("an unnamed mint is labelled with the neutral word, not a guessed ticker", () => {
+  assert.equal(assetLabel(DEVNET.USDG), "USDG");
+  assert.equal(assetLabel("So11111111111111111111111111111111111111112"), "tokens");
 });

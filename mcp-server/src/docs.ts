@@ -442,7 +442,7 @@ export function renderDocsHtml(): string {
 
           <section class="section" id="authentication" aria-labelledby="authentication-title">
             <div class="section-heading"><div><h2 id="authentication-title">A wallet address is not a login.</h2><p>Sign the dashboard wallet-message challenge. Create a connection for your mandates and tools. Copy its one-time token into <code>headers.Authorization</code> as <code>Bearer YOUR_SCOPED_CONNECTION_TOKEN</code>. Never put credentials in a prompt or commit them.</p></div></div>
-            <div class="callout"><strong>First private read:</strong> select <code>get_mandate</code> when creating the connection, then call it with <code>{"address":"YOUR_MANDATE_PDA"}</code>. Wrong mandate or unselected tool = rejected. Owner tools need an owner session. Login does not authorize spending.</div>
+            <div class="callout"><strong>First private read:</strong> call <code>get_spend_overview</code> after connecting, or <code>get_mandate</code> with a mandate PDA if that tool is missing. Wrong mandate or unselected tool = rejected. Owner tools need an owner session. Login does not authorize spending.</div>
             <p style="margin-top:16px;color:var(--body);font-size:14px;line-height:1.65">For stdio, build <code>mcp-server/dist/server.js</code>. Private calls need <code>CHAINPAY_BACKEND_URL</code> and <code>CHAINPAY_CALLER_TOKEN</code>. Full guide: <code>docs/guides/connect-an-agent.md</code> in the repo.</p>
           </section>
 

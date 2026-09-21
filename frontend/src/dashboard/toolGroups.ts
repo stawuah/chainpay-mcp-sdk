@@ -21,7 +21,9 @@ export const TOOL_GROUPS: { id: ToolGroupId; label: string; blurb: string }[] = 
 const MEMBERSHIP: Record<string, ToolGroupId> = {
   list_mandates: "discover",
   find_compatible_mandate: "discover",
+  get_spend_overview: "discover",
   get_mandate: "discover",
+  list_receipts: "pay",
   get_supported_assets: "discover",
   create_mandate: "policy",
   update_mandate: "policy",

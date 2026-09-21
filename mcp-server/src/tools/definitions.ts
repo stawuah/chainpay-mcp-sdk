@@ -26,6 +26,18 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "get_spend_overview",
+    description: "Show spend, remaining allowance, attention items, and recent receipts for the connected wallet. Use first when the owner asks what an agent spent or what is left. Totals are mandate allowances, not wallet balance.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: { type: "string", description: "Connected wallet. Filled from the session when omitted." },
+        mandate: { type: "string", description: "Optional mandate PDA to limit the snapshot" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_mandate",
     description: "Read one spending permission on-chain. Use after connect or when the owner names a permission. Report status, token, limits, and whether it is ready for payments.",
     inputSchema: {
@@ -300,6 +312,19 @@ export const TOOL_DEFINITIONS = [
         },
       },
       anyOf: [{ required: ["paymentId"] }, { required: ["resource", "mandate", "agent", "signingMode"] }],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_receipts",
+    description: "List recent on-chain receipts for the connected wallet or one permission. Use when the owner asks for payment history. Share verify links when available.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: { type: "string", description: "Connected wallet. Filled from the session when omitted." },
+        mandate: { type: "string", description: "Optional mandate PDA" },
+        limit: { type: "string", description: "Maximum receipts to return, newest first" },
+      },
       additionalProperties: false,
     },
   },
