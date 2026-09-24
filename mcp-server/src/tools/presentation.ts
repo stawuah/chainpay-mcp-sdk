@@ -292,6 +292,23 @@ function formatOwnerApproval(record: RecordLike): string {
   ].join("\n");
 }
 
+function formatTokenAccountApproval(record: RecordLike): string {
+  const tokenAccount = pickString(record.tokenAccount);
+  const mint = pickString(record.mint);
+  return [
+    "**Token account approval required**",
+    "",
+    "The agent prepared a canonical associated token account creation. The owner wallet must review and sign it.",
+    "",
+    `- Mint: \`${shortAddress(mint)}\``,
+    `- Token account: \`${shortAddress(tokenAccount)}\``,
+    "- Cost: Devnet SOL account rent and transaction fee",
+    "- This does not fund the account or grant spending permission",
+    "",
+    "**Next step:** Approve in the ChainPay dashboard, or cancel without spending SOL.",
+  ].join("\n");
+}
+
 function formatActionResult(record: RecordLike, isError: boolean): string {
   const action = pickString(record.action) ?? "result";
   if (action === "details_required" || action === "requirements_ready" || action === "requirements_blocked") {
@@ -302,6 +319,9 @@ function formatActionResult(record: RecordLike, isError: boolean): string {
   }
   if (action === "owner_wallet_signature_required") {
     return formatOwnerApproval(record);
+  }
+  if (action === "token_account_signature_required") {
+    return formatTokenAccountApproval(record);
   }
   if (
     action === "backend_relayed"

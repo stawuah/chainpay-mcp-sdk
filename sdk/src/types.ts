@@ -77,6 +77,17 @@ export type SupportedAsset = {
   bump: number;
 };
 
+export type AssociatedTokenAccountPreparation = {
+  asset: SupportedAsset;
+  address: Address;
+  owner: Address;
+  mint: Address;
+  tokenProgram: TokenProgram;
+  status: "ready" | "missing";
+  /** Present only when the canonical account is missing. The SDK never submits it. */
+  transaction?: PreparedTransaction;
+};
+
 export type TokenCapabilityProfile = {
   mint: Address;
   tokenProgram: TokenProgram;

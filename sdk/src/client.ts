@@ -4,6 +4,7 @@ import {
 } from "@solana/web3.js";
 import type {
   Address,
+  AssociatedTokenAccountPreparation,
   ChainPayClientOptions,
   Mandate,
   PaymentReceipt,
@@ -42,7 +43,12 @@ import {
   type PreparePaymentInput,
 } from "./payment.js";
 import { deriveAssetAddress, deriveConfigAddress, deriveReceiptAddress } from "./pda.js";
-import { paymentPreflightContextFromTokenAccount } from "./token.js";
+import {
+  buildCreateAssociatedTokenAccountInstruction,
+  deriveAssociatedTokenAddress,
+  paymentPreflightContextFromTokenAccount,
+  readTokenAccountFields,
+} from "./token.js";
 import {
   amountDisplayFromMint,
   readCurrentMandateFields,
@@ -185,6 +191,101 @@ export class ChainPayClient {
         account.pubkey.toBase58(),
       ))
       .sort((left, right) => left.mint.localeCompare(right.mint));
+  }
+
+  /**
+   * Inspect the canonical token account for one enabled registry asset and,
+   * when absent, return an unsigned creation transaction for wallet review.
+   */
+  async prepareAssociatedTokenAccount(input: {
+    owner: Address;
+    mint: Address;
+    payer?: Address;
+  }): Promise<AssociatedTokenAccountPreparation> {
+    const mint = address(input.mint);
+    const asset = await this.getSupportedAsset(mint);
+    if (!asset || !asset.enabled) {
+      throw new Error(`Asset is not enabled in the ChainPay registry: ${mint}`);
+    }
+    return this.prepareAssociatedTokenAccountForAsset(asset, input.owner, input.payer);
+  }
+
+  /** Inspect every enabled registry asset. Disabled assets are intentionally excluded. */
+  async prepareRegisteredAssetTokenAccounts(
+    owner: Address,
+    payer?: Address,
+  ): Promise<AssociatedTokenAccountPreparation[]> {
+    const assets = (await this.getSupportedAssets()).filter((asset) => asset.enabled);
+    return Promise.all(assets.map((asset) => (
+      this.prepareAssociatedTokenAccountForAsset(asset, owner, payer)
+    )));
+  }
+
+  private async prepareAssociatedTokenAccountForAsset(
+    asset: SupportedAsset,
+    ownerInput: Address,
+    payerInput?: Address,
+  ): Promise<AssociatedTokenAccountPreparation> {
+    const owner = address(ownerInput);
+    const payer = address(payerInput ?? owner);
+    const mint = address(asset.mint);
+    const tokenProgram = tokenProgramFromAddress(asset.tokenProgram);
+    if (!tokenProgram) {
+      throw new Error(`Registry asset uses an unsupported token program: ${asset.tokenProgram}`);
+    }
+
+    const mintAccount = await this.connection.getAccountInfo(publicKey(mint), this.commitment);
+    if (!mintAccount) throw new Error(`Mint account not found: ${mint}`);
+    const mintProgram = tokenProgramFromAddress(mintAccount.owner.toBase58());
+    if (!mintProgram) {
+      throw new Error(`Mint is not owned by a supported token program: ${mintAccount.owner.toBase58()}`);
+    }
+    const verifiedMint = readVerifiedMintDecimals({
+      owner: mintAccount.owner.toBase58(),
+      data: new Uint8Array(mintAccount.data),
+    });
+    if (!verifiedMint.ok) throw new Error(`Mint account data is invalid: ${mint}`);
+    if (mintProgram !== tokenProgram) {
+      throw new Error(`Registry token program does not match mint owner for ${mint}`);
+    }
+
+    const associatedTokenAccount = deriveAssociatedTokenAddress(owner, mint, tokenProgram);
+    const existing = await this.connection.getAccountInfo(
+      publicKey(associatedTokenAccount),
+      this.commitment,
+    );
+    const base = {
+      asset,
+      address: associatedTokenAccount,
+      owner,
+      mint,
+      tokenProgram,
+    };
+    if (existing) {
+      if (existing.owner.toBase58() !== asset.tokenProgram) {
+        throw new Error(`Canonical token account is owned by an unexpected program: ${associatedTokenAccount}`);
+      }
+      const fields = readTokenAccountFields(new Uint8Array(existing.data));
+      if (!fields || fields.owner !== owner || fields.mint !== mint) {
+        throw new Error(`Canonical token account data is invalid: ${associatedTokenAccount}`);
+      }
+      return { ...base, status: "ready" };
+    }
+
+    return {
+      ...base,
+      status: "missing",
+      transaction: {
+        instructions: [buildCreateAssociatedTokenAccountInstruction({
+          payer,
+          owner,
+          mint,
+          tokenProgram,
+        })],
+        requiredSigners: [payer],
+        feePayer: payer,
+      },
+    };
   }
 
   async getPayment(lookup: PaymentLookup): Promise<PaymentReceipt | null> {

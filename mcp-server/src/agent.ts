@@ -16,6 +16,7 @@ const AGENT_TOOL_NAMES = new Set([
   "get_mandate",
   "get_protocol_config",
   "get_asset",
+  "prepare_token_accounts",
   "list_receipts",
   "get_payment",
   "create_demo_payment_request",
@@ -59,7 +60,7 @@ export type ChainPayAgentAttachment = {
 };
 
 export type ChainPayAgentApproval = {
-  kind: "mandate" | "payment";
+  kind: "mandate" | "token_account" | "payment";
   action: string;
   [key: string]: unknown;
 };
@@ -282,6 +283,9 @@ function approvalFromToolResult(result: unknown): ChainPayAgentApproval | undefi
   const data = structured as Record<string, unknown>;
   if (data.action === "owner_wallet_signature_required") {
     return { kind: "mandate", ...data, action: String(data.action) };
+  }
+  if (data.action === "token_account_signature_required") {
+    return { kind: "token_account", ...data, action: String(data.action) };
   }
   if (data.action === "agent_signature_required" || data.action === "x402_agent_signature_required") {
     return { kind: "payment", ...data, action: String(data.action) };

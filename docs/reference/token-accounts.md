@@ -20,6 +20,12 @@ derives the connected wallet's ATA. If a valid account already exists, the UI
 shows **Ready**. If it is missing, the wallet is asked to sign account creation,
 which requires Devnet SOL for fees and rent.
 
+The connected-wallet menu performs this check for every asset currently enabled
+in the on-chain registry. Each missing asset has its own **Create account**
+action and wallet approval. Merely opening the menu never creates an account or
+spends SOL. The SDK exposes the same behavior through
+`prepareRegisteredAssetTokenAccounts(owner)` and returns unsigned transactions.
+
 Creating an account does not fund it, create a mandate, or authorize spending.
 The source must separately hold enough of the selected token. A zero token
 balance cannot fund a payment even when the account is ready.

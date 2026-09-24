@@ -15,6 +15,7 @@ import { findCompatibleMandate, listMandates } from "./tools/list-mandates.js";
 import { getSpendOverview, listReceipts } from "./tools/ops-snapshot.js";
 import { pauseMandate, revokeMandate } from "./tools/mandate-control.js";
 import { preparePayment } from "./tools/prepare_payment.js";
+import { prepareTokenAccounts } from "./tools/prepare_token_accounts.js";
 import { quotePayment } from "./tools/quote_payment.js";
 import { quotePaymentRequest } from "./tools/quote-payment-request.js";
 import { updateMandate } from "./tools/update_mandate.js";
@@ -69,6 +70,7 @@ export const tools = {
     quotePaymentRequest,
     createMandate,
     checkPaymentRequirements,
+    prepareTokenAccounts,
   preparePayment,
   executePayment,
   getPayment,
@@ -115,6 +117,8 @@ export async function callTool(
       return createMandate(context, args);
     case "check_payment_requirements":
       return checkPaymentRequirements(context, args);
+    case "prepare_token_accounts":
+      return prepareTokenAccounts(context, args);
     case "prepare_payment":
       return preparePayment(context, args);
     case "quote_payment":

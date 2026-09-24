@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import {
+  ChainPayClient,
+  SPL_TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   buildCreateMandateInstruction,
   buildExecutePaymentInstruction,
   buildInitializeConfigInstruction,
@@ -111,6 +114,50 @@ test("derives the canonical Token-2022 associated token account", () => {
     deriveAssociatedTokenAddress(wallet, pyusd, "token-2022"),
     "HC7kZ6CXs5JQS2CDmGh9ADjkyNdibX5HDe3pcspvs65g",
   );
+});
+
+test("prepares canonical token accounts for every enabled registry asset", async () => {
+  const connection = new Connection("http://127.0.0.1:8899", "confirmed");
+  const client = new ChainPayClient(connection);
+  const classicMint = Keypair.generate().publicKey.toBase58();
+  const token2022Mint = Keypair.generate().publicKey.toBase58();
+  const disabledMint = Keypair.generate().publicKey.toBase58();
+  const registryAsset = (mintAddress, tokenProgram, enabled = true) => ({
+    address: Keypair.generate().publicKey.toBase58(),
+    authority: owner,
+    mint: mintAddress,
+    tokenProgram,
+    enabled,
+    bump: 255,
+  });
+  client.getSupportedAssets = async () => [
+    registryAsset(classicMint, SPL_TOKEN_PROGRAM_ID),
+    registryAsset(token2022Mint, TOKEN_2022_PROGRAM_ID),
+    registryAsset(disabledMint, SPL_TOKEN_PROGRAM_ID, false),
+  ];
+
+  const classicAta = deriveAssociatedTokenAddress(owner, classicMint, "spl-token");
+  const tokenData = new Uint8Array(165);
+  tokenData.set(new PublicKey(classicMint).toBytes(), 0);
+  tokenData.set(new PublicKey(owner).toBytes(), 32);
+  connection.getAccountInfo = async (key) => {
+    const value = key.toBase58();
+    if (value === classicMint) return { owner: new PublicKey(SPL_TOKEN_PROGRAM_ID), data: new Uint8Array(82) };
+    if (value === token2022Mint) return { owner: new PublicKey(TOKEN_2022_PROGRAM_ID), data: new Uint8Array(82) };
+    if (value === classicAta) return { owner: new PublicKey(SPL_TOKEN_PROGRAM_ID), data: tokenData };
+    return null;
+  };
+
+  const prepared = await client.prepareRegisteredAssetTokenAccounts(owner);
+  assert.equal(prepared.length, 2);
+  assert.equal(prepared.find((item) => item.mint === classicMint)?.status, "ready");
+  const missing = prepared.find((item) => item.mint === token2022Mint);
+  assert.equal(missing?.status, "missing");
+  assert.equal(missing?.tokenProgram, "token-2022");
+  assert.equal(missing?.transaction?.instructions.length, 1);
+  assert.equal(missing?.transaction?.instructions[0].name, "create_associated_token_account");
+  assert.deepEqual(missing?.transaction?.requiredSigners, [owner]);
+  assert.equal(prepared.some((item) => item.mint === disabledMint), false);
 });
 
 test("keeps x402 client and merchant references on one canonical hash", async () => {

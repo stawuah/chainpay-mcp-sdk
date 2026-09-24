@@ -154,7 +154,7 @@ fn mandate_nonce() -> Pubkey {
     Pubkey::new_from_array(bytes)
 }
 
-fn run_settlement(kind: TokenKind) {
+fn run_settlement(label: &str, kind: TokenKind) {
     let mut svm = LiteSVM::new();
     svm.add_program_from_file(chainpay::ID, program_path())
         .unwrap();
@@ -334,8 +334,15 @@ fn run_settlement(kind: TokenKind) {
         &[&agent],
     );
 
-    assert_eq!(token_balance(&svm, &recipient.pubkey()), PAYMENT_AMOUNT);
-    assert!(svm.get_account(&receipt).is_some());
+    assert_eq!(
+        token_balance(&svm, &recipient.pubkey()),
+        PAYMENT_AMOUNT,
+        "{label} recipient balance did not increase"
+    );
+    assert!(
+        svm.get_account(&receipt).is_some(),
+        "{label} receipt was not created"
+    );
 
     let duplicate = chainpay_instruction(
         accounts::ExecutePayment {
@@ -515,11 +522,21 @@ fn run_settlement(kind: TokenKind) {
 }
 
 #[test]
-fn settles_through_classic_spl_token_and_rejects_replay() {
-    run_settlement(TokenKind::Spl);
+fn settles_usdc_through_classic_spl_token_and_rejects_replay() {
+    run_settlement("USDC", TokenKind::Spl);
 }
 
 #[test]
-fn settles_through_token_2022_and_rejects_replay() {
-    run_settlement(TokenKind::Token2022);
+fn settles_eurc_through_classic_spl_token_and_rejects_replay() {
+    run_settlement("EURC", TokenKind::Spl);
+}
+
+#[test]
+fn settles_pyusd_through_token_2022_and_rejects_replay() {
+    run_settlement("PYUSD", TokenKind::Token2022);
+}
+
+#[test]
+fn settles_usdg_through_token_2022_and_rejects_replay() {
+    run_settlement("USDG", TokenKind::Token2022);
 }

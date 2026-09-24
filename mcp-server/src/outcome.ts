@@ -1,5 +1,5 @@
 export type NormalizedOutcome = {
-  kind: "mandate_approval_required" | "payment_approval_required" | "payment_settled" | "payment_blocked" | "details_required" | "payment_pending";
+  kind: "mandate_approval_required" | "token_account_approval_required" | "payment_approval_required" | "payment_settled" | "payment_blocked" | "details_required" | "payment_pending";
   receiptAddress?: string;
   signature?: string;
   status?: string;
@@ -91,6 +91,9 @@ export function normalizeToolOutcome(result: unknown): NormalizedOutcome | undef
 
   if (action === "owner_wallet_signature_required") {
     return { kind: "mandate_approval_required", ...base };
+  }
+  if (action === "token_account_signature_required") {
+    return { kind: "token_account_approval_required", ...base };
   }
   if (action === "agent_signature_required" || action === "x402_agent_signature_required") {
     if (response.isError === true) {

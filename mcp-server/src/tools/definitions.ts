@@ -68,6 +68,19 @@ export const TOOL_DEFINITIONS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "prepare_token_accounts",
+    description: "Check the connected owner's canonical token accounts for enabled registry assets and prepare the next missing account for wallet approval. Pass a mint to target one asset, or omit it to check all enabled assets. Call again after each approved creation until all are ready. Never claim an account exists until the owner approves and the transaction confirms.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: { type: "string", description: "Connected owner wallet. Filled from the verified session." },
+        mint: { type: "string", description: "Optional enabled mint. Omit to inspect every enabled registry asset." },
+      },
+      required: ["owner"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "quote_payment_request",
     description: "Verify a merchant-signed invoice and quote it against a permission without moving funds. Use for signed requests; tell the owner pass/fail on limits, token, recipient, expiry, and policy.",
     inputSchema: {

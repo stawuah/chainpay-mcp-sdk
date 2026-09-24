@@ -206,7 +206,11 @@
 .dashboard-app.cp-app .cp-owner-scene .owner-setup-distinction { font-size: 12px; }
 .owner-wallet-asset { display: flex; align-items: center; gap: 10px; padding: 12px 0; }
 .owner-wallet-asset img { width: 24px; height: 24px; object-fit: contain; }
-.owner-wallet-asset strong { margin-left: auto; font-size: 14px; font-weight: 500; }
+.owner-wallet-asset-state { margin-left: auto; display: grid; justify-items: end; gap: 3px; }
+.owner-wallet-asset strong { font-size: 14px; font-weight: 500; }
+.owner-wallet-asset-state button { appearance: none; border: 0; padding: 0; background: transparent; color: #0052ff; font: inherit; font-size: 12px; cursor: pointer; }
+.owner-wallet-asset-state button:disabled { color: #7a8493; cursor: wait; }
+.wallet-asset-error { margin: 0 0 12px; color: #b42318; font-size: 12px; line-height: 1.45; }
 body:has(.dashboard-app) :is(.wallet-asset-popover,.cp-record-panel,.astryx-dialog) { font-family: Inter,sans-serif; font-size: 14px; }
 body:has(.dashboard-app) .wallet-asset-popover { padding: 20px; max-width: 100%; }
 body:has(.dashboard-app) .wallet-asset-popover .soft-label { display: none; }
