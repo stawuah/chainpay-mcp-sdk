@@ -127,6 +127,7 @@ import {
   resolvePaymentDestination,
   copyValue,
   callChainPayAgent,
+  signAndSubmitTransaction,
   submitSignedTransaction,
   compareMandatesByCreation,
   mandateDisplayName,
@@ -407,10 +408,11 @@ export function Dashboard({
       if (!preparation.transaction) throw new Error("The SDK did not return an account-creation transaction.");
       const balance = await chainpayClient.connection.getBalance(new PublicKey(wallet), "confirmed");
       if (balance === 0) throw new Error("Add Devnet SOL to this wallet before creating a token account.");
-      const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-      const transaction = toWeb3Transaction(preparation.transaction, latest.blockhash);
-      const signed = await walletSigner(transaction);
-      await submitSignedTransaction(`ata:${wallet}:${preparation.address}:${latest.blockhash}`, signed.serialize());
+      await signAndSubmitTransaction(
+        preparation.transaction,
+        walletSigner,
+        (blockhash) => `ata:${wallet}:${preparation.address}:${blockhash}`,
+      );
       setWalletAssetRefresh((value) => value + 1);
     } catch (cause) {
       setWalletAssetError(cause instanceof Error ? cause.message : String(cause));
@@ -3434,10 +3436,11 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
       }
       if (!walletSigner) throw new Error("The connected wallet does not expose transaction signing.");
       if (!preparation.transaction) throw new Error("The SDK did not return an account-creation transaction.");
-      const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-      const transaction = toWeb3Transaction(preparation.transaction, latest.blockhash);
-      const signed = await walletSigner(transaction);
-      const result = await submitSignedTransaction(`ata:${wallet}:${tokenAccount}:${latest.blockhash}`, signed.serialize());
+      const result = await signAndSubmitTransaction(
+        preparation.transaction,
+        walletSigner,
+        (blockhash) => `ata:${wallet}:${tokenAccount}:${blockhash}`,
+      );
       setAccountSignature(result.signature ?? "");
       setAccountSetup("ready");
     } catch (cause) {

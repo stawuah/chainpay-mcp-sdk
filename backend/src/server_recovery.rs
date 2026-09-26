@@ -254,6 +254,33 @@ pub(super) async fn classify_transaction_send(
         }
     }
 }
+/// What to tell the owner when the chain or its preflight refused the
+/// transaction.
+///
+/// The upstream reason is carried through rather than flattened, because a
+/// stale blockhash, a failing instruction and a malformed signature are three
+/// different problems with three different answers, and one shared sentence
+/// makes every one of them look like the others. The message an RPC returns
+/// here describes the transaction, not this process: credentials live in the
+/// URL, which only `RpcError::Http` carries and which is stripped at
+/// construction.
+fn rejection_reason(error: &RpcError) -> String {
+    const PREFIX: &str = "Transaction rejected by chain or preflight";
+    let detail = match error {
+        RpcError::Remote { message, .. } | RpcError::TransactionFailed { message, .. } => {
+            message.trim()
+        }
+        _ => "",
+    };
+    if detail.is_empty() {
+        return PREFIX.to_owned();
+    }
+    // Simulation failures arrive with their whole program log attached. The
+    // first line names the error; the rest belongs in the explorer.
+    let first_line = detail.lines().next().unwrap_or(detail).trim();
+    let clipped: String = first_line.chars().take(200).collect();
+    format!("{PREFIX}: {clipped}")
+}
 pub(super) fn payment_error(mut record: PaymentRecord, error: &RpcError) -> PaymentRecord {
     record.status = if deterministic_failure(error) {
         PaymentStatus::Failed
@@ -261,7 +288,7 @@ pub(super) fn payment_error(mut record: PaymentRecord, error: &RpcError) -> Paym
         PaymentStatus::Submitted
     };
     record.error = Some(if deterministic_failure(error) {
-        "Transaction rejected by chain or preflight".into()
+        rejection_reason(error)
     } else {
         "Submission outcome unknown; awaiting chain reconciliation. Keep this operation and signature.".into()
     });
@@ -278,7 +305,7 @@ pub(super) fn transaction_error(
         PaymentStatus::Submitted
     };
     record.error = Some(if deterministic_failure(error) {
-        "Transaction rejected by chain or preflight".into()
+        rejection_reason(error)
     } else {
         "Submission outcome unknown; awaiting chain reconciliation. Keep this operation and signature.".into()
     });
@@ -741,6 +768,37 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn a_rejection_names_the_reason_the_chain_gave() {
+        // A stale blockhash and a failing instruction are different problems.
+        // Reporting both as "rejected" leaves the owner nothing to act on.
+        assert_eq!(
+            rejection_reason(&RpcError::Remote {
+                method: "sendTransaction".to_owned(),
+                message: "Blockhash not found".to_owned(),
+                code: -32002,
+            }),
+            "Transaction rejected by chain or preflight: Blockhash not found"
+        );
+
+        // A simulation failure carries its whole program log. The first line
+        // names the error; the rest belongs in an explorer, not a toast.
+        assert_eq!(
+            rejection_reason(&RpcError::TransactionFailed {
+                signature: "sig".to_owned(),
+                message: "Error processing Instruction 0: custom program error: 0x1\nProgram log: insufficient funds".to_owned(),
+            }),
+            "Transaction rejected by chain or preflight: Error processing Instruction 0: custom program error: 0x1"
+        );
+
+        // Errors that carry no upstream message keep the bare sentence rather
+        // than inventing a reason or trailing an empty colon.
+        assert_eq!(
+            rejection_reason(&RpcError::MissingField("value")),
+            "Transaction rejected by chain or preflight"
+        );
+    }
 
     fn fixture() -> (BackendState, Principal, PaymentSubmissionRequest) {
         let (_, mut request, _) = transactions::tests::fixture(0);
