@@ -190,13 +190,6 @@ type WalletAssetSummary = {
   loading: boolean;
 };
 
-async function simulateTokenAccountCreation(transaction: Transaction) {
-  const simulation = await chainpayClient.connection.simulateTransaction(transaction);
-  if (simulation.value.err) {
-    throw new Error(`Token-account creation simulation failed: ${JSON.stringify(simulation.value.err)}`);
-  }
-}
-
 export function Dashboard({
   wallet,
   walletName,
@@ -416,7 +409,6 @@ export function Dashboard({
       if (balance === 0) throw new Error("Add Devnet SOL to this wallet before creating a token account.");
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
       const transaction = toWeb3Transaction(preparation.transaction, latest.blockhash);
-      await simulateTokenAccountCreation(transaction);
       const signed = await walletSigner(transaction);
       await submitSignedTransaction(`ata:${wallet}:${preparation.address}:${latest.blockhash}`, signed.serialize());
       setWalletAssetRefresh((value) => value + 1);
@@ -762,7 +754,6 @@ export function Dashboard({
       }
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
       const transaction = toWeb3Transaction(prepared, latest.blockhash);
-      if (agentApproval.kind === "token_account") await simulateTokenAccountCreation(transaction);
       const signed = await walletSigner(transaction);
       if (agentApproval.kind === "mandate") {
         const result = await submitSignedTransaction(`agent-mandate:${agentApproval.mandateAddress ?? latest.blockhash}:${latest.blockhash}`, signed.serialize());
@@ -3445,7 +3436,6 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
       if (!preparation.transaction) throw new Error("The SDK did not return an account-creation transaction.");
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
       const transaction = toWeb3Transaction(preparation.transaction, latest.blockhash);
-      await simulateTokenAccountCreation(transaction);
       const signed = await walletSigner(transaction);
       const result = await submitSignedTransaction(`ata:${wallet}:${tokenAccount}:${latest.blockhash}`, signed.serialize());
       setAccountSignature(result.signature ?? "");
