@@ -78,6 +78,13 @@ signing mode. Human mode prepares or relays externally signed transactions;
 delegated mode sends unsigned wires to Axum's mandate-bound provider signer.
 MCP never accepts a private key or provider credential.
 
+`prepare_token_accounts` lets the authenticated owner ask the assistant to
+inspect one mint or every enabled registry asset. It returns at most one missing
+ATA creation per call for explicit wallet review. After that transaction
+confirms, call the tool again to prepare the next missing account. A scoped
+agent connection cannot use this owner-management tool, and MCP never signs or
+submits the returned transaction itself.
+
 The x402 adapter supports ChainPay's custom `x402/1.0` receipt proof. Standard v2
 is recognized and rejected before signing. See the
 [custom x402 boundary](../docs/guides/connect-an-agent.md#custom-x402-boundary).

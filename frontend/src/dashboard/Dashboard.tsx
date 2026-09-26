@@ -190,6 +190,13 @@ type WalletAssetSummary = {
   loading: boolean;
 };
 
+async function simulateTokenAccountCreation(transaction: Transaction) {
+  const simulation = await chainpayClient.connection.simulateTransaction(transaction);
+  if (simulation.value.err) {
+    throw new Error(`Token-account creation simulation failed: ${JSON.stringify(simulation.value.err)}`);
+  }
+}
+
 export function Dashboard({
   wallet,
   walletName,
@@ -408,7 +415,9 @@ export function Dashboard({
       const balance = await chainpayClient.connection.getBalance(new PublicKey(wallet), "confirmed");
       if (balance === 0) throw new Error("Add Devnet SOL to this wallet before creating a token account.");
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-      const signed = await walletSigner(toWeb3Transaction(preparation.transaction, latest.blockhash));
+      const transaction = toWeb3Transaction(preparation.transaction, latest.blockhash);
+      await simulateTokenAccountCreation(transaction);
+      const signed = await walletSigner(transaction);
       await submitSignedTransaction(`ata:${wallet}:${preparation.address}:${latest.blockhash}`, signed.serialize());
       setWalletAssetRefresh((value) => value + 1);
     } catch (cause) {
@@ -752,7 +761,9 @@ export function Dashboard({
         throw new Error("This approval is addressed to a different signer wallet.");
       }
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-      const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
+      const transaction = toWeb3Transaction(prepared, latest.blockhash);
+      if (agentApproval.kind === "token_account") await simulateTokenAccountCreation(transaction);
+      const signed = await walletSigner(transaction);
       if (agentApproval.kind === "mandate") {
         const result = await submitSignedTransaction(`agent-mandate:${agentApproval.mandateAddress ?? latest.blockhash}:${latest.blockhash}`, signed.serialize());
         const response = `Mandate approved${result.signature ? ` (${shortAddress(result.signature)})` : ""}. The agent can now use this policy within the limits you approved without another wallet prompt.`;
@@ -761,6 +772,21 @@ export function Dashboard({
         updateAgentInboxItem(inboxId, { response, stage: "approved", approval: undefined });
         await onRefresh(agentApproval.mandateAddress);
         if (result.signature) setAgentToolsUsed((current) => [...current, "wallet_approval"]);
+      } else if (agentApproval.kind === "token_account") {
+        if (typeof agentApproval.tokenAccount !== "string" || typeof agentApproval.mint !== "string") {
+          throw new Error("The token-account approval is missing its mint or canonical account address.");
+        }
+        const result = await submitSignedTransaction(
+          `agent-ata:${wallet}:${agentApproval.tokenAccount}:${latest.blockhash}`,
+          signed.serialize(),
+        );
+        const response = `Token account created${result.signature ? ` (${shortAddress(result.signature)})` : ""}. It can now receive this asset, but it still needs a token balance before it can send payments.`;
+        setApprovalStatuses((current) => ({ ...current, [inboxId]: "success" }));
+        setReply(response);
+        updateAgentInboxItem(inboxId, { response, stage: "approved", approval: undefined });
+        setAgentToolsUsed((current) => [...current, "wallet_approval", "prepare_token_accounts"]);
+        setWalletAssetRefresh((value) => value + 1);
+        await onRefresh();
       } else {
         if (!agentApproval.payment || typeof agentApproval.payment !== "object") {
           throw new Error("The prepared payment did not include its policy request details.");
@@ -2692,6 +2718,7 @@ function AssistantPanel({ prompt, setPrompt, reply, thinking, listening, agentTo
 function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimals, onApprove }: { approval: AgentApproval; status: ApprovalStatus; error: string; stablecoinOptions: StablecoinOption[]; decimals: number | null; onApprove: () => Promise<void> }) {
   const instructionNames = approval.transaction?.instructions?.map((instruction) => instruction.name).join(" + ") || "mandate transaction";
   const isPayment = approval.kind === "payment";
+  const isTokenAccount = approval.kind === "token_account";
   const payment = approval.payment;
   const amount = typeof payment?.amount === "string" ? payment.amount : undefined;
   const tokenMint = typeof payment?.mint === "string" ? payment.mint : undefined;
@@ -2706,7 +2733,7 @@ function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimal
       displayAmount = `${amount} base units`;
     }
   }
-  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Approve payment" : "Approve this mandate once"}</h3></div><span className={`state-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "pending" ? "Pending settlement" : status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "Review the amount, recipient, and policy checks below. Approve in your wallet to complete the payment." : "The AI prepared this spending policy. Approve it once; future policy-compliant payments can settle without another wallet prompt."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b><code>{displayAmount}</code></span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<Button type="button" variant="primary" className="full-button" label={status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Approve payment in wallet" : "Approve wallet once"} isDisabled={status === "signing" || status === "pending" || status === "success"} onClick={() => void onApprove()} /></div>;
+  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Approve payment" : isTokenAccount ? "Create token account" : "Approve this mandate once"}</h3></div><span className={`state-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "pending" ? "Pending settlement" : status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "Review the amount, recipient, and policy checks below. Approve in your wallet to complete the payment." : isTokenAccount ? "The AI prepared one canonical token-account creation. Approving spends Devnet SOL for account rent; it does not fund the account or authorize payments." : "The AI prepared this spending policy. Approve it once; future policy-compliant payments can settle without another wallet prompt."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b><code>{displayAmount}</code></span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : isTokenAccount ? <><span><b>Mint</b>{approval.mint ? <code>{shortAddress(approval.mint)}</code> : "Enabled asset"}</span><span><b>Token account</b>{approval.tokenAccount ? <code>{shortAddress(approval.tokenAccount)}</code> : "Canonical ATA"}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<Button type="button" variant="primary" className="full-button" label={status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Approve payment in wallet" : isTokenAccount ? "Create account in wallet" : "Approve wallet once"} isDisabled={status === "signing" || status === "pending" || status === "success"} onClick={() => void onApprove()} /></div>;
 }
 
 function ToolsPanel({ mcpTools }: { mcpTools: McpTool[] }) {
@@ -3418,6 +3445,7 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
       if (!preparation.transaction) throw new Error("The SDK did not return an account-creation transaction.");
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
       const transaction = toWeb3Transaction(preparation.transaction, latest.blockhash);
+      await simulateTokenAccountCreation(transaction);
       const signed = await walletSigner(transaction);
       const result = await submitSignedTransaction(`ata:${wallet}:${tokenAccount}:${latest.blockhash}`, signed.serialize());
       setAccountSignature(result.signature ?? "");

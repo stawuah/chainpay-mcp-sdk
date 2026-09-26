@@ -25,6 +25,7 @@ const MEMBERSHIP: Record<string, ToolGroupId> = {
   get_mandate: "discover",
   list_receipts: "pay",
   get_supported_assets: "discover",
+  prepare_token_accounts: "policy",
   create_mandate: "policy",
   update_mandate: "policy",
   pause_mandate: "policy",

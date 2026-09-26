@@ -130,10 +130,12 @@ export type AgentAttachment = {
 };
 export type AgentAttachmentPreview = Pick<AgentAttachment, "name" | "mimeType" | "kind" | "size"> & { previewUrl?: string; textPreview?: string };
 export type AgentApproval = {
-  kind: "mandate" | "payment";
+  kind: "mandate" | "token_account" | "payment";
   action: string;
   mandateAddress?: string;
   configAddress?: string;
+  tokenAccount?: string;
+  mint?: string;
   payment?: Record<string, unknown>;
   transaction?: {
     feePayer?: string;
@@ -148,7 +150,7 @@ export type AgentApproval = {
   [key: string]: unknown;
 };
 export type AgentOutcome = {
-  kind: "mandate_approval_required" | "payment_approval_required" | "payment_settled" | "payment_blocked" | "details_required" | "payment_pending";
+  kind: "mandate_approval_required" | "token_account_approval_required" | "payment_approval_required" | "payment_settled" | "payment_blocked" | "details_required" | "payment_pending";
   receiptAddress?: string;
   signature?: string;
   status?: string;
@@ -244,6 +246,11 @@ export const coreToolReferences = [
     name: "get_supported_assets",
     description: "List every mint in the on-chain SupportedAsset settlement registry.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "prepare_token_accounts",
+    description: "Inspect enabled registry assets and prepare the next missing associated token account for owner wallet approval.",
+    inputSchema: { type: "object", properties: { owner: { type: "string" }, mint: { type: "string" } }, required: ["owner"], additionalProperties: false },
   },
   {
     name: "check_payment_requirements",

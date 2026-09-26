@@ -25,6 +25,9 @@ in the on-chain registry. Each missing asset has its own **Create account**
 action and wallet approval. Merely opening the menu never creates an account or
 spends SOL. The SDK exposes the same behavior through
 `prepareRegisteredAssetTokenAccounts(owner)` and returns unsigned transactions.
+An authenticated owner may also ask the ChainPay assistant to prepare this via
+the MCP `prepare_token_accounts` tool. MCP returns one missing account at a time
+so every account-rent charge receives a separate wallet review.
 
 Creating an account does not fund it, create a mandate, or authorize spending.
 The source must separately hold enough of the selected token. A zero token
