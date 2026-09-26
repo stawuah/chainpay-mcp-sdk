@@ -316,10 +316,6 @@ impl RpcClient {
             "getTokenAccountBalance",
             "getTokenSupply",
             "getTransaction",
-            // Read-only: simulation never submits a transaction or moves funds.
-            // A caller can already reach the same answer by replaying the
-            // instructions against account state this proxy serves.
-            "simulateTransaction",
         ];
         if !ALLOWED_METHODS.contains(&request.method.as_str()) {
             return Err(RpcError::UnsupportedProxyMethod(request.method));
@@ -476,23 +472,6 @@ mod tests {
             .await,
             Err(RpcError::UnsupportedProxyMethod(_))
         ));
-
-        // Simulation is read-only, so it is forwarded with the caller's own
-        // params rather than rejected or rewritten.
-        rpc.forward_proxy(JsonRpcProxyRequest {
-            jsonrpc: "2.0".to_owned(),
-            id: json!(3),
-            method: "simulateTransaction".to_owned(),
-            params: Some(json!(["dHJhbnNhY3Rpb24=", {"encoding": "base64"}])),
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(
-            seen.lock().unwrap().last().unwrap(),
-            &json!(["dHJhbnNhY3Rpb24=", {"encoding": "base64"}]),
-            "a simulation request must reach the upstream RPC unchanged"
-        );
     }
 
     #[tokio::test]
