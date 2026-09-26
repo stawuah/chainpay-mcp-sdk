@@ -3,7 +3,6 @@ import {
   TOKEN_2022_PROGRAM_ID,
   buildCreateAssociatedTokenAccountInstruction,
   deriveAssociatedTokenAddress,
-  toWeb3Transaction,
   type PreparedTransaction,
   type TokenProgram,
 } from "@chainpay/sdk";
@@ -11,7 +10,7 @@ import { PublicKey, type Transaction } from "@solana/web3.js";
 import {
   chainpayClient,
   getAccountInfoOrNull,
-  submitSignedTransaction,
+  signAndSubmitTransaction,
   tokenAccountValidationError,
 } from "../owner/runtime";
 
@@ -86,11 +85,10 @@ export async function ensureAssociatedTokenAccount(input: {
     requiredSigners: [input.payer],
     feePayer: input.payer,
   };
-  const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-  const signed = await input.walletSigner(toWeb3Transaction(prepared, latest.blockhash));
-  const result = await submitSignedTransaction(
-    `${input.idempotencyPrefix}:${latest.blockhash}`,
-    signed.serialize(),
+  const result = await signAndSubmitTransaction(
+    prepared,
+    input.walletSigner,
+    (blockhash) => `${input.idempotencyPrefix}:${blockhash}`,
   );
   return { address, signature: result.signature };
 }

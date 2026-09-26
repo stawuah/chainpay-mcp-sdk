@@ -766,6 +766,37 @@ export async function submitSignedTransaction(idempotencyKey: string, signedTran
   return awaitSettlement(operation, payload);
 }
 
+/**
+ * Sign a prepared transaction and submit it, re-signing once if its blockhash
+ * expired while the owner was deciding.
+ *
+ * A signature commits to one blockhash, so a fresh one cannot be swapped in
+ * after the fact — the transaction has to be signed again. Devnet blockhashes
+ * last a minute or two, and a wallet that interrupts with a warning screen can
+ * outlive one easily. Retrying costs a second wallet prompt, which is honest
+ * about what it is: the same transaction, approved again, not a second
+ * transaction. Everything other than expiry is reported as it happened, and
+ * only one retry is made so a transaction that keeps failing keeps saying so.
+ */
+const EXPIRED_BLOCKHASH = /blockhash not found|block height exceeded|blockhashnotfound/i;
+
+export async function signAndSubmitTransaction(
+  prepared: PreparedTransaction,
+  walletSigner: (transaction: Transaction) => Promise<Transaction>,
+  idempotencyKey: (blockhash: string) => string,
+) {
+  for (let attempt = 0; ; attempt += 1) {
+    const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
+    const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
+    try {
+      return await submitSignedTransaction(idempotencyKey(latest.blockhash), signed.serialize());
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (attempt > 0 || !EXPIRED_BLOCKHASH.test(message)) throw cause;
+    }
+  }
+}
+
 export type ManagedSigner = {
   signer_id: string;
   owner_wallet: string;
