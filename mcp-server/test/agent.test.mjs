@@ -47,6 +47,17 @@ test("AI settlement outcome requires confirmed signature and receipt", () => {
   assert.equal(incomplete, undefined);
 });
 
+test("AI recognizes token-account creation as an owner approval", () => {
+  const outcome = outcomeFromToolResult({
+    structuredContent: {
+      action: "token_account_signature_required",
+      tokenAccount: "canonical-ata",
+      mint: "enabled-mint",
+    },
+  });
+  assert.equal(outcome?.kind, "token_account_approval_required");
+});
+
 test("agent executes an MCP lookup before answering", async () => {
   const previousFetch = globalThis.fetch;
   const previousOpenRouterKey = process.env.OPENROUTER_API_KEY;

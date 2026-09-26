@@ -22,21 +22,16 @@ chain but absent from the table still works; it is labelled by its address.
 | --- | --- | --- | --- |
 | USDC | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` | SPL Token | 6 |
 | PYUSD | `CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM` | Token-2022 | 6 |
-
-## Named and awaiting authority registration
-
-These are verified Devnet mints. The dashboard names them; the protocol
-authority has not yet enabled them, so they will not appear in the stablecoin
-list until it does.
-
-| Asset | Devnet mint | Token program | Decimals |
-| --- | --- | --- | --- |
 | EURC | `HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr` | SPL Token | 6 |
 | USDG | `4F6PM96JJxngmHnZLBh9n58RH4aTVNWvDs2nuwrT5BP7` | Token-2022 | 6 |
 
-Each was read from Devnet before being added: an initialized mint account, six
-decimals, EURC a plain 82-byte SPL mint and USDG a 869-byte Token-2022 mint
-whose account-type byte marks it a mint rather than a token account.
+All four registry entries were re-read from Devnet on 2026-09-24. EURC and USDG
+are enabled, but neither has a recorded ChainPay settlement baseline yet.
+Registration is not settlement acceptance: USDC and PYUSD remain the only
+assets with historical payment signatures checked by `npm run verify:devnet`.
+
+EURC is a plain 82-byte SPL mint. USDG is a Token-2022 mint whose account-type
+byte marks it as a mint rather than a token account.
 
 Two mainnet addresses were deliberately **not** carried over. The mainnet USDT
 mint is not a mint on Devnet — it resolves to an empty system-owned account. The

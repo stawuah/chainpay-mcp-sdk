@@ -20,3 +20,15 @@ Do not assume an npm registry release.
 - [Public exports](src/index.ts), [client methods](src/client.ts), and [types](src/types.ts): implementation reference.
 - [Payment-agent guide](../docs/guides/connect-an-agent.md): MCP integration and caller authorization.
 - [Documentation index](../docs/README.md).
+
+## Preparing wallet token accounts
+
+`prepareAssociatedTokenAccount({ owner, mint, payer })` checks that the mint is
+enabled in the on-chain asset registry, validates its token program, and checks
+the owner's canonical associated token account. It returns `status: "ready"`
+when the account exists or an unsigned, single-instruction transaction when it
+is missing. The caller must show that transaction to the wallet for approval.
+
+`prepareRegisteredAssetTokenAccounts(owner)` performs the same inspection for
+every enabled registry asset. Disabled assets are excluded. Neither method
+submits a transaction, funds an account, or grants a spending permission.

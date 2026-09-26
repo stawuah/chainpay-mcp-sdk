@@ -15,9 +15,11 @@ npm run verify:devnet
 ```
 
 `verify-devnet.mjs` is strictly read-only. It rejects non-Devnet RPCs and
-verifies the deployed ChainPay program, USDC and PYUSD mint owners, enabled
-asset PDAs, known confirmed settlements, and the current PYUSD transfer-fee and
-transfer-hook configuration. It never loads a signer or submits a transaction.
+verifies the deployed ChainPay program, the USDC, PYUSD, EURC, and USDG mint
+owners and enabled asset PDAs, the known confirmed USDC/PYUSD settlements, and
+the current PYUSD/USDG transfer-fee and transfer-hook configuration. EURC and
+USDG remain registry-and-mint checks until each has a recorded settlement
+baseline. The verifier never loads a signer or submits a transaction.
 
 ## Legacy live-stack verifier
 

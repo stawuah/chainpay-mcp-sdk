@@ -7,7 +7,7 @@ export type ConnectionScope = { version: 1; mandates: string[]; tools: string[];
 export type Principal = { wallet: string; scope: ConnectionScope | null };
 export class AuthorizationError extends Error {}
 export const PUBLIC_TOOLS = new Set(["get_protocol_config", "get_asset", "get_supported_assets", "verify_payment_request"]);
-const OWNER_TOOLS = new Set(["create_mandate", "update_mandate", "pause_mandate", "revoke_mandate"]);
+const OWNER_TOOLS = new Set(["create_mandate", "update_mandate", "pause_mandate", "revoke_mandate", "prepare_token_accounts"]);
 
 export function parseScope(value: string): ConnectionScope {
   let scope: ConnectionScope;
@@ -66,7 +66,7 @@ export async function authorizeTool(context: ChainPayMcpContext, name: string, a
   for (const field of ["owner", "wallet", "ownerWallet"]) {
     if (args[field] !== undefined && args[field] !== principal.wallet) throw new AuthorizationError("Wallet differs from verified owner");
   }
-  if (["list_mandates", "find_compatible_mandate", "create_mandate", "get_spend_overview", "list_receipts"].includes(name)) args.owner = principal.wallet;
+  if (["list_mandates", "find_compatible_mandate", "create_mandate", "prepare_token_accounts", "get_spend_overview", "list_receipts"].includes(name)) args.owner = principal.wallet;
   // Existing-operation resume is authorized again by Axum against the stored
   // owner and mandate. It never prepares or signs a new payment.
   if (name === "execute_x402_payment" && typeof args.paymentId === "string") return;
@@ -80,7 +80,7 @@ export async function authorizeTool(context: ChainPayMcpContext, name: string, a
     const mandate = await authorizeMandate(context, address);
     context.agentAddress = mandate.approvedAgent;
     if (args.agent !== undefined && args.agent !== mandate.approvedAgent) throw new AuthorizationError("Agent differs from approved mandate agent");
-  } else if (!PUBLIC_TOOLS.has(name) && !["list_mandates", "find_compatible_mandate", "create_mandate", "create_demo_payment_request", "quote_payment_request", "wait_for_payment", "get_spend_overview", "list_receipts"].includes(name)) {
+  } else if (!PUBLIC_TOOLS.has(name) && !["list_mandates", "find_compatible_mandate", "create_mandate", "prepare_token_accounts", "create_demo_payment_request", "quote_payment_request", "wait_for_payment", "get_spend_overview", "list_receipts"].includes(name)) {
     throw new AuthorizationError("An explicit owned mandate is required");
   }
 }

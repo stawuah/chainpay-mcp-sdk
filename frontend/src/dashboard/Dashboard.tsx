@@ -12,14 +12,10 @@ import { BrandLogo } from "../brand/Brand";
 import { useSidebarCollapse } from "./useSidebarCollapse";
 import { useSettlementFormStatus, settlementPendingEvent, settlementTerminalEvent, listStoredOperations, type Operation, isPendingSettlement } from "../settlement";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveReceiptAddress, deriveVersionedMandateAddress, formatExactTokenAmount, toWeb3Transaction } from "@chainpay/sdk";
+import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveReceiptAddress, deriveVersionedMandateAddress, formatExactTokenAmount, toWeb3Transaction } from "@chainpay/sdk";
 import type { Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, TokenProgram } from "@chainpay/sdk";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import solWalletImage from "../assets/brands/solana.svg";
-import usdcWalletImage from "../assets/brands/usdc.svg";
-import pyusdWalletImage from "../assets/brands/pyusd.png";
-import eurcWalletImage from "../assets/brands/eurc.svg";
-import usdgWalletImage from "../assets/brands/usdg.svg";
 import { buildPath, type DashboardTab } from "../routing/paths";
 import { useRoute } from "../routing/useRoute";
 import { RecordDetails } from "../ui/RecordDetails";
@@ -75,10 +71,8 @@ import { catalogQuoteForProvider, fetchPayshCatalog, type PayshCatalogProvider }
 import {
   AGENT_URL,
   BACKEND_URL,
-  DEVNET_EURC_MINT,
   DEVNET_PYUSD_TOKEN_2022_MINT,
   DEVNET_USDC_MINT,
-  DEVNET_USDG_TOKEN_2022_MINT,
   MCP_URL,
   PROGRAM_ID,
   chainpayClient,
@@ -188,27 +182,20 @@ export type DashboardProps = {
 };
 
 type WalletAssetSummary = {
-  symbol: "SOL" | "USDC" | "PYUSD" | "EURC" | "USDG";
+  symbol: string;
   address: string;
+  mint?: string;
   balance: string;
   exists: boolean;
   loading: boolean;
 };
 
-const walletAssetDefinitions: Array<{ symbol: "USDC" | "PYUSD" | "EURC" | "USDG"; mint: string; tokenProgram: TokenProgram }> = [
-  { symbol: "USDC", mint: DEVNET_USDC_MINT, tokenProgram: "spl-token" },
-  { symbol: "PYUSD", mint: DEVNET_PYUSD_TOKEN_2022_MINT, tokenProgram: "token-2022" },
-  { symbol: "EURC", mint: DEVNET_EURC_MINT, tokenProgram: "spl-token" },
-  { symbol: "USDG", mint: DEVNET_USDG_TOKEN_2022_MINT, tokenProgram: "token-2022" },
-];
-
-const walletAssetImages = {
-  SOL: solWalletImage,
-  USDC: usdcWalletImage,
-  PYUSD: pyusdWalletImage,
-  EURC: eurcWalletImage,
-  USDG: usdgWalletImage,
-} as const;
+async function simulateTokenAccountCreation(transaction: Transaction) {
+  const simulation = await chainpayClient.connection.simulateTransaction(transaction);
+  if (simulation.value.err) {
+    throw new Error(`Token-account creation simulation failed: ${JSON.stringify(simulation.value.err)}`);
+  }
+}
 
 export function Dashboard({
   wallet,
@@ -285,6 +272,9 @@ export function Dashboard({
   const [hostedAssistantStatus, setHostedAssistantStatus] = useState<"unknown" | "available" | "unavailable">("unknown");
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [walletAssets, setWalletAssets] = useState<WalletAssetSummary[]>([]);
+  const [walletAssetRefresh, setWalletAssetRefresh] = useState(0);
+  const [preparingWalletAsset, setPreparingWalletAsset] = useState("");
+  const [walletAssetError, setWalletAssetError] = useState("");
   const [copiedWalletAddress, setCopiedWalletAddress] = useState("");
   const walletCopyTimer = useRef<number | null>(null);
   const toast = useToast();
@@ -292,10 +282,8 @@ export function Dashboard({
   const spent = mandate ? formatTokenAmount(mandate.amountSpent, mandateDecimals) : "—";
   const solWalletAsset = walletAssets.find((asset) => asset.symbol === "SOL");
   const tokenWalletAssets = walletAssets.filter((asset) => asset.symbol !== "SOL");
-  const walletAssetSourceKey = mandates
-    .filter((item) => item.owner === wallet)
-    .map((item) => `${item.allowedMint}:${item.sourceTokenAccount}`)
-    .sort()
+  const walletAssetRegistryKey = stablecoinOptions
+    .map((item) => `${item.mint}:${item.tokenProgram}:${item.label}`)
     .join("|");
 
   useEffect(() => {
@@ -343,16 +331,12 @@ export function Dashboard({
   useEffect(() => {
     if (!walletMenuOpen) return;
     let active = true;
-    const sourceByMint = new Map(
-      mandates
-        .filter((item) => item.owner === wallet)
-        .map((item) => [item.allowedMint, item.sourceTokenAccount] as const),
-    );
     const initialAssets: WalletAssetSummary[] = [
       { symbol: "SOL", address: wallet, balance: "—", exists: true, loading: true },
-      ...walletAssetDefinitions.map((asset) => ({
-        symbol: asset.symbol,
-        address: sourceByMint.get(asset.mint) ?? deriveAssociatedTokenAddress(wallet, asset.mint, asset.tokenProgram),
+      ...stablecoinOptions.map((asset) => ({
+        symbol: asset.label,
+        mint: asset.mint,
+        address: deriveAssociatedTokenAddress(wallet, asset.mint, asset.tokenProgram),
         balance: "—",
         exists: false,
         loading: true,
@@ -361,34 +345,87 @@ export function Dashboard({
     setWalletAssets(initialAssets);
 
     async function loadWalletAssets() {
-      const solPromise = chainpayClient.connection.getBalance(new PublicKey(wallet), "confirmed")
-        .then((lamports): WalletAssetSummary => ({
-          symbol: "SOL",
-          address: wallet,
-          balance: formatTokenAmount(BigInt(lamports), 9),
-          exists: true,
+      try {
+        const solPromise = chainpayClient.connection.getBalance(new PublicKey(wallet), "confirmed")
+          .then((lamports): WalletAssetSummary => ({
+            symbol: "SOL",
+            address: wallet,
+            balance: formatTokenAmount(BigInt(lamports), 9),
+            exists: true,
+            loading: false,
+          }));
+        const preparations = await chainpayClient.prepareRegisteredAssetTokenAccounts(wallet);
+        const tokenPromises = preparations.map(async (preparation): Promise<WalletAssetSummary> => {
+          const symbol = stablecoinOptions.find((asset) => asset.mint === preparation.mint)?.label
+            ?? shortAddress(preparation.mint);
+          if (preparation.status === "missing") {
+            return { symbol, mint: preparation.mint, address: preparation.address, balance: "Not created", exists: false, loading: false };
+          }
+          const balance = await chainpayClient.connection.getTokenAccountBalance(new PublicKey(preparation.address), "confirmed");
+          return { symbol, mint: preparation.mint, address: preparation.address, balance: balance.value.uiAmountString ?? balance.value.amount, exists: true, loading: false };
+        });
+        const [solState, tokenStates] = await Promise.all([
+          Promise.allSettled([solPromise]).then(([state]) => state),
+          Promise.allSettled(tokenPromises),
+        ]);
+        if (!active) return;
+        const solAsset = solState.status === "fulfilled" ? solState.value : {
+          ...initialAssets[0],
+          balance: "Unavailable",
           loading: false,
-        }));
-      const tokenPromises = walletAssetDefinitions.map(async (asset): Promise<WalletAssetSummary> => {
-        const address = sourceByMint.get(asset.mint) ?? deriveAssociatedTokenAddress(wallet, asset.mint, asset.tokenProgram);
-        const account = await getAccountInfoOrNull(new PublicKey(address));
-        if (!account || tokenAccountValidationError(account, asset.mint, wallet, asset.tokenProgram)) {
-          return { symbol: asset.symbol, address, balance: "0", exists: false, loading: false };
-        }
-        const balance = await chainpayClient.connection.getTokenAccountBalance(new PublicKey(address), "confirmed");
-        return { symbol: asset.symbol, address, balance: balance.value.uiAmountString ?? balance.value.amount, exists: true, loading: false };
-      });
-      const states = await Promise.allSettled([solPromise, ...tokenPromises]);
-      if (!active) return;
-      setWalletAssets(states.map((state, index) => state.status === "fulfilled" ? state.value : {
-        ...initialAssets[index],
-        balance: "Unavailable",
-        loading: false,
-      }));
+        };
+        const tokenAssets = tokenStates.map((state, index) => {
+          if (state.status === "fulfilled") return state.value;
+          const preparation = preparations[index];
+          return {
+            symbol: stablecoinOptions.find((asset) => asset.mint === preparation.mint)?.label ?? shortAddress(preparation.mint),
+            mint: preparation.mint,
+            address: preparation.address,
+            balance: "Unavailable",
+            exists: preparation.status === "ready",
+            loading: false,
+          };
+        });
+        setWalletAssets([solAsset, ...tokenAssets]);
+      } catch {
+        if (!active) return;
+        setWalletAssets(initialAssets.map((asset) => ({ ...asset, balance: "Unavailable", loading: false })));
+      }
     }
     void loadWalletAssets();
     return () => { active = false; };
-  }, [wallet, walletAssetSourceKey, walletMenuOpen]);
+  }, [wallet, walletAssetRefresh, walletAssetRegistryKey, walletMenuOpen]);
+
+  async function prepareWalletAssetAccount(asset: WalletAssetSummary) {
+    if (!asset.mint || asset.exists) return;
+    setPreparingWalletAsset(asset.mint);
+    setWalletAssetError("");
+    try {
+      if (!walletSigner) throw new Error("The connected wallet cannot sign the account-creation transaction.");
+      const preparation = await chainpayClient.prepareAssociatedTokenAccount({
+        owner: wallet,
+        payer: wallet,
+        mint: asset.mint,
+      });
+      if (preparation.status === "ready") {
+        setWalletAssetRefresh((value) => value + 1);
+        return;
+      }
+      if (!preparation.transaction) throw new Error("The SDK did not return an account-creation transaction.");
+      const balance = await chainpayClient.connection.getBalance(new PublicKey(wallet), "confirmed");
+      if (balance === 0) throw new Error("Add Devnet SOL to this wallet before creating a token account.");
+      const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
+      const transaction = toWeb3Transaction(preparation.transaction, latest.blockhash);
+      await simulateTokenAccountCreation(transaction);
+      const signed = await walletSigner(transaction);
+      await submitSignedTransaction(`ata:${wallet}:${preparation.address}:${latest.blockhash}`, signed.serialize());
+      setWalletAssetRefresh((value) => value + 1);
+    } catch (cause) {
+      setWalletAssetError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPreparingWalletAsset("");
+    }
+  }
 
   useEffect(() => {
     if (wallet) persistAgentInbox(wallet, agentInbox);
@@ -724,7 +761,9 @@ export function Dashboard({
         throw new Error("This approval is addressed to a different signer wallet.");
       }
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-      const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
+      const transaction = toWeb3Transaction(prepared, latest.blockhash);
+      if (agentApproval.kind === "token_account") await simulateTokenAccountCreation(transaction);
+      const signed = await walletSigner(transaction);
       if (agentApproval.kind === "mandate") {
         const result = await submitSignedTransaction(`agent-mandate:${agentApproval.mandateAddress ?? latest.blockhash}:${latest.blockhash}`, signed.serialize());
         const response = `Mandate approved${result.signature ? ` (${shortAddress(result.signature)})` : ""}. The agent can now use this policy within the limits you approved without another wallet prompt.`;
@@ -733,6 +772,21 @@ export function Dashboard({
         updateAgentInboxItem(inboxId, { response, stage: "approved", approval: undefined });
         await onRefresh(agentApproval.mandateAddress);
         if (result.signature) setAgentToolsUsed((current) => [...current, "wallet_approval"]);
+      } else if (agentApproval.kind === "token_account") {
+        if (typeof agentApproval.tokenAccount !== "string" || typeof agentApproval.mint !== "string") {
+          throw new Error("The token-account approval is missing its mint or canonical account address.");
+        }
+        const result = await submitSignedTransaction(
+          `agent-ata:${wallet}:${agentApproval.tokenAccount}:${latest.blockhash}`,
+          signed.serialize(),
+        );
+        const response = `Token account created${result.signature ? ` (${shortAddress(result.signature)})` : ""}. It can now receive this asset, but it still needs a token balance before it can send payments.`;
+        setApprovalStatuses((current) => ({ ...current, [inboxId]: "success" }));
+        setReply(response);
+        updateAgentInboxItem(inboxId, { response, stage: "approved", approval: undefined });
+        setAgentToolsUsed((current) => [...current, "wallet_approval", "prepare_token_accounts"]);
+        setWalletAssetRefresh((value) => value + 1);
+        await onRefresh();
       } else {
         if (!agentApproval.payment || typeof agentApproval.payment !== "object") {
           throw new Error("The prepared payment did not include its policy request details.");
@@ -938,7 +992,8 @@ export function Dashboard({
                     <section className="wallet-asset-popover">
                       <div className="wallet-asset-header"><div className="wallet-asset-heading"><WalletBrandMark name={walletName} icon={walletIcon} size={28} /><div><span className="soft-label">CONNECTED WALLET</span><strong>{walletName}</strong></div></div><span className="wallet-network-pill"><i /> Devnet</span></div>
                       <button type="button" className="wallet-owner-address" onClick={() => void copyWalletAddress(wallet)} title="Copy connected wallet address"><span><strong>{shortAddress(wallet)}</strong><small>{copiedWalletAddress === wallet ? "Address copied" : "Copy wallet address"}</small></span><Copy size={16} /></button>
-                      <div className="wallet-asset-list">{walletAssets.map((asset) => <div className="owner-wallet-asset" key={asset.symbol}><img src={walletAssetImages[asset.symbol]} alt="" /><span>{asset.symbol}</span><strong>{asset.loading ? "Loading…" : asset.balance}</strong></div>)}</div>
+                      <div className="wallet-asset-list">{walletAssets.map((asset) => <div className="owner-wallet-asset" key={asset.mint ?? "SOL"}>{asset.mint ? <TokenIcon mint={asset.mint} size={24} /> : <img src={solWalletImage} alt="" />}<span>{asset.symbol}</span><span className="owner-wallet-asset-state"><strong>{asset.loading ? "Loading…" : asset.balance}</strong>{asset.mint && !asset.loading && !asset.exists && <button type="button" disabled={Boolean(preparingWalletAsset)} onClick={() => void prepareWalletAssetAccount(asset)}>{preparingWalletAsset === asset.mint ? "Waiting for wallet…" : "Create account"}</button>}</span></div>)}</div>
+                      {walletAssetError && <p className="wallet-asset-error" role="alert">{walletAssetError}</p>}
                       <div className="wallet-asset-actions">
                         <Button type="button" variant="secondary" label={switchingWalletAccount ? "Opening wallet…" : "Change account"} isDisabled={switchingWalletAccount} onClick={() => { setWalletMenuOpen(false); onChangeAccount(); }} />
                         <Button type="button" variant="secondary" label="Change wallet" isDisabled={false} onClick={() => { setWalletMenuOpen(false); onChangeWallet(); }} />
@@ -2663,6 +2718,7 @@ function AssistantPanel({ prompt, setPrompt, reply, thinking, listening, agentTo
 function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimals, onApprove }: { approval: AgentApproval; status: ApprovalStatus; error: string; stablecoinOptions: StablecoinOption[]; decimals: number | null; onApprove: () => Promise<void> }) {
   const instructionNames = approval.transaction?.instructions?.map((instruction) => instruction.name).join(" + ") || "mandate transaction";
   const isPayment = approval.kind === "payment";
+  const isTokenAccount = approval.kind === "token_account";
   const payment = approval.payment;
   const amount = typeof payment?.amount === "string" ? payment.amount : undefined;
   const tokenMint = typeof payment?.mint === "string" ? payment.mint : undefined;
@@ -2677,7 +2733,7 @@ function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimal
       displayAmount = `${amount} base units`;
     }
   }
-  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Approve payment" : "Approve this mandate once"}</h3></div><span className={`state-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "pending" ? "Pending settlement" : status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "Review the amount, recipient, and policy checks below. Approve in your wallet to complete the payment." : "The AI prepared this spending policy. Approve it once; future policy-compliant payments can settle without another wallet prompt."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b><code>{displayAmount}</code></span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<Button type="button" variant="primary" className="full-button" label={status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Approve payment in wallet" : "Approve wallet once"} isDisabled={status === "signing" || status === "pending" || status === "success"} onClick={() => void onApprove()} /></div>;
+  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Approve payment" : isTokenAccount ? "Create token account" : "Approve this mandate once"}</h3></div><span className={`state-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "pending" ? "Pending settlement" : status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "Review the amount, recipient, and policy checks below. Approve in your wallet to complete the payment." : isTokenAccount ? "The AI prepared one canonical token-account creation. Approving spends Devnet SOL for account rent; it does not fund the account or authorize payments." : "The AI prepared this spending policy. Approve it once; future policy-compliant payments can settle without another wallet prompt."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b><code>{displayAmount}</code></span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : isTokenAccount ? <><span><b>Mint</b>{approval.mint ? <code>{shortAddress(approval.mint)}</code> : "Enabled asset"}</span><span><b>Token account</b>{approval.tokenAccount ? <code>{shortAddress(approval.tokenAccount)}</code> : "Canonical ATA"}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<Button type="button" variant="primary" className="full-button" label={status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Approve payment in wallet" : isTokenAccount ? "Create account in wallet" : "Approve wallet once"} isDisabled={status === "signing" || status === "pending" || status === "success"} onClick={() => void onApprove()} /></div>;
 }
 
 function ToolsPanel({ mcpTools }: { mcpTools: McpTool[] }) {
@@ -3370,17 +3426,13 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
     setError("");
     try {
       const mint = form.allowedMint.trim();
-      const mintInfo = await getAccountInfoOrNull(new PublicKey(mint));
-      if (!mintInfo) throw new Error(`The selected ${form.tokenProgram === "token-2022" ? "Token-2022" : "SPL Token"} mint was not found on this network. Run the Devnet bootstrap first.`);
-      const expectedProgram = form.tokenProgram === "token-2022" ? TOKEN_2022_PROGRAM_ID : SPL_TOKEN_PROGRAM_ID;
-      if (mintInfo.owner.toBase58() !== expectedProgram) throw new Error("The selected mint does not belong to the selected token program.");
-
-      const tokenAccount = deriveAssociatedTokenAddress(wallet, mint, form.tokenProgram);
+      const preparation = await chainpayClient.prepareAssociatedTokenAccount({ owner: wallet, payer: wallet, mint });
+      if (preparation.tokenProgram !== form.tokenProgram) {
+        throw new Error("The registry token program does not match the selected token program.");
+      }
+      const tokenAccount = preparation.address;
       setForm((current) => ({ ...current, sourceTokenAccount: tokenAccount }));
-      const existing = await getAccountInfoOrNull(new PublicKey(tokenAccount));
-      if (existing) {
-        const issue = tokenAccountValidationError(existing, mint, wallet, form.tokenProgram);
-        if (issue) throw new Error(issue);
+      if (preparation.status === "ready") {
         setAccountSignature("");
         setAccountSetup("ready");
         return;
@@ -3390,19 +3442,10 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
         throw new Error("Add Devnet SOL to this wallet before preparing it for payments.");
       }
       if (!walletSigner) throw new Error("The connected wallet does not expose transaction signing.");
-      const instruction = buildCreateAssociatedTokenAccountInstruction({
-        payer: wallet,
-        owner: wallet,
-        mint: form.allowedMint.trim(),
-        tokenProgram: form.tokenProgram,
-      });
-      const prepared: PreparedTransaction = {
-        instructions: [instruction],
-        requiredSigners: [wallet],
-        feePayer: wallet,
-      };
+      if (!preparation.transaction) throw new Error("The SDK did not return an account-creation transaction.");
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-      const transaction = toWeb3Transaction(prepared, latest.blockhash);
+      const transaction = toWeb3Transaction(preparation.transaction, latest.blockhash);
+      await simulateTokenAccountCreation(transaction);
       const signed = await walletSigner(transaction);
       const result = await submitSignedTransaction(`ata:${wallet}:${tokenAccount}:${latest.blockhash}`, signed.serialize());
       setAccountSignature(result.signature ?? "");
