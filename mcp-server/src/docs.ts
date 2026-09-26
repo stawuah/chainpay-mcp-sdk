@@ -117,6 +117,8 @@ function renderAssetStrip(): string {
     { src: "/assets/brands/solana.svg", name: "Solana", role: "Network · Devnet" },
     { src: "/assets/brands/usdc.svg", name: "USDC", role: "Supported token · Devnet" },
     { src: "/assets/brands/pyusd.png", name: "PYUSD", role: "PayPal USD · Devnet" },
+    { src: "/assets/brands/eurc.svg", name: "EURC", role: "Euro stablecoin · Devnet" },
+    { src: "/assets/brands/usdg.svg", name: "USDG", role: "Global Dollar · Devnet" },
   ];
   return items.map((item) => `<div class="asset-item"><img class="asset-mark" src="${item.src}" alt="" width="36" height="36" loading="lazy" /><div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.role)}</span></div></div>`).join("");
 }

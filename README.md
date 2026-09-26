@@ -4,7 +4,7 @@
 
 <h1 align="center">ChainPay</h1>
 
-<p align="center"><strong>Give agents spending limits. Keep control of your funds.</strong></p>
+<p align="center"><strong>Give agents spending limits. Keep control of your funds. Access to more payment rails</strong></p>
 
 ChainPay lets you give an AI agent permission to make stablecoin payments on
 Solana within limits you approve. The on-chain program checks each payment
