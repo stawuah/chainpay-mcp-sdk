@@ -259,13 +259,22 @@ fn validate_approve_checked(
     Ok(())
 }
 
+/// Legacy Create uses an empty payload. CreateIdempotent is the single byte 1.
+/// Anything else, including a raw 0, is not an associated-token setup.
+fn supported_ata_instruction_data(data: &[u8]) -> bool {
+    data.is_empty() || data == [1u8]
+}
+
 fn validate_ata_creation(
     tx: &VersionedTransaction,
     wallet: &str,
     owner_must_be_wallet: bool,
 ) -> Result<(), ApiError> {
     let ix = &payload_instructions(tx)[0];
-    if payload_instructions(tx).len() != 1 || !ix.data.is_empty() || ix.accounts.len() != 6 {
+    if payload_instructions(tx).len() != 1
+        || !supported_ata_instruction_data(&ix.data)
+        || ix.accounts.len() != 6
+    {
         return Err(bad("Only standalone associated-token setup is supported"));
     }
     let accounts = ix
@@ -1982,5 +1991,101 @@ pub(super) mod tests {
             message: register,
         };
         assert!(owner(&extra_ix, &wallet, DEFAULT_PROGRAM_ID).is_err());
+    }
+
+    /// Empty data is the legacy Create. A single 1 is CreateIdempotent, which
+    /// succeeds when the account already exists. Any other payload is refused.
+    #[test]
+    fn ata_creation_accepts_legacy_and_idempotent_payloads_only() {
+        let signer = SigningKey::from_bytes(&[9; 32]);
+        let wallet = Address::from(signer.verifying_key().to_bytes()).to_string();
+        let mint = Address::from([5; 32]).to_string();
+        let ata_program = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+        let owner_ata = pda(
+            ata_program,
+            &[
+                &address_bytes(&wallet).unwrap(),
+                &address_bytes(SPL_TOKEN_PROGRAM_ID).unwrap(),
+                &[5; 32],
+            ],
+        )
+        .unwrap();
+        let recipient = bs58::encode([9; 32]).into_string();
+        let recipient_ata = pda(
+            ata_program,
+            &[
+                &address_bytes(&recipient).unwrap(),
+                &address_bytes(SPL_TOKEN_PROGRAM_ID).unwrap(),
+                &[5; 32],
+            ],
+        )
+        .unwrap();
+
+        let sign = |message: VersionedMessage| VersionedTransaction {
+            signatures: vec![signer.sign(&message.serialize()).to_bytes().into()],
+            message,
+        };
+        let owner_tx = |data: Vec<u8>| {
+            sign(VersionedMessage::Legacy(Message {
+                header: MessageHeader {
+                    num_required_signatures: 1,
+                    num_readonly_signed_accounts: 0,
+                    num_readonly_unsigned_accounts: 4,
+                },
+                account_keys: [
+                    wallet.clone(),
+                    owner_ata.clone(),
+                    mint.clone(),
+                    SPL_TOKEN_PROGRAM_ID.into(),
+                    SYSTEM_PROGRAM.into(),
+                    ata_program.into(),
+                ]
+                .map(|value| Address::from_str(&value).unwrap())
+                .to_vec(),
+                recent_blockhash: Default::default(),
+                instructions: vec![CompiledInstruction {
+                    program_id_index: 5,
+                    accounts: vec![0, 1, 0, 2, 4, 3],
+                    data,
+                }],
+            }))
+        };
+        let recipient_tx = |data: Vec<u8>| {
+            sign(VersionedMessage::Legacy(Message {
+                header: MessageHeader {
+                    num_required_signatures: 1,
+                    num_readonly_signed_accounts: 0,
+                    num_readonly_unsigned_accounts: 4,
+                },
+                account_keys: [
+                    wallet.clone(),
+                    recipient_ata.clone(),
+                    recipient.clone(),
+                    mint.clone(),
+                    SPL_TOKEN_PROGRAM_ID.into(),
+                    SYSTEM_PROGRAM.into(),
+                    ata_program.into(),
+                ]
+                .map(|value| Address::from_str(&value).unwrap())
+                .to_vec(),
+                recent_blockhash: Default::default(),
+                instructions: vec![CompiledInstruction {
+                    program_id_index: 6,
+                    accounts: vec![0, 1, 2, 3, 5, 4],
+                    data,
+                }],
+            }))
+        };
+
+        let accept = |tx: VersionedTransaction| owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+        let reject = |tx: VersionedTransaction| assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
+        accept(owner_tx(vec![]));
+        accept(owner_tx(vec![1]));
+        accept(recipient_tx(vec![]));
+        accept(recipient_tx(vec![1]));
+        for data in [vec![0_u8], vec![2], vec![1, 0]] {
+            reject(owner_tx(data.clone()));
+            reject(recipient_tx(data));
+        }
     }
 }

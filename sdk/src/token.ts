@@ -52,7 +52,9 @@ export function buildCreateAssociatedTokenAccountInstruction(input: {
       systemProgramMeta(),
       meta(tokenProgramAddress(input.tokenProgram)),
     ],
-    new Uint8Array(),
+    // 1 is CreateIdempotent. Empty data is the legacy Create, which fails
+    // when the account already exists and Phantom shows that as a red banner.
+    new Uint8Array([1]),
   );
 }
 
