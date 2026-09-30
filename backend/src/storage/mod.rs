@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 use crate::delivery::{DeliveryAttestationPut, DeliveryAttestationRecord};
 use crate::status::{
     ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord, PaymentStatus,
-    SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
+    ConnectorKind, SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
 };
 
 #[derive(Debug, Error)]
@@ -476,10 +476,13 @@ impl StatusStore {
         }
     }
 
-    /// List x402 jobs for one owner wallet. Idempotency keys are `{wallet}:{user_key}`.
-    pub async fn list_x402_for_owner(
+    /// List one connector's jobs for one owner wallet. Idempotency keys are
+    /// `{wallet}:{user_key}`. The connector is required so an x402 listing can
+    /// never answer with a Crossmint job, or the reverse.
+    pub async fn list_connector_jobs(
         &self,
         owner_wallet: &str,
+        connector: ConnectorKind,
         mandate: Option<&str>,
         limit: u32,
     ) -> Result<Vec<(X402PaymentRecord, Option<String>)>, StorageError> {
@@ -491,6 +494,7 @@ impl StatusStore {
                 let mut rows: Vec<(X402PaymentRecord, Option<String>)> = state
                     .x402_payments
                     .values()
+                    .filter(|record| record.connector == connector)
                     .filter(|record| record.idempotency_key.starts_with(&prefix))
                     .filter_map(|record| {
                         let linked_mandate = record.payment_id.as_ref().and_then(|payment_id| {
@@ -515,6 +519,7 @@ impl StatusStore {
                 let rows = if let Some(mandate) = mandate {
                     sqlx::query(X402_LIST_FOR_OWNER_WITH_MANDATE)
                         .bind(format!("{prefix}%"))
+                        .bind(connector.as_str())
                         .bind(mandate)
                         .bind(limit as i64)
                         .fetch_all(pool)
@@ -522,6 +527,7 @@ impl StatusStore {
                 } else {
                     sqlx::query(X402_LIST_FOR_OWNER)
                         .bind(format!("{prefix}%"))
+                        .bind(connector.as_str())
                         .bind(limit as i64)
                         .fetch_all(pool)
                         .await?
@@ -551,6 +557,41 @@ impl StatusStore {
             StorageBackend::Postgres(pool) => {
                 let row = sqlx::query(X402_SELECT_BY_IDEMPOTENCY)
                     .bind(key)
+                    .fetch_optional(pool)
+                    .await?;
+                row.map(x402_from_row).transpose()
+            }
+        }
+    }
+
+    /// The most recently updated job for one connector reference, such as a
+    /// Crossmint order id. Used to refuse a second payment for an obligation
+    /// that already has one, which the receipt PDA alone cannot prevent across
+    /// two different mandates.
+    pub async fn find_connector_job_by_reference(
+        &self,
+        connector: ConnectorKind,
+        reference: &str,
+    ) -> Result<Option<X402PaymentRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let state = state.read().await;
+                let mut rows: Vec<X402PaymentRecord> = state
+                    .x402_payments
+                    .values()
+                    .filter(|record| {
+                        record.connector == connector
+                            && record.connector_reference.as_deref() == Some(reference)
+                    })
+                    .cloned()
+                    .collect();
+                rows.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
+                Ok(rows.into_iter().next())
+            }
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(X402_SELECT_BY_CONNECTOR_REFERENCE)
+                    .bind(connector.as_str())
+                    .bind(reference)
                     .fetch_optional(pool)
                     .await?;
                 row.map(x402_from_row).transpose()
@@ -600,13 +641,17 @@ impl StatusStore {
                     INSERT INTO x402_payments (
                         x402_payment_id, idempotency_key, resource, payment_id,
                         receipt_address, transaction_signature, status, challenge,
-                        proof, response_status, error, created_at, updated_at
+                        proof, response_status, error, created_at, updated_at,
+                        connector, connector_reference
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                         TO_TIMESTAMP($12::DOUBLE PRECISION / 1000.0),
-                        TO_TIMESTAMP($13::DOUBLE PRECISION / 1000.0)
+                        TO_TIMESTAMP($13::DOUBLE PRECISION / 1000.0),
+                        $14, $15
                     )
                     ON CONFLICT (x402_payment_id) DO UPDATE SET
+                        connector = EXCLUDED.connector,
+                        connector_reference = COALESCE(EXCLUDED.connector_reference,x402_payments.connector_reference),
                         resource = EXCLUDED.resource,
                         payment_id = EXCLUDED.payment_id,
                         receipt_address = EXCLUDED.receipt_address,
@@ -633,6 +678,8 @@ impl StatusStore {
                 .bind(&record.error)
                 .bind(to_i64(Some(record.created_at_ms), "created_at_ms")?)
                 .bind(to_i64(Some(record.updated_at_ms), "updated_at_ms")?)
+                .bind(record.connector.as_str())
+                .bind(&record.connector_reference)
                 .execute(pool)
                 .await?;
                 Ok(())
@@ -955,7 +1002,7 @@ const TRANSACTION_SELECT_BY_IDEMPOTENCY: &str = r#"
 "#;
 
 const X402_SELECT_BY_IDEMPOTENCY: &str = r#"
-    SELECT x402_payment_id, idempotency_key, resource, payment_id,
+    SELECT x402_payment_id, idempotency_key, connector, connector_reference, resource, payment_id,
            receipt_address, transaction_signature, status, challenge, proof,
            response_status, error,
            (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
@@ -963,8 +1010,20 @@ const X402_SELECT_BY_IDEMPOTENCY: &str = r#"
     FROM x402_payments WHERE idempotency_key = $1
 "#;
 
+const X402_SELECT_BY_CONNECTOR_REFERENCE: &str = r#"
+    SELECT x402_payment_id, idempotency_key, connector, connector_reference, resource, payment_id,
+           receipt_address, transaction_signature, status, challenge, proof,
+           response_status, error,
+           (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
+           (EXTRACT(EPOCH FROM updated_at) * 1000)::BIGINT AS updated_at_ms
+    FROM x402_payments
+    WHERE connector = $1 AND connector_reference = $2
+    ORDER BY updated_at DESC
+    LIMIT 1
+"#;
+
 const X402_LIST_FOR_OWNER: &str = r#"
-    SELECT x.x402_payment_id, x.idempotency_key, x.resource, x.payment_id,
+    SELECT x.x402_payment_id, x.idempotency_key, x.connector, x.connector_reference, x.resource, x.payment_id,
            x.receipt_address, x.transaction_signature, x.status, x.challenge, x.proof,
            x.response_status, x.error,
            (EXTRACT(EPOCH FROM x.created_at) * 1000)::BIGINT AS created_at_ms,
@@ -978,7 +1037,7 @@ const X402_LIST_FOR_OWNER: &str = r#"
 "#;
 
 const X402_LIST_FOR_OWNER_WITH_MANDATE: &str = r#"
-    SELECT x.x402_payment_id, x.idempotency_key, x.resource, x.payment_id,
+    SELECT x.x402_payment_id, x.idempotency_key, x.connector, x.connector_reference, x.resource, x.payment_id,
            x.receipt_address, x.transaction_signature, x.status, x.challenge, x.proof,
            x.response_status, x.error,
            (EXTRACT(EPOCH FROM x.created_at) * 1000)::BIGINT AS created_at_ms,
@@ -1108,6 +1167,8 @@ fn x402_from_row(row: PgRow) -> Result<X402PaymentRecord, StorageError> {
     Ok(X402PaymentRecord {
         x402_payment_id: row.try_get("x402_payment_id")?,
         idempotency_key: row.try_get("idempotency_key")?,
+        connector: parse_connector(row.try_get("connector")?)?,
+        connector_reference: row.try_get("connector_reference")?,
         resource: row.try_get("resource")?,
         payment_id: row.try_get("payment_id")?,
         receipt_address: row.try_get("receipt_address")?,
@@ -1194,6 +1255,13 @@ fn parse_managed_signer_status(value: String) -> Result<ManagedSignerStatus, Sto
             value,
         }),
     }
+}
+
+fn parse_connector(value: String) -> Result<ConnectorKind, StorageError> {
+    ConnectorKind::parse(&value).ok_or(StorageError::InvalidValue {
+        field: "connector",
+        value,
+    })
 }
 
 fn x402_status_name(status: X402PaymentStatus) -> &'static str {

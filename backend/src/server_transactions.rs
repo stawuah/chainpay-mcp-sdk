@@ -690,6 +690,7 @@ pub(super) fn batch_payment_requests(
             signed_transaction: String::new(),
             agent: Some(key(tx, ix.accounts[4])?),
             mint: Some(key(tx, ix.accounts[5])?),
+            crossmint: None,
             recipient: key(tx, ix.accounts[7])?,
             amount: Some(u64::from_le_bytes(ix.data[104..112].try_into().unwrap())),
             token_program: Some(
