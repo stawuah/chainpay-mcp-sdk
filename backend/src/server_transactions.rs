@@ -699,6 +699,7 @@ pub(super) fn batch_payment_requests(
             signed_transaction: String::new(),
             agent: Some(key(tx, ix.accounts[4])?),
             mint: Some(key(tx, ix.accounts[5])?),
+            crossmint: None,
             recipient: key(tx, ix.accounts[7])?,
             amount: Some(u64::from_le_bytes(ix.data[104..112].try_into().unwrap())),
             token_program: Some(
@@ -972,6 +973,7 @@ pub(super) mod tests {
             amount: Some(10),
             token_program: Some("spl-token".into()),
             x402: None,
+            crossmint: None,
         };
         (tx, request, signer)
     }
@@ -2078,7 +2080,8 @@ pub(super) mod tests {
         };
 
         let accept = |tx: VersionedTransaction| owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
-        let reject = |tx: VersionedTransaction| assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
+        let reject =
+            |tx: VersionedTransaction| assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
         accept(owner_tx(vec![]));
         accept(owner_tx(vec![1]));
         accept(recipient_tx(vec![]));

@@ -53,6 +53,8 @@ pub struct PaymentSubmissionRequest {
     pub token_program: Option<String>,
     #[serde(default)]
     pub x402: Option<X402PaymentMetadata>,
+    #[serde(default)]
+    pub crossmint: Option<CrossmintPaymentMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -95,6 +97,8 @@ pub struct ManagedPaymentSubmissionRequest {
     pub token_program: String,
     #[serde(default)]
     pub x402: Option<X402PaymentMetadata>,
+    #[serde(default)]
+    pub crossmint: Option<CrossmintPaymentMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +106,74 @@ pub struct ManagedPaymentSubmissionRequest {
 pub struct X402PaymentMetadata {
     pub resource: String,
     pub challenge: serde_json::Value,
+}
+
+/// What ChainPay was asked to pay on Crossmint's side. `terms` is the payment
+/// ChainPay read out of Crossmint's own prepared transaction; it is stored so a
+/// settled payment can be explained later without re-fetching the order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrossmintPaymentMetadata {
+    pub order_id: String,
+    #[serde(default)]
+    pub order_url: Option<String>,
+    pub terms: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrossmintOrderProofRequest {
+    pub mandate: String,
+    pub idempotency_key: String,
+    pub proof: serde_json::Value,
+    /// The phase Crossmint reported after settlement, read back from its
+    /// Orders API. It is evidence about the order, never about the payment:
+    /// the receipt stays authoritative for whether money moved.
+    pub order_phase: String,
+    pub response_status: u16,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListCrossmintOrdersQuery {
+    #[serde(default)]
+    pub mandate: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CrossmintOrderResponse {
+    pub connector_job_id: String,
+    pub order_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mandate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mint: Option<String>,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CrossmintOrderListResponse {
+    pub orders: Vec<CrossmintOrderResponse>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

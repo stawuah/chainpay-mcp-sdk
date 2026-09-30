@@ -9,9 +9,14 @@ pub(super) fn intent(
         &decode_transaction(&request.signed_transaction)?,
         "transaction",
     )?;
-    Ok(
-        json!({"mandate":request.mandate,"invoice":request.invoice_hash.to_lowercase(),"receipt":request.receipt_address,"agent":request.agent,"mint":request.mint,"recipient":request.recipient,"amount":request.amount.map(|v|v.to_string()),"token_program":request.token_program,"mode":mode,"message":hex_encode(&Sha256::digest(tx.message.serialize())),"x402":request.x402}),
-    )
+    let mut intent = json!({"mandate":request.mandate,"invoice":request.invoice_hash.to_lowercase(),"receipt":request.receipt_address,"agent":request.agent,"mint":request.mint,"recipient":request.recipient,"amount":request.amount.map(|v|v.to_string()),"token_program":request.token_program,"mode":mode,"message":hex_encode(&Sha256::digest(tx.message.serialize())),"x402":request.x402});
+    // The Crossmint key is bound only when a Crossmint order is being paid.
+    // Adding it unconditionally would change the bound intent of every payment,
+    // so an operation claimed before this change could no longer be resumed.
+    if let Some(crossmint) = &request.crossmint {
+        intent["crossmint"] = serde_json::to_value(crossmint).map_err(|_| conflict())?;
+    }
+    Ok(intent)
 }
 pub(super) fn initial(
     request: &PaymentSubmissionRequest,
@@ -379,7 +384,23 @@ pub(super) async fn payment(
                     .flatten()
             }),
     };
-    persist_payment(state, &record, metadata.as_ref()).await?;
+    // A Crossmint job is rebuilt from the same bound intent, so a recovered
+    // settlement keeps its connector row instead of losing the order it paid.
+    let crossmint = state
+        .store
+        .operation_record(&record.payment_id)
+        .await?
+        .and_then(|(_, intent, _)| {
+            serde_json::from_value::<Option<CrossmintPaymentMetadata>>(intent["crossmint"].clone())
+                .ok()
+                .flatten()
+        });
+    let connector = match (&metadata, &crossmint) {
+        (Some(x402), _) => Some(ConnectorMetadata::X402(x402)),
+        (None, Some(crossmint)) => Some(ConnectorMetadata::Crossmint(crossmint)),
+        (None, None) => None,
+    };
+    persist_payment(state, &record, connector).await?;
     Ok(state
         .store
         .get_payment(&record.payment_id)
@@ -563,10 +584,12 @@ pub(super) async fn recover_payment(
         &state,
         &principal,
         &record,
-        if bound["x402"].is_null() {
-            "execute_payment"
-        } else {
+        if !bound["x402"].is_null() {
             "execute_x402_payment"
+        } else if !bound["crossmint"].is_null() {
+            "execute_crossmint_payment"
+        } else {
+            "execute_payment"
         },
     )
     .await?;
@@ -582,6 +605,7 @@ pub(super) async fn recover_payment(
         amount: record.amount,
         token_program: record.token_program.clone(),
         x402: serde_json::from_value(bound["x402"].clone()).map_err(|_| conflict())?,
+        crossmint: serde_json::from_value(bound["crossmint"].clone()).map_err(|_| conflict())?,
     };
     validate_payment_request(&request, &state.config.program_id)?;
     let tx = decode_solana_transaction(
@@ -601,7 +625,7 @@ pub(super) async fn recover_payment(
     }
     record.signature = Some(signature.clone());
     record.updated_at_ms = now_ms();
-    persist_payment(&state, &record, request.x402.as_ref()).await?;
+    persist_payment(&state, &record, connector_metadata(&request)).await?;
     record = payment(&state, record).await?;
     if input.resubmit
         && !matches!(
@@ -634,7 +658,7 @@ pub(super) async fn recover_payment(
                 record.error =
                     Some("Recovery submission outcome unknown; retain the same signature.".into());
                 record.updated_at_ms = now_ms();
-                persist_payment(&state, &record, request.x402.as_ref()).await?;
+                persist_payment(&state, &record, connector_metadata(&request)).await?;
             }
         }
     }
@@ -757,7 +781,7 @@ pub(super) async fn x402_context(
         .strip_prefix(&format!("{}:", principal.wallet))
         .ok_or(ApiError::Unauthorized)?;
     Ok(Json(
-        json!({"payment":record,"resource":metadata.resource,"challenge":metadata.challenge,"idempotency_key":key,"merchant_status":metadata.status,"proof":metadata.proof}),
+        json!({"payment":record,"connector":metadata.connector,"connector_reference":metadata.connector_reference,"resource":metadata.resource,"challenge":metadata.challenge,"idempotency_key":key,"merchant_status":metadata.status,"proof":metadata.proof}),
     ))
 }
 
@@ -939,7 +963,7 @@ mod tests {
             resource: "https://fixture.invalid".into(),
             challenge: json!({"fixture":true}),
         };
-        persist_payment(&state, &record, Some(&metadata))
+        persist_payment(&state, &record, Some(ConnectorMetadata::X402(&metadata)))
             .await
             .unwrap();
         let mut proof = state
@@ -954,7 +978,7 @@ mod tests {
         state.store.put_x402(proof).await.unwrap();
         record.status = PaymentStatus::Submitted;
         record.updated_at_ms += 10;
-        persist_payment(&state, &record, Some(&metadata))
+        persist_payment(&state, &record, Some(ConnectorMetadata::X402(&metadata)))
             .await
             .unwrap();
         assert_eq!(
@@ -1182,7 +1206,7 @@ mod tests {
         let mut stale = record.clone();
         stale.status = PaymentStatus::Submitted;
         stale.updated_at_ms = now_ms() + 100;
-        persist_payment(&state, &stale, Some(&metadata))
+        persist_payment(&state, &stale, Some(ConnectorMetadata::X402(&metadata)))
             .await
             .unwrap();
         assert_eq!(
