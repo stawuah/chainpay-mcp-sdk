@@ -7,6 +7,7 @@ import {
   TOKEN_2022_PROGRAM_ID,
   buildCreateMandateInstruction,
   buildExecutePaymentInstruction,
+  buildCreateAssociatedTokenAccountInstruction,
   buildInitializeConfigInstruction,
   deriveAssociatedTokenAddress,
   deriveLegacyMandateAddress,
@@ -107,6 +108,22 @@ test("builds the one-time protocol config initializer", () => {
   assert.equal(initialize.data.length, 104);
 });
 
+test("creates an associated token account idempotently", () => {
+  const created = buildCreateAssociatedTokenAccountInstruction({
+    payer: owner,
+    owner,
+    mint,
+    tokenProgram: "spl-token",
+  });
+  assert.deepEqual([...created.data], [1]);
+  assert.equal(created.keys.length, 6);
+  assert.equal(created.keys[0].isSigner, true);
+  assert.equal(created.keys[0].isWritable, true);
+  assert.equal(created.keys[1].isWritable, true);
+  assert.equal(created.keys[2].isSigner, false);
+  assert.equal(created.keys[2].isWritable, false);
+});
+
 test("derives the canonical Token-2022 associated token account", () => {
   const wallet = "FmFHfuMx1U6sjKKsuD9SrFedspnAuTUki1KPKjWbehkU";
   const pyusd = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM";
@@ -156,6 +173,7 @@ test("prepares canonical token accounts for every enabled registry asset", async
   assert.equal(missing?.tokenProgram, "token-2022");
   assert.equal(missing?.transaction?.instructions.length, 1);
   assert.equal(missing?.transaction?.instructions[0].name, "create_associated_token_account");
+  assert.deepEqual([...(missing?.transaction?.instructions[0].data ?? [])], [1]);
   assert.deepEqual(missing?.transaction?.requiredSigners, [owner]);
   assert.equal(prepared.some((item) => item.mint === disabledMint), false);
 });
