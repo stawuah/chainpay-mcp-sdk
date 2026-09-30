@@ -9,8 +9,7 @@ pub(super) fn intent(
         &decode_transaction(&request.signed_transaction)?,
         "transaction",
     )?;
-    let mut intent =
-        json!({"mandate":request.mandate,"invoice":request.invoice_hash.to_lowercase(),"receipt":request.receipt_address,"agent":request.agent,"mint":request.mint,"recipient":request.recipient,"amount":request.amount.map(|v|v.to_string()),"token_program":request.token_program,"mode":mode,"message":hex_encode(&Sha256::digest(tx.message.serialize())),"x402":request.x402});
+    let mut intent = json!({"mandate":request.mandate,"invoice":request.invoice_hash.to_lowercase(),"receipt":request.receipt_address,"agent":request.agent,"mint":request.mint,"recipient":request.recipient,"amount":request.amount.map(|v|v.to_string()),"token_program":request.token_program,"mode":mode,"message":hex_encode(&Sha256::digest(tx.message.serialize())),"x402":request.x402});
     // The Crossmint key is bound only when a Crossmint order is being paid.
     // Adding it unconditionally would change the bound intent of every payment,
     // so an operation claimed before this change could no longer be resumed.
@@ -964,7 +963,7 @@ mod tests {
             resource: "https://fixture.invalid".into(),
             challenge: json!({"fixture":true}),
         };
-        persist_payment(&state, &record, Some(&metadata))
+        persist_payment(&state, &record, Some(ConnectorMetadata::X402(&metadata)))
             .await
             .unwrap();
         let mut proof = state
@@ -979,7 +978,7 @@ mod tests {
         state.store.put_x402(proof).await.unwrap();
         record.status = PaymentStatus::Submitted;
         record.updated_at_ms += 10;
-        persist_payment(&state, &record, Some(&metadata))
+        persist_payment(&state, &record, Some(ConnectorMetadata::X402(&metadata)))
             .await
             .unwrap();
         assert_eq!(
@@ -1207,7 +1206,7 @@ mod tests {
         let mut stale = record.clone();
         stale.status = PaymentStatus::Submitted;
         stale.updated_at_ms = now_ms() + 100;
-        persist_payment(&state, &stale, Some(&metadata))
+        persist_payment(&state, &stale, Some(ConnectorMetadata::X402(&metadata)))
             .await
             .unwrap();
         assert_eq!(

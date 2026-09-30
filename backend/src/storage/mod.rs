@@ -16,8 +16,8 @@ use tokio::sync::RwLock;
 
 use crate::delivery::{DeliveryAttestationPut, DeliveryAttestationRecord};
 use crate::status::{
-    ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord, PaymentStatus,
-    ConnectorKind, SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
+    ConnectorKind, ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord,
+    PaymentStatus, SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
 };
 
 #[derive(Debug, Error)]
@@ -1471,6 +1471,8 @@ mod tests {
                     proof: None,
                     response_status: None,
                     error: None,
+                    connector: ConnectorKind::X402,
+                    connector_reference: None,
                     created_at_ms: updated_at_ms,
                     updated_at_ms,
                 })
@@ -1478,12 +1480,15 @@ mod tests {
                 .unwrap();
         }
 
-        let owner_jobs = store.list_x402_for_owner(owner, None, 10).await.unwrap();
+        let owner_jobs = store
+            .list_connector_jobs(owner, ConnectorKind::X402, None, 10)
+            .await
+            .unwrap();
         assert_eq!(owner_jobs.len(), 2);
         assert_eq!(owner_jobs[0].0.x402_payment_id, "x402-b");
 
         let filtered = store
-            .list_x402_for_owner(owner, Some(mandate_a), 10)
+            .list_connector_jobs(owner, ConnectorKind::X402, Some(mandate_a), 10)
             .await
             .unwrap();
         assert_eq!(filtered.len(), 1);
