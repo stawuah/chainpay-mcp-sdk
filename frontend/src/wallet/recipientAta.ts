@@ -1,6 +1,6 @@
-import { buildCreateAssociatedTokenAccountInstruction, toWeb3Transaction, type ChainPayInstruction, type PreparedTransaction, type TokenProgram } from "@chainpay/sdk";
+import { buildCreateAssociatedTokenAccountInstruction, type ChainPayInstruction, type TokenProgram } from "@chainpay/sdk";
 import type { Transaction } from "@solana/web3.js";
-import { chainpayClient, submitSignedTransaction } from "../owner/runtime";
+import { ensureAssociatedTokenAccount } from "./tokenAccount";
 
 export type RecipientAtaReview = {
   ownerWallet: string;
@@ -15,17 +15,14 @@ export async function createRecipientTokenAccount(
   walletSigner: (transaction: Transaction) => Promise<Transaction>,
   payer: string,
 ): Promise<string | undefined> {
-  const prepared: PreparedTransaction = {
-    instructions: [review.createInstruction],
-    requiredSigners: [payer],
-    feePayer: payer,
-  };
-  const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-  const signed = await walletSigner(toWeb3Transaction(prepared, latest.blockhash));
-  const result = await submitSignedTransaction(
-    `recipient-ata:${payer}:${review.tokenAccount}:${latest.blockhash}`,
-    signed.serialize(),
-  );
+  const result = await ensureAssociatedTokenAccount({
+    payer,
+    owner: review.ownerWallet,
+    mint: review.mint,
+    tokenProgram: review.tokenProgram,
+    walletSigner,
+    idempotencyPrefix: `recipient-ata:${payer}:${review.tokenAccount}`,
+  });
   return result.signature;
 }
 

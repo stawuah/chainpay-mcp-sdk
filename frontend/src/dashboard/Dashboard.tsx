@@ -62,6 +62,7 @@ import { describeWalletCapabilities, type WalletCapabilityReport } from "../wall
 import { loadWalletDrafts, saveWalletDrafts, type BatchCsvPayment } from "../wallet/draftStore";
 import { chunkPreparedTransactions } from "../wallet/transactionChunks";
 import { createRecipientTokenAccount, type RecipientAtaReview } from "../wallet/recipientAta";
+import { assertCanPayTokenAccountRent, tokenProgramForMint } from "../wallet/tokenAccount";
 import { estimatedSlotsForDays, mandateExpiryLabel, parseExpirySlot } from "../owner/slotEstimate";
 import { retryRead } from "../owner/retryRead";
 import { useOwnerSignIn } from "../owner/useOwnerSignIn";
@@ -395,7 +396,6 @@ export function Dashboard({
     setPreparingWalletAsset(asset.mint);
     setWalletAssetError("");
     try {
-      if (!walletSigner) throw new Error("The connected wallet cannot sign the account-creation transaction.");
       const preparation = await chainpayClient.prepareAssociatedTokenAccount({
         owner: wallet,
         payer: wallet,
@@ -406,8 +406,8 @@ export function Dashboard({
         return;
       }
       if (!preparation.transaction) throw new Error("The SDK did not return an account-creation transaction.");
-      const balance = await chainpayClient.connection.getBalance(new PublicKey(wallet), "confirmed");
-      if (balance === 0) throw new Error("Add Devnet SOL to this wallet before creating a token account.");
+      await assertCanPayTokenAccountRent(wallet, preparation.tokenProgram);
+      if (!walletSigner) throw new Error("The connected wallet cannot sign the account-creation transaction.");
       await signAndSubmitTransaction(
         preparation.transaction,
         walletSigner,
@@ -3086,6 +3086,7 @@ function ProtocolPanel({ wallet, walletSigner, config, onCreated }: ProtocolPane
 
   async function submitAssetAction(preparedTx: PreparedTransaction, label: string) {
     if (!walletSigner) {
+      setAssetActionMint(null);
       setStatus("error");
       setError("The connected wallet does not expose transaction signing.");
       return;
@@ -3109,9 +3110,18 @@ function ProtocolPanel({ wallet, walletSigner, config, onCreated }: ProtocolPane
     }
   }
 
-  async function registerAssetMint(mint: string, tokenProgram: TokenProgram) {
+  async function registerAssetMint(mint: string) {
     setAssetActionMint(mint);
-    await submitAssetAction(chainpayClient.buildRegisterAsset(mint, tokenProgram, wallet), `register-asset:${mint}`);
+    setError("");
+    try {
+      const tokenProgram = await tokenProgramForMint(mint);
+      await submitAssetAction(chainpayClient.buildRegisterAsset(mint, tokenProgram, wallet), `register-asset:${mint}`);
+    } catch (cause) {
+      setStatus("error");
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAssetActionMint(null);
+    }
   }
 
   async function setAssetEnabled(mint: string, enabled: boolean) {
@@ -3137,8 +3147,8 @@ function ProtocolPanel({ wallet, walletSigner, config, onCreated }: ProtocolPane
       <div className="dashboard-card protocol-review-card">
         <div className="dashboard-card-heading"><div><span className="section-kicker">SUPPORTED ASSETS</span><h2>{config ? `${assets.length} configured mint${assets.length === 1 ? "" : "s"}` : "Review transaction"}</h2></div>{config && <span className="network-chip"><i /> Devnet</span>}</div>
         {config ? <>
-          <div className="asset-status-list">{assets.length ? assets.map((asset) => <div className="asset-status-row" key={asset.mint}><span className="asset-status-icon">{asset.enabled ? "✓" : "!"}</span><span><strong>{shortAddress(asset.mint)}</strong><small>{asset.tokenProgram ? (asset.tokenProgram === TOKEN_2022_PROGRAM_ID ? "Token-2022" : "Classic SPL Token") : "Not registered"}{asset.decimals === undefined ? "" : ` · ${asset.decimals} decimals`}</small></span><em className={asset.enabled ? "asset-enabled" : "asset-disabled"}>{asset.enabled ? "Enabled" : asset.registered ? "Disabled" : "Not registered"}</em>{isAuthority && <span className="asset-status-actions">{!asset.registered ? <Button type="button" variant="secondary" label={assetActionMint === asset.mint ? "Waiting…" : "Register"} isDisabled={status === "signing" || assetActionMint !== null} onClick={() => void registerAssetMint(asset.mint, asset.tokenProgram === TOKEN_2022_PROGRAM_ID ? "token-2022" : "spl-token")} /> : asset.enabled ? <Button type="button" variant="secondary" label={assetActionMint === asset.mint ? "Waiting…" : "Disable"} isDisabled={status === "signing" || assetActionMint !== null} onClick={() => void setAssetEnabled(asset.mint, false)} /> : <Button type="button" variant="primary" label={assetActionMint === asset.mint ? "Waiting…" : "Enable"} isDisabled={status === "signing" || assetActionMint !== null} onClick={() => void setAssetEnabled(asset.mint, true)} />}</span>}</div>) : <div className="review-empty"><div className="empty-icon">◌</div><p>Reading asset registry…</p></div>}</div>
-          {isAuthority && <div className="protocol-register-row"><TextInput label="Register another mint" description="Authority-only" value={registerMint} onChange={setRegisterMint} placeholder="Mint address" /><Button type="button" variant="secondary" label={status === "signing" ? "Waiting…" : "Register mint"} isDisabled={!registerMint.trim() || status === "signing" || assetActionMint !== null} onClick={() => void registerAssetMint(registerMint.trim(), "spl-token")} /></div>}
+          <div className="asset-status-list">{assets.length ? assets.map((asset) => <div className="asset-status-row" key={asset.mint}><span className="asset-status-icon">{asset.enabled ? "✓" : "!"}</span><span><strong>{shortAddress(asset.mint)}</strong><small>{asset.tokenProgram ? (asset.tokenProgram === TOKEN_2022_PROGRAM_ID ? "Token-2022" : "Classic SPL Token") : "Not registered"}{asset.decimals === undefined ? "" : ` · ${asset.decimals} decimals`}</small></span><em className={asset.enabled ? "asset-enabled" : "asset-disabled"}>{asset.enabled ? "Enabled" : asset.registered ? "Disabled" : "Not registered"}</em>{isAuthority && <span className="asset-status-actions">{!asset.registered ? <Button type="button" variant="secondary" label={assetActionMint === asset.mint ? "Waiting…" : "Register"} isDisabled={status === "signing" || assetActionMint !== null} onClick={() => void registerAssetMint(asset.mint)} /> : asset.enabled ? <Button type="button" variant="secondary" label={assetActionMint === asset.mint ? "Waiting…" : "Disable"} isDisabled={status === "signing" || assetActionMint !== null} onClick={() => void setAssetEnabled(asset.mint, false)} /> : <Button type="button" variant="primary" label={assetActionMint === asset.mint ? "Waiting…" : "Enable"} isDisabled={status === "signing" || assetActionMint !== null} onClick={() => void setAssetEnabled(asset.mint, true)} />}</span>}</div>) : <div className="review-empty"><div className="empty-icon">◌</div><p>Reading asset registry…</p></div>}</div>
+          {isAuthority && <div className="protocol-register-row"><TextInput label="Register another mint" description="Authority-only" value={registerMint} onChange={setRegisterMint} placeholder="Mint address" /><Button type="button" variant="secondary" label={status === "signing" ? "Waiting…" : "Register mint"} isDisabled={!registerMint.trim() || status === "signing" || assetActionMint !== null} onClick={() => void registerAssetMint(registerMint.trim())} /></div>}
         </> : prepared ? <><div className="review-list"><div><span>Protocol settings</span><strong className="mono">{shortAddress(deriveConfigAddress(PROGRAM_ID))}</strong></div><div><span>Setup actions</span><strong>{prepared.instructions.map((instruction) => instruction.name).join(" + ")}</strong></div><div><span>Wallet</span><strong className="mono">{shortAddress(wallet)}</strong></div></div><div className="state-box"><p>This transaction will be submitted directly to Devnet after wallet approval. Success is reported only from finalized on-chain state.</p></div><Button type="button" variant="primary" className="full-button" label={status === "signing" ? "Waiting for wallet…" : "Approve setup"} isDisabled={status === "signing" || !walletSigner} onClick={() => void signAndInitialize()} />{signature && <div className="success-box"><span>✓</span><div><b>Protocol initialized</b><a href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`} target="_blank" rel="noreferrer">View transaction <Arrow /></a></div></div>}</> : <div className="review-empty"><div className="empty-icon">◌</div><p>Review the mint list before direct Devnet submission.</p></div>}
       </div>
     </section>
@@ -3430,10 +3440,7 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
         setAccountSetup("ready");
         return;
       }
-      const balance = await chainpayClient.connection.getBalance(new PublicKey(wallet), "confirmed");
-      if (balance === 0) {
-        throw new Error("Add Devnet SOL to this wallet before preparing it for payments.");
-      }
+      await assertCanPayTokenAccountRent(wallet, preparation.tokenProgram);
       if (!walletSigner) throw new Error("The connected wallet does not expose transaction signing.");
       if (!preparation.transaction) throw new Error("The SDK did not return an account-creation transaction.");
       const result = await signAndSubmitTransaction(
