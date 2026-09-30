@@ -308,6 +308,7 @@ impl RpcClient {
             "getGenesisHash",
             "getProgramAccounts",
             "getLatestBlockhash",
+            "getMinimumBalanceForRentExemption",
             "getMultipleAccounts",
             "getRecentPerformanceSamples",
             "getSignaturesForAddress",
