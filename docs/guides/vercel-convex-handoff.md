@@ -5,19 +5,39 @@ SDK, MCP tools, and public HTTP contracts. Convex replaces off-chain PostgreSQL
 storage. Vercel runs the existing Vite app, an Axum runtime adapter, and a Node
 MCP handler. There is no new payment authority or new signing approval.
 
+## Inputs Kwasi needs to provide
+
+PR #24 is merged into `master` at `8c6b433`, but the existing service has not
+been cut over. Kwasi and Dre can use this list to track the inputs needed before
+replacing Render/Neon. Mark an item complete only after its recipient has
+confirmed access or received the information through a private channel.
+
+| Input from Kwasi | What Dre needs it for |
+| --- | --- |
+| Confirm Vercel's GitHub app can read `stawuah/chainpay-mcp-sdk` and Dre has the intended repository access. | Link the three Vercel projects to upstream `master`. |
+| Identify the currently deployed Render/Neon revision and provide the SQLx migration history. | Compare the source schema with the canonical migrations before export. |
+| Provide a complete PostgreSQL snapshot/export or grant a read-only source connection for the exporter. Include payment operations, unresolved submissions, token hashes, signer IDs, and claims. | Rehearse and verify the 13-table import without losing recovery state. |
+| Provide an inventory of the settings enabled on the existing service: Devnet RPC provider, Privy app and policy, public agent identity, OpenRouter, merchant origin allowlists, and trusted-seller mappings. | Configure equivalent services without guessing or enabling unused providers. |
+| Agree on a maintenance window and name who will pause both old writers, reconcile unresolved operations, verify the import, switch traffic, and perform rollback if needed. | Complete the cutover without creating duplicate payment attempts. |
+
+Share source data, credentials, and private settings through provider invitations
+or a secret manager. Do not paste them into this repository, a PR, or a chat.
+Never share wallet keys or seed phrases. Dre owns the Vercel/Convex setup; the
+steps and environment variables are detailed below. Crossmint activation and a
+Devnet program upgrade remain separate decisions.
+
 ## Start here: repository owner and hosting owner
 
-**Kwasi owns the repository and merge; Dre owns Vercel and Convex.** Review the
-combined release in PR #24 before merging any of the overlapping runtime PRs.
-Its integration history includes #19–27 and the review corrections. Prefer a
-**merge commit**, which preserves the individual feature histories. If choosing
-squash, close the superseded feature PRs explicitly. Do not deploy intermediate
-feature heads: they do not contain the combined Convex implementations.
+**Kwasi owns the repository and merge; Dre owns Vercel and Convex.** The
+combined release in PR #24 was merged with a merge commit, preserving the
+feature histories from #19–27 and their review corrections. Do not deploy
+intermediate feature heads: they do not contain the combined Convex
+implementations.
 
-- **Kwasi:** approve repository access for the Vercel GitHub app and Dre's GitHub
-  identity, review the combined diff, enable the `Release checks` required jobs,
-  and merge only when they pass. Supply the source schema/export and enabled
-  provider settings privately. Program upgrade authority stays with Kwasi.
+- **Kwasi:** confirm repository access for the Vercel GitHub app and Dre's
+  GitHub identity, configure the `Release checks` required jobs, and supply the
+  source schema/export and enabled provider settings privately. Program upgrade
+  authority stays with Kwasi.
 - **Dre:** configure the three existing Vercel projects below and their matching
   Convex environment. Enter secrets through provider settings, not PR comments.
   Select deployment types in the Convex dashboard; labels alone do not prove
