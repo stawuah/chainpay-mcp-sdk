@@ -3,8 +3,8 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { decimal, encode, fail, json, numberToken, safeNumber, sorted, sqlTimestampMicros, string, writeRecord } from "./records";
 import type { RecordKind, JsonRecord } from "./records";
 
-const tableValidator = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"), v.literal("operation_claims"), v.literal("owner_auth"), v.literal("agent_connections"), v.literal("inbox_messages"));
-const recordTables = new Set(["payments", "transactions", "x402_payments", "managed_signer_challenges", "managed_signers", "delivery_attestations"]);
+const tableValidator = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"), v.literal("operation_claims"), v.literal("owner_auth"), v.literal("agent_connections"), v.literal("inbox_messages"), v.literal("receipt_requests"), v.literal("observed_policies"), v.literal("mandate_requests"));
+const recordTables = new Set(["payments", "transactions", "x402_payments", "managed_signer_challenges", "managed_signers", "delivery_attestations", "receipt_requests", "observed_policies", "mandate_requests"]);
 function maintenance() { if (process.env.CHAINPAY_MAINTENANCE !== "true" || process.env.CHAINPAY_CONVEX_MIGRATION_ENABLED !== "true") return fail("forbidden", "Migration requires maintenance and migration mode"); }
 function iso(value: unknown): string { const s = string(value); if (!Number.isFinite(Date.parse(s))) return fail("invalid_argument", "Invalid SQL timestamp"); return new Date(s).toISOString(); }
 // PostgreSQL's numeric-to-BIGINT cast rounds fractional milliseconds.
@@ -62,6 +62,7 @@ export function sqlRow(table: string, doc: any): string {
     const r = json(doc.record_json); const out = { ...base, ...r };
     if (table === "payments" && out.amount != null) out.amount = numberToken(out.amount);
     if (table === "x402_payments") {
+      out.connector ??= "x402"; out.connector_reference ??= null;
       out.created_at = base.created_at ?? new Date(safeNumber(r.created_at_ms)).toISOString();
       out.updated_at = base.updated_at ?? new Date(safeNumber(r.updated_at_ms)).toISOString();
       delete out.created_at_ms; delete out.updated_at_ms;

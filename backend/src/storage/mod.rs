@@ -5,14 +5,14 @@
 //! `DATABASE_URL`.
 
 mod convex;
-use convex::{decode, encode, ConvexStore};
+use convex::{ConvexStore, decode, encode};
 use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
 
 use sqlx::{
+    PgPool, Row,
     postgres::{PgPoolOptions, PgRow},
     types::Json,
-    PgPool, Row,
 };
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -603,7 +603,7 @@ impl StatusStore {
                 let rows: Vec<(String, Option<String>)> = client
                     .call(
                         "list_x402_for_owner",
-                        json!({"owner_wallet":owner_wallet,"mandate":mandate,"limit":limit}),
+                        json!({"owner_wallet":owner_wallet,"connector":connector.as_str(),"mandate":mandate,"limit":limit}),
                     )
                     .await?;
                 rows.into_iter()
@@ -700,6 +700,7 @@ impl StatusStore {
         current_key: &str,
     ) -> Result<Option<X402PaymentRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => { client.record("find_other_connector_job_for_owner", json!({"owner":owner,"connector":connector.as_str(),"reference":reference,"current_key":current_key})).await },
             StorageBackend::Memory(state) => {
                 let state = state.read().await;
                 let mut rows: Vec<X402PaymentRecord> = state
@@ -831,6 +832,14 @@ impl StatusStore {
         record: &X402PaymentRecord,
     ) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call::<()>(
+                        "put_crossmint_proof",
+                        json!({"record_json":encode(record)?}),
+                    )
+                    .await?;
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 if let Some(old) = state.x402_payments.get_mut(&record.x402_payment_id) {
@@ -1197,6 +1206,15 @@ impl StatusStore {
         created_at_ms: u64,
     ) -> Result<KeyedRecordPut, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let result: (bool, String) = client.call("put_mandate_request", json!({"record_json":encode(&json!({"mandate_pda":mandate_pda,"record":record,"created_at_ms":created_at_ms}))?})).await?;
+                let value = decode(&result.1)?;
+                Ok(if result.0 {
+                    KeyedRecordPut::Created(value)
+                } else {
+                    KeyedRecordPut::Existing(value)
+                })
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 if let Some(existing) = state.mandate_requests.get(mandate_pda) {
@@ -1237,6 +1255,11 @@ impl StatusStore {
         mandate_pda: &str,
     ) -> Result<Option<serde_json::Value>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("get_mandate_request", json!({"mandate_pda":mandate_pda}))
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -1293,6 +1316,15 @@ impl StatusStore {
         record: ReceiptRequestRecord,
     ) -> Result<ReceiptRequestRecord, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let value: String = client
+                    .call(
+                        "put_receipt_request",
+                        json!({"record_json":encode(&record)?}),
+                    )
+                    .await?;
+                decode(&value)
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 let key = receipt_key(&record.cluster, &record.program_id, &record.receipt_address);
@@ -1340,6 +1372,7 @@ impl StatusStore {
         receipt_address: &str,
     ) -> Result<Option<ReceiptRequestRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => { client.record("find_receipt_request", json!({"cluster":cluster,"program_id":program_id,"receipt_address":receipt_address})).await },
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -1387,6 +1420,15 @@ impl StatusStore {
         record: ObservedPolicyRecord,
     ) -> Result<ObservedPolicyRecord, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let value: String = client
+                    .call(
+                        "put_observed_policy",
+                        json!({"record_json":encode(&record)?}),
+                    )
+                    .await?;
+                decode(&value)
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 let key = receipt_key(&record.cluster, &record.program_id, &record.receipt_address);
@@ -1439,6 +1481,7 @@ impl StatusStore {
         receipt_address: &str,
     ) -> Result<Option<ObservedPolicyRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => { client.record("find_observed_policy", json!({"cluster":cluster,"program_id":program_id,"receipt_address":receipt_address})).await },
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -2065,14 +2108,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(store
-            .consume_managed_signer_challenge("challenge-1", 150)
-            .await
-            .unwrap());
-        assert!(!store
-            .consume_managed_signer_challenge("challenge-1", 151)
-            .await
-            .unwrap());
+        assert!(
+            store
+                .consume_managed_signer_challenge("challenge-1", 150)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .consume_managed_signer_challenge("challenge-1", 151)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             store
                 .get_managed_signer_challenge("challenge-1")
@@ -2095,10 +2142,12 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(!store
-            .consume_managed_signer_challenge("expired-challenge", 101)
-            .await
-            .unwrap());
+        assert!(
+            !store
+                .consume_managed_signer_challenge("expired-challenge", 101)
+                .await
+                .unwrap()
+        );
     }
 
     #[test]

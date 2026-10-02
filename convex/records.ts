@@ -34,16 +34,19 @@ export function sqlTimestampMicros(value: unknown): bigint {
 }
 export const receiptKey = (r: JsonRecord) => encode([r.cluster, r.program_id, r.receipt_address]);
 export function recordKey(kind: RecordKind, r: JsonRecord): string {
+  if (kind === "receipt_requests" || kind === "observed_policies") return receiptKey(r);
+  if (kind === "mandate_requests") return string(r.mandate_pda);
   if (kind === "delivery_attestations") return encode([r.cluster, r.program_id, r.receipt_address, r.seller]);
   return string(r[{ payments: "payment_id", transactions: "transaction_id", x402_payments: "x402_payment_id", managed_signer_challenges: "challenge_id", managed_signers: "signer_id" }[kind]]);
 }
 export async function getRecord(ctx: QueryCtx | MutationCtx, kind: RecordKind, key: string) { return ctx.db.query("records").withIndex("by_kind_key", q => q.eq("kind", kind).eq("key", key)).unique(); }
 export function metadata(kind: RecordKind, r: JsonRecord) {
-  const data: Omit<Doc<"records">, "_id" | "_creationTime" | "record_json"> = { kind, key: recordKey(kind, r), updated: sorted(r.updated_at_ms ?? r.published_at_ms ?? r.created_at_ms) };
+  const data: Omit<Doc<"records">, "_id" | "_creationTime" | "record_json"> = { kind, key: recordKey(kind, r), updated: sorted(r.updated_at_ms ?? r.published_at_ms ?? r.created_at_ms ?? r.stored_at_ms ?? r.observed_at_ms) };
   if (r.idempotency_key != null) data.idempotency = string(r.idempotency_key);
   if (r.receipt_address != null) data.receipt = kind === "delivery_attestations" ? receiptKey(r) : string(r.receipt_address);
   if (r.owner_wallet != null) data.owner = string(r.owner_wallet);
   if (kind === "x402_payments" && typeof r.idempotency_key === "string" && r.idempotency_key.includes(":")) data.owner = r.idempotency_key.slice(0, r.idempotency_key.indexOf(":"));
+  if (kind === "x402_payments") { data.connector = r.connector ?? "x402"; if (!["x402", "crossmint"].includes(data.connector!)) return fail("invalid_argument", "Invalid connector"); if (r.connector_reference != null) data.reference = string(r.connector_reference); }
   if (r.mandate != null || r.mandate_pda != null) data.mandate = string(r.mandate ?? r.mandate_pda);
   if (r.public_key != null) data.public_key = string(r.public_key);
   if (r.provider_wallet_id != null) data.provider_wallet = encode([r.provider, r.provider_wallet_id]);
@@ -54,7 +57,7 @@ export async function writeRecord(ctx: MutationCtx, kind: RecordKind, text: stri
   const old = await getRecord(ctx, kind, fields.key);
   // Validate fields used by Rust as integers before accepting opaque JSON. This
   // prevents corrupt records from being written successfully but failing reads.
-  for (const field of ["created_at_ms", "updated_at_ms", "published_at_ms", "expires_at_ms", "consumed_at_ms", "revoked_at_ms", "slot", "amount"]) {
+  for (const field of ["created_at_ms", "updated_at_ms", "published_at_ms", "expires_at_ms", "consumed_at_ms", "revoked_at_ms", "slot", "amount", "stored_at_ms", "observed_at_ms", "observed_at_slot"]) {
     if (incoming[field] != null) decimal(incoming[field]);
   }
   if (kind === "payments" && !["human", "delegated"].includes(incoming.signing_mode)) return fail("invalid_argument", "Invalid signing mode");

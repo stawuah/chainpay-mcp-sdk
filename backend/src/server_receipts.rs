@@ -411,6 +411,7 @@ mod tests {
             amount: Some(4_500_000),
             token_program: Some("spl-token".into()),
             x402: None,
+            crossmint: None,
             payment_request: Some(request),
         }
     }

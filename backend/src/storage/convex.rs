@@ -1,8 +1,8 @@
 //! Server-to-server storage transport. Never retries a mutation: a timed-out
 //! reservation may already have committed and must be reconciled by its ID.
 use super::StorageError;
-use serde::{de::DeserializeOwned, Serialize};
-use serde_json::{json, Value};
+use serde::{Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -102,7 +102,7 @@ mod tests {
     use super::*;
     use crate::status::{ManagedSignerRecord, ManagedSignerStatus, SigningMode};
     use crate::storage::{StatusStore, StorageBackend};
-    use axum::{routing::post, Json, Router};
+    use axum::{Json, Router, routing::post};
     use std::sync::{Arc, Mutex};
 
     #[tokio::test]
@@ -151,10 +151,12 @@ mod tests {
             updated_at_ms: 1,
             revoked_at_ms: None,
         };
-        assert!(serde_json::to_value(&signer)
-            .unwrap()
-            .get("provider_wallet_id")
-            .is_none());
+        assert!(
+            serde_json::to_value(&signer)
+                .unwrap()
+                .get("provider_wallet_id")
+                .is_none()
+        );
         store.put_managed_signer(signer).await.unwrap();
         let data = calls.lock().unwrap();
         let stored: Value = decode(data[1]["args"]["signer_json"].as_str().unwrap()).unwrap();

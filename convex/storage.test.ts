@@ -139,7 +139,7 @@ describe("migration fidelity", () => {
     const time = "2026-10-02T00:00:00.123456+00:00";
     const fixtures = {
       transactions: { transaction_id: "tx", idempotency_key: "txkey", status: "submitted", signature: null, slot: null, error: null, created_at_ms: 100, updated_at_ms: 200, created_at: time, updated_at: time },
-      x402_payments: { x402_payment_id: "x", idempotency_key: "owner:key", resource: "https://merchant", payment_id: null, receipt_address: null, transaction_signature: null, status: "confirmed", challenge: { amount: "18446744073709551615" }, proof: { signature: "sig" }, response_status: 200, error: null, created_at: time, updated_at: time },
+      x402_payments: { connector: "x402", connector_reference: null, x402_payment_id: "x", idempotency_key: "owner:key", resource: "https://merchant", payment_id: null, receipt_address: null, transaction_signature: null, status: "confirmed", challenge: { amount: "18446744073709551615" }, proof: { signature: "sig" }, response_status: 200, error: null, created_at: time, updated_at: time },
       managed_signer_challenges: { challenge_id: "c", owner_wallet: "w", mandate_pda: "m", message: "signed", expires_at_ms: 200, consumed_at_ms: null, created_at_ms: 100 },
       managed_signers: { signer_id: "s", owner_wallet: "w", public_key: "pub", provider: "privy", provider_wallet_id: "private-provider-id", provider_policy_id: "private-policy-id", mandate_pda: "m", signing_mode: "delegated", status: "active", created_at_ms: 100, updated_at_ms: 200, revoked_at_ms: null },
       delivery_attestations: { cluster: "devnet", program_id: "program", receipt_address: "receipt", seller: "seller", content_hash: "a".repeat(64), served_at: time, signature: "sig", canonical_payload: "exact", published_at_ms: 100 },
@@ -169,4 +169,76 @@ describe("migration fidelity", () => {
     const updated = await t.query(internal.migration.exportRows, { table: "payments", cursor: null, limit: 100 });
     expect(updated.rows[0]).toContain('"status":"confirmed"'); expect(updated.rows[0]).toContain("18446744073709551615"); expect(updated.rows[0]).toContain(".123456+00:00");
   });
+});
+
+describe("combined release storage", () => {
+  it("keeps first receipt evidence, policy and mandate linkage atomically", async () => {
+    const t = test();
+    for (const [put, get, time] of [["put_receipt_request", "find_receipt_request", "stored_at_ms"], ["put_observed_policy", "find_observed_policy", "observed_at_ms"]]) {
+      const key = { cluster: "devnet", program_id: "program", receipt_address: "receipt" };
+      const record = { ...key, mandate: "mandate", [time]: 100, evidence: "first", limits: { amount: "18446744073709551615" } };
+      await Promise.all([call(t, put, { record_json: JSON.stringify(record) }), call(t, put, { record_json: JSON.stringify({ ...record, evidence: "second" }) })]);
+      const first = await call(t, get, key);
+      await call(t, put, { record_json: JSON.stringify({ ...record, evidence: "third" }) });
+      expect(await call(t, get, key)).toBe(first);
+      expect(JSON.parse(first).evidence).not.toBe("third");
+      await expect(call(t, get, key, "mcp")).rejects.toThrow(/not allowed/);
+    }
+    const args = { record_json: '{"mandate_pda":"m","record":{"amount":18446744073709551615},"created_at_ms":100}' };
+    const results = await Promise.all([call(t, "put_mandate_request", args), call(t, "put_mandate_request", args)]);
+    expect(results.filter(r => r[0])).toHaveLength(1);
+    expect(await call(t, "get_mandate_request", { mandate_pda: "m" })).toBe('{"amount":18446744073709551615}');
+  });
+  it("looks up the latest receipt attempt and isolates connector orders by owner", async () => {
+    const t = test(); await call(t, "put_payment", { record_json: payment("failed", 100) });
+    await call(t, "put_payment", { record_json: payment("confirmed", 200).replace('"p1"', '"p2"').replace('"owner:key"', '"owner:next"') });
+    expect(JSON.parse(await call(t, "find_payment_by_receipt", { receipt_address: "receipt" })).payment_id).toBe("p2");
+    for (const [id, owner, connector] of [["c", "owner", "crossmint"], ["x", "owner", "x402"], ["o", "other", "crossmint"]]) {
+      await call(t, "put_x402", { record_json: JSON.stringify({ x402_payment_id: id, idempotency_key: `${owner}:${id}`, connector, connector_reference: "order", status: "confirmed", created_at_ms: 100, updated_at_ms: 100 }) });
+    }
+    expect((await call(t, "list_x402_for_owner", { owner_wallet: "owner", connector: "crossmint", limit: 100 })).map((r: string[]) => JSON.parse(r[0]).x402_payment_id)).toEqual(["c"]);
+    const lookup = { owner: "owner", connector: "crossmint", reference: "order", current_key: "owner:different" };
+    expect(JSON.parse(await call(t, "find_other_connector_job_for_owner", lookup)).x402_payment_id).toBe("c");
+    expect(await call(t, "find_other_connector_job_for_owner", { ...lookup, current_key: "owner:c" })).toBeNull();
+  });
+  it("updates Crossmint phases without overwriting settlement or regressing verification", async () => {
+    const t = test();
+    const record = { x402_payment_id: "c", idempotency_key: "owner:c", connector: "crossmint", connector_reference: "order", status: "confirmed", transaction_signature: "original", receipt_address: "receipt", created_at_ms: 100, updated_at_ms: 100 };
+    await call(t, "put_x402", { record_json: JSON.stringify(record) });
+    for (const [phase, updated, status] of [["delivery", 200, "verified"], ["completed", 300, "confirmed"]]) {
+      await call(t, "put_crossmint_proof", { record_json: JSON.stringify({ ...record, status, updated_at_ms: updated, transaction_signature: "cannot-rewrite", proof: { phase }, response_status: 200, error: null }) });
+    }
+    const stored = JSON.parse(await call(t, "find_x402_by_idempotency", { key: "owner:c" }));
+    expect(stored.status).toBe("verified"); expect(stored.proof.phase).toBe("completed"); expect(stored.transaction_signature).toBe("original");
+    await call(t, "put_x402", { record_json: JSON.stringify({ ...record, updated_at_ms: 400 }) });
+    expect(JSON.parse(await call(t, "find_x402_by_idempotency", { key: "owner:c" })).proof.phase).toBe("completed");
+  });
+});
+
+it("fails visibly for legacy connector indexes and backfills without changing evidence", async () => {
+  const t = test();
+  const record = '{"x402_payment_id":"old","idempotency_key":"owner:old","status":"confirmed","created_at_ms":100,"updated_at_ms":100}';
+  await t.run(async ctx => { await ctx.db.insert("records", { kind:"x402_payments", key:"old", owner:"owner", idempotency:"owner:old", updated:"00000000000000000100", record_json:record }); });
+  await expect(call(t,"list_x402_for_owner",{owner_wallet:"owner"})).rejects.toThrow(/Backfill/);
+  await expect(t.mutation(internal.maintenance.backfillConnectorIndexes,{cursor:null})).rejects.toThrow(/paused/);
+  await expect(call(t,"find_other_connector_job_for_owner",{owner:"owner",connector:"crossmint",reference:"r",current_key:"key"})).rejects.toThrow(/Backfill/);
+  vi.stubEnv("CHAINPAY_MAINTENANCE","true");
+  expect((await t.mutation(internal.maintenance.backfillConnectorIndexes,{cursor:null})).done).toBe(true);
+  expect((await call(t,"list_x402_for_owner",{owner_wallet:"owner"}))[0][0]).toBe(record);
+});
+
+it("exports canonical legacy connector defaults and rejects microsecond-stale Crossmint evidence", async () => {
+  const t = test(); vi.stubEnv("CHAINPAY_MAINTENANCE","true"); vi.stubEnv("CHAINPAY_CONVEX_MIGRATION_ENABLED","true");
+  const row = { x402_payment_id:"c", idempotency_key:"owner:c", connector:"crossmint", connector_reference:"order", status:"confirmed", created_at:"2026-10-02T00:00:00.123456Z", updated_at:"2026-10-02T00:00:00.123456Z", proof:{phase:"payment"} };
+  await t.mutation(internal.migration.importRows, {table:"x402_payments",rows:[JSON.stringify(row)]});
+  const old = await call(t,"find_x402_by_idempotency",{key:"owner:c"});
+  vi.stubEnv("CHAINPAY_MAINTENANCE","false");
+  await call(t,"put_crossmint_proof",{record_json:JSON.stringify({...JSON.parse(old),status:"verified",proof:{phase:"delivery"}})});
+  expect(await call(t,"find_x402_by_idempotency",{key:"owner:c"})).toBe(old);
+  const legacy = {x402_payment_id:"legacy",idempotency_key:"owner:legacy",status:"confirmed",created_at_ms:100,updated_at_ms:100};
+  await call(t,"put_x402",{record_json:JSON.stringify(legacy)});
+  vi.stubEnv("CHAINPAY_MAINTENANCE","true");
+  const exported = await t.query(internal.migration.exportRows,{table:"x402_payments",cursor:null,limit:100});
+  const normalized = exported.rows.map(r => JSON.parse(r)).find(r => r.x402_payment_id === "legacy");
+  expect(normalized.connector).toBe("x402"); expect(normalized.connector_reference).toBeNull();
 });

@@ -1,6 +1,6 @@
-use chainpay_backend::{build_router, server::BackendConfig, storage::StatusStore, BackendState};
+use chainpay_backend::{BackendState, build_router, server::BackendConfig, storage::StatusStore};
 use tower::ServiceBuilder;
-use vercel_runtime::{axum::VercelLayer, Error};
+use vercel_runtime::{Error, axum::VercelLayer};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {

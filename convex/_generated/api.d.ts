@@ -11,6 +11,7 @@
 import type * as cleanup from "../cleanup.js";
 import type * as crons from "../crons.js";
 import type * as http from "../http.js";
+import type * as maintenance from "../maintenance.js";
 import type * as migration from "../migration.js";
 import type * as records from "../records.js";
 import type * as storage from "../storage.js";
@@ -25,6 +26,7 @@ declare const fullApi: ApiFromModules<{
   cleanup: typeof cleanup;
   crons: typeof crons;
   http: typeof http;
+  maintenance: typeof maintenance;
   migration: typeof migration;
   records: typeof records;
   storage: typeof storage;

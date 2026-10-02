@@ -3,11 +3,12 @@ import { v } from "convex/values";
 
 // Record JSON is deliberately opaque: JavaScript must never round u64 values,
 // nested x402 proof numbers, or signed statements while persisting them.
-export const kind = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"));
+export const kind = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"), v.literal("receipt_requests"), v.literal("observed_policies"), v.literal("mandate_requests"));
 export default defineSchema({
   records: defineTable({
     kind, key: v.string(), record_json: v.string(), source_json: v.optional(v.string()),
     idempotency: v.optional(v.string()), receipt: v.optional(v.string()),
+    connector: v.optional(v.string()), reference: v.optional(v.string()),
     owner: v.optional(v.string()), mandate: v.optional(v.string()),
     public_key: v.optional(v.string()), provider_wallet: v.optional(v.string()),
     // Zero-padded decimal strings sort full u64 timestamps without floating point.
@@ -17,6 +18,8 @@ export default defineSchema({
     .index("by_kind_receipt_updated", ["kind", "receipt", "updated"])
     .index("by_kind_owner_updated", ["kind", "owner", "updated"])
     .index("by_kind_owner_mandate_updated", ["kind", "owner", "mandate", "updated"])
+    .index("by_kind_owner_connector_updated", ["kind", "owner", "connector", "updated"])
+    .index("by_kind_owner_connector_reference", ["kind", "owner", "connector", "reference", "updated"])
     .index("by_kind_public_key", ["kind", "public_key"])
     .index("by_kind_mandate", ["kind", "mandate"])
     .index("by_kind_provider_wallet", ["kind", "provider_wallet"]),

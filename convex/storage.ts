@@ -2,12 +2,12 @@ import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
-import { decimal, encode, fail, getRecord, json, jsonValue, numberToken, receiptKey, safeNumber, sorted, string, writeRecord } from "./records";
+import { decimal, encode, fail, getRecord, json, jsonValue, numberToken, receiptKey, safeNumber, sorted, sqlTimestampMicros, string, writeRecord } from "./records";
 import type { RecordKind } from "./records";
 
-export const backendOperations = new Set(["ping", "claim_operation", "operation_record", "operation_owner", "auth_rate", "put_auth", "get_auth", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "put_payment", "get_transaction", "find_transaction_by_idempotency", "put_transaction", "list_x402_for_owner", "find_x402_by_idempotency", "put_x402", "put_managed_signer_challenge", "get_managed_signer_challenge", "consume_managed_signer_challenge", "put_managed_signer", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "put_delivery_attestation", "find_delivery_attestation"]);
+export const backendOperations = new Set(["find_other_connector_job_for_owner","put_crossmint_proof","put_mandate_request","get_mandate_request","put_receipt_request","find_receipt_request","put_observed_policy","find_observed_policy","ping", "claim_operation", "operation_record", "operation_owner", "auth_rate", "put_auth", "get_auth", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "put_payment", "get_transaction", "find_transaction_by_idempotency", "put_transaction", "list_x402_for_owner", "find_x402_by_idempotency", "put_x402", "put_managed_signer_challenge", "get_managed_signer_challenge", "consume_managed_signer_challenge", "put_managed_signer", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "put_delivery_attestation", "find_delivery_attestation"]);
 export const mcpOperations = new Set(["ping", "mcp.register", "mcp.identify", "mcp.observe", "mcp.list", "mcp.revoke", "mcp.appendInboxMessage", "mcp.listInbox", "mcp.rateLimit"]);
-const readOperations = new Set(["ping", "operation_record", "operation_owner", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "get_transaction", "find_transaction_by_idempotency", "list_x402_for_owner", "find_x402_by_idempotency", "get_managed_signer_challenge", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "find_delivery_attestation", "mcp.identify", "mcp.list", "mcp.listInbox"]);
+const readOperations = new Set(["get_mandate_request","find_receipt_request","find_observed_policy","find_other_connector_job_for_owner","ping", "operation_record", "operation_owner", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "get_transaction", "find_transaction_by_idempotency", "list_x402_for_owner", "find_x402_by_idempotency", "get_managed_signer_challenge", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "find_delivery_attestation", "mcp.identify", "mcp.list", "mcp.listInbox"]);
 export function isRead(operation: string, args: Record<string, any>): boolean { return readOperations.has(operation) || operation === "get_auth" && args.consume === false; }
 function publicConnection(r: Doc<"agent_connections">) { const { _id, _creationTime, tokenHash, revokedAt, source_json, ...record } = r; return record; }
 function publicInbox(r: Doc<"inbox_messages">) { const { _id, _creationTime, source_json, ...record } = r; return record; }
@@ -63,6 +63,44 @@ export const execute = internalMutation({
       if (source) { delete source.last_seen_at; if (a.name) delete source.tools_called; }
       await ctx.db.patch(record._id, { lastSeenAt: now, totalCalls: safeNumber(record.totalCalls + (a.name ? 1 : 0)), toolsCalled, ...(source ? { source_json: encode(source) } : {}) }); return null;
     }
+    const immutable: Record<string, RecordKind> = { put_receipt_request: "receipt_requests", put_observed_policy: "observed_policies", put_mandate_request: "mandate_requests" };
+    if (immutable[op]) {
+      const kind = immutable[op]; const incoming = json(a.record_json);
+      const key = kind === "mandate_requests" ? string(incoming.mandate_pda) : receiptKey(incoming);
+      const old = await getRecord(ctx, kind, key);
+      if (!old) await writeRecord(ctx, kind, string(a.record_json));
+      const stored = old?.record_json ?? string(a.record_json);
+      return kind === "mandate_requests" ? [!old, encode(json(stored).record)] : stored;
+    }
+    if (op === "get_mandate_request" || op === "find_receipt_request" || op === "find_observed_policy") {
+      const kind = op === "get_mandate_request" ? "mandate_requests" : op === "find_receipt_request" ? "receipt_requests" : "observed_policies";
+      const key = kind === "mandate_requests" ? string(a.mandate_pda) : receiptKey({cluster:string(a.cluster),program_id:string(a.program_id),receipt_address:string(a.receipt_address)});
+      const old = await getRecord(ctx, kind, key);
+      return old ? kind === "mandate_requests" ? encode(json(old.record_json).record) : old.record_json : null;
+    }
+    if (op === "find_other_connector_job_for_owner") {
+      const legacy = await ctx.db.query("records").withIndex("by_kind_owner_connector_updated", q => q.eq("kind", "x402_payments").eq("owner", string(a.owner)).eq("connector", undefined)).first();
+      if (legacy) return fail("migration_required", "Backfill connector indexes before reserving orders");
+      const rows = ctx.db.query("records").withIndex("by_kind_owner_connector_reference", q => q.eq("kind", "x402_payments").eq("owner", string(a.owner)).eq("connector", string(a.connector)).eq("reference", string(a.reference))).order("desc");
+      // The idempotency index is unique, so at most one row can be excluded.
+      for (const row of await rows.take(2)) if (row.idempotency !== string(a.current_key)) return row.record_json;
+      return null;
+    }
+    if (op === "put_crossmint_proof") {
+      const incoming = json(a.record_json); const old = await getRecord(ctx, "x402_payments", string(incoming.x402_payment_id));
+      if (!old) return null;
+      const prior = json(old.record_json);
+      const original = old.source_json ? json(old.source_json) : null;
+      if (original?.updated_at && sqlTimestampMicros(original.updated_at) > BigInt(decimal(incoming.updated_at_ms)) * 1000n) return null;
+      if (prior.connector !== "crossmint" || !["confirmed", "verified"].includes(prior.status) || old.updated > sorted(incoming.updated_at_ms)) return null;
+      if (!["confirmed", "verified"].includes(incoming.status)) return fail("invalid_argument", "Invalid order evidence status");
+      prior.proof = incoming.proof; prior.response_status = incoming.response_status; prior.error = incoming.error;
+      if (prior.status !== "verified") prior.status = incoming.status;
+      prior.updated_at_ms = incoming.updated_at_ms;
+      const source = old.source_json ? json(old.source_json) : null; if (source) delete source.updated_at;
+      await ctx.db.patch(old._id, { record_json: encode(prior), updated: sorted(prior.updated_at_ms), ...(source ? { source_json: encode(source) } : {}) });
+      return null;
+    }
     const puts: Record<string, [RecordKind, string]> = { put_payment: ["payments", "record_json"], put_transaction: ["transactions", "record_json"], put_x402: ["x402_payments", "record_json"], put_managed_signer_challenge: ["managed_signer_challenges", "challenge_json"], put_managed_signer: ["managed_signers", "signer_json"], put_delivery_attestation: ["delivery_attestations", "record_json"] };
     if (puts[op]) { const [kind, field] = puts[op]; return writeRecord(ctx, kind, string(a[field])); }
     const gets: Record<string, [RecordKind, string]> = { get_payment: ["payments", "payment_id"], get_transaction: ["transactions", "transaction_id"], get_managed_signer_challenge: ["managed_signer_challenges", "challenge_id"] };
@@ -72,7 +110,7 @@ export const execute = internalMutation({
     if (op === "find_payment_by_receipt" || op === "find_delivery_attestation") {
       const delivery = op === "find_delivery_attestation";
       const receipt = delivery ? receiptKey({ cluster: string(a.cluster), program_id: string(a.program_id), receipt_address: string(a.receipt_address) }) : string(a.receipt_address);
-      return (await ctx.db.query("records").withIndex("by_kind_receipt_updated", q => q.eq("kind", delivery ? "delivery_attestations" : "payments").eq("receipt", receipt)).first())?.record_json ?? null;
+      return (await ctx.db.query("records").withIndex("by_kind_receipt_updated", q => q.eq("kind", delivery ? "delivery_attestations" : "payments").eq("receipt", receipt)).order(delivery ? "asc" : "desc").first())?.record_json ?? null;
     }
     if (op === "find_managed_signer_by_public_key") return (await ctx.db.query("records").withIndex("by_kind_public_key", q => q.eq("kind", "managed_signers").eq("public_key", string(a.public_key))).unique())?.record_json ?? null;
     if (op === "find_managed_signer_by_mandate") return (await ctx.db.query("records").withIndex("by_kind_mandate", q => q.eq("kind", "managed_signers").eq("mandate", string(a.mandate_pda))).unique())?.record_json ?? null;
@@ -83,8 +121,10 @@ export const execute = internalMutation({
       r.consumed_at_ms = numberToken(consumed); await ctx.db.patch(old._id, { record_json: encode(r) }); return true;
     }
     if (op === "list_x402_for_owner") {
+      const legacy = await ctx.db.query("records").withIndex("by_kind_owner_connector_updated", q => q.eq("kind", "x402_payments").eq("owner", string(a.owner_wallet)).eq("connector", undefined)).first();
+      if (legacy) return fail("migration_required", "Backfill connector indexes before serving history");
       const maximum = limit(a.limit, 100); const rows: [string, string | null][] = [];
-      const query = ctx.db.query("records").withIndex("by_kind_owner_updated", q => q.eq("kind", "x402_payments").eq("owner", string(a.owner_wallet))).order("desc");
+      const query = ctx.db.query("records").withIndex("by_kind_owner_connector_updated", q => q.eq("kind", "x402_payments").eq("owner", string(a.owner_wallet)).eq("connector", string(a.connector ?? "x402"))).order("desc");
       // A bounded indexed iterator avoids collecting all of an owner's history.
       let scanned = 0;
       for await (const row of query) {
