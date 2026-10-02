@@ -187,7 +187,33 @@ async function inViewport(page) {
   await context.close();
 }
 
-// 8. Embeds live inside other people's pages: no robot.
+// 8. Tour: a line only ever shows for the section under the reading line.
+{
+  const LINES = { 'spend-limits': 'allowance part', 'payment-review': '4.50 USDC', receipts: 'receipts.', 'stay-in-control': 'pause or revoke', developers: 'devs:', faq: 'good questions' };
+  const { page, context } = await open('/');
+  await page.locator('.cp-pet-body').waitFor({ timeout: 20000 });
+  await page.waitForTimeout(1200);
+  let said = 0;
+  for (let step = 0; step < 10; step++) {
+    await page.mouse.wheel(0, 640);
+    for (let i = 0; i < (step % 3 === 0 ? 3 : 10); i++) {
+      const s = await page.evaluate((LINES) => {
+        const line = innerHeight * 0.45;
+        let at = null;
+        for (const id of Object.keys(LINES)) { const r = document.getElementById(id)?.getBoundingClientRect(); if (r && r.top <= line && r.bottom >= line) { at = id; break; } }
+        const text = document.querySelector('.cp-pet-speech')?.textContent ?? '';
+        return { at, shownFor: Object.keys(LINES).find((id) => text.includes(LINES[id])) ?? null };
+      }, LINES);
+      if (s.shownFor) said += 1;
+      assert.ok(!s.shownFor || s.shownFor === s.at, `tour line for ${s.shownFor} shown while reading ${s.at}`);
+      await page.waitForTimeout(250);
+    }
+  }
+  assert.ok(said > 0, 'he commented on at least one section');
+  await context.close();
+}
+
+// 9. Embeds live inside other people's pages: no robot.
 {
   const { page, context } = await open('/embed/overview');
   await page.waitForTimeout(3000);

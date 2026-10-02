@@ -77,3 +77,8 @@ test("stage follows age in days", () => {
   assert.equal(sim.stageFor(NOON, NOON + 50 * day), "teen");
   assert.equal(sim.stageFor(NOON, NOON + 200 * day), "adult");
 });
+
+test("nothing in the pet's CSS loops forever (WCAG 2.2.2, council ruling R3)", async () => {
+  const css = await readFile(new URL("../src/pet/pet.css", import.meta.url), "utf8");
+  assert.equal(/\binfinite\b/.test(css), false, "an infinite animation would run past 5s with no stop control");
+});

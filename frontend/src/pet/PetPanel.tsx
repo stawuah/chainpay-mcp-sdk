@@ -86,7 +86,8 @@ type Props = {
   view: PanelView;
   onView: (view: PanelView) => void;
   bond: Bond;
-  onToss: () => void;
+  /** viaKeyboard: started with Enter/Space, so the hint mentions Enter. */
+  onToss: (viaKeyboard: boolean) => void;
   onGameFinish: (won: boolean) => void;
   onToggleGear: (item: Gear) => void;
   pinned: boolean;
@@ -213,7 +214,7 @@ export function PetPanel(props: Props) {
       )}
 
       <footer className="cp-pet-panel-foot">
-        <span>Remembers you on this device</span>
+        <span>Saved on this device</span>
         <span className="cp-pet-foot-actions">
           <button type="button" className="cp-pet-ghost" aria-pressed={pinned} onClick={onTogglePin}>
             {pinned ? <PinOff size={14} strokeWidth={1.75} aria-hidden="true" /> : <Pin size={14} strokeWidth={1.75} aria-hidden="true" />}
@@ -311,7 +312,7 @@ function MainView(props: MainProps) {
         <button type="button" className="cp-pet-pill" onClick={() => onQuick("poke")}>
           <Pointer size={14} strokeWidth={1.75} aria-hidden="true" /> Poke
         </button>
-        <button type="button" className="cp-pet-pill" onClick={onToss}>
+        <button type="button" className="cp-pet-pill" onClick={(event) => onToss(event.detail === 0)}>
           <Coins size={14} strokeWidth={1.75} aria-hidden="true" /> Toss a coin
         </button>
       </div>

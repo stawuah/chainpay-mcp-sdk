@@ -29,8 +29,6 @@ const RobotCanvas = lazy(() => import("./RobotCanvas"));
 const DAY = 86_400_000;
 const DEBUG_KEY = "chainpay.pet.debug";
 const PIN_KEY = "chainpay.pet.pin";
-/** Lines he volunteers (tour, bugs) wait for this much quiet after the last one. */
-const QUIET_MS = 10_000;
 
 function readPin(): Pin | null {
   try {
@@ -50,14 +48,46 @@ function writePin(pin: Pin | null) {
   }
 }
 
-/** True when he has been quiet long enough to volunteer something. */
-function quiet(ms = QUIET_MS) {
-  const speech = petStore.get().speech;
-  return !speech || Date.now() - (speech.at + speech.ms) > ms;
+// ---- Distraction budget (council ruling pet-play R5) -------------------------
+// Everything he does without being asked goes through canVolunteer(). The
+// tour is separate: it only ever speaks about the section you are reading.
+
+const BUDGET_KEY = "chainpay.pet.budget";
+const VOLUNTEER_GAP_MS = 20_000;
+const VOLUNTEER_MAX = 6;
+const CALLS_MAX = 2;
+
+type Budget = { lines: number; lastAt: number; calls: number; bugLine: boolean };
+
+function readBudget(): Budget {
+  try {
+    return { lines: 0, lastAt: 0, calls: 0, bugLine: false, ...JSON.parse(window.sessionStorage.getItem(BUDGET_KEY) ?? "{}") };
+  } catch {
+    return { lines: 0, lastAt: 0, calls: 0, bugLine: false };
+  }
 }
 
-/** Tour lines follow the reader, so they only need a short gap between them. */
-const TOUR_GAP_MS = 3_000;
+function writeBudget(budget: Budget) {
+  try {
+    window.sessionStorage.setItem(BUDGET_KEY, JSON.stringify(budget));
+  } catch {
+    // Memory only.
+  }
+}
+
+let lastScrollAt = 0;
+if (typeof window !== "undefined") {
+  window.addEventListener("scroll", () => (lastScrollAt = Date.now()), { passive: true });
+}
+
+function readerIsBusy() {
+  const speech = petStore.get().speech;
+  const tourShowing = speech?.source === "tour" && Date.now() - speech.at < speech.ms;
+  const dialog = [...document.querySelectorAll<HTMLElement>('dialog[open], [aria-modal="true"]')].some(
+    (element) => !element.closest(".cp-pet-panel") && element.getClientRects().length > 0,
+  );
+  return tourShowing || dialog || Date.now() - lastScrollAt < 450;
+}
 
 /** How long each reaction drives his face and body. */
 const REACTION_MS: Partial<Record<ReactionKind, number>> = { dizzy: 3_000, dance: 2_400, excited: 2_000, flip: 1_000 };
@@ -158,7 +188,6 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   const [clock, setClock] = useState(() => Date.now());
   const body = useRef<HTMLButtonElement>(null);
   const satOnSheet = useRef(false);
-  const missedCall = useRef(false);
   const drag = useRef<{ startX: number; startY: number; dx: number; dy: number; moved: boolean } | null>(null);
   // React flushes the pointerup state change before the click event fires, so
   // "was that a drag?" has to live in a ref, not in render state.
@@ -167,6 +196,23 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   // Play that happens to you (bugs, calls, the tour) lives on the landing page
   // only. The dashboard and public receipts are for reading money, not play.
   const playful = routeKind === "landing";
+  const latestBusy = useRef(false);
+
+  /** One gate for bugs, calls and lines he volunteers. Counts what it allows. */
+  const canVolunteer = useCallback((kind: "line" | "bug" | "call") => {
+    if (latestBusy.current || readerIsBusy()) return false;
+    const budget = readBudget();
+    const at = Date.now();
+    if (kind === "call") {
+      if (budget.calls >= CALLS_MAX) return false;
+      writeBudget({ ...budget, calls: budget.calls + 1 });
+      return true;
+    }
+    if (kind === "bug") return true;
+    if (budget.lines >= VOLUNTEER_MAX || at - budget.lastAt < VOLUNTEER_GAP_MS) return false;
+    writeBudget({ ...budget, lines: budget.lines + 1, lastAt: at });
+    return true;
+  }, []);
   const now = clock;
   const mood = moodOf(snapshot, now);
   const asleep = mood === "asleep";
@@ -216,19 +262,24 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   useEffect(() => {
     const greeting = arrive();
     const timers: number[] = [];
+    if (greeting !== "same-day") {
+      // The hello (boot plus greeting) counts as one volunteered line.
+      const budget = readBudget();
+      writeBudget({ ...budget, lines: budget.lines + 1, lastAt: Date.now() });
+    }
     const later = (ms: number, run: () => void) => timers.push(window.setTimeout(run, ms));
     if (greeting === "first") {
       setBooting(true);
       later(1_600, () => {
         setBooting(false);
         petStore.react("excited");
-        petStore.say(BOOT_LINE, 2_400);
+        petStore.say(BOOT_LINE, 2_400, "volunteer");
       });
-      later(4_200, () => petStore.say(GREETINGS.first, 5_000));
+      later(4_200, () => petStore.say(GREETINGS.first, 5_000, "volunteer"));
     } else if (greeting === "streak") {
-      later(1_400, () => petStore.say(GREETINGS.streak(petStore.get().bond.streak), 5_000));
+      later(1_400, () => petStore.say(GREETINGS.streak(petStore.get().bond.streak), 5_000, "volunteer"));
     } else if (greeting === "back") {
-      later(1_400, () => petStore.say(GREETINGS.back, 4_000));
+      later(1_400, () => petStore.say(GREETINGS.back, 4_000, "volunteer"));
     }
     // Once greeted, hiding and un-hiding him does not replay the hello.
     later(4_300, () => {
@@ -317,23 +368,25 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   // ---- "!" calls -------------------------------------------------------------
   const calls = useAttentionCalls({
     enabled: playful && !busy && !asleep,
-    onMissed: () => {
-      missedCall.current = true;
-      petStore.miss("callsMissed", { joy: -5 });
-    },
+    allow: () => canVolunteer("call"),
+    // Ignoring him costs nothing; the diary just notes you were busy.
+    onMissed: () => petStore.miss("callsMissed"),
   });
 
   // ---- Bugs ----------------------------------------------------------------
   const { bugs, squash, spawnNow } = useBugs({
     enabled: playful && !booting,
-    clean: snapshot.needs.clean,
+    allow: () => canVolunteer("bug"),
+    near: () => body.current?.getBoundingClientRect() ?? null,
+    reducedMotion,
     onSpawn: () => {
-      if (!open && quiet()) petStore.say(BUG_LINES.spawn, 2_500);
+      // "ew. a bug." only for the first bug of the session.
+      const budget = readBudget();
+      if (budget.bugLine || open) return;
+      writeBudget({ ...budget, bugLine: true });
+      if (canVolunteer("line")) petStore.say(BUG_LINES.spawn, 2_500, "volunteer");
     },
-    onEscape: () => {
-      petStore.miss("bugsMissed", { clean: -3 });
-      if (!open && quiet()) petStore.say(BUG_LINES.escaped, 3_000);
-    },
+    onEscape: () => petStore.miss("bugsMissed"),
   });
   const onSquash = (bug: Bug) => {
     squash(bug.id);
@@ -342,7 +395,9 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   };
 
   // ---- Coin toss -------------------------------------------------------------
-  const startToss = () => {
+  const [tossByKeyboard, setTossByKeyboard] = useState(false);
+  const startToss = (viaKeyboard: boolean) => {
+    setTossByKeyboard(viaKeyboard);
     setOpen(false);
     setView("main");
     pause();
@@ -351,9 +406,11 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   const cancelToss = useCallback(() => {
     setTossing(false);
     resume(2_000);
+    body.current?.focus({ preventScroll: true });
   }, [resume]);
   const onToss = (x: number, y: number) => {
     setTossing(false);
+    body.current?.focus({ preventScroll: true });
     setCoin({ x, y });
     // Fly over so the coin lands in his visor's line of sight.
     hold(x - size / 2, y - size * 0.55, true);
@@ -369,23 +426,32 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   };
 
   // ---- Landing tour ----------------------------------------------------------
-  const latestBusy = useRef(busy);
   latestBusy.current = busy;
   useLandingTour({
     enabled: playful,
-    onSection: (text, heading) => {
-      if (latestBusy.current || !quiet(TOUR_GAP_MS)) return false;
-      petStore.say(text, 4_500);
+    onSection: (id, text, heading) => {
+      if (latestBusy.current) return false;
+      // Don't talk over a direct answer to something you just did.
+      const current = petStore.get().speech;
+      if (current?.source === "reply" && Date.now() - current.at < 1_500) return false;
+      petStore.say(text, 6_000, "tour", id);
       if (heading) {
         const rect = heading.getBoundingClientRect();
         setGaze({ x: rect.left + Math.min(rect.width, 360) / 2, y: rect.top + rect.height / 2, until: Date.now() + 2_500 });
       }
       return true;
     },
+    onLeave: (id) => {
+      const current = petStore.get().speech;
+      if (current?.source === "tour" && current.key === id) {
+        petStore.hush();
+        setGaze(null);
+      }
+    },
     onCta: () => {
       if (latestBusy.current) return false;
       petStore.react("excited");
-      petStore.say(CTA_LINE, 3_000);
+      petStore.say(CTA_LINE, 3_000, "tour", "cta");
       return true;
     },
   });
@@ -455,12 +521,6 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
     }
     pause();
     setOpen(true);
-    if (missedCall.current && !answered) {
-      missedCall.current = false;
-      petStore.act("pet");
-      petStore.say(CALL_LINES.missedLater);
-      return;
-    }
     if (answered) {
       // He already said something; the pat still counts.
       petStore.act("pet");
@@ -517,8 +577,8 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
         {calls.calling ? <span className="cp-pet-call" aria-hidden="true">!</span> : null}
       </div>
 
-      {speaking && !open && !tossing ? <SpeechBubble text={speaking} anchor={{ x: position.x, y: position.y, size }} /> : null}
-      {tossing ? <CoinToss onToss={onToss} onCancel={cancelToss} /> : null}
+      {speaking && !open && !tossing ? <SpeechBubble key={speech!.at} text={speaking} anchor={{ x: position.x, y: position.y, size }} /> : null}
+      {tossing ? <CoinToss onToss={onToss} onCancel={cancelToss} viaKeyboard={tossByKeyboard} /> : null}
       {coin ? <LandedCoin x={coin.x} y={coin.y} /> : null}
       <BugLayer bugs={bugs} onSquash={onSquash} />
 

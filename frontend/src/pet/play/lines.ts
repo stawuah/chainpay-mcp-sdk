@@ -36,17 +36,19 @@ export const GREETINGS = {
 export const BOOT_LINE = "booting… ok. hi.";
 
 export const COIN_LINES = ["mine.", "caught it.", "shiny.", "imaginary coin. real joy."] as const;
-export const COIN_HINT = "click anywhere to toss. esc to cancel.";
+export const COIN_HINT = {
+  pointer: "Click anywhere to toss · Esc to cancel",
+  touch: "Tap anywhere to toss",
+  keyboard: " · Enter tosses to the middle",
+} as const;
 
 export const BUG_LINES = {
   spawn: "ew. a bug.",
   squash: ["got it.", "bug squashed.", "thanks. that one was crunchy."],
-  escaped: "a bug got away. i feel slightly worse.",
 } as const;
 
 export const CALL_LINES = {
-  answered: ["you came. ^^", "just checking you're still there.", "ok that's all. thanks."],
-  missedLater: "i called earlier. nobody came. it's fine.",
+  answered: ["you came.", "just checking you're still there.", "ok that's all. thanks."],
 } as const;
 
 export const SECRET_LINES = {
@@ -61,9 +63,9 @@ export const SECRET_LINES = {
 export const TOUR_LINES: Record<string, string> = {
   "spend-limits": "this is the allowance part. agents get a budget, not your keys.",
   "payment-review": "4.50 USDC, and you see it before your wallet does.",
-  receipts: "receipts. my favourite part.",
-  "stay-in-control": "pause or revoke anytime. please don't revoke me.",
-  developers: "devs: it fits the agent tools you already use.",
+  receipts: "receipts. my favorite part.",
+  "stay-in-control": "pause or revoke when plans change. please don't revoke me.",
+  developers: "devs: SDK or MCP. fits the workflow you already have.",
   faq: "good questions. read these before you approve anything.",
 };
 
@@ -71,7 +73,7 @@ export const CTA_LINE = "ooh. that's where the fun is.";
 
 export const GAME_COPY = {
   title: "Allowance",
-  rules: "Catch coins to spend exactly 10 USDC. Anything over the limit gets blocked.",
+  rules: "Total allowance: 10 USDC. Catch payments to spend exactly 10. Anything over gets blocked.",
   practice: "Practice round. No real USDC.",
   start: "Start",
   again: "Play again",

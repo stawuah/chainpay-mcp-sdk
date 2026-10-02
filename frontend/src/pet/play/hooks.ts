@@ -9,21 +9,26 @@ const CALL_OPEN_MS = 30_000;
 
 export function useAttentionCalls({
   enabled,
+  allow,
   onMissed,
 }: {
   enabled: boolean;
+  /** Asked right before a call starts; false skips it (distraction budget). */
+  allow: () => boolean;
   onMissed: () => void;
 }) {
   const [callingSince, setCallingSince] = useState<number | null>(null);
   const missed = useRef(onMissed);
   missed.current = onMissed;
+  const allowed = useRef(allow);
+  allowed.current = allow;
   const timer = useRef<number | undefined>(undefined);
 
   const schedule = useCallback((delay: number) => {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
-      if (document.hidden) {
-        schedule(30_000);
+      if (document.hidden || !allowed.current()) {
+        schedule(60_000);
         return;
       }
       setCallingSince(Date.now());
@@ -53,7 +58,15 @@ export function useAttentionCalls({
     return true;
   }, [callingSince, schedule]);
 
-  const callNow = useCallback(() => schedule(0), [schedule]);
+  /** For tests: call right now, skipping the budget. */
+  const callNow = useCallback(() => {
+    window.clearTimeout(timer.current);
+    setCallingSince(Date.now());
+    timer.current = window.setTimeout(() => {
+      setCallingSince(null);
+      missed.current();
+    }, CALL_OPEN_MS);
+  }, []);
 
   return { calling: callingSince !== null, answer, callNow };
 }
@@ -179,15 +192,18 @@ function sectionInView(): HTMLElement | null {
 export function useLandingTour({
   enabled,
   onSection,
+  onLeave,
   onCta,
 }: {
   enabled: boolean;
   /** Return true if he said it (false when busy, so it can be tried again). */
-  onSection: (line: string, heading: Element | null) => boolean;
+  onSection: (id: string, line: string, heading: Element | null) => boolean;
+  /** The reader moved off this section: drop its line at once. */
+  onLeave: (id: string) => void;
   onCta: () => boolean;
 }) {
-  const latest = useRef({ onSection, onCta });
-  latest.current = { onSection, onCta };
+  const latest = useRef({ onSection, onLeave, onCta });
+  latest.current = { onSection, onLeave, onCta };
 
   useEffect(() => {
     if (!enabled) return;
@@ -196,14 +212,26 @@ export function useLandingTour({
     let candidate: string | null = null;
     let since = 0;
 
+    // Leaving is checked on every scroll frame, so a line never outlives its
+    // section; speaking waits for the slower settle-and-dwell check below.
+    let frame = 0;
     const onScroll = () => {
       lastScroll = performance.now();
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const id = sectionInView()?.id ?? null;
+        if (id === candidate) return;
+        if (candidate) latest.current.onLeave(candidate);
+        candidate = id;
+        since = performance.now();
+      });
     };
     const check = () => {
       const now = performance.now();
       const section = sectionInView();
       const id = section?.id ?? null;
       if (id !== candidate) {
+        if (candidate) latest.current.onLeave(candidate);
         candidate = id;
         since = now;
         return;
@@ -211,7 +239,7 @@ export function useLandingTour({
       if (!section || !id || done.has(id)) return;
       if (now - lastScroll < SETTLE_MS || now - since < DWELL_MS) return;
       const heading = section.querySelector("h2");
-      if (latest.current.onSection(TOUR_LINES[id]!, heading)) {
+      if (latest.current.onSection(id, TOUR_LINES[id]!, heading)) {
         done.add(id);
         remember(done);
       }
@@ -231,6 +259,7 @@ export function useLandingTour({
     document.addEventListener("pointerover", onOver);
     return () => {
       window.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
       window.clearInterval(timer);
       document.removeEventListener("pointerover", onOver);
     };

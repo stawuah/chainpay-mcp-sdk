@@ -9,9 +9,13 @@ import { COIN_HINT } from "./lines";
 type Props = {
   onToss: (x: number, y: number) => void;
   onCancel: () => void;
+  /** Started from the keyboard: mention Enter. */
+  viaKeyboard: boolean;
 };
 
-export function CoinToss({ onToss, onCancel }: Props) {
+const coarse = () => window.matchMedia("(pointer: coarse)").matches;
+
+export function CoinToss({ onToss, onCancel, viaKeyboard }: Props) {
   const [point, setPoint] = useState<{ x: number; y: number } | null>(null);
   const layer = useRef<HTMLDivElement>(null);
 
@@ -44,7 +48,10 @@ export function CoinToss({ onToss, onCancel }: Props) {
         }
       }}
     >
-      <p className="cp-pet-toss-hint">{COIN_HINT}</p>
+      <p className="cp-pet-toss-hint">
+        {coarse() ? COIN_HINT.touch : COIN_HINT.pointer}
+        {viaKeyboard ? COIN_HINT.keyboard : ""}
+      </p>
       {point ? <span className="cp-pet-coin is-held" style={{ left: point.x, top: point.y }} aria-hidden="true" /> : null}
     </div>,
     document.body,

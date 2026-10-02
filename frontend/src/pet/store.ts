@@ -38,7 +38,9 @@ export type ReactionKind =
   | "excited";
 
 export type Reaction = { kind: ReactionKind; at: number };
-export type Speech = { text: string; at: number; ms: number };
+/** reply = answer to something you did; volunteer = he spoke up; tour = about the section you are reading. */
+export type SpeechSource = "reply" | "volunteer" | "tour";
+export type Speech = { text: string; at: number; ms: number; source: SpeechSource; key?: string };
 
 type PetState = {
   snapshot: PetSnapshot;
@@ -181,9 +183,9 @@ function createStore() {
       set({ reaction: { kind, at: now }, now });
     },
 
-    say(text: string, ms = 4_000) {
+    say(text: string, ms = 4_000, source: SpeechSource = "reply", key?: string) {
       const now = Date.now();
-      set({ speech: { text, at: now, ms }, now });
+      set({ speech: { text, at: now, ms, source, key }, now });
     },
 
     hush() {

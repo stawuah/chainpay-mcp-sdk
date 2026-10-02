@@ -173,13 +173,13 @@ export function diaryText(log: DayLog): string {
   if (log.bugs > 0) lines.push(`${plural(log.bugs, "bug", "bugs")} squashed. not by me.`);
   if (log.bugsMissed > 0) lines.push(`${plural(log.bugsMissed, "bug", "bugs")} got away.`);
   if (log.calls > 0) lines.push(log.calls === 1 ? "i called. someone came." : `called ${log.calls} times. people came.`);
-  if (log.callsMissed > 0) lines.push("called once and nobody answered. it's fine.");
+  if (log.callsMissed > 0) lines.push(log.callsMissed === 1 ? "called once. you were busy." : "called a couple of times. you were busy.");
   if (log.coins > 0) lines.push(`caught ${plural(log.coins, "coin", "coins")}. all imaginary, all mine.`);
   if (log.dizzy > 0) lines.push("got shaken. room still spinning.");
   if (log.pokes > 2) lines.push("too many pokes.");
   if (log.secrets > 0) lines.push("someone found a secret.");
   if (log.lowPower) lines.push("ran low on power at one point.");
-  if (log.pats >= 3) lines.push(pick(log.day, 4, ["lots of pats. ^^", "head pats: plenty."]));
+  if (log.pats >= 3) lines.push(pick(log.day, 4, ["lots of pats.", "head pats: plenty."]));
   return lines.slice(0, 3).join(" ");
 }
 
