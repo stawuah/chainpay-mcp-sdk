@@ -77,6 +77,29 @@ required for chain inclusion; signatures alone do not prove the transaction
 landed. This verifies the custom ChainPay receipt proof. It is not a claim
 of standard x402 facilitator or sponsor-transaction interoperability.
 
+## Ask an owner for a spending permission
+
+`GET /` is one page, "Pay us with ChainPay", with a **Request permission**
+button. It calls `POST /mandate-requests`, which signs a vendor mandate request
+(SDK `signMandateRequest`) and returns `{link, summary}`. The link opens the
+ChainPay app at `/app/requests/permission#req=…`; the owner reviews it, may
+change every limit, and signs the mandate in their own wallet. Nothing is
+charged by the link.
+
+The request asks for the resource price per payment
+(`CHAINPAY_X402_AMOUNT`), ten payments in total unless
+`CHAINPAY_MANDATE_REQUEST_TOTAL` (base units) is set, and 30 days unless
+`CHAINPAY_MANDATE_REQUEST_DAYS` is set. The payee is
+`CHAINPAY_X402_RECIPIENT_TOKEN_ACCOUNT`. Optional: `CHAINPAY_MERCHANT_NAME`
+(shown to the owner as stated, not verified), `CHAINPAY_MANDATE_REQUEST_DESCRIPTION`,
+`CHAINPAY_APP_URL`, and `CHAINPAY_X402_DECIMALS` to skip the mint lookup. A
+JSON body `{"poNumber": "PO-1042"}` sets the PO number; otherwise one is
+generated.
+
+The request is signed with `CHAINPAY_SELLER_SECRET_KEY`. Without it, a
+development process signs with a throwaway key printed at startup, and
+`NODE_ENV=production` answers 503.
+
 ## Tests and further reading
 
 ```bash

@@ -3,6 +3,13 @@ import type { X402PaymentReferences } from "@chainpay/sdk";
 import { paymentRequiredForConfig, type MerchantConfig } from "./config.js";
 import { createDeliveryController, type DeliveryController, type DeliveryPublisher } from "./delivery.js";
 import {
+  MandateRequestLookupError,
+  PAY_WITH_CHAINPAY_HTML,
+  createMandateRequest,
+  type MandateRequestDependencies,
+  type MandateRequestSettings,
+} from "./mandate-requests.js";
+import {
   detectAndParsePaymentHeader,
   inspectPaymentHeader,
   logSafeProofEvent,
@@ -13,7 +20,19 @@ import {
 
 export type MerchantAppDependencies = MerchantVerificationDependencies & {
   publisher?: DeliveryPublisher;
+  /** Absent in production without a seller key: the endpoint answers 503. */
+  mandateRequests?: { settings: MandateRequestSettings; lookup: MandateRequestDependencies };
 };
+
+const PAGE_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
 
 export type MerchantApp = Express & {
   waitForDeliveryWork(): Promise<void>;
@@ -36,6 +55,35 @@ export function createMerchantApp(
   app.waitForDeliveryWork = () => delivery.waitForIdle();
 
   app.get("/healthz", (_request: Request, response: Response) => response.json({ ok: true }));
+  app.get("/", (_request: Request, response: Response) => {
+    response
+      .set({ "Content-Security-Policy": PAGE_CSP, "Cache-Control": "no-store" })
+      .type("html")
+      .send(PAY_WITH_CHAINPAY_HTML);
+  });
+  app.post("/mandate-requests", express.json({ limit: "2kb" }), async (request: Request, response: Response) => {
+    response.set("Cache-Control", "no-store");
+    const configured = deps.mandateRequests;
+    if (!configured) {
+      return response.status(503).json({ error: "Mandate requests need CHAINPAY_SELLER_SECRET_KEY on this host." });
+    }
+    const body: unknown = request.body;
+    const requested = body && typeof body === "object" && "poNumber" in body ? (body as { poNumber: unknown }).poNumber : undefined;
+    if (requested !== undefined && typeof requested !== "string") {
+      return response.status(400).json({ error: "poNumber must be text" });
+    }
+    try {
+      const created = await createMandateRequest(configured.settings, config, configured.lookup, {
+        ...(requested === undefined ? {} : { poNumber: requested }),
+      });
+      return response.json({ link: created.link, summary: created.summary });
+    } catch (error) {
+      if (error instanceof MandateRequestLookupError) {
+        return response.status(502).json({ error: error.message });
+      }
+      return response.status(400).json({ error: error instanceof Error ? error.message : "Request is invalid" });
+    }
+  });
   app.get("/data", async (request: Request, response: Response) => {
     response.set("Cache-Control", "no-store");
     const paymentHeaders = [
