@@ -1,5 +1,9 @@
 #[path = "server_delivery.rs"]
 mod delivery_routes;
+#[path = "server_receipts.rs"]
+mod receipt_routes;
+#[path = "server_mandate_requests.rs"]
+mod mandate_request_routes;
 #[path = "server_recovery.rs"]
 mod recovery;
 #[path = "server_transactions.rs"]
@@ -20,7 +24,7 @@ use axum::{
     http::{HeaderName, HeaderValue, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -247,6 +251,9 @@ enum ApiError {
     ManagedSignerUnavailable,
     #[error("catalog unavailable: {0}")]
     Catalog(#[from] CatalogError),
+    /// The receipt for this mandate and invoice hash already exists on chain.
+    #[error("{}", receipt_routes::DUPLICATE_INVOICE_MESSAGE)]
+    DuplicateInvoice { receipt_address: String },
 }
 
 impl IntoResponse for ApiError {
@@ -264,6 +271,9 @@ impl IntoResponse for ApiError {
             Self::SignerProvider(_) => StatusCode::BAD_GATEWAY,
             Self::ManagedSignerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Catalog(_) => StatusCode::BAD_GATEWAY,
+            // 422, not 409: clients treat 422 as "refused before anything was
+            // sent", which is exactly the case, and stop instead of polling.
+            Self::DuplicateInvoice { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         };
         let message = self.to_string();
         // The relay refuses a request in a dozen places and, until this line,
@@ -272,7 +282,16 @@ impl IntoResponse for ApiError {
         // Errors are the whole point of the line, so every one is written,
         // including the ones a healthy client causes.
         eprintln!("[chainpay] {} {}", status.as_u16(), message);
-        let body = Json(json!({ "error": message }));
+        let body = match &self {
+            // Typed so a client can show the plain sentence and stop, instead of
+            // offering a retry that would only be refused again.
+            Self::DuplicateInvoice { receipt_address } => Json(json!({
+                "error": message,
+                "code": "DuplicateInvoice",
+                "receipt_address": receipt_address,
+            })),
+            _ => Json(json!({ "error": message })),
+        };
         (status, body).into_response()
     }
 }
@@ -345,7 +364,11 @@ pub fn build_router(state: BackendState) -> Router {
         )
         .route(
             "/v1/receipts/{receipt_address}",
-            get(get_payment_by_receipt),
+            get(receipt_routes::get_receipt),
+        )
+        .route(
+            "/v1/receipts/{receipt_address}/request",
+            get(receipt_routes::get_receipt_request),
         )
         .route(
             "/v1/delivery-attestations",
@@ -354,6 +377,11 @@ pub fn build_router(state: BackendState) -> Router {
         .route(
             "/v1/delivery-attestations/{receipt_address}",
             get(delivery_routes::get_delivery_attestation),
+        )
+        .route(
+            "/v1/mandates/{mandate_pda}/request",
+            put(mandate_request_routes::put_mandate_request)
+                .get(mandate_request_routes::get_mandate_request),
         )
         .route("/v1/x402-payments", get(list_x402_payments))
         .route("/v1/x402-payments/proof", post(record_x402_proof))
@@ -508,6 +536,7 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
+            axum::http::Method::PUT,
             axum::http::Method::OPTIONS,
             axum::http::Method::DELETE,
         ])
@@ -575,10 +604,9 @@ async fn verify_payment_request(
         }
     }
     let payload = request.payload;
-    let canonical = serde_json::to_vec(&payload).map_err(|error| {
-        ApiError::BadRequest(format!("cannot serialize payment request: {error}"))
-    })?;
-    let invoice_hash = hex_encode(&Sha256::digest(&canonical));
+    let (canonical, hash) =
+        crate::receipts::canonical_payment_request(&payload).map_err(ApiError::BadRequest)?;
+    let invoice_hash = hex_encode(&hash);
     let mut response = PaymentRequestVerificationResponse {
         valid: false,
         payload: payload.clone(),
@@ -586,56 +614,15 @@ async fn verify_payment_request(
         reason: None,
     };
 
-    if payload.version != 1 {
-        response.reason = Some("unsupported payment request version".to_owned());
-        return Ok(Json(response));
-    }
-    if payload.cluster != state.config.cluster {
-        response.reason = Some("unsupported Solana cluster".to_owned());
-        return Ok(Json(response));
-    }
-    if payload.invoice.trim().is_empty() || payload.nonce.trim().is_empty() {
-        response.reason = Some("invoice and nonce are required".to_owned());
-        return Ok(Json(response));
-    }
-    if payload.token_program != "spl-token" && payload.token_program != "token-2022" {
-        response.reason = Some("unsupported token program".to_owned());
-        return Ok(Json(response));
-    }
-    if payload
-        .amount
-        .parse::<u64>()
-        .ok()
-        .filter(|amount| *amount > 0)
-        .is_none()
+    if let Err(reason) =
+        crate::receipts::check_payment_request_fields(&payload, state.config.cluster)
     {
-        response.reason = Some("amount must be a positive u64 string".to_owned());
+        response.reason = Some(reason);
         return Ok(Json(response));
-    }
-    for (name, value) in [
-        ("merchant", payload.merchant.as_str()),
-        ("mint", payload.mint.as_str()),
-        ("recipient", payload.recipient.as_str()),
-    ] {
-        if bs58::decode(value)
-            .into_vec()
-            .ok()
-            .filter(|bytes| bytes.len() == 32)
-            .is_none()
-        {
-            response.reason = Some(format!("{name} must be a valid Solana address"));
-            return Ok(Json(response));
-        }
     }
     if let Some(expiry) = &payload.expires_at_slot {
-        let expiry = match expiry.parse::<u64>() {
-            Ok(expiry) => expiry,
-            Err(_) => {
-                response.reason =
-                    Some("expiresAtSlot must be an unsigned integer string".to_owned());
-                return Ok(Json(response));
-            }
-        };
+        // Parsed by the field check above.
+        let expiry = expiry.parse::<u64>().unwrap_or(0);
         if expiry <= state.rpc.current_slot().await? {
             response.reason = Some("payment request has expired".to_owned());
             return Ok(Json(response));
@@ -712,7 +699,10 @@ async fn proxy_rpc(
             .and_then(|v| v["filters"].as_array())
             .ok_or_else(|| ApiError::BadRequest("Bounded ChainPay filters required".into()))?;
         let size = filters.iter().find_map(|v| v["dataSize"].as_u64());
-        if !matches!(size, Some(106 | 235 | 282))
+        // 106 asset, 235 mandate, 282 original receipt, 371 receipt with its
+        // policy snapshot. Every size but the asset registry needs the
+        // owner/mandate memcmp below.
+        if !matches!(size, Some(106 | 235 | 282 | 371))
             || (size != Some(106)
                 && !filters.iter().any(|v| {
                     v["memcmp"]["offset"] == 8
@@ -766,21 +756,6 @@ async fn get_payment(
             serde_json::from_value(initial).map_err(|_| ApiError::NotFound)?
         }
     };
-    recovery::authorize_payment(&state, &principal, &record, "get_payment").await?;
-    Ok(Json(recovery::payment(&state, record).await?))
-}
-
-async fn get_payment_by_receipt(
-    State(state): State<BackendState>,
-    Extension(principal): Extension<Principal>,
-    Path(receipt_address): Path<String>,
-) -> Result<Json<PaymentRecord>, ApiError> {
-    validate_string(&receipt_address, "receipt_address")?;
-    let record = state
-        .store
-        .find_payment_by_receipt(&receipt_address)
-        .await?
-        .ok_or(ApiError::NotFound)?;
     recovery::authorize_payment(&state, &principal, &record, "get_payment").await?;
     Ok(Json(recovery::payment(&state, record).await?))
 }
@@ -1005,12 +980,14 @@ async fn submit_managed_payment(
         token_program: Some(request.token_program.clone()),
         x402: request.x402.clone(),
         crossmint: request.crossmint.clone(),
+        payment_request: request.payment_request.clone(),
     };
     validate_managed_payment_request(
         &request.unsigned_transaction,
         &payment,
         &state.config.program_id,
     )?;
+    receipt_routes::receipt_request_record(&state.config, &payment)?;
     if let Some(existing) =
         recovery::existing_payment(&state, &principal, &payment, SigningMode::Delegated).await?
     {
@@ -1114,6 +1091,7 @@ async fn submit_payment(
     Json(request): Json<PaymentSubmissionRequest>,
 ) -> Result<Json<PaymentRecord>, ApiError> {
     validate_payment_request(&request, &state.config.program_id)?;
+    receipt_routes::receipt_request_record(&state.config, &request)?;
     let mut request = request;
     request.idempotency_key = format!("{}:{}", principal.wallet, request.idempotency_key);
     if let Some(existing) =
@@ -1158,7 +1136,24 @@ async fn settle_payment(
     mut record: PaymentRecord,
 ) -> Result<Json<PaymentRecord>, ApiError> {
     // J6a: re-read pause/revoke/expiry immediately before broadcast, not only at reservation.
-    validate_live_payment(state, &request).await?;
+    match validate_live_payment(state, &request).await {
+        // The receipt exists. If these exact signed bytes created it (an earlier
+        // send whose response was lost), this is our own payment: reconcile it
+        // instead of calling it a duplicate.
+        Err(ApiError::DuplicateInvoice { receipt_address }) => {
+            let own = recovery::signature(&request.signed_transaction)?;
+            if state.rpc.signature_status(&own).await?.is_none() {
+                return Err(ApiError::DuplicateInvoice { receipt_address });
+            }
+            record.signature = Some(own);
+            record.status = PaymentStatus::Submitted;
+            record.updated_at_ms = now_ms();
+            persist_payment(state, &record, request.x402.as_ref()).await?;
+            return Ok(Json(recovery::payment(state, record).await?));
+        }
+        other => other?,
+    }
+    receipt_routes::keep_receipt_request(state, &request).await?;
     record.signature = Some(recovery::signature(&request.signed_transaction)?);
     record.status = PaymentStatus::Submitted;
     record.updated_at_ms = now_ms();
@@ -1170,6 +1165,13 @@ async fn settle_payment(
     {
         record = recovery::classify_send(state, record, &error).await?;
         persist_payment(state, &record, connector_metadata(&request)).await?;
+        if record.status == PaymentStatus::Failed
+            && record.error.as_deref() == Some(receipt_routes::DUPLICATE_INVOICE_MESSAGE)
+        {
+            return Err(ApiError::DuplicateInvoice {
+                receipt_address: record.receipt_address.clone().unwrap_or_default(),
+            });
+        }
         return Ok(Json(
             state
                 .store
@@ -2239,6 +2241,21 @@ async fn validate_live_payment_at(
         &state.config.program_id,
         state.rpc.current_slot().await?,
     )?;
+    // The receipt PDA is derived from mandate and invoice hash, so an existing
+    // account means this invoice was already paid under this mandate. Refuse
+    // before anything is reserved or broadcast; the chain would refuse anyway,
+    // with a message nobody can read.
+    let receipt = ix
+        .accounts
+        .get(3)
+        .and_then(|index| keys.get(*index as usize))
+        .ok_or_else(|| ApiError::BadRequest("Payment instruction accounts are missing".into()))?
+        .to_string();
+    if state.rpc.account_info(&receipt).await?.is_some() {
+        return Err(ApiError::DuplicateInvoice {
+            receipt_address: receipt,
+        });
+    }
     for (position, range) in [(4, 40..72), (5, 104..136), (6, 72..104)] {
         let key = ix
             .accounts
@@ -2325,20 +2342,25 @@ async fn verify_managed_mandate(
 }
 
 async fn verify_finalized_receipt(
-    rpc: &RpcClient,
+    state: &BackendState,
     record: &PaymentRecord,
-    program_id: &str,
 ) -> Result<(), String> {
     let address = record
         .receipt_address
         .as_deref()
         .ok_or_else(|| "payment record has no receipt address".to_owned())?;
-    let account = rpc
+    let account = state
+        .rpc
         .account_info(address)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("receipt account does not exist: {address}"))?;
-    verify_receipt_account(&account, record, program_id)
+    verify_receipt_account(&account, record, &state.config.program_id)?;
+    // J6b: an original receipt carries no policy snapshot. Read the mandate
+    // now, as close to the payment as the relay gets, and keep it labeled as
+    // relay-observed. This never changes the verification result.
+    receipt_routes::observe_policy(state, address, &account.data).await;
+    Ok(())
 }
 
 fn verify_receipt_account(
@@ -2347,7 +2369,8 @@ fn verify_receipt_account(
     program_id: &str,
 ) -> Result<(), String> {
     const RECEIPT_DISCRIMINATOR: [u8; 8] = [168, 198, 209, 4, 60, 235, 126, 109];
-    const RECEIPT_ACCOUNT_LENGTH: usize = 282;
+    // Minimum, not exact: a v2 receipt appends its policy snapshot after this.
+    const RECEIPT_ACCOUNT_LENGTH: usize = crate::receipts::RECEIPT_ACCOUNT_LENGTH;
     const RECEIPT_STATUS_SETTLED: u8 = 1;
 
     if account.owner != program_id {

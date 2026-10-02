@@ -239,6 +239,10 @@ export const TOOL_DEFINITIONS = [
           type: "string",
           description: "Base64 wallet-signed transaction for relay through the Rust backend",
         },
+        request: {
+          type: "object",
+          description: "The verified merchant-signed request this payment settles, when there is one. Its hash must equal invoiceHash. The relay keeps it with the receipt so the owner can see what was bought.",
+        },
       },
       required: [
         "mandate",
@@ -337,6 +341,19 @@ export const TOOL_DEFINITIONS = [
         owner: { type: "string", description: "Connected wallet. Filled from the session when omitted." },
         mandate: { type: "string", description: "Optional mandate PDA" },
         limit: { type: "string", description: "Maximum receipts to return, newest first" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "export_receipts",
+    description: "Export the connected wallet's receipts as one CSV for accounting. Use when the owner asks to download, export, or reconcile payments. Columns start with Date, Description, Amount, Payee, Reference; each row says whether its limits were recorded on Solana, observed by the relay, or not recorded.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: { type: "string", description: "Connected wallet. Filled from the session when omitted." },
+        mandate: { type: "string", description: "Optional mandate PDA to export one permission" },
+        limit: { type: "string", description: "Maximum receipts, newest first. Default 500, at most 1000" },
       },
       additionalProperties: false,
     },

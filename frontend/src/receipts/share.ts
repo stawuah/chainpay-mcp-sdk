@@ -6,8 +6,8 @@ export type ShareResult =
   | { status: "cancelled" }
   | { status: "failed"; message: string };
 
-export function shareCopy(amountLabel: string, tokenLabel: string, receiptPda: string, origin: string): { title: string; text: string; url: string } {
-  const url = publicReceiptUrl(receiptPda, origin);
+export function shareCopy(amountLabel: string, tokenLabel: string, receiptPda: string, origin: string, path?: string): { title: string; text: string; url: string } {
+  const url = path ? `${origin.replace(/\/$/, "")}${path}` : publicReceiptUrl(receiptPda, origin);
   return {
     title: "ChainPay payment receipt",
     text: `ChainPay receipt: ${amountLabel} ${tokenLabel} on Solana Devnet.`,
@@ -20,11 +20,13 @@ export async function sharePublicReceipt(input: {
   tokenLabel: string;
   receiptPda: string;
   origin?: string;
+  /** Path to share instead of the plain public receipt, such as an audit link. */
+  path?: string;
   share?: (data: ShareData) => Promise<void>;
   clipboardWrite?: (value: string) => Promise<void>;
 }): Promise<ShareResult> {
   const origin = input.origin ?? (typeof window !== "undefined" ? window.location.origin : "");
-  const payload = shareCopy(input.amountLabel, input.tokenLabel, input.receiptPda, origin);
+  const payload = shareCopy(input.amountLabel, input.tokenLabel, input.receiptPda, origin, input.path);
   const share = input.share ?? (typeof navigator !== "undefined" && typeof navigator.share === "function"
     ? (data: ShareData) => navigator.share(data)
     : undefined);
@@ -57,9 +59,11 @@ export async function sharePublicReceipt(input: {
   }
 }
 
-export function shareStatusCopy(result: ShareResult): string {
-  if (result.status === "shared") return "Receipt sent from your browser.";
-  if (result.status === "copied") return "ChainPay receipt link copied.";
+/** `details`: true or "invoice" when the link carries the invoice, "order" when it carries only the order. */
+export function shareStatusCopy(result: ShareResult, details: boolean | "invoice" | "order" = false): string {
+  const what = details === "order" ? "order details" : "invoice details";
+  if (result.status === "shared") return details ? `Receipt with ${what} sent from your browser.` : "Receipt sent from your browser.";
+  if (result.status === "copied") return details ? `Receipt link with ${what} copied.` : "ChainPay receipt link copied.";
   if (result.status === "cancelled") return "";
   return result.message;
 }

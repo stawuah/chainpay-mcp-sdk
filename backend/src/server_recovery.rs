@@ -276,7 +276,11 @@ pub(super) fn payment_error(mut record: PaymentRecord, error: &RpcError) -> Paym
     } else {
         PaymentStatus::Submitted
     };
-    record.error = Some(if deterministic_failure(error) {
+    let duplicate = matches!(error, RpcError::Remote { message, .. }
+        if super::receipt_routes::is_duplicate_receipt_error(message, record.receipt_address.as_deref()));
+    record.error = Some(if deterministic_failure(error) && duplicate {
+        super::receipt_routes::DUPLICATE_INVOICE_MESSAGE.to_owned()
+    } else if deterministic_failure(error) {
         rejection_reason(error)
     } else {
         "Submission outcome unknown; awaiting chain reconciliation. Keep this operation and signature.".into()
@@ -326,7 +330,7 @@ pub(super) async fn payment(
             if status.error.is_none()
                 && status.confirmation_status.as_deref() == Some("finalized") =>
         {
-            match verify_finalized_receipt(&state.rpc, &record, &state.config.program_id).await {
+            match verify_finalized_receipt(state, &record).await {
                 Ok(()) => {
                     record.status = PaymentStatus::Confirmed;
                     record.slot = status.slot;
@@ -424,10 +428,7 @@ pub(super) async fn transaction(
                     for receipt in receipts {
                         let receipt: PaymentRecord =
                             serde_json::from_value(receipt.clone()).map_err(|_| conflict())?;
-                        if verify_finalized_receipt(&state.rpc, &receipt, &state.config.program_id)
-                            .await
-                            .is_err()
-                        {
+                        if verify_finalized_receipt(state, &receipt).await.is_err() {
                             verified = false;
                             break;
                         }
@@ -594,6 +595,7 @@ pub(super) async fn recover_payment(
         token_program: record.token_program.clone(),
         x402: serde_json::from_value(bound["x402"].clone()).map_err(|_| conflict())?,
         crossmint: serde_json::from_value(bound["crossmint"].clone()).map_err(|_| conflict())?,
+        payment_request: None,
     };
     validate_payment_request(&request, &state.config.program_id)?;
     let tx = decode_solana_transaction(
@@ -1708,7 +1710,9 @@ mod tests {
                 "getSignatureStatuses"=>{assert_eq!(request["params"][0][0],signature);json!({"value":[if stage==0{Value::Null}else{json!({"slot":7,"confirmationStatus":if stage==1{"confirmed"}else{"finalized"},"err":if stage==1||stage==4{json!({"InstructionError":[0,"fixture"]})}else{Value::Null}})}]})},
                 "getAccountInfo"=>{
                     let address=request["params"][0].as_str().unwrap();
-                    json!({"value":if stage==2 && address!=fixture_record.mandate{Value::Null}else{rpc_account_info(address,&fixture_record.mandate,&mandate,&receipt)}})
+                    // No receipt exists before the first send (stage 0) or while
+                    // the finalized receipt is still missing (stage 2).
+                    json!({"value":if (stage==0||stage==2) && address!=fixture_record.mandate{Value::Null}else{rpc_account_info(address,&fixture_record.mandate,&mandate,&receipt)}})
                 },
                 "getSlot"=>json!(1),
                 other=>panic!("Unexpected RPC {other}"),
@@ -2078,12 +2082,17 @@ mod tests {
                     }
                     "getAccountInfo" => {
                         let address = body["params"][0].as_str().unwrap();
-                        json!({"value": rpc_account_info(
-                            address,
-                            &fixture_record.mandate,
-                            &mandate,
-                            &receipt,
-                        )})
+                        // The receipt account exists only once the payment lands.
+                        if address != fixture_record.mandate && landed.load(Ordering::SeqCst) == 0 {
+                            json!({"value": Value::Null})
+                        } else {
+                            json!({"value": rpc_account_info(
+                                address,
+                                &fixture_record.mandate,
+                                &mandate,
+                                &receipt,
+                            )})
+                        }
                     }
                     "getSlot" => json!(1),
                     other => panic!("Unexpected RPC {other}"),

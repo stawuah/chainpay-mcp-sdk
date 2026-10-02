@@ -9,6 +9,8 @@ import { tokenProgramAccountType } from "./tokenAccounts";
 import { settlementKey } from "./settlementKey";
 import { assetOrder, knownAsset } from "../config/knownAssets";
 
+import type { PermissionRequestRecord } from "../requests/permissionRequest";
+
 export type Action = "Send" | "Receive" | "Approve mandate" | "Receipts";
 export type Range = "1H" | "1D" | "1W" | "1M" | "1Y" | "All";
 
@@ -192,7 +194,7 @@ export type CrossmintRequest = {
 export type AgentInboxItem = {
   id: string;
   createdAt: string;
-  source: "message" | "invoice" | "mandate";
+  source: "message" | "invoice" | "mandate" | "permission-request";
   title: string;
   prompt: string;
   response: string;
@@ -205,6 +207,8 @@ export type AgentInboxItem = {
   error?: string;
   archivedAt?: string;
   crossmint?: CrossmintRequest;
+  /** Only for source "permission-request": the signed ask and what became of it. */
+  permissionRequest?: PermissionRequestRecord;
 };
 
 export { archiveInboxItem, isInboxItemArchived, restoreInboxItem } from "./inboxArchive";
@@ -289,6 +293,11 @@ export const coreToolReferences = [
   {
     name: "list_receipts",
     description: "List recent on-chain receipts for the connected wallet or one permission.",
+    inputSchema: { type: "object", properties: { owner: { type: "string" }, mandate: { type: "string" }, limit: { type: "string" } }, additionalProperties: false },
+  },
+  {
+    name: "export_receipts",
+    description: "Export receipts as one CSV, with the source of each receipt's limits.",
     inputSchema: { type: "object", properties: { owner: { type: "string" }, mandate: { type: "string" }, limit: { type: "string" } }, additionalProperties: false },
   },
   {

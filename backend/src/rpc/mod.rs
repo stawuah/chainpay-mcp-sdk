@@ -140,7 +140,14 @@ struct RawSignatureStatus {
 
 #[derive(Debug, Deserialize)]
 struct AccountInfoResponse {
+    #[serde(default)]
+    context: Option<RpcResponseContext>,
     value: Option<RawAccountInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcResponseContext {
+    slot: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,8 +207,38 @@ impl RpcClient {
                 json!([address, { "commitment": commitment, "encoding": "base64" }]),
             )
             .await?;
-        response
-            .value
+        Self::decode_account(response.value)
+    }
+
+    /// Read an account from a node that has reached at least `min_context_slot`,
+    /// and return the slot the read was answered at. The node refuses rather
+    /// than answering from an older state, so a post-payment read can never
+    /// describe the account as it was before the payment.
+    pub async fn account_info_since(
+        &self,
+        address: &str,
+        min_context_slot: u64,
+    ) -> Result<Option<(RpcAccount, u64)>, RpcError> {
+        let response: AccountInfoResponse = self
+            .call(
+                "getAccountInfo",
+                json!([address, {
+                    "commitment": self.config.commitment,
+                    "encoding": "base64",
+                    "minContextSlot": min_context_slot
+                }]),
+            )
+            .await?;
+        let slot = response
+            .context
+            .as_ref()
+            .map(|context| context.slot)
+            .ok_or(RpcError::MissingField("context.slot"))?;
+        Ok(Self::decode_account(response.value)?.map(|account| (account, slot)))
+    }
+
+    fn decode_account(value: Option<RawAccountInfo>) -> Result<Option<RpcAccount>, RpcError> {
+        value
             .map(|account| {
                 let encoded = account
                     .data

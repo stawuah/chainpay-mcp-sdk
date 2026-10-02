@@ -104,6 +104,15 @@ export type TokenCapabilityProfile = {
   transferHookProgram?: Address;
 };
 
+/** One line of what was bought. Amounts are base units of the request mint. */
+export type PaymentRequestLineItem = {
+  label: string;
+  /** Unsigned integer string in base units of the request mint. */
+  amount?: string;
+  /** Unsigned decimal string, for example "1" or "2.5". */
+  quantity?: string;
+};
+
 export type PaymentRequestPayload = {
   version: 1;
   cluster: "devnet" | "mainnet-beta";
@@ -117,6 +126,12 @@ export type PaymentRequestPayload = {
   nonce: string;
   expiresAtSlot?: string;
   resource?: string;
+  /**
+   * Seller's plain description of what is being bought. Signed with the rest
+   * of the payload, so it is part of the invoice hash when present.
+   */
+  description?: string;
+  lineItems?: PaymentRequestLineItem[];
 };
 
 export type SignedPaymentRequest = {
@@ -142,6 +157,50 @@ export type PaymentRequest = {
   tokenProgram?: TokenProgram;
 };
 
+/**
+ * Mandate policy values the program copied into a v2 receipt at payment time.
+ * Every value is the mandate's state immediately after this payment.
+ */
+export type ReceiptPolicyLimits = {
+  maxPerPayment: bigint;
+  totalLimit: bigint;
+  amountSpentAfter: bigint;
+  paymentCountAfter: bigint;
+  /** 0 means no payment-count cap. */
+  maxPaymentCount: bigint;
+  expiresAtSlot: bigint;
+  cooldownSlots: bigint;
+};
+
+export type ReceiptPolicySnapshot = ReceiptPolicyLimits & {
+  /** Layout version byte from the receipt. 1 is the first snapshot layout. */
+  version: number;
+};
+
+/**
+ * Where the limits shown beside a receipt came from.
+ * - on-chain: written by the program into the receipt account itself.
+ * - relay-observed: read from the mandate by the ChainPay relay after the
+ *   payment finalized. Not stored on Solana, and later payments in the same
+ *   observation window may already be counted.
+ * - not-recorded: neither exists for this receipt.
+ */
+export type ReceiptPolicySource = "on-chain" | "relay-observed" | "not-recorded";
+
+export type ReceiptPolicy =
+  | { source: "on-chain"; limits: ReceiptPolicyLimits }
+  | {
+      source: "relay-observed";
+      limits: ReceiptPolicyLimits;
+      observedAtSlot: bigint;
+      /**
+       * The mandate had paid again after this receipt when the relay read it,
+       * so `amountSpentAfter` and `paymentCountAfter` include later payments.
+       */
+      includesLaterPayments: boolean;
+    }
+  | { source: "not-recorded" };
+
 export type PaymentReceipt = {
   address: Address;
   mandate: Address;
@@ -160,6 +219,11 @@ export type PaymentReceipt = {
   onChainStatus: number;
   bump: number;
   transactionSignature?: string;
+  /**
+   * Policy snapshot from a v2 (371-byte) receipt. Null for an original
+   * 282-byte receipt or when the program wrote no snapshot.
+   */
+  policySnapshot: ReceiptPolicySnapshot | null;
 };
 
 export type PolicyCheck = {
@@ -217,6 +281,8 @@ export type PaymentExecutionResult = {
   signature?: string;
   slot?: bigint;
   error?: string;
+  /** Set when the receipt already existed: nothing new was paid. */
+  code?: "DuplicateInvoice";
 };
 
 export type PreparedMandate = {

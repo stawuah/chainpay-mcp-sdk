@@ -109,6 +109,26 @@ After a successful payment, the dashboard shows the same human-readable
 - **In-context ops:** MCP `get_spend_overview` / `list_receipts`, `chainpay status` in the terminal, or `/embed/overview/<owner>` — same spend and receipts without opening the dashboard. Pause and revoke still sign in the owner wallet.
 - **Stranger verify:** landing **See a receipt** → `/verify` paste or
   `/verify/:pda` — no wallet required.
+- **Why it was allowed:** each receipt shows **Spending permission at payment**
+  (amount against the per-payment limit, spent after, payment N of the cap,
+  paid before expiry) and says where those limits came from: recorded on
+  Solana (after the program upgrade in PR #23 deploys), seen by the relay after
+  payment, or not recorded with today's limits instead. One line says whether
+  the same payment would pass today.
+- **What was bought:** when a seller-signed invoice verifies against the
+  receipt, the owner sees **Order match** with its description and line items,
+  and can **Share with details** as a `/verify` link that carries the invoice
+  in the URL fragment. A plain public receipt shows none of it.
+- **Export:** **Export CSV** on the Receipts tab, `chainpay export --owner
+  <wallet>`, or MCP `export_receipts`.
+- **Purchase orders for agents:** a vendor (`chainpay request-mandate`, or the
+  demo merchant's **Request permission**) or a builder (`chainpay
+  request-budget`) sends a signed link; the owner reviews it in Requests and
+  approves a permission in the usual builder. Receipts then show **Order
+  match** (Matched / Payee differs / No invoice / No order), the CSV adds PO
+  number and match status, and each permission has a **Statement**. The
+  expected payee is checked, not enforced on Solana — see
+  [ask for a spending permission](docs/guides/request-a-permission.md).
 - **Owner deep link:** `/app/receipts/:pda` opens the inbox receipt card when
   signed in.
 - **Settlement recovery:** in-app **Check settlement**, **Retry same approval**,

@@ -55,6 +55,11 @@ pub struct PaymentSubmissionRequest {
     pub x402: Option<X402PaymentMetadata>,
     #[serde(default)]
     pub crossmint: Option<CrossmintPaymentMetadata>,
+    /// The merchant-signed request this payment settles, when there is one.
+    /// Kept by receipt PDA after its hash is checked against `invoice_hash`.
+    /// Not part of the idempotency intent: the hash already fixes its content.
+    #[serde(default)]
+    pub payment_request: Option<SignedPaymentRequest>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,6 +104,7 @@ pub struct ManagedPaymentSubmissionRequest {
     pub x402: Option<X402PaymentMetadata>,
     #[serde(default)]
     pub crossmint: Option<CrossmintPaymentMetadata>,
+    pub payment_request: Option<SignedPaymentRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,9 +255,25 @@ pub struct PaymentRequestPayload {
     pub expires_at_slot: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
+    /// Optional "what was bought" fields. Serialized only when present, so a
+    /// request without them keeps its original canonical bytes and hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(rename = "lineItems", default, skip_serializing_if = "Option::is_none")]
+    pub line_items: Option<Vec<PaymentRequestLineItem>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Field order is canonical: label, amount, quantity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentRequestLineItem {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignedPaymentRequest {
     pub payload: PaymentRequestPayload,
     pub signature: String,

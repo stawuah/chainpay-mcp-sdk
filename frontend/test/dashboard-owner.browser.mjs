@@ -79,7 +79,7 @@ try {
   await page.evaluate(()=>document.documentElement.style.zoom='1');
   await page.goto(`${BASE_URL}/test/fixtures/dashboard-harness.html?tab=payments&receipts`);
   assert.equal(await page.locator('.receipt-preview-card').count(),0,'history does not auto-open a receipt');
-  await page.getByRole('button',{name:/Preview USDC receipt/}).click();
+  await page.getByRole('button',{name:'Preview USDC receipt 2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1'}).click();
   await page.locator('.receipt-card').waitFor();
   assert.match(await page.locator('.receipt-card-amount').innerText(),/4\.500001/);
   await page.locator('.receipt-lookup > summary').click();

@@ -1,6 +1,6 @@
 import { submitSettlement } from "./settlement-submit.js";
 import type { ChainPayMcpContext } from "./context.js";
-import { bytesToHex } from "@chainpay/sdk";
+import { bytesToHex, verifyPaymentRequest, type SignedPaymentRequest } from "@chainpay/sdk";
 import { materializeUnsignedTransaction, serializeTransaction, toolResult } from "./common.js";
 import { parsePaymentInput, requireObject } from "./payment-input.js";
 import { requirementsFromPreflight } from "./check_payment_requirements.js";
@@ -15,6 +15,12 @@ export async function executePayment(
     throw new Error("signingMode must be human or delegated");
   }
   const parsed = parsePaymentInput(input);
+  let paymentRequest: SignedPaymentRequest | undefined;
+  if (input.request !== undefined) {
+    const checked = await checkedPaymentRequest(context, input.request, parsed.input);
+    if ("rejected" in checked) return checked.rejected;
+    paymentRequest = checked.request;
+  }
   const prepared = await context.client.preparePayment(parsed.input, parsed.agent);
   if (!prepared.preflight.valid) {
     return toolResult(
@@ -82,9 +88,11 @@ export async function executePayment(
         recipient: parsed.input.recipient,
         amount: parsed.input.amount.toString(),
         token_program: parsed.input.tokenProgram,
+        ...(paymentRequest ? { payment_request: paymentRequest } : {}),
       }),
     });
     const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (payload.code === "DuplicateInvoice") return duplicateInvoice(payload, prepared.receiptAddress);
     if (!response.ok) {
       return toolResult({ action: "managed_backend_rejected", httpStatus: response.status, ...payload }, true);
     }
@@ -141,9 +149,11 @@ export async function executePayment(
         recipient: parsed.input.recipient,
         amount: parsed.input.amount.toString(),
         token_program: parsed.input.tokenProgram,
+        ...(paymentRequest ? { payment_request: paymentRequest } : {}),
       }),
     });
     const payload = await response.json() as Record<string, unknown>;
+    if (payload.code === "DuplicateInvoice") return duplicateInvoice(payload, prepared.receiptAddress);
     if (!response.ok) {
       return toolResult({ action: "backend_rejected", httpStatus: response.status, ...payload }, true);
     }
@@ -176,4 +186,41 @@ export async function executePayment(
     transaction: serializeTransaction(prepared.transaction),
     unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction),
   });
+}
+
+/** The relay found the receipt already on chain and sent nothing. */
+function duplicateInvoice(payload: Record<string, unknown>, receiptAddress: string) {
+  return toolResult({
+    action: "duplicate_invoice",
+    code: "DuplicateInvoice",
+    message: typeof payload.error === "string" ? payload.error : "This invoice was already paid. Nothing new was submitted.",
+    receiptAddress,
+  }, true);
+}
+
+/**
+ * The merchant request this payment settles, checked before anything is
+ * prepared: signed by its merchant, not expired, hashing to this invoiceHash,
+ * and naming this mint, recipient, and amount. The relay checks it again and
+ * keeps it with the receipt.
+ */
+async function checkedPaymentRequest(
+  context: ChainPayMcpContext,
+  value: unknown,
+  payment: ReturnType<typeof parsePaymentInput>["input"],
+): Promise<{ request: SignedPaymentRequest } | { rejected: ReturnType<typeof toolResult> }> {
+  const reject = (message: string) => ({
+    rejected: toolResult({ action: "payment_request_mismatch", message }, true),
+  });
+  const request = requireObject(value) as unknown as SignedPaymentRequest;
+  const verification = await verifyPaymentRequest(request, await context.client.getCurrentSlot());
+  if (!verification.valid) return reject(verification.reason ?? "The merchant request did not verify.");
+  if (bytesToHex(verification.invoiceHash) !== bytesToHex(payment.invoiceHash)) {
+    return reject("The merchant request does not hash to this invoiceHash.");
+  }
+  const { payload } = verification;
+  if (payload.mint !== payment.mint || payload.recipient !== payment.recipient || payload.amount !== payment.amount.toString()) {
+    return reject("The merchant request names a different mint, recipient, or amount than this payment.");
+  }
+  return { request: { payload: verification.payload, signature: request.signature } };
 }

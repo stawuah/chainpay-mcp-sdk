@@ -63,8 +63,11 @@ read; verify the selected cluster and program before continuing.
 | Read a decoded payment receipt | `getPayment(receiptAddress)` |
 | Verify a settled receipt for public display | `readPublicReceipt(receiptAddress)` |
 | Prepare owner permission | `buildCreateMandate(input, owner)` |
-| Prepare a payment and inspect policy | `preparePayment(input, approvedAgent)` |
+| Check a merchant request against a receipt | `verifyReceiptPurchase(receipt, signedRequest)` |
+| Export receipts as one CSV | `receiptsToCsv(rows)` |
+| Prepare a payment and inspect policy | `preparePayment(input, approvedAgent)`; throws `DuplicateInvoiceError` when the invoice is already paid |
 | Terminal without the dashboard | `npx --prefix sdk chainpay status --owner <wallet>` |
+| Receipts CSV from the terminal | `npx --prefix sdk chainpay export --owner <wallet> --out receipts.csv` |
 
 A PDA is a program-derived account address. A receipt PDA records a settlement;
 its address is derived from the mandate and invoice hash. Use validated receipt
@@ -112,7 +115,8 @@ evidence and remaining live verification.
 ## Terminal without the dashboard
 
 After the SDK build, the same snapshot the MCP cards use is available as a
-read-only CLI. It never signs, stores keys, or submits. Pause and revoke print
+read-only CLI. It never stores keys or submits a transaction, and the read
+commands never sign. Pause and revoke print
 the owner-approval next step; with `--json` they also print the unsigned
 transaction (the same shape the MCP `pause_mandate` tool returns) for a wallet
 flow to sign.
@@ -128,6 +132,36 @@ node sdk/dist/cli.js pause <mandate> --owner <wallet>
 `CHAINPAY_APP_URL` are optional environment defaults. Add `--json` for the
 machine snapshot. Token symbols come from the same table the dashboard uses,
 `sdk/src/known-assets.ts`, so an asset named once is named everywhere.
+
+### Ask an owner for a spending permission
+
+A vendor, or a builder who wants their agent funded, can send an owner a signed
+request link. The request moves no money and creates nothing on chain. The
+owner opens the link, may change every limit, and signs the mandate in their
+own wallet.
+
+```bash
+node sdk/dist/cli.js request-mandate --keypair vendor.json --mint <mint> \
+  --recipient <payee-token-account> --per-payment 5 --total 50 --days 30 \
+  --description "Market data API" --po PO-1042 --name "Acme Data"
+
+node sdk/dist/cli.js request-budget --keypair builder.json --agent <agent-key> \
+  --mint <mint> --total 50 --days 14 --description "Hackathon API credits"
+```
+
+These two commands sign an off-chain request with the keypair file and print
+the link and a summary, for example "Asks for up to 5 USDC per payment, 50 USDC
+total, 30 days. Payee DobH…jY42. Link valid 7 days." The key is never printed.
+Amounts are whole tokens converted exactly with the mint decimals (read over
+RPC, or `--decimals`). Days are estimated from 400 ms slots. The link is
+`<app>/app/requests/permission#req=<base64url>`; the fragment never reaches a
+server. `signMandateRequest`, `verifyMandateRequest`, and the link helpers live
+in `sdk/src/mandate-request.ts`.
+
+The expected payee in a vendor request is checked when receipts are matched to
+the request. Solana does not block a payment to someone else under a nonce
+mandate. The owner's side, Order match and the Statement are in
+[ask an owner for a spending permission](request-a-permission.md).
 
 A compact public widget also lives at `/embed/overview/<owner>` — spend meters
 and the latest receipt card, no wallet.

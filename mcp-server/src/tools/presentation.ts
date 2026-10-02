@@ -3,6 +3,8 @@ import {
   formatPaymentLookupMarkdown,
   formatReceiptListMarkdown,
   type OpsReceiptList,
+  type OpsReceiptPolicy,
+  type OpsReceiptPurpose,
   type OpsSnapshot,
   type PaymentLookupCard,
 } from "@chainpay/sdk";
@@ -269,6 +271,8 @@ function formatBlocked(record: RecordLike): string {
     lines.push("", "**Next step:** MPP (WWW-Authenticate: Payment) merchants are pay.sh's job. Use the pay.sh MCP server if it is connected, otherwise hand the owner the URL and the dashboard's pay.sh panel. Do not retry here.");
   } else if (action.includes("preflight") || action === "requirements_blocked" || action === "payment_request_rejected") {
     lines.push("", "**Next step:** Fix the failed checks or choose a different spending permission.");
+  } else if (action === "duplicate_invoice") {
+    lines.push("", "**Next step:** Nothing to retry. Open the existing receipt with `get_payment` if the owner wants proof.");
   } else if (action === "payment_pending" || action === "x402_payment_pending") {
     lines.push("", "**Next step:** Poll \`wait_for_payment\` with the same \`paymentId\`. Do not approve a second payment.");
   } else {
@@ -376,8 +380,29 @@ function formatPaymentLookup(record: RecordLike): string {
     ),
     mandate: pickString(onChain?.mandate),
     receiptUrl: receiptUrlForAddress(pickString(record.receiptAddress, onChain?.address)),
+    ...(isRecord(record.policy) ? { policy: record.policy as OpsReceiptPolicy } : {}),
+    ...(isRecord(record.purpose) ? { purpose: record.purpose as OpsReceiptPurpose } : {}),
   };
   return formatPaymentLookupMarkdown(card);
+}
+
+function formatReceiptExport(record: RecordLike): string {
+  const count = typeof record.rowCount === "number" ? record.rowCount : 0;
+  const sources = isRecord(record.limitsSources) ? record.limitsSources : {};
+  const csv = typeof record.csv === "string" ? record.csv : "";
+  return [
+    `**Receipt export** — ${count} receipt${count === 1 ? "" : "s"} as CSV${pickString(record.filename) ? ` (\`${record.filename}\`)` : ""}.`,
+    "",
+    `- Limits recorded on Solana: ${Number(sources["on-chain"] ?? 0)}`,
+    `- Limits seen by the ChainPay relay after payment, not stored on Solana: ${Number(sources["relay-observed"] ?? 0)}`,
+    `- Limits not recorded: ${Number(sources["not-recorded"] ?? 0)}`,
+    "",
+    "```csv",
+    csv.replace(/\r\n$/, "").replace(/\r\n/g, "\n"),
+    "```",
+    "",
+    "**Next step:** Save the CSV and import it, or open a Verify URL to check any row on Solana.",
+  ].join("\n");
 }
 
 export function formatToolPresentation(data: unknown, isError = false): string {
@@ -385,6 +410,7 @@ export function formatToolPresentation(data: unknown, isError = false): string {
   if (data.kind === "spend_overview") return formatOpsMarkdown(data as OpsSnapshot);
   if (data.kind === "receipt_list") return formatReceiptListMarkdown(data as OpsReceiptList);
   if (data.kind === "payment_lookup") return formatPaymentLookup(data);
+  if (data.kind === "receipt_export") return formatReceiptExport(data);
   if (Array.isArray(data.mandates) && data.owner !== undefined) return formatMandateList(data);
   if (data.compatible !== undefined && Array.isArray(data.candidates)) return formatCompatibleMandate(data);
   if (data.found === true && data.mandate !== undefined) return formatSingleMandate(data);

@@ -70,7 +70,7 @@ test("illustrative receipt uses the approved example and never claims payment", 
   assert.match(text, /10 USDC/);
   assert.match(text, /100 USDC/);
   assert.match(text, /No seller statement/);
-  assert.match(text, /Current permission settings are not a historical snapshot/);
+  assert.match(text, /Each receipt says whether its limits were recorded at payment or are today’s/);
   assert.match(text, /Public receipts exclude private request text and attachments/);
 });
 

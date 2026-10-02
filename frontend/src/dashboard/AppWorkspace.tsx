@@ -58,6 +58,7 @@ export default function AppWorkspace() {
           tab={currentRoute.tab}
           mandateBuilder={currentRoute.mandateBuilder}
           receiptDetail={currentRoute.receiptDetail}
+          permissionRequest={currentRoute.permissionRequest}
           onTabChange={(tab, options) => navigate({
             kind: "app",
             tab,

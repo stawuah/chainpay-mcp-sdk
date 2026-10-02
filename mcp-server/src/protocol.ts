@@ -15,7 +15,7 @@ Capability map:
 - Discover: list_mandates, get_spend_overview, get_mandate, get_protocol_config, get_asset, get_supported_assets, find_compatible_mandate
 - Policy: create_mandate, update_mandate, pause_mandate, revoke_mandate
 - Quote and check: check_payment_requirements, quote_payment, quote_payment_request, verify_payment_request, create_demo_payment_request
-- Pay: prepare_payment, execute_payment, list_receipts, get_payment, wait_for_payment
+- Pay: prepare_payment, execute_payment, list_receipts, export_receipts, get_payment, wait_for_payment
 - x402: prepare_x402_payment, execute_x402_payment (primary verb for HTTPS 402 URLs)
 
 Connection scope:

@@ -3,6 +3,8 @@
 pub mod api;
 pub mod catalog;
 pub mod delivery;
+pub mod mandate_request;
+pub mod receipts;
 pub mod rpc;
 pub mod server;
 pub mod signer;

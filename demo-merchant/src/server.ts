@@ -6,6 +6,7 @@ import {
 } from "@chainpay/sdk";
 import { createMerchantApp } from "./app.js";
 import { loadMerchantConfig, loadSellerPublishConfig, sanitizedResourceLabel } from "./config.js";
+import { loadMandateRequestSettings } from "./mandate-requests.js";
 import { createRpcTransactionReader } from "./proof.js";
 import { createAxumDeliveryPublisher } from "./publisher.js";
 
@@ -31,16 +32,35 @@ async function main(): Promise<void> {
   }
 
   const sellerPublish = loadSellerPublishConfig(process.env, config.programId);
+  const mandateRequestSettings = loadMandateRequestSettings(process.env, config);
   const app = createMerchantApp(config, references, {
     getFinalizedReceipt: (address) => client.getPayment(address),
     getFinalizedTransaction: createRpcTransactionReader(config.rpcUrl),
     ...(sellerPublish ? { publisher: createAxumDeliveryPublisher(sellerPublish) } : {}),
+    ...(mandateRequestSettings
+      ? {
+        mandateRequests: {
+          settings: mandateRequestSettings,
+          lookup: {
+            getCurrentSlot: () => client.getCurrentSlot(),
+            getMintDecimals: (mint: string) => client.getMintDecimals(mint),
+          },
+        },
+      }
+      : {}),
   });
 
   app.listen(config.port, "127.0.0.1", () => {
     process.stdout.write(
       `ChainPay custom receipt-proof demo merchant listening at ${sanitizedResourceLabel(config.resource)}\n`,
     );
+    if (mandateRequestSettings) {
+      process.stdout.write(
+        mandateRequestSettings.throwawayKey
+          ? "Mandate requests signed with a throwaway key for this process (set CHAINPAY_SELLER_SECRET_KEY to keep one)\n"
+          : `Mandate requests signed by ${mandateRequestSettings.requester}\n`,
+      );
+    }
     if (sellerPublish) {
       process.stdout.write(
         `Seller response-served attestations enabled for ${sellerPublish.seller}\n`,

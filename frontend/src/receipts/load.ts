@@ -1,9 +1,11 @@
 import {
   bytesToHex,
   formatExactTokenAmount,
+  receiptPolicy,
   type CurrentMandateRead,
   type PaymentReceipt,
   type PublicReceiptProof,
+  type ReceiptPolicy,
   type ReceiptValidationCode,
   type TokenAmountDisplay,
 } from "@chainpay/sdk";
@@ -13,6 +15,7 @@ import {
   amountLabel,
   classifyReceiptPda,
   type CurrentMandateView,
+  type PolicyAtPaymentView,
   type PublicReceiptPageState,
   type ReceiptAmountView,
   type ReceiptView,
@@ -60,6 +63,11 @@ function currentMandateView(read: CurrentMandateRead, decimals: number | null): 
         maxPaymentCount: mandate.maxPaymentCount.toString(),
         cooldownSlots: mandate.cooldownSlots.toString(),
         expiresAtSlot: mandate.expiresAtSlot.toString(),
+        baseUnits: {
+          maxPerPayment: mandate.maxPerPayment.toString(),
+          totalLimit: mandate.totalLimit.toString(),
+          amountSpent: mandate.amountSpent.toString(),
+        },
       },
     };
   }
@@ -67,11 +75,38 @@ function currentMandateView(read: CurrentMandateRead, decimals: number | null): 
   return { status: "absent" };
 }
 
+/** SDK policy (bigints) to the view's exact strings. */
+export function policyView(policy: ReceiptPolicy): PolicyAtPaymentView {
+  if (policy.source === "not-recorded") return { source: "not-recorded" };
+  const limits = {
+    maxPerPayment: policy.limits.maxPerPayment.toString(),
+    totalLimit: policy.limits.totalLimit.toString(),
+    amountSpentAfter: policy.limits.amountSpentAfter.toString(),
+    paymentCountAfter: policy.limits.paymentCountAfter.toString(),
+    maxPaymentCount: policy.limits.maxPaymentCount.toString(),
+    expiresAtSlot: policy.limits.expiresAtSlot.toString(),
+    cooldownSlots: policy.limits.cooldownSlots.toString(),
+  };
+  if (policy.source === "on-chain") return { source: "on-chain", limits };
+  return {
+    source: "relay-observed",
+    limits,
+    observedAtSlot: policy.observedAtSlot.toString(),
+    includesLaterPayments: policy.includesLaterPayments,
+  };
+}
+
+/** The receipt's own on-chain snapshot, else not-recorded. Never the relay here. */
+export function onChainPolicyView(receipt: Pick<PaymentReceipt, "policySnapshot">): PolicyAtPaymentView {
+  return policyView(receiptPolicy({ policySnapshot: receipt.policySnapshot ?? null }));
+}
+
 export function receiptViewFromProof(
   proof: Extract<PublicReceiptProof["receipt"], { valid: true }>,
   amount: TokenAmountDisplay,
   currentMandate: CurrentMandateRead,
   seller: SellerStatementState,
+  currentSlot?: bigint,
 ): ReceiptView {
   const receipt = proof.receipt;
   return {
@@ -93,6 +128,8 @@ export function receiptViewFromProof(
     tokenLabel: tokenLabelForMint(receipt.mint),
     currentMandate: currentMandateView(currentMandate, amount.decimals),
     seller,
+    policy: onChainPolicyView(receipt),
+    ...(currentSlot === undefined ? {} : { currentSlot: currentSlot.toString() }),
   };
 }
 
@@ -122,6 +159,7 @@ export function receiptViewFromSettledPayment(
     tokenLabel: tokenLabelForMint(receipt.mint),
     currentMandate,
     seller,
+    policy: onChainPolicyView(receipt),
   };
 }
 
@@ -174,6 +212,9 @@ async function readPageState(receiptPda: string, refreshSeller = false): Promise
   }
 
   const amount = proof.amount ?? formatExactTokenAmount(proof.receipt.receipt.amount, null);
+  // Reference slot for "≈ date" labels and the expiry part of the today check.
+  // Optional: a failed read leaves both as slot-only or not checked.
+  const slotRead: Promise<bigint | undefined> = publicReceiptClient.getCurrentSlot().catch(() => undefined);
   let seller: SellerStatementState = { status: "absent" };
   try {
     seller = await loadSellerStatement({
@@ -191,7 +232,7 @@ async function readPageState(receiptPda: string, refreshSeller = false): Promise
   return {
     kind: "verified",
     receiptPda: proof.receipt.receipt.address,
-    receipt: receiptViewFromProof(proof.receipt, amount, proof.currentMandate, seller),
+    receipt: receiptViewFromProof(proof.receipt, amount, proof.currentMandate, seller, await slotRead),
   };
 }
 
