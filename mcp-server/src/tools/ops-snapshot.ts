@@ -2,6 +2,7 @@ import { loadOpsSnapshot, receiptListFromSnapshot, type Mandate } from "@chainpa
 import { mandateInScope } from "../authorization.js";
 import type { ChainPayMcpContext } from "./context.js";
 import { solanaAddress, toolResult, unsignedInteger } from "./common.js";
+import { receiptContext } from "./receipt-context.js";
 
 // authorizeTool has already proved a requested mandate is owned, in scope and
 // still bound to the approved agent. Without one, the snapshot shows exactly
@@ -44,6 +45,9 @@ export async function listReceipts(
     mandateFilter: mandateFilter(context, requested),
     receiptLimit: receiptLimit(args.limit),
     appUrl: process.env.CHAINPAY_APP_URL,
+    // Limits the relay observed for receipts without an on-chain snapshot, and
+    // what was bought when the owner's session can read the signed request.
+    receiptContext: (receipt) => receiptContext(context, receipt),
   });
   return toolResult(receiptListFromSnapshot(snapshot));
 }

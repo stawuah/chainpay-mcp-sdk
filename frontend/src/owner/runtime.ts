@@ -273,6 +273,11 @@ export const coreToolReferences = [
     inputSchema: { type: "object", properties: { owner: { type: "string" }, mandate: { type: "string" }, limit: { type: "string" } }, additionalProperties: false },
   },
   {
+    name: "export_receipts",
+    description: "Export receipts as one CSV, with the source of each receipt's limits.",
+    inputSchema: { type: "object", properties: { owner: { type: "string" }, mandate: { type: "string" }, limit: { type: "string" } }, additionalProperties: false },
+  },
+  {
     name: "get_payment",
     description: "Fetch an on-chain ChainPay receipt and its persisted Axum transaction signature.",
     inputSchema: { type: "object", properties: { receiptAddress: { type: "string" }, mandate: { type: "string" }, invoiceHash: { type: "string" } }, additionalProperties: false },

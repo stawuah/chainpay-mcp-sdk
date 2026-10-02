@@ -6,6 +6,7 @@ export const CONNECTION_READ_TOOLS = [
   "get_spend_overview",
   "list_mandates",
   "list_receipts",
+  "export_receipts",
   "find_compatible_mandate",
   "quote_payment",
   "quote_payment_request",

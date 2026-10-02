@@ -18,6 +18,7 @@ const AGENT_TOOL_NAMES = new Set([
   "get_asset",
   "prepare_token_accounts",
   "list_receipts",
+  "export_receipts",
   "get_payment",
   "create_demo_payment_request",
   "verify_payment_request",
@@ -106,7 +107,8 @@ Safety rules:
 - For “my mandate” or “active mandate”, use the mandate address in the session context.
 - Automatic-payment mandates must be created from the dashboard, which provisions and binds the secure provider wallet. Never ask a user to paste a signer public key and never invent one. For a human-approval mandate, the owner wallet is the approved agent.
 - If the session includes a connected wallet but no mandate address, call get_spend_overview first. Fall back to list_mandates if that tool is unavailable. For a signed invoice, call find_compatible_mandate with the same wallet, the verified mint, amount, and token program before quoting.
-- For spend, remaining allowance, or what the agent spent, call get_spend_overview. For receipt history, call list_receipts. Ask for a receipt address only when looking up one payment.
+- For spend, remaining allowance, or what the agent spent, call get_spend_overview. For receipt history, call list_receipts. To download or reconcile receipts, call export_receipts. Ask for a receipt address only when looking up one payment.
+- When execute_payment settles a verified signed invoice, pass the same complete signed request in its request field so the receipt keeps what was bought.
 - If a tool says data was not found, say that plainly and suggest the next safe dashboard step.
 - Use human-readable explanations and do not expose internal chain-of-thought.
 - Token amounts are stored on-chain in base units. Prefer the tool's display.amounts values for user-facing answers: 10,000,000 base units with 6 decimals means 10 tokens, so say "10 PYUSD" when the display symbol is PYUSD. Never show a raw base-unit number as the main amount unless the user asks for technical details.
