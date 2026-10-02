@@ -1032,8 +1032,9 @@ const X402_LIST_FOR_OWNER: &str = r#"
     FROM x402_payments x
     LEFT JOIN payments p ON p.payment_id = x.payment_id
     WHERE x.idempotency_key LIKE $1 ESCAPE '\'
+      AND x.connector = $2
     ORDER BY x.updated_at DESC
-    LIMIT $2
+    LIMIT $3
 "#;
 
 const X402_LIST_FOR_OWNER_WITH_MANDATE: &str = r#"
@@ -1046,9 +1047,10 @@ const X402_LIST_FOR_OWNER_WITH_MANDATE: &str = r#"
     FROM x402_payments x
     INNER JOIN payments p ON p.payment_id = x.payment_id
     WHERE x.idempotency_key LIKE $1 ESCAPE '\'
-      AND p.mandate = $2
+      AND x.connector = $2
+      AND p.mandate = $3
     ORDER BY x.updated_at DESC
-    LIMIT $3
+    LIMIT $4
 "#;
 
 const MANAGED_SIGNER_CHALLENGE_SELECT_BY_ID: &str = r#"
@@ -1350,6 +1352,28 @@ fn from_i64(value: Option<i64>, field: &'static str) -> Result<Option<u64>, Stor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn highest_placeholder(sql: &str) -> usize {
+        sql.split('$')
+            .skip(1)
+            .filter_map(|tail| {
+                let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().ok()
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    // The memory store cannot catch a query whose placeholders drift from the
+    // binds in `list_connector_jobs`; Postgres rejects the mismatch at runtime.
+    #[test]
+    fn connector_list_queries_filter_by_connector_and_match_binds() {
+        assert_eq!(highest_placeholder(X402_LIST_FOR_OWNER), 3);
+        assert_eq!(highest_placeholder(X402_LIST_FOR_OWNER_WITH_MANDATE), 4);
+        assert!(X402_LIST_FOR_OWNER.contains("x.connector = $2"));
+        assert!(X402_LIST_FOR_OWNER_WITH_MANDATE.contains("x.connector = $2"));
+        assert_eq!(highest_placeholder(X402_SELECT_BY_CONNECTOR_REFERENCE), 2);
+    }
 
     fn payment() -> PaymentRecord {
         PaymentRecord {
