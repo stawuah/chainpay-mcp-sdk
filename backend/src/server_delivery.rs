@@ -11,7 +11,8 @@ use solana_address::Address;
 use std::str::FromStr;
 
 const RECEIPT_DISCRIMINATOR: [u8; 8] = [168, 198, 209, 4, 60, 235, 126, 109];
-const RECEIPT_ACCOUNT_LENGTH: usize = 282;
+// Minimum, not exact: a v2 receipt appends its policy snapshot after `bump`.
+const RECEIPT_ACCOUNT_LENGTH: usize = crate::receipts::RECEIPT_ACCOUNT_LENGTH;
 const RECEIPT_STATUS_SETTLED: u8 = 1;
 const POST_RATE_GLOBAL: u64 = 120;
 const POST_RATE_PEER: u64 = 20;
@@ -378,6 +379,32 @@ mod tests {
         let other = bs58::encode([9_u8; 32]).into_string();
         assert!(
             verify_settled_delivery_receipt(&account, &address, DEFAULT_PROGRAM_ID, &other)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_receipts_with_a_policy_snapshot_tail() {
+        // A v2 receipt is the original layout plus 89 bytes. The length check is
+        // a minimum, so delivery statements keep working after the upgrade.
+        let recipient = recipient_address();
+        let (address, mut data) = settled_receipt(DEFAULT_PROGRAM_ID, &recipient);
+        data.resize(crate::receipts::RECEIPT_ACCOUNT_LENGTH_V2, 0);
+        data[282] = 1;
+        let account = RpcAccount {
+            owner: DEFAULT_PROGRAM_ID.to_owned(),
+            data,
+        };
+        assert!(
+            verify_settled_delivery_receipt(&account, &address, DEFAULT_PROGRAM_ID, &recipient)
+                .is_ok()
+        );
+        let truncated = RpcAccount {
+            owner: DEFAULT_PROGRAM_ID.to_owned(),
+            data: account.data[..RECEIPT_ACCOUNT_LENGTH - 1].to_vec(),
+        };
+        assert!(
+            verify_settled_delivery_receipt(&truncated, &address, DEFAULT_PROGRAM_ID, &recipient)
                 .is_err()
         );
     }

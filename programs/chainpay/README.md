@@ -29,6 +29,14 @@ This Anchor program implements the ChainPay Devnet payment rail described in
    A second attempt using the same invoice hash fails because the receipt PDA
    already exists.
 
+   The receipt also records the mandate policy the payment was checked
+   against: the per-payment, total, and payment-count limits, the expiry and
+   cooldown slots, and the mandate's spend and payment count after this
+   payment (`snapshot_version = 1`). These fields are appended after `bump`,
+   so earlier offsets are unchanged. Receipts are 371 bytes including the
+   discriminator; receipts created before the snapshot are 282 bytes and
+   carry no snapshot. 32 trailing bytes are reserved and zeroed.
+
 New mandate identities use:
 
 ```text

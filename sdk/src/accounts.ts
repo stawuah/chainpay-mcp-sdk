@@ -4,10 +4,17 @@ import type {
   Mandate,
   PaymentReceipt,
   PaymentStatus,
+  ReceiptPolicySnapshot,
   SupportedAsset,
   TokenProgram,
 } from "./types.js";
-import { ACCOUNT_DISCRIMINATORS, MANDATE_ACCOUNT_LENGTH, RECEIPT_ACCOUNT_LENGTH, RECEIPT_STATUS_SETTLED } from "./constants.js";
+import {
+  ACCOUNT_DISCRIMINATORS,
+  MANDATE_ACCOUNT_LENGTH,
+  RECEIPT_ACCOUNT_LENGTH,
+  RECEIPT_ACCOUNT_LENGTH_V2,
+  RECEIPT_STATUS_SETTLED,
+} from "./constants.js";
 import {
   address,
   assertDiscriminator,
@@ -121,6 +128,31 @@ function paymentStatus(onChainStatus: number): PaymentStatus {
   return onChainStatus === RECEIPT_STATUS_SETTLED ? "confirmed" : "failed";
 }
 
+/** Offset of `snapshot_version`, the first byte after the original receipt. */
+const RECEIPT_SNAPSHOT_VERSION_OFFSET = RECEIPT_ACCOUNT_LENGTH;
+
+/**
+ * Read the policy tail of a v2 receipt. An original 282-byte receipt, or a v2
+ * receipt whose version byte is 0, has no snapshot: return null rather than
+ * reading zeroes as limits.
+ */
+export function decodeReceiptPolicySnapshot(data: Uint8Array | Buffer): ReceiptPolicySnapshot | null {
+  const bytes = accountBytes(data);
+  if (bytes.length < RECEIPT_ACCOUNT_LENGTH_V2) return null;
+  const version = readU8(bytes, RECEIPT_SNAPSHOT_VERSION_OFFSET);
+  if (version === 0) return null;
+  return {
+    version,
+    maxPerPayment: readU64(bytes, 283),
+    totalLimit: readU64(bytes, 291),
+    amountSpentAfter: readU64(bytes, 299),
+    paymentCountAfter: readU64(bytes, 307),
+    maxPaymentCount: readU64(bytes, 315),
+    expiresAtSlot: readU64(bytes, 323),
+    cooldownSlots: readU64(bytes, 331),
+  };
+}
+
 export function decodePaymentReceipt(
   data: Uint8Array | Buffer,
   receiptAddress: Address,
@@ -150,6 +182,7 @@ export function decodePaymentReceipt(
     onChainStatus,
     bump: readU8(bytes, 281),
     transactionSignature,
+    policySnapshot: decodeReceiptPolicySnapshot(bytes),
   };
 }
 

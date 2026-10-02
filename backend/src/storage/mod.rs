@@ -1,9 +1,12 @@
 //! Public payment metadata and transaction lifecycle persistence.
 //!
-//! Production uses PostgreSQL. The in-memory implementation exists only for
+//! Production uses explicitly selected Convex or PostgreSQL storage. The in-memory implementation exists only for
 //! deterministic unit tests; the backend process refuses to start without a
 //! `DATABASE_URL`.
 
+mod convex;
+use convex::{ConvexStore, decode, encode};
+use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
 
 use sqlx::{
@@ -15,13 +18,16 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::delivery::{DeliveryAttestationPut, DeliveryAttestationRecord};
+use crate::receipts::{ObservedPolicyRecord, ReceiptPolicyLimits, ReceiptRequestRecord};
 use crate::status::{
-    ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord, PaymentStatus,
-    SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
+    ConnectorKind, ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord,
+    PaymentStatus, SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
 };
 
 #[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("Convex storage error: {0}")]
+    Remote(String),
     #[error("DATABASE_URL is required; production storage cannot fall back to memory")]
     MissingDatabaseUrl,
     #[error("database error: {0}")]
@@ -44,12 +50,24 @@ struct MemoryState {
     managed_signer_challenges: HashMap<String, ManagedSignerChallenge>,
     managed_signers: HashMap<String, ManagedSignerRecord>,
     delivery_attestations: HashMap<String, DeliveryAttestationRecord>,
+    receipt_requests: HashMap<String, ReceiptRequestRecord>,
+    observed_policies: HashMap<String, ObservedPolicyRecord>,
+    mandate_requests: HashMap<String, serde_json::Value>,
+}
+
+/// Outcome of a first-write-wins keyed record put. The caller decides whether
+/// an existing record is the same one or a conflict.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyedRecordPut {
+    Created(serde_json::Value),
+    Existing(serde_json::Value),
 }
 
 #[derive(Debug, Clone)]
 enum StorageBackend {
     Memory(Arc<RwLock<MemoryState>>),
     Postgres(PgPool),
+    Convex(ConvexStore),
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +90,26 @@ impl StatusStore {
     }
 
     pub async fn from_env() -> Result<Self, StorageError> {
+        if std::env::var("CHAINPAY_STORAGE").as_deref() == Ok("convex") {
+            let url = std::env::var("CHAINPAY_CONVEX_SITE_URL")
+                .map_err(|_| StorageError::Remote("CHAINPAY_CONVEX_SITE_URL is required".into()))?;
+            let secret = std::env::var("CHAINPAY_CONVEX_BACKEND_SECRET").map_err(|_| {
+                StorageError::Remote("CHAINPAY_CONVEX_BACKEND_SECRET is required".into())
+            })?;
+            let client = ConvexStore::new(&url, secret)?;
+            let _: serde_json::Value = client.call("ping", json!({})).await?;
+            return Ok(Self {
+                backend: StorageBackend::Convex(client),
+            });
+        }
+        if std::env::var("CHAINPAY_STORAGE").is_ok_and(|s| s != "postgres")
+            || std::env::var("VERCEL").as_deref() == Ok("1")
+        {
+            return Err(StorageError::Remote(
+                "CHAINPAY_STORAGE=convex is required on Vercel; unknown storage selection refused"
+                    .into(),
+            ));
+        }
         let database_url = std::env::var("DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -99,6 +137,10 @@ impl StatusStore {
         initial: serde_json::Value,
     ) -> Result<(bool, String, serde_json::Value, serde_json::Value), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let (won, owner, intent, initial): (bool, String, String, String) = client.call("claim_operation", json!({"id":id,"owner":owner,"intent_json":encode(&intent)?,"initial_json":encode(&initial)?})).await?;
+                Ok((won, owner, decode(&intent)?, decode(&initial)?))
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 let won = !state.operations.contains_key(id);
@@ -128,6 +170,8 @@ impl StatusStore {
         id: &str,
     ) -> Result<Option<(String, serde_json::Value, serde_json::Value)>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => { let row: Option<(String,String,String)> = client.call("operation_record", json!({"id":id})).await?;
+                row.map(|(owner,intent,initial)| Ok((owner,decode(&intent)?,decode(&initial)?))).transpose() },
             StorageBackend::Memory(state) => Ok(state.read().await.operations.get(id).cloned()),
             StorageBackend::Postgres(pool) => Ok(sqlx::query("SELECT owner_wallet,intent,initial_record FROM operation_claims WHERE operation_id=$1").bind(id).fetch_optional(pool).await?.map(|r| (r.get("owner_wallet"),r.get::<Json<serde_json::Value>,_>("intent").0,r.get::<Json<serde_json::Value>,_>("initial_record").0))),
         }
@@ -135,6 +179,9 @@ impl StatusStore {
 
     pub async fn operation_owner(&self, id: &str) -> Result<Option<String>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client.call("operation_owner", json!({"id":id})).await
+            }
             StorageBackend::Memory(state) => {
                 Ok(state.read().await.operations.get(id).map(|r| r.0.clone()))
             }
@@ -156,6 +203,14 @@ impl StatusStore {
     ) -> Result<bool, StorageError> {
         let key = format!("rate:{bucket}:{}", now / 60_000);
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call(
+                        "auth_rate",
+                        json!({"bucket":bucket,"now":now.to_string(),"limit":limit.to_string()}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 state.auth.retain(|_, (_, expires)| *expires > now);
@@ -192,6 +247,12 @@ impl StatusStore {
         expires: u64,
     ) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => client
+                .call(
+                    "put_auth",
+                    json!({"key":key,"value_json":encode(&value)?,"expires":expires.to_string()}),
+                )
+                .await?,
             StorageBackend::Memory(state) => {
                 state
                     .write()
@@ -214,6 +275,14 @@ impl StatusStore {
         consume: bool,
     ) -> Result<Option<serde_json::Value>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "get_auth",
+                        json!({"key":key,"now":now.to_string(),"consume":consume}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 state.auth.retain(|_, (_, expires)| *expires > now);
@@ -245,6 +314,9 @@ impl StatusStore {
         hash: &str,
     ) -> Result<Option<serde_json::Value>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client.call("auth_connection", json!({"hash":hash})).await
+            }
             StorageBackend::Memory(_) => Ok(None),
             StorageBackend::Postgres(pool) => {
                 let row = sqlx::query("SELECT wallet_address, scope FROM agent_connections WHERE token_hash=$1 AND revoked_at IS NULL")
@@ -259,6 +331,11 @@ impl StatusStore {
         payment_id: &str,
     ) -> Result<Option<PaymentRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("get_payment", json!({"payment_id":payment_id}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 Ok(state.read().await.payments.get(payment_id).cloned())
             }
@@ -277,6 +354,11 @@ impl StatusStore {
         key: &str,
     ) -> Result<Option<PaymentRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("find_payment_by_idempotency", json!({"key":key}))
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -299,6 +381,14 @@ impl StatusStore {
         receipt_address: &str,
     ) -> Result<Option<PaymentRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "find_payment_by_receipt",
+                        json!({"receipt_address":receipt_address}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -318,6 +408,11 @@ impl StatusStore {
 
     pub async fn put_payment(&self, record: PaymentRecord) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call("put_payment", json!({"record_json":encode(&record)?}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 if state.payments.get(&record.payment_id).is_some_and(|old| {
@@ -390,6 +485,11 @@ impl StatusStore {
         transaction_id: &str,
     ) -> Result<Option<TransactionRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("get_transaction", json!({"transaction_id":transaction_id}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 Ok(state.read().await.transactions.get(transaction_id).cloned())
             }
@@ -408,6 +508,11 @@ impl StatusStore {
         key: &str,
     ) -> Result<Option<TransactionRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("find_transaction_by_idempotency", json!({"key":key}))
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -427,6 +532,11 @@ impl StatusStore {
 
     pub async fn put_transaction(&self, record: TransactionRecord) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call("put_transaction", json!({"record_json":encode(&record)?}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 if state
@@ -476,21 +586,36 @@ impl StatusStore {
         }
     }
 
-    /// List x402 jobs for one owner wallet. Idempotency keys are `{wallet}:{user_key}`.
-    pub async fn list_x402_for_owner(
+    /// List one connector's jobs for one owner wallet. Idempotency keys are
+    /// `{wallet}:{user_key}`. The connector is required so an x402 listing can
+    /// never answer with a Crossmint job, or the reverse.
+    pub async fn list_connector_jobs(
         &self,
         owner_wallet: &str,
+        connector: ConnectorKind,
         mandate: Option<&str>,
         limit: u32,
     ) -> Result<Vec<(X402PaymentRecord, Option<String>)>, StorageError> {
         let prefix = format!("{owner_wallet}:");
         let limit = limit.clamp(1, 100) as usize;
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let rows: Vec<(String, Option<String>)> = client
+                    .call(
+                        "list_x402_for_owner",
+                        json!({"owner_wallet":owner_wallet,"connector":connector.as_str(),"mandate":mandate,"limit":limit}),
+                    )
+                    .await?;
+                rows.into_iter()
+                    .map(|(record, mandate)| Ok((decode(&record)?, mandate)))
+                    .collect()
+            }
             StorageBackend::Memory(state) => {
                 let state = state.read().await;
                 let mut rows: Vec<(X402PaymentRecord, Option<String>)> = state
                     .x402_payments
                     .values()
+                    .filter(|record| record.connector == connector)
                     .filter(|record| record.idempotency_key.starts_with(&prefix))
                     .filter_map(|record| {
                         let linked_mandate = record.payment_id.as_ref().and_then(|payment_id| {
@@ -515,6 +640,7 @@ impl StatusStore {
                 let rows = if let Some(mandate) = mandate {
                     sqlx::query(X402_LIST_FOR_OWNER_WITH_MANDATE)
                         .bind(format!("{prefix}%"))
+                        .bind(connector.as_str())
                         .bind(mandate)
                         .bind(limit as i64)
                         .fetch_all(pool)
@@ -522,6 +648,7 @@ impl StatusStore {
                 } else {
                     sqlx::query(X402_LIST_FOR_OWNER)
                         .bind(format!("{prefix}%"))
+                        .bind(connector.as_str())
                         .bind(limit as i64)
                         .fetch_all(pool)
                         .await?
@@ -541,6 +668,11 @@ impl StatusStore {
         key: &str,
     ) -> Result<Option<X402PaymentRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("find_x402_by_idempotency", json!({"key":key}))
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -558,8 +690,53 @@ impl StatusStore {
         }
     }
 
+    /// Find any other operation for the same owner's connector obligation.
+    /// Failed jobs count too; their status is not permission to charge again.
+    pub async fn find_other_connector_job_for_owner(
+        &self,
+        owner: &str,
+        connector: ConnectorKind,
+        reference: &str,
+        current_key: &str,
+    ) -> Result<Option<X402PaymentRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Convex(client) => { client.record("find_other_connector_job_for_owner", json!({"owner":owner,"connector":connector.as_str(),"reference":reference,"current_key":current_key})).await },
+            StorageBackend::Memory(state) => {
+                let state = state.read().await;
+                let mut rows: Vec<X402PaymentRecord> = state
+                    .x402_payments
+                    .values()
+                    .filter(|record| {
+                        record.connector == connector
+                            && record.connector_reference.as_deref() == Some(reference)
+                            && record.idempotency_key.starts_with(&format!("{owner}:"))
+                            && record.idempotency_key != current_key
+                    })
+                    .cloned()
+                    .collect();
+                rows.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
+                Ok(rows.into_iter().next())
+            }
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(X402_SELECT_BY_CONNECTOR_REFERENCE)
+                    .bind(connector.as_str())
+                    .bind(reference)
+                    .bind(owner)
+                    .bind(current_key)
+                    .fetch_optional(pool)
+                    .await?;
+                row.map(x402_from_row).transpose()
+            }
+        }
+    }
+
     pub async fn put_x402(&self, mut record: X402PaymentRecord) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call("put_x402", json!({"record_json":encode(&record)?}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 if state
@@ -600,13 +777,17 @@ impl StatusStore {
                     INSERT INTO x402_payments (
                         x402_payment_id, idempotency_key, resource, payment_id,
                         receipt_address, transaction_signature, status, challenge,
-                        proof, response_status, error, created_at, updated_at
+                        proof, response_status, error, created_at, updated_at,
+                        connector, connector_reference
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                         TO_TIMESTAMP($12::DOUBLE PRECISION / 1000.0),
-                        TO_TIMESTAMP($13::DOUBLE PRECISION / 1000.0)
+                        TO_TIMESTAMP($13::DOUBLE PRECISION / 1000.0),
+                        $14, $15
                     )
                     ON CONFLICT (x402_payment_id) DO UPDATE SET
+                        connector = EXCLUDED.connector,
+                        connector_reference = COALESCE(EXCLUDED.connector_reference,x402_payments.connector_reference),
                         resource = EXCLUDED.resource,
                         payment_id = EXCLUDED.payment_id,
                         receipt_address = EXCLUDED.receipt_address,
@@ -633,6 +814,8 @@ impl StatusStore {
                 .bind(&record.error)
                 .bind(to_i64(Some(record.created_at_ms), "created_at_ms")?)
                 .bind(to_i64(Some(record.updated_at_ms), "updated_at_ms")?)
+                .bind(record.connector.as_str())
+                .bind(&record.connector_reference)
                 .execute(pool)
                 .await?;
                 Ok(())
@@ -640,11 +823,83 @@ impl StatusStore {
         }
     }
 
+    /// Refresh off-chain order evidence without rewriting settlement fields.
+    /// Unlike x402 delivery proofs, Crossmint order phases can advance after
+    /// verification (delivery -> completed). Generic payment reconciliation
+    /// still cannot overwrite a verified job.
+    pub async fn put_crossmint_proof(
+        &self,
+        record: &X402PaymentRecord,
+    ) -> Result<(), StorageError> {
+        match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call::<()>(
+                        "put_crossmint_proof",
+                        json!({"record_json":encode(record)?}),
+                    )
+                    .await?;
+            }
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                if let Some(old) = state.x402_payments.get_mut(&record.x402_payment_id) {
+                    if old.connector == ConnectorKind::Crossmint
+                        && matches!(
+                            old.status,
+                            X402PaymentStatus::Confirmed | X402PaymentStatus::Verified
+                        )
+                        && old.updated_at_ms <= record.updated_at_ms
+                    {
+                        old.proof = record.proof.clone();
+                        old.response_status = record.response_status;
+                        old.error = record.error.clone();
+                        // Verification that the order advanced is monotonic,
+                        // even if a later poll fails or returns an older phase.
+                        if old.status != X402PaymentStatus::Verified {
+                            old.status = record.status;
+                        }
+                        old.updated_at_ms = record.updated_at_ms;
+                    }
+                }
+            }
+            StorageBackend::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    UPDATE x402_payments SET
+                        proof = $2, response_status = $3, error = $4,
+                        status = CASE WHEN status = 'verified' THEN status ELSE $5 END,
+                        updated_at = TO_TIMESTAMP($6::DOUBLE PRECISION / 1000.0)
+                    WHERE x402_payment_id = $1 AND connector = 'crossmint'
+                      AND status IN ('confirmed', 'verified')
+                      AND updated_at <= TO_TIMESTAMP($6::DOUBLE PRECISION / 1000.0)
+                "#,
+                )
+                .bind(&record.x402_payment_id)
+                .bind(record.proof.clone().map(Json))
+                .bind(record.response_status.map(i32::from))
+                .bind(&record.error)
+                .bind(x402_status_name(record.status))
+                .bind(to_i64(Some(record.updated_at_ms), "updated_at_ms")?)
+                .execute(pool)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn put_managed_signer_challenge(
         &self,
         challenge: ManagedSignerChallenge,
     ) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call(
+                        "put_managed_signer_challenge",
+                        json!({"challenge_json":encode(&challenge)?}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 state
                     .write()
@@ -681,6 +936,14 @@ impl StatusStore {
         challenge_id: &str,
     ) -> Result<Option<ManagedSignerChallenge>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "get_managed_signer_challenge",
+                        json!({"challenge_id":challenge_id}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -703,6 +966,7 @@ impl StatusStore {
         consumed_at_ms: u64,
     ) -> Result<bool, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => { client.call("consume_managed_signer_challenge", json!({"challenge_id":challenge_id,"consumed_at_ms":consumed_at_ms.to_string()})).await },
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 let Some(challenge) = state.managed_signer_challenges.get_mut(challenge_id) else {
@@ -739,6 +1003,15 @@ impl StatusStore {
         signer: ManagedSignerRecord,
     ) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let mut value = serde_json::to_value(&signer)
+                    .map_err(|_| StorageError::Remote("invalid signer record".into()))?;
+                value["provider_wallet_id"] = json!(signer.provider_wallet_id);
+                value["provider_policy_id"] = json!(signer.provider_policy_id);
+                client
+                    .call("put_managed_signer", json!({"signer_json":encode(&value)?}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 state
                     .write()
@@ -795,6 +1068,14 @@ impl StatusStore {
         public_key: &str,
     ) -> Result<Option<ManagedSignerRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "find_managed_signer_by_public_key",
+                        json!({"public_key":public_key}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -817,6 +1098,14 @@ impl StatusStore {
         mandate_pda: &str,
     ) -> Result<Option<ManagedSignerRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "find_managed_signer_by_mandate",
+                        json!({"mandate_pda":mandate_pda}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -839,6 +1128,24 @@ impl StatusStore {
         record: DeliveryAttestationRecord,
     ) -> Result<DeliveryAttestationPut, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let result: serde_json::Value = client
+                    .call(
+                        "put_delivery_attestation",
+                        json!({"record_json":encode(&record)?}),
+                    )
+                    .await?;
+                let stored =
+                    decode(result["record_json"].as_str().ok_or_else(|| {
+                        StorageError::Remote("invalid attestation response".into())
+                    })?)?;
+                match result["kind"].as_str() {
+                    Some("created") => Ok(DeliveryAttestationPut::Created(stored)),
+                    Some("unchanged") => Ok(DeliveryAttestationPut::Unchanged(stored)),
+                    Some("conflict") => Ok(DeliveryAttestationPut::Conflict(stored)),
+                    _ => Err(StorageError::Remote("invalid attestation result".into())),
+                }
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 let key = delivery_key(&record);
@@ -888,6 +1195,87 @@ impl StatusStore {
         }
     }
 
+    /// Keyed JSON record for the mandate request an owner accepted, keyed by
+    /// mandate PDA. First write wins; rows are never updated. Stored as one
+    /// key and one JSON value so it maps onto a generic `records` table with
+    /// kind `mandate_requests`.
+    pub async fn put_mandate_request(
+        &self,
+        mandate_pda: &str,
+        record: serde_json::Value,
+        created_at_ms: u64,
+    ) -> Result<KeyedRecordPut, StorageError> {
+        match &self.backend {
+            StorageBackend::Convex(client) => {
+                let result: (bool, String) = client.call("put_mandate_request", json!({"record_json":encode(&json!({"mandate_pda":mandate_pda,"record":record,"created_at_ms":created_at_ms}))?})).await?;
+                let value = decode(&result.1)?;
+                Ok(if result.0 {
+                    KeyedRecordPut::Created(value)
+                } else {
+                    KeyedRecordPut::Existing(value)
+                })
+            }
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                if let Some(existing) = state.mandate_requests.get(mandate_pda) {
+                    return Ok(KeyedRecordPut::Existing(existing.clone()));
+                }
+                state
+                    .mandate_requests
+                    .insert(mandate_pda.to_owned(), record.clone());
+                Ok(KeyedRecordPut::Created(record))
+            }
+            StorageBackend::Postgres(pool) => {
+                let inserted = sqlx::query(
+                    "INSERT INTO mandate_requests (mandate_pda, record, created_at_ms) VALUES ($1, $2, $3) ON CONFLICT (mandate_pda) DO NOTHING",
+                )
+                .bind(mandate_pda)
+                .bind(Json(&record))
+                .bind(to_i64(Some(created_at_ms), "created_at_ms")?)
+                .execute(pool)
+                .await?
+                .rows_affected()
+                    == 1;
+                if inserted {
+                    return Ok(KeyedRecordPut::Created(record));
+                }
+                let row = sqlx::query("SELECT record FROM mandate_requests WHERE mandate_pda = $1")
+                    .bind(mandate_pda)
+                    .fetch_one(pool)
+                    .await?;
+                Ok(KeyedRecordPut::Existing(
+                    row.get::<Json<serde_json::Value>, _>("record").0,
+                ))
+            }
+        }
+    }
+
+    pub async fn get_mandate_request(
+        &self,
+        mandate_pda: &str,
+    ) -> Result<Option<serde_json::Value>, StorageError> {
+        match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("get_mandate_request", json!({"mandate_pda":mandate_pda}))
+                    .await
+            }
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .mandate_requests
+                .get(mandate_pda)
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query("SELECT record FROM mandate_requests WHERE mandate_pda = $1")
+                    .bind(mandate_pda)
+                    .fetch_optional(pool)
+                    .await?;
+                Ok(row.map(|row| row.get::<Json<serde_json::Value>, _>("record").0))
+            }
+        }
+    }
+
     pub async fn find_delivery_attestation(
         &self,
         cluster: &str,
@@ -895,6 +1283,7 @@ impl StatusStore {
         receipt_address: &str,
     ) -> Result<Option<DeliveryAttestationRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => { client.record("find_delivery_attestation", json!({"cluster":cluster,"program_id":program_id,"receipt_address":receipt_address})).await },
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -915,6 +1304,231 @@ impl StatusStore {
                     .fetch_optional(pool)
                     .await?;
                 row.map(delivery_from_row).transpose()
+            }
+        }
+    }
+
+    /// Keep a signed request by receipt PDA. Written once: a later write for
+    /// the same receipt returns the stored row unchanged. The invoice hash is
+    /// a PDA seed, so a second, different request cannot match the receipt.
+    pub async fn put_receipt_request(
+        &self,
+        record: ReceiptRequestRecord,
+    ) -> Result<ReceiptRequestRecord, StorageError> {
+        match &self.backend {
+            StorageBackend::Convex(client) => {
+                let value: String = client
+                    .call(
+                        "put_receipt_request",
+                        json!({"record_json":encode(&record)?}),
+                    )
+                    .await?;
+                decode(&value)
+            }
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                let key = receipt_key(&record.cluster, &record.program_id, &record.receipt_address);
+                Ok(state.receipt_requests.entry(key).or_insert(record).clone())
+            }
+            StorageBackend::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO receipt_requests (
+                        cluster, program_id, receipt_address, mandate, invoice_hash,
+                        merchant, canonical_payload, signature, stored_at_ms
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (cluster, program_id, receipt_address) DO NOTHING
+                    "#,
+                )
+                .bind(&record.cluster)
+                .bind(&record.program_id)
+                .bind(&record.receipt_address)
+                .bind(&record.mandate)
+                .bind(&record.invoice_hash)
+                .bind(&record.merchant)
+                .bind(&record.canonical_payload)
+                .bind(&record.signature)
+                .bind(to_i64(Some(record.stored_at_ms), "stored_at_ms")?)
+                .execute(pool)
+                .await?;
+                self.find_receipt_request(
+                    &record.cluster,
+                    &record.program_id,
+                    &record.receipt_address,
+                )
+                .await?
+                .ok_or_else(|| StorageError::InvalidValue {
+                    field: "receipt_request",
+                    value: record.receipt_address.clone(),
+                })
+            }
+        }
+    }
+
+    pub async fn find_receipt_request(
+        &self,
+        cluster: &str,
+        program_id: &str,
+        receipt_address: &str,
+    ) -> Result<Option<ReceiptRequestRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Convex(client) => { client.record("find_receipt_request", json!({"cluster":cluster,"program_id":program_id,"receipt_address":receipt_address})).await },
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .receipt_requests
+                .get(&receipt_key(cluster, program_id, receipt_address))
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(
+                    r#"
+                    SELECT cluster, program_id, receipt_address, mandate, invoice_hash,
+                           merchant, canonical_payload, signature, stored_at_ms
+                    FROM receipt_requests
+                    WHERE cluster = $1 AND program_id = $2 AND receipt_address = $3
+                    "#,
+                )
+                .bind(cluster)
+                .bind(program_id)
+                .bind(receipt_address)
+                .fetch_optional(pool)
+                .await?;
+                row.map(|row| {
+                    Ok(ReceiptRequestRecord {
+                        cluster: row.try_get("cluster")?,
+                        program_id: row.try_get("program_id")?,
+                        receipt_address: row.try_get("receipt_address")?,
+                        mandate: row.try_get("mandate")?,
+                        invoice_hash: row.try_get("invoice_hash")?,
+                        merchant: row.try_get("merchant")?,
+                        canonical_payload: row.try_get("canonical_payload")?,
+                        signature: row.try_get("signature")?,
+                        stored_at_ms: from_i64(Some(row.try_get("stored_at_ms")?), "stored_at_ms")?
+                            .unwrap_or_default(),
+                    })
+                })
+                .transpose()
+            }
+        }
+    }
+
+    /// Keep the relay's first post-payment read of a mandate for one receipt.
+    /// Written once, so a later read with more payments counted never replaces
+    /// the observation closest to the payment.
+    pub async fn put_observed_policy(
+        &self,
+        record: ObservedPolicyRecord,
+    ) -> Result<ObservedPolicyRecord, StorageError> {
+        match &self.backend {
+            StorageBackend::Convex(client) => {
+                let value: String = client
+                    .call(
+                        "put_observed_policy",
+                        json!({"record_json":encode(&record)?}),
+                    )
+                    .await?;
+                decode(&value)
+            }
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                let key = receipt_key(&record.cluster, &record.program_id, &record.receipt_address);
+                Ok(state.observed_policies.entry(key).or_insert(record).clone())
+            }
+            StorageBackend::Postgres(pool) => {
+                let limits = serde_json::to_value(&record.limits).map_err(|error| {
+                    StorageError::InvalidValue {
+                        field: "limits",
+                        value: error.to_string(),
+                    }
+                })?;
+                sqlx::query(
+                    r#"
+                    INSERT INTO observed_policies (
+                        cluster, program_id, receipt_address, mandate, limits,
+                        observed_at_slot, includes_later_payments, observed_at_ms
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (cluster, program_id, receipt_address) DO NOTHING
+                    "#,
+                )
+                .bind(&record.cluster)
+                .bind(&record.program_id)
+                .bind(&record.receipt_address)
+                .bind(&record.mandate)
+                .bind(Json(limits))
+                .bind(to_i64(Some(record.observed_at_slot), "observed_at_slot")?)
+                .bind(record.includes_later_payments)
+                .bind(to_i64(Some(record.observed_at_ms), "observed_at_ms")?)
+                .execute(pool)
+                .await?;
+                self.find_observed_policy(
+                    &record.cluster,
+                    &record.program_id,
+                    &record.receipt_address,
+                )
+                .await?
+                .ok_or_else(|| StorageError::InvalidValue {
+                    field: "observed_policy",
+                    value: record.receipt_address.clone(),
+                })
+            }
+        }
+    }
+
+    pub async fn find_observed_policy(
+        &self,
+        cluster: &str,
+        program_id: &str,
+        receipt_address: &str,
+    ) -> Result<Option<ObservedPolicyRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Convex(client) => { client.record("find_observed_policy", json!({"cluster":cluster,"program_id":program_id,"receipt_address":receipt_address})).await },
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .observed_policies
+                .get(&receipt_key(cluster, program_id, receipt_address))
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(
+                    r#"
+                    SELECT cluster, program_id, receipt_address, mandate, limits,
+                           observed_at_slot, includes_later_payments, observed_at_ms
+                    FROM observed_policies
+                    WHERE cluster = $1 AND program_id = $2 AND receipt_address = $3
+                    "#,
+                )
+                .bind(cluster)
+                .bind(program_id)
+                .bind(receipt_address)
+                .fetch_optional(pool)
+                .await?;
+                row.map(|row| {
+                    let limits = row.try_get::<Json<serde_json::Value>, _>("limits")?.0;
+                    let limits: ReceiptPolicyLimits = serde_json::from_value(limits.clone())
+                        .map_err(|_| StorageError::InvalidValue {
+                            field: "limits",
+                            value: limits.to_string(),
+                        })?;
+                    Ok(ObservedPolicyRecord {
+                        cluster: row.try_get("cluster")?,
+                        program_id: row.try_get("program_id")?,
+                        receipt_address: row.try_get("receipt_address")?,
+                        mandate: row.try_get("mandate")?,
+                        limits,
+                        observed_at_slot: from_i64(
+                            Some(row.try_get("observed_at_slot")?),
+                            "observed_at_slot",
+                        )?
+                        .unwrap_or_default(),
+                        includes_later_payments: row.try_get("includes_later_payments")?,
+                        observed_at_ms: from_i64(
+                            Some(row.try_get("observed_at_ms")?),
+                            "observed_at_ms",
+                        )?
+                        .unwrap_or_default(),
+                    })
+                })
+                .transpose()
             }
         }
     }
@@ -955,7 +1569,7 @@ const TRANSACTION_SELECT_BY_IDEMPOTENCY: &str = r#"
 "#;
 
 const X402_SELECT_BY_IDEMPOTENCY: &str = r#"
-    SELECT x402_payment_id, idempotency_key, resource, payment_id,
+    SELECT x402_payment_id, idempotency_key, connector, connector_reference, resource, payment_id,
            receipt_address, transaction_signature, status, challenge, proof,
            response_status, error,
            (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
@@ -963,8 +1577,22 @@ const X402_SELECT_BY_IDEMPOTENCY: &str = r#"
     FROM x402_payments WHERE idempotency_key = $1
 "#;
 
+const X402_SELECT_BY_CONNECTOR_REFERENCE: &str = r#"
+    SELECT x402_payment_id, idempotency_key, connector, connector_reference, resource, payment_id,
+           receipt_address, transaction_signature, status, challenge, proof,
+           response_status, error,
+           (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
+           (EXTRACT(EPOCH FROM updated_at) * 1000)::BIGINT AS updated_at_ms
+    FROM x402_payments
+    WHERE connector = $1 AND connector_reference = $2
+      AND split_part(idempotency_key, ':', 1) = $3
+      AND idempotency_key <> $4
+    ORDER BY updated_at DESC
+    LIMIT 1
+"#;
+
 const X402_LIST_FOR_OWNER: &str = r#"
-    SELECT x.x402_payment_id, x.idempotency_key, x.resource, x.payment_id,
+    SELECT x.x402_payment_id, x.idempotency_key, x.connector, x.connector_reference, x.resource, x.payment_id,
            x.receipt_address, x.transaction_signature, x.status, x.challenge, x.proof,
            x.response_status, x.error,
            (EXTRACT(EPOCH FROM x.created_at) * 1000)::BIGINT AS created_at_ms,
@@ -973,12 +1601,13 @@ const X402_LIST_FOR_OWNER: &str = r#"
     FROM x402_payments x
     LEFT JOIN payments p ON p.payment_id = x.payment_id
     WHERE x.idempotency_key LIKE $1 ESCAPE '\'
+      AND x.connector = $2
     ORDER BY x.updated_at DESC
-    LIMIT $2
+    LIMIT $3
 "#;
 
 const X402_LIST_FOR_OWNER_WITH_MANDATE: &str = r#"
-    SELECT x.x402_payment_id, x.idempotency_key, x.resource, x.payment_id,
+    SELECT x.x402_payment_id, x.idempotency_key, x.connector, x.connector_reference, x.resource, x.payment_id,
            x.receipt_address, x.transaction_signature, x.status, x.challenge, x.proof,
            x.response_status, x.error,
            (EXTRACT(EPOCH FROM x.created_at) * 1000)::BIGINT AS created_at_ms,
@@ -987,9 +1616,10 @@ const X402_LIST_FOR_OWNER_WITH_MANDATE: &str = r#"
     FROM x402_payments x
     INNER JOIN payments p ON p.payment_id = x.payment_id
     WHERE x.idempotency_key LIKE $1 ESCAPE '\'
-      AND p.mandate = $2
+      AND x.connector = $2
+      AND p.mandate = $3
     ORDER BY x.updated_at DESC
-    LIMIT $3
+    LIMIT $4
 "#;
 
 const MANAGED_SIGNER_CHALLENGE_SELECT_BY_ID: &str = r#"
@@ -1108,6 +1738,8 @@ fn x402_from_row(row: PgRow) -> Result<X402PaymentRecord, StorageError> {
     Ok(X402PaymentRecord {
         x402_payment_id: row.try_get("x402_payment_id")?,
         idempotency_key: row.try_get("idempotency_key")?,
+        connector: parse_connector(row.try_get("connector")?)?,
+        connector_reference: row.try_get("connector_reference")?,
         resource: row.try_get("resource")?,
         payment_id: row.try_get("payment_id")?,
         receipt_address: row.try_get("receipt_address")?,
@@ -1196,6 +1828,13 @@ fn parse_managed_signer_status(value: String) -> Result<ManagedSignerStatus, Sto
     }
 }
 
+fn parse_connector(value: String) -> Result<ConnectorKind, StorageError> {
+    ConnectorKind::parse(&value).ok_or(StorageError::InvalidValue {
+        field: "connector",
+        value,
+    })
+}
+
 fn x402_status_name(status: X402PaymentStatus) -> &'static str {
     match status {
         X402PaymentStatus::Prepared => "prepared",
@@ -1224,6 +1863,10 @@ fn parse_u64(field: &'static str, value: String) -> Result<u64, StorageError> {
     value
         .parse()
         .map_err(|_| StorageError::InvalidValue { field, value })
+}
+
+fn receipt_key(cluster: &str, program_id: &str, receipt_address: &str) -> String {
+    format!("{cluster}:{program_id}:{receipt_address}")
 }
 
 fn delivery_key(record: &DeliveryAttestationRecord) -> String {
@@ -1282,6 +1925,28 @@ fn from_i64(value: Option<i64>, field: &'static str) -> Result<Option<u64>, Stor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn highest_placeholder(sql: &str) -> usize {
+        sql.split('$')
+            .skip(1)
+            .filter_map(|tail| {
+                let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().ok()
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    // The memory store cannot catch a query whose placeholders drift from the
+    // binds in `list_connector_jobs`; Postgres rejects the mismatch at runtime.
+    #[test]
+    fn connector_list_queries_filter_by_connector_and_match_binds() {
+        assert_eq!(highest_placeholder(X402_LIST_FOR_OWNER), 3);
+        assert_eq!(highest_placeholder(X402_LIST_FOR_OWNER_WITH_MANDATE), 4);
+        assert!(X402_LIST_FOR_OWNER.contains("x.connector = $2"));
+        assert!(X402_LIST_FOR_OWNER_WITH_MANDATE.contains("x.connector = $2"));
+        assert_eq!(highest_placeholder(X402_SELECT_BY_CONNECTOR_REFERENCE), 4);
+    }
 
     fn payment() -> PaymentRecord {
         PaymentRecord {
@@ -1403,6 +2068,8 @@ mod tests {
                     proof: None,
                     response_status: None,
                     error: None,
+                    connector: ConnectorKind::X402,
+                    connector_reference: None,
                     created_at_ms: updated_at_ms,
                     updated_at_ms,
                 })
@@ -1410,12 +2077,15 @@ mod tests {
                 .unwrap();
         }
 
-        let owner_jobs = store.list_x402_for_owner(owner, None, 10).await.unwrap();
+        let owner_jobs = store
+            .list_connector_jobs(owner, ConnectorKind::X402, None, 10)
+            .await
+            .unwrap();
         assert_eq!(owner_jobs.len(), 2);
         assert_eq!(owner_jobs[0].0.x402_payment_id, "x402-b");
 
         let filtered = store
-            .list_x402_for_owner(owner, Some(mandate_a), 10)
+            .list_connector_jobs(owner, ConnectorKind::X402, Some(mandate_a), 10)
             .await
             .unwrap();
         assert_eq!(filtered.len(), 1);
@@ -1534,5 +2204,64 @@ mod tests {
             .unwrap();
         assert_eq!(stored.served_at, first.served_at);
         assert_eq!(stored.published_at_ms, 1_000);
+    }
+
+    async fn mandate_request_round_trip(store: &StatusStore, key: &str) {
+        let first = serde_json::json!({"requestHash": "aa", "owner": "o"});
+        assert_eq!(
+            store
+                .put_mandate_request(key, first.clone(), 1_000)
+                .await
+                .unwrap(),
+            KeyedRecordPut::Created(first.clone())
+        );
+        let second = serde_json::json!({"requestHash": "bb", "owner": "o"});
+        assert_eq!(
+            store.put_mandate_request(key, second, 2_000).await.unwrap(),
+            KeyedRecordPut::Existing(first.clone())
+        );
+        assert_eq!(store.get_mandate_request(key).await.unwrap(), Some(first));
+        assert_eq!(
+            store
+                .get_mandate_request(&format!("{key}-missing"))
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn mandate_requests_are_first_write_wins() {
+        mandate_request_round_trip(&StatusStore::in_memory(), "mandate-a").await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires explicitly isolated TEST_DATABASE_URL"]
+    async fn postgres_mandate_requests_match_memory() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("isolated fixture URL required");
+        assert!(
+            url.starts_with("postgresql://chainpay_test@127.0.0.1:55439/"),
+            "Only the explicitly provisioned local fixture is allowed"
+        );
+        let store = StatusStore::connect(&url).await.unwrap();
+        let mut suffix = [0_u8; 8];
+        getrandom::fill(&mut suffix).unwrap();
+        let key = format!(
+            "mandate-{}",
+            suffix
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+        mandate_request_round_trip(&store, &key).await;
+        let reconnected = StatusStore::connect(&url).await.unwrap();
+        assert_eq!(
+            reconnected
+                .get_mandate_request(&key)
+                .await
+                .unwrap()
+                .unwrap()["requestHash"],
+            "aa"
+        );
     }
 }

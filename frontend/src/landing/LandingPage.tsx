@@ -7,8 +7,8 @@ import { SupportedAssets } from "./SupportedAssets";
 import { useLandingMotion } from "./useLandingMotion";
 import "./landing.css";
 
-const MCP_DOCS_URL = "https://chainpay-mcp.onrender.com/docs";
-const MCP_TOOLS_URL = "https://chainpay-mcp.onrender.com/tools";
+const MCP_DOCS_URL = "https://chainpay-mcp.vercel.app/docs";
+const MCP_TOOLS_URL = "https://chainpay-mcp.vercel.app/tools";
 const REPOSITORY_URL = "https://github.com/stawuah/chainpay-mcp-sdk";
 const PROGRAM_EXPLORER_URL = `https://explorer.solana.com/address/${PROGRAM_ID}?cluster=devnet`;
 

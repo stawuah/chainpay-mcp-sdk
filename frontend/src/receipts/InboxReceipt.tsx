@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { loadPublicReceiptView } from "./load";
-import { type PublicReceiptPageState } from "./model";
+import { type SellerStatementState, type OrderLinkState, type PublicReceiptPageState, type PurchaseProofState, type ReceiptView } from "./model";
+import { loadOwnerReceiptContext } from "./owner";
 import { ReceiptCard, ReceiptPageState } from "./ReceiptCard";
 
 export function LoadedReceiptCard({
@@ -8,29 +9,48 @@ export function LoadedReceiptCard({
   shareMode = "public",
   onShare,
   preparedInRequests = false,
+  seller,
 }: {
   receiptPda: string;
   shareMode?: "public" | "dashboard";
   onShare?: () => void;
   preparedInRequests?: boolean;
+  /** A seller statement known privately to this request, such as Crossmint's order status. */
+  seller?: SellerStatementState;
 }) {
   const [state, setState] = useState<PublicReceiptPageState>({ kind: "loading", receiptPda });
+  const [owner, setOwner] = useState<{ receiptPda: string; policy?: ReceiptView["policy"]; purchase: PurchaseProofState; order: OrderLinkState } | null>(null);
 
   useEffect(() => {
     let active = true;
     setState({ kind: "loading", receiptPda });
+    setOwner(null);
     void loadPublicReceiptView(receiptPda).then((next) => {
-      if (active) setState(next);
+      if (!active) return;
+      setState(next);
+      // Owner-only additions from the relay: observed limits for a receipt
+      // without an on-chain snapshot, and the verified signed invoice.
+      if (next.kind === "verified" && shareMode === "dashboard") {
+        void loadOwnerReceiptContext(next.receipt).then((context) => {
+          if (active) setOwner({ receiptPda, ...context });
+        }).catch(() => undefined);
+      }
     });
     return () => {
       active = false;
     };
-  }, [receiptPda]);
+  }, [receiptPda, shareMode]);
 
   if (state.kind === "verified") {
+    const ownerContext = owner?.receiptPda === receiptPda ? owner : null;
+    const receipt = ownerContext?.policy && state.receipt.policy?.source !== "on-chain"
+      ? { ...state.receipt, policy: ownerContext.policy }
+      : state.receipt;
     return (
       <ReceiptCard
-        receipt={state.receipt}
+        receipt={seller ? { ...receipt, seller } : receipt}
+        purchase={ownerContext?.purchase}
+        order={ownerContext?.order}
         shareMode={shareMode}
         onShare={onShare}
         // Both dashboard call sites pass shareMode="dashboard", so OR-ing it here
@@ -57,9 +77,11 @@ export function LoadedReceiptCard({
 export function InboxReceipt({
   receiptAddress,
   preparedInRequests = true,
+  seller,
 }: {
   receiptAddress?: string;
   preparedInRequests?: boolean;
+  seller?: SellerStatementState;
 }) {
   if (!receiptAddress) {
     return (
@@ -72,7 +94,7 @@ export function InboxReceipt({
 
   return (
     <div className="inbox-receipt">
-      <LoadedReceiptCard receiptPda={receiptAddress} shareMode="dashboard" preparedInRequests={preparedInRequests} />
+      <LoadedReceiptCard receiptPda={receiptAddress} shareMode="dashboard" preparedInRequests={preparedInRequests} seller={seller} />
     </div>
   );
 }

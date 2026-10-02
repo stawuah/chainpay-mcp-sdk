@@ -10,14 +10,14 @@ ChainPay lets you give an AI agent permission to make stablecoin payments on
 Solana within limits you approve. The on-chain program checks each payment
 and creates a receipt you can inspect and share.
 
-**[Try ChainPay](https://chainpay-frontend.onrender.com/)** ·
+**[Try ChainPay](https://chainpay-web-kappa.vercel.app/)** ·
 [First payment walkthrough](docs/getting-started/try-chainpay.md) ·
 [Connect an agent](docs/guides/connect-an-agent.md) ·
 [Documentation](docs/README.md)
 
 **Devnet demo.** This is a test-network project, not a mainnet payment service.
-These docs describe this fork's PR stack. The hosted app currently shows an
-earlier interface. [Run this fork locally](docs/getting-started/local-development.md)
+The Vercel deployment uses a separate development database. Existing Render/Neon
+history has not been imported; see the [operator handoff](docs/guides/vercel-convex-handoff.md). [Run this fork locally](docs/getting-started/local-development.md)
 for the onboarding shown below.
 
 ![ChainPay owner setup: a Devnet dashboard with Wallet, Limits, and Agent steps, starting with wallet connection.](docs/assets/owner-setup.png)
@@ -80,7 +80,7 @@ not give the model your wallet keys. You can also use the SDK directly.
 ## Under the hood
 
 The React dashboard, TypeScript SDK, and MCP server connect to an Axum relay
-and the Anchor program on Solana. PostgreSQL stores operational records;
+and the Anchor program on Solana. Convex stores operational records in the new Vercel deployment;
 the program enforces spending rules and creates the on-chain receipt.
 
 [Architecture](docs/reference/architecture.md) ·
@@ -109,6 +109,26 @@ After a successful payment, the dashboard shows the same human-readable
 - **In-context ops:** MCP `get_spend_overview` / `list_receipts`, `chainpay status` in the terminal, or `/embed/overview/<owner>` — same spend and receipts without opening the dashboard. Pause and revoke still sign in the owner wallet.
 - **Stranger verify:** landing **See a receipt** → `/verify` paste or
   `/verify/:pda` — no wallet required.
+- **Why it was allowed:** each receipt shows **Spending permission at payment**
+  (amount against the per-payment limit, spent after, payment N of the cap,
+  paid before expiry) and says where those limits came from: recorded on
+  Solana (after the program upgrade in PR #23 deploys), seen by the relay after
+  payment, or not recorded with today's limits instead. One line says whether
+  the same payment would pass today.
+- **What was bought:** when a seller-signed invoice verifies against the
+  receipt, the owner sees **Order match** with its description and line items,
+  and can **Share with details** as a `/verify` link that carries the invoice
+  in the URL fragment. A plain public receipt shows none of it.
+- **Export:** **Export CSV** on the Receipts tab, `chainpay export --owner
+  <wallet>`, or MCP `export_receipts`.
+- **Purchase orders for agents:** a vendor (`chainpay request-mandate`, or the
+  demo merchant's **Request permission**) or a builder (`chainpay
+  request-budget`) sends a signed link; the owner reviews it in Requests and
+  approves a permission in the usual builder. Receipts then show **Order
+  match** (Matched / Payee differs / No invoice / No order), the CSV adds PO
+  number and match status, and each permission has a **Statement**. The
+  expected payee is checked, not enforced on Solana — see
+  [ask for a spending permission](docs/guides/request-a-permission.md).
 - **Owner deep link:** `/app/receipts/:pda` opens the inbox receipt card when
   signed in.
 - **Settlement recovery:** in-app **Check settlement**, **Retry same approval**,

@@ -4,6 +4,21 @@ Run commands in this guide from `frontend/`.
 
 Run the ordinary suite with `npm test`, and TypeScript/Vite checks with `npm run build`.
 
+## Crossmint request and receipt browser check
+
+Run `node test/crossmint-inbox.browser.mjs` with Playwright and Google Chrome
+installed. This runner starts and closes its own local Vite servers, testing both
+values of `VITE_CHAINPAY_CROSSMINT`; no separately running dev server is needed.
+It exercises the real dashboard at desktop and 390px widths with keyboard request
+expansion. Matching requests retain their approval control; mismatched, closed,
+and already-paid requests do not, even when their stored stage still requests
+approval. Completed, waiting, and refunded seller reports reach the loaded receipt
+only with the flag enabled, preserving the exact payment and Allowed/Paid stamps.
+
+External requests and local API/RPC proxy routes are blocked. The dashboard
+harness supplies inert account reads and no signing wallet. These checks prove
+rendering and approval gating, not live Crossmint fulfillment or settlement.
+
 ## Payment submission browser check
 
 With the frontend dev server on port 5189, run
@@ -59,3 +74,41 @@ It mounts the actual owner controller and routes with a deliberately fake wallet
 blocks external services, and checks wallet discovery, connection without login,
 explicit message-signing retries, and navigation to mandate review. It rejects
 financial signing. Screenshots are fixture rendering evidence only.
+
+## Receipt limits, Order match and export browser checks
+
+With the frontend dev server on port 5189, `npm run test:verify-public-browser`
+also covers limits at payment from an on-chain snapshot and from a relay
+observation that already counts later payments, and an audit link
+(`/verify/<pda>#purchase=…`) that verifies or is rejected without showing any
+of its content. `npm run test:receipts-owner-browser` mounts the dashboard
+harness with `?tab=receipts&receipts`: one original receipt and one 371-byte
+receipt with a policy snapshot, plus a stand-in for the owner's relay session
+that returns the fixture's seller-signed invoice
+(`fixtures/receipt-purchase.json`). It checks the owner Order match, Share with
+details, Export CSV (a real browser download), 44px controls and no horizontal
+scroll at 390 and 320px. External requests are blocked; these are fixtures, not
+payment evidence.
+
+## Permission request browser check
+
+With the frontend dev server on port 5189 (or `CHAINPAY_PREVIEW_URL`), run
+`npm run test:permission-request-browser`. It uses the dashboard harness with
+`?permission=vendor|grantee|expired|tampered` (a fixture `#req=` link from
+`fixtures/mandate-request.json`, deterministic keys) and `?orders` (an accepted
+purchase order and budget request behind a stand-in relay). It checks the
+request card, blocked links, Decline, the builder prefill (budget request:
+**Requester's agent signs** fixed), "(requested X)" review rows and the
+expected payee, the **Matched** receipt, Share with details carrying the
+order, the CSV PO number and Order match columns, and the permission
+Statement, at 1440 and 390. Screenshots go to `CHAINPAY_SHOTS_DIR` (default
+`/tmp`) as `pr4-*.png`. The `fixture-approval` mode exercises the real
+post-wallet continuation using invalid fixture bytes and intercepts every
+service request in memory, with no network fallback. It verifies successful
+linking, failed-link retry without a second signature/submission, and expiry
+between preview and approval. No real transaction is signed or submitted.
+
+The unit suite also checks unavailable-slot refusal, network mismatch,
+acceptance deadlines, public proposals displaying **Acceptance unverified**,
+and invoice amount/token mismatches displaying **Invoice differs** in the
+receipt model and CSV.

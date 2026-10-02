@@ -1,11 +1,12 @@
 import { authorizeTool } from "./authorization.js";
-import { ChainPayClient, publicKey } from "@chainpay/sdk";
+import { ChainPayClient, isDuplicateInvoiceError, publicKey } from "@chainpay/sdk";
 import { createMandate } from "./tools/create_mandate.js";
 import { checkPaymentRequirements } from "./tools/check_payment_requirements.js";
 import { createDemoPaymentRequest } from "./tools/demo-payment-request.js";
 import type { ChainPayMcpContext } from "./tools/context.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { executePayment } from "./tools/execute_payment.js";
+import { exportReceipts } from "./tools/export-receipts.js";
 import { getMandate } from "./tools/get_mandate.js";
 import { getPayment } from "./tools/get_payment.js";
 import { getAsset } from "./tools/get_asset.js";
@@ -22,6 +23,8 @@ import { updateMandate } from "./tools/update_mandate.js";
 import { verifyPaymentRequest } from "./tools/verify_payment_request.js";
 import { waitForPayment } from "./tools/wait_for_payment.js";
 import { executeX402Payment, prepareX402Payment } from "./tools/x402.js";
+import { toolResult } from "./tools/common.js";
+import { prepareCrossmintPayment, executeCrossmintPayment, crossmintPaymentStatus } from "./tools/crossmint.js";
 
 export { TOOL_DEFINITIONS };
 export type { ChainPayMcpContext };
@@ -92,6 +95,28 @@ export async function callTool(
     context = { ...context, principal };
   }
   await authorizeTool(context, name, args);
+  try {
+    return await dispatchTool(context, name, args);
+  } catch (error) {
+    // Any tool that reaches the receipt check reports a paid invoice the same
+    // way: typed, in plain words, and with nothing new submitted.
+    if (isDuplicateInvoiceError(error)) {
+      return toolResult({
+        action: "duplicate_invoice",
+        code: "DuplicateInvoice",
+        message: error.message,
+        receiptAddress: error.receiptAddress,
+      }, true);
+    }
+    throw error;
+  }
+}
+
+async function dispatchTool(
+  context: ChainPayMcpContext,
+  name: string,
+  args: Record<string, unknown>,
+) {
   switch (name) {
     case "get_mandate":
       return getMandate(context, args);
@@ -101,6 +126,8 @@ export async function callTool(
       return listMandates(context, args);
     case "list_receipts":
       return listReceipts(context, args);
+    case "export_receipts":
+      return exportReceipts(context, args);
     case "find_compatible_mandate":
       return findCompatibleMandate(context, args);
     case "get_protocol_config":
@@ -125,6 +152,12 @@ export async function callTool(
       return quotePayment(context, args);
     case "verify_payment_request":
       return verifyPaymentRequest(context, args);
+    case "prepare_crossmint_payment":
+      return prepareCrossmintPayment(context, args);
+    case "execute_crossmint_payment":
+      return executeCrossmintPayment(context, args);
+    case "get_crossmint_payment":
+      return crossmintPaymentStatus(context, args);
     case "prepare_x402_payment":
       return prepareX402Payment(context, args);
     case "execute_x402_payment":

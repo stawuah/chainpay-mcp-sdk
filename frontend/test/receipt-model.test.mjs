@@ -210,3 +210,26 @@ test("share helper reports copy, cancel, and failure separately", async () => {
   });
   assert.deepEqual(cancelled, { status: "cancelled" });
 });
+
+test("Crossmint's order status takes the seller slot and is never shown as verified", () => {
+  const stamp = (state) => model.sellerStamp({ status: "crossmint", refunded: false, ...state });
+  const complete = stamp({ phase: "completed", reportedAt: "2026-10-02T14:02:00.000Z" });
+  assert.equal(complete.label, "Crossmint reports order complete");
+  assert.match(complete.detail, /^Reported by Crossmint at .+\. Not checked on Solana\.$/);
+  assert.equal(stamp({ phase: "delivery" }).label, "Waiting for Crossmint");
+  assert.equal(stamp({ phase: "payment" }).label, "Waiting for Crossmint");
+  assert.equal(stamp({ phase: "" }).label, "No Crossmint statement");
+  // Crossmint marks a refunded order completed; the refund must win.
+  const refund = stamp({ phase: "completed", refunded: true });
+  assert.equal(refund.label, "Crossmint reports a refund");
+  assert.equal(refund.tone, "unknown");
+  // A third party's report never wears the green tone that Allowed and Paid use.
+  for (const phase of ["completed", "delivery", "payment", ""]) {
+    for (const refunded of [false, true]) {
+      const result = stamp({ phase, refunded });
+      assert.equal(result.key, "seller");
+      assert.notEqual(result.tone, "yes");
+      assert.doesNotMatch(result.label, /deliver(ed|y)/i);
+    }
+  }
+});

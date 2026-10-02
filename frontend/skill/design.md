@@ -50,7 +50,12 @@ current theme sets 44px small/medium controls and 24px container radii.
 - Separate wallet connection, message sign-in, mandate approval, and payment
   approval. An earlier step never silently authorizes a later signature.
 - Keep settled payment evidence separate from optional seller statements.
-  Current mandate state is not a historical policy snapshot.
+  Name where limits beside a receipt came from: recorded on Solana at
+  payment, seen by the ChainPay relay after payment, or today's limits when
+  neither exists. Never present today's limits as the limits at payment.
+- Request content (description, line items) appears only to the owner, or on
+  `/verify` from an audit link the owner shared, after it verifies against the
+  receipt. A plain public receipt shows none of it.
 - Use real loading, empty, unavailable, rejected, and pending states. Do not fill
   empty dashboards with unmarked sample financial data.
 

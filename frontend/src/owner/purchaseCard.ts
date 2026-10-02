@@ -3,6 +3,7 @@ import type { AgentCheck, AgentInboxItem, AgentInboxStage, StablecoinOption } fr
 import { isInboxItemArchived } from "./inboxArchive";
 import { formatTokenAmount } from "./amounts";
 import { shortAddress } from "../ui/marks";
+import { crossmintBlockingChecks } from "./crossmint";
 
 export type PurchaseAttentionStage =
   | "needs_details"
@@ -19,6 +20,8 @@ export type PurchaseCardView = {
   amountLabel: string;
   tokenLabel: string;
   recipientLabel: string;
+  /** A known seller shown by its official mark next to the recipient. */
+  recipientBrand?: "crossmint";
   status: PurchaseAttentionStage;
   statusLabel: string;
   limitDetail?: string;
@@ -44,7 +47,7 @@ function purchaseDescription(item: AgentInboxItem): string {
 }
 
 function tokenLabelForMint(mint: string | undefined, stablecoinOptions: StablecoinOption[]): string {
-  if (!mint) return "token";
+  if (!mint) return "";
   return stablecoinOptions.find((option) => option.mint === mint)?.label ?? "token";
 }
 
@@ -54,7 +57,7 @@ function formatPaymentAmount(
   mandate: Mandate | null | undefined,
   mandateDecimals: number | null,
 ): string {
-  if (!amount) return "—";
+  if (!amount) return "Amount unavailable";
   // `mandateDecimals` describes the selected mandate's mint, not necessarily the
   // mint this payment is denominated in. Applying 6 to a 9-decimal token — or
   // the reverse — misstates the headline amount by 1000x while still labelling
@@ -69,10 +72,27 @@ function formatPaymentAmount(
   }
 }
 
-function limitDetailFromRequirements(item: AgentInboxItem, mandate: Mandate | null | undefined): string | undefined {
+function limitDetailFromRequirements(
+  item: AgentInboxItem,
+  mandate: Mandate | null | undefined,
+  mandateDecimals: number | null,
+  stablecoinOptions: StablecoinOption[],
+): string | undefined {
   const limitsCheck = item.requirements?.checks.find((check) => check.key === "limits");
   if (limitsCheck?.status === "fail" && limitsCheck.detail) return limitsCheck.detail;
   if (!mandate) return undefined;
+  // Token units only when the decimals and label are both known for the
+  // permission's own mint; otherwise the exact base units stay the honest form.
+  const token = stablecoinOptions.find((option) => option.mint === mandate.allowedMint)?.label;
+  if (mandateDecimals !== null && token) {
+    try {
+      const perPayment = formatTokenAmount(mandate.maxPerPayment, mandateDecimals);
+      const total = formatTokenAmount(mandate.totalLimit, mandateDecimals);
+      return `This permission allows up to ${perPayment} ${token} per payment and ${total} ${token} total.`;
+    } catch {
+      // Fall through to base units.
+    }
+  }
   return `This permission allows up to ${mandate.maxPerPayment.toString()} base units per payment and ${mandate.totalLimit.toString()} base units total.`;
 }
 
@@ -141,6 +161,8 @@ export function purchaseCardFromInboxItem(
     stablecoinOptions: StablecoinOption[];
     mandateDecimals: number | null;
     mandate?: Mandate | null;
+    /** Crossmint orders render as Crossmint only behind the CROSSMINT_ENABLED flag. */
+    crossmint?: boolean;
   },
 ): PurchaseCardView {
   const payment = item.approval?.kind === "payment" && item.approval.payment && typeof item.approval.payment === "object"
@@ -150,19 +172,35 @@ export function purchaseCardFromInboxItem(
   const amount = typeof payment?.amount === "string" ? payment.amount : undefined;
   const recipient = typeof payment?.recipient === "string" ? payment.recipient : undefined;
   const tokenLabel = tokenLabelForMint(mint, options.stablecoinOptions);
-  const status = purchaseAttentionStage(item.stage);
+  const amountLabel = formatPaymentAmount(amount, mint, options.mandate, options.mandateDecimals);
+  // Branding waits for the flag; the safety checks do not. A request carrying
+  // Crossmint data is never offered for approval with a mismatched quote or a
+  // closed or already-paid order, whether or not Crossmint is shown by name.
+  const order = options.crossmint ? item.crossmint : undefined;
+  const blocking = item.crossmint
+    ? crossmintBlockingChecks(
+      item.crossmint,
+      `${formatPaymentAmount(item.crossmint.quotedAmount, mint, options.mandate, options.mandateDecimals)} ${tokenLabel}`.trim(),
+      `${amountLabel} ${tokenLabel}`.trim(),
+    )
+    : [];
+  const checks = [...(item.requirements?.checks ?? []), ...blocking];
+  const status = blocking.length > 0 ? "blocked" : purchaseAttentionStage(item.stage);
+  const description = purchaseDescription(item);
 
   return {
     id: item.id,
-    description: purchaseDescription(item),
-    amountLabel: formatPaymentAmount(amount, mint, options.mandate, options.mandateDecimals),
+    // The request's own title names it everywhere; the item is the fallback.
+    description: description === "Purchase description unavailable" && order?.itemLabel?.trim() ? order.itemLabel.trim() : description,
+    amountLabel,
     tokenLabel,
-    recipientLabel: recipient ? shortAddress(recipient) : "—",
+    recipientLabel: order ? "Crossmint" : recipient ? shortAddress(recipient) : "Recipient unavailable",
+    ...(order ? { recipientBrand: "crossmint" as const } : {}),
     status,
     statusLabel: purchaseStatusLabel(status),
-    limitDetail: limitDetailFromRequirements(item, options.mandate),
-    checks: item.requirements?.checks ?? [],
-    showChecks: Boolean(item.requirements && item.requirements.checks.length > 0),
+    limitDetail: limitDetailFromRequirements(item, options.mandate, options.mandateDecimals, options.stablecoinOptions),
+    checks,
+    showChecks: checks.length > 0,
   };
 }
 

@@ -1,7 +1,18 @@
 import { BrandLogo } from "../brand/Brand";
 import { useEffect, useState } from "react";
 import { loadPublicReceiptView } from "../receipts/load";
-import { classifyReceiptPda, initialPageState, publicReceiptPath, type PublicReceiptPageState } from "../receipts/model";
+import {
+  classifyReceiptPda,
+  initialPageState,
+  orderFragmentFromHash,
+  publicReceiptPath,
+  purchaseFragmentFromHash,
+  type OrderLinkState,
+  type PublicReceiptPageState,
+  type PurchaseProofState,
+} from "../receipts/model";
+import { decodeOrderFragment, verifyOrderForReceipt } from "../receipts/order";
+import { decodePurchaseFragment, verifyPurchaseForReceipt } from "../receipts/purchase";
 import { ReceiptPageState } from "../receipts/ReceiptCard";
 import { configuredDemoReceiptPath } from "../owner/onboarding";
 
@@ -50,6 +61,59 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
   const [state, setState] = useState<PublicReceiptPageState>(() => (
     trimmed ? initialPageState(trimmed) : { kind: "malformed", receiptPda: "" }
   ));
+  const [purchase, setPurchase] = useState<PurchaseProofState | undefined>(undefined);
+  const [order, setOrder] = useState<OrderLinkState | undefined>(undefined);
+  const [hash, setHash] = useState(() => (typeof window === "undefined" ? "" : window.location.hash));
+
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // An audit link carries the seller-signed invoice in the URL fragment, which
+  // never reaches a server. Nothing from it shows until it verifies against
+  // this receipt's on-chain invoice hash and the seller's signature.
+  useEffect(() => {
+    setPurchase(undefined);
+    if (state.kind !== "verified") return;
+    const fragment = purchaseFragmentFromHash(hash);
+    if (!fragment) return;
+    let active = true;
+    const request = decodePurchaseFragment(fragment);
+    if (!request) {
+      setPurchase({ status: "failed", via: "link", reason: "the invoice in this link could not be read" });
+      return;
+    }
+    void verifyPurchaseForReceipt(state.receipt, request, "link").then((result) => {
+      if (active) setPurchase(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, [state, hash]);
+
+  // The same audit link may also carry the requester-signed order. It shows
+  // only after its signature verifies and it matches this receipt's token
+  // (and, for a budget request, the agent that paid).
+  useEffect(() => {
+    setOrder(undefined);
+    if (state.kind !== "verified") return;
+    const fragment = orderFragmentFromHash(hash);
+    if (!fragment) return;
+    let active = true;
+    const request = decodeOrderFragment(fragment);
+    if (!request) {
+      setOrder({ status: "failed", via: "link", reason: "the order in this link could not be read" });
+      return;
+    }
+    void verifyOrderForReceipt(state.receipt, request, "link").then((result) => {
+      if (active) setOrder(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, [state, hash]);
 
   useEffect(() => {
     setDraftAddress(trimmed);
@@ -96,6 +160,8 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
         {trimmed && (
           <ReceiptPageState
             state={state}
+            purchase={purchase}
+            order={order}
             editableAddress={draftAddress}
             onAddressChange={setDraftAddress}
             onRetry={() => {

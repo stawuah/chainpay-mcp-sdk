@@ -9,9 +9,14 @@ pub(super) fn intent(
         &decode_transaction(&request.signed_transaction)?,
         "transaction",
     )?;
-    Ok(
-        json!({"mandate":request.mandate,"invoice":request.invoice_hash.to_lowercase(),"receipt":request.receipt_address,"agent":request.agent,"mint":request.mint,"recipient":request.recipient,"amount":request.amount.map(|v|v.to_string()),"token_program":request.token_program,"mode":mode,"message":hex_encode(&Sha256::digest(tx.message.serialize())),"x402":request.x402}),
-    )
+    let mut intent = json!({"mandate":request.mandate,"invoice":request.invoice_hash.to_lowercase(),"receipt":request.receipt_address,"agent":request.agent,"mint":request.mint,"recipient":request.recipient,"amount":request.amount.map(|v|v.to_string()),"token_program":request.token_program,"mode":mode,"message":hex_encode(&Sha256::digest(tx.message.serialize())),"x402":request.x402});
+    // The Crossmint key is bound only when a Crossmint order is being paid.
+    // Adding it unconditionally would change the bound intent of every payment,
+    // so an operation claimed before this change could no longer be resumed.
+    if let Some(crossmint) = &request.crossmint {
+        intent["crossmint"] = serde_json::to_value(crossmint).map_err(|_| conflict())?;
+    }
+    Ok(intent)
 }
 pub(super) fn initial(
     request: &PaymentSubmissionRequest,
@@ -68,17 +73,7 @@ pub(super) async fn existing_payment(
         .ok_or(ApiError::Unauthorized)?;
     let legacy_key = format!("{}:{}:{}", principal.wallet, request.mandate, user_key);
     if let Some(old) = state.store.find_payment_by_idempotency(&legacy_key).await? {
-        authorize_payment(
-            state,
-            principal,
-            &old,
-            if request.x402.is_some() {
-                "execute_x402_payment"
-            } else {
-                "execute_payment"
-            },
-        )
-        .await?;
+        authorize_payment(state, principal, &old, connector_operation(request)).await?;
         return Err(ApiError::Conflict(format!(
             "Existing operation {} predates intent hashes; query that operation instead of submitting again",
             old.payment_id
@@ -105,17 +100,7 @@ pub(super) async fn existing_payment(
         None => serde_json::from_value(initial)
             .map_err(|_| ApiError::Conflict("Operation reservation needs recovery".into()))?,
     };
-    authorize_payment(
-        state,
-        principal,
-        &record,
-        if request.x402.is_some() {
-            "execute_x402_payment"
-        } else {
-            "execute_payment"
-        },
-    )
-    .await?;
+    authorize_payment(state, principal, &record, connector_operation(request)).await?;
     Ok(Some(payment(state, record).await?))
 }
 pub(super) async fn reserve_payment(
@@ -142,6 +127,10 @@ pub(super) async fn reserve_payment(
         Some(r) => r,
         None => serde_json::from_value(initial).map_err(|_| conflict())?,
     };
+    // Bind the immutable payment intent first. Otherwise simultaneous requests
+    // reusing one key for different orders could reserve both order IDs before
+    // one loses the payment claim, permanently stranding an unpaid order.
+    reserve_crossmint_order(state, principal, request).await?;
     Ok((won, existing))
 }
 fn deterministic_failure(error: &RpcError) -> bool {
@@ -287,7 +276,11 @@ pub(super) fn payment_error(mut record: PaymentRecord, error: &RpcError) -> Paym
     } else {
         PaymentStatus::Submitted
     };
-    record.error = Some(if deterministic_failure(error) {
+    let duplicate = matches!(error, RpcError::Remote { message, .. }
+        if super::receipt_routes::is_duplicate_receipt_error(message, record.receipt_address.as_deref()));
+    record.error = Some(if deterministic_failure(error) && duplicate {
+        super::receipt_routes::DUPLICATE_INVOICE_MESSAGE.to_owned()
+    } else if deterministic_failure(error) {
         rejection_reason(error)
     } else {
         "Submission outcome unknown; awaiting chain reconciliation. Keep this operation and signature.".into()
@@ -337,7 +330,7 @@ pub(super) async fn payment(
             if status.error.is_none()
                 && status.confirmation_status.as_deref() == Some("finalized") =>
         {
-            match verify_finalized_receipt(&state.rpc, &record, &state.config.program_id).await {
+            match verify_finalized_receipt(state, &record).await {
                 Ok(()) => {
                     record.status = PaymentStatus::Confirmed;
                     record.slot = status.slot;
@@ -379,7 +372,23 @@ pub(super) async fn payment(
                     .flatten()
             }),
     };
-    persist_payment(state, &record, metadata.as_ref()).await?;
+    // A Crossmint job is rebuilt from the same bound intent, so a recovered
+    // settlement keeps its connector row instead of losing the order it paid.
+    let crossmint = state
+        .store
+        .operation_record(&record.payment_id)
+        .await?
+        .and_then(|(_, intent, _)| {
+            serde_json::from_value::<Option<CrossmintPaymentMetadata>>(intent["crossmint"].clone())
+                .ok()
+                .flatten()
+        });
+    let connector = match (&metadata, &crossmint) {
+        (Some(x402), _) => Some(ConnectorMetadata::X402(x402)),
+        (None, Some(crossmint)) => Some(ConnectorMetadata::Crossmint(crossmint)),
+        (None, None) => None,
+    };
+    persist_payment(state, &record, connector).await?;
     Ok(state
         .store
         .get_payment(&record.payment_id)
@@ -419,10 +428,7 @@ pub(super) async fn transaction(
                     for receipt in receipts {
                         let receipt: PaymentRecord =
                             serde_json::from_value(receipt.clone()).map_err(|_| conflict())?;
-                        if verify_finalized_receipt(&state.rpc, &receipt, &state.config.program_id)
-                            .await
-                            .is_err()
-                        {
+                        if verify_finalized_receipt(state, &receipt).await.is_err() {
                             verified = false;
                             break;
                         }
@@ -437,6 +443,10 @@ pub(super) async fn transaction(
                 record.status = PaymentStatus::Submitted;
                 record.error=Some("Transaction finalized; batch receipt verification pending. Keep the existing operation.".into());
             }
+        }
+        Ok(None) | Err(_) if record.status == PaymentStatus::Prepared => {
+            // Absent or unavailable RPC evidence does not undo proof that no
+            // submission left this process (for example local backpressure).
         }
         _ => {
             record.status = PaymentStatus::Submitted;
@@ -563,10 +573,12 @@ pub(super) async fn recover_payment(
         &state,
         &principal,
         &record,
-        if bound["x402"].is_null() {
-            "execute_payment"
-        } else {
+        if !bound["x402"].is_null() {
             "execute_x402_payment"
+        } else if !bound["crossmint"].is_null() {
+            "execute_crossmint_payment"
+        } else {
+            "execute_payment"
         },
     )
     .await?;
@@ -582,6 +594,8 @@ pub(super) async fn recover_payment(
         amount: record.amount,
         token_program: record.token_program.clone(),
         x402: serde_json::from_value(bound["x402"].clone()).map_err(|_| conflict())?,
+        crossmint: serde_json::from_value(bound["crossmint"].clone()).map_err(|_| conflict())?,
+        payment_request: None,
     };
     validate_payment_request(&request, &state.config.program_id)?;
     let tx = decode_solana_transaction(
@@ -601,7 +615,7 @@ pub(super) async fn recover_payment(
     }
     record.signature = Some(signature.clone());
     record.updated_at_ms = now_ms();
-    persist_payment(&state, &record, request.x402.as_ref()).await?;
+    persist_payment(&state, &record, connector_metadata(&request)).await?;
     record = payment(&state, record).await?;
     if input.resubmit
         && !matches!(
@@ -615,14 +629,11 @@ pub(super) async fn recover_payment(
             &state,
             &principal,
             &record.mandate,
-            if request.x402.is_some() {
-                "execute_x402_payment"
-            } else {
-                "execute_payment"
-            },
+            connector_operation(&request),
         )
         .await?;
         validate_live_payment(&state, &request).await?;
+        reserve_crossmint_order(&state, &principal, &request).await?;
         if can_resubmit(&state, &signature, &tx).await? {
             if state
                 .rpc
@@ -634,7 +645,7 @@ pub(super) async fn recover_payment(
                 record.error =
                     Some("Recovery submission outcome unknown; retain the same signature.".into());
                 record.updated_at_ms = now_ms();
-                persist_payment(&state, &record, request.x402.as_ref()).await?;
+                persist_payment(&state, &record, connector_metadata(&request)).await?;
             }
         }
     }
@@ -745,19 +756,30 @@ pub(super) async fn x402_context(
         .get_payment(&id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    authorize_payment(&state, &principal, &record, "execute_x402_payment").await?;
-    let record = payment(&state, record).await?;
     let metadata = state
         .store
         .find_x402_by_idempotency(&record.idempotency_key)
         .await?
         .ok_or(ApiError::NotFound)?;
+    // The same context backs the x402 and connector-neutral routes, so the
+    // operation checked is the one the stored job actually belongs to.
+    let operation = match metadata.connector {
+        ConnectorKind::X402 => "execute_x402_payment",
+        ConnectorKind::Crossmint => crossmint_read_operation(&principal),
+    };
+    authorize_payment(&state, &principal, &record, operation).await?;
+    let record = payment(&state, record).await?;
+    let metadata = state
+        .store
+        .find_x402_by_idempotency(&record.idempotency_key)
+        .await?
+        .unwrap_or(metadata);
     let key = record
         .idempotency_key
         .strip_prefix(&format!("{}:", principal.wallet))
         .ok_or(ApiError::Unauthorized)?;
     Ok(Json(
-        json!({"payment":record,"resource":metadata.resource,"challenge":metadata.challenge,"idempotency_key":key,"merchant_status":metadata.status,"proof":metadata.proof}),
+        json!({"payment":record,"connector":metadata.connector,"connector_reference":metadata.connector_reference,"resource":metadata.resource,"challenge":metadata.challenge,"idempotency_key":key,"merchant_status":metadata.status,"proof":metadata.proof}),
     ))
 }
 
@@ -768,6 +790,238 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    fn prepend_budget(tx: &mut VersionedTransaction, signer: &ed25519_dalek::SigningKey) {
+        use ed25519_dalek::Signer;
+        let solana_message::VersionedMessage::Legacy(message) = &mut tx.message else {
+            panic!()
+        };
+        let index = message.account_keys.len() as u8;
+        message.account_keys.push(
+            "ComputeBudget111111111111111111111111111111"
+                .parse()
+                .unwrap(),
+        );
+        message.header.num_readonly_unsigned_accounts += 1;
+        let mut data = vec![2];
+        data.extend_from_slice(&200_000u32.to_le_bytes());
+        message.instructions.insert(
+            0,
+            solana_message::compiled_instruction::CompiledInstruction {
+                program_id_index: index,
+                accounts: vec![],
+                data,
+            },
+        );
+        tx.signatures = vec![signer.sign(&tx.message.serialize()).to_bytes().into()];
+    }
+
+    fn owner_ata_fixture() -> (VersionedTransaction, Principal, Vec<u8>) {
+        use ed25519_dalek::Signer;
+        use solana_address::Address;
+        use solana_message::{
+            Message, MessageHeader, VersionedMessage, compiled_instruction::CompiledInstruction,
+        };
+        let signer = ed25519_dalek::SigningKey::from_bytes(&[91; 32]);
+        let owner = Address::from(signer.verifying_key().to_bytes());
+        let mint = Address::from([5; 32]);
+        let token: Address = SPL_TOKEN_PROGRAM_ID.parse().unwrap();
+        let ata_program: Address = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+            .parse()
+            .unwrap();
+        let ata = Address::find_program_address(
+            &[owner.as_ref(), token.as_ref(), mint.as_ref()],
+            &ata_program,
+        )
+        .0;
+        let message = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 4,
+            },
+            account_keys: vec![
+                owner,
+                ata,
+                mint,
+                token,
+                "11111111111111111111111111111111".parse().unwrap(),
+                ata_program,
+            ],
+            recent_blockhash: Default::default(),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 5,
+                accounts: vec![0, 1, 0, 2, 4, 3],
+                data: vec![1],
+            }],
+        });
+        let mut tx = VersionedTransaction {
+            signatures: vec![signer.sign(&message.serialize()).to_bytes().into()],
+            message,
+        };
+        prepend_budget(&mut tx, &signer);
+        let mut asset = vec![0; 106];
+        asset[..8].copy_from_slice(&[129, 27, 96, 192, 89, 180, 227, 200]);
+        asset[40..72].copy_from_slice(mint.as_ref());
+        asset[72..104].copy_from_slice(token.as_ref());
+        asset[104] = 1;
+        (
+            tx,
+            Principal {
+                wallet: owner.to_string(),
+                scope: None,
+            },
+            asset,
+        )
+    }
+
+    async fn attach_rpc(state: &mut BackendState, router: Router) -> tokio::task::JoinHandle<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        state.config.rpc.url = format!("http://{}", listener.local_addr().unwrap());
+        state.rpc = RpcClient::new(state.config.rpc.clone()).unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() })
+    }
+
+    #[tokio::test]
+    async fn compute_prefix_cannot_bypass_disabled_asset_or_paused_payment() {
+        let (mut state, _, _) = fixture();
+        let (ata, owner, mut asset) = owner_ata_fixture();
+        validate_owner_transaction(&ata, &owner.wallet, DEFAULT_PROGRAM_ID).unwrap();
+        asset[104] = 0;
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let asset = asset.clone();
+            async move {
+                assert_eq!(body["method"], "getAccountInfo");
+                Json(json!({"jsonrpc":"2.0","id":1,"result":{"value":{"owner":DEFAULT_PROGRAM_ID,"data":[BASE64.encode(asset),"base64"]}}}))
+            }
+        });
+        let task = attach_rpc(&mut state, router).await;
+        assert!(
+            matches!(validate_owner_live(&state, &owner, &ata).await, Err(ApiError::BadRequest(message)) if message.contains("disabled"))
+        );
+        task.abort();
+
+        let (mut tx, request, signer) = transactions::tests::fixture(0);
+        prepend_budget(&mut tx, &signer);
+        let owner = Principal {
+            wallet: request.agent.clone().unwrap(),
+            scope: None,
+        };
+        validate_owner_transaction(&tx, &owner.wallet, DEFAULT_PROGRAM_ID).unwrap();
+        let record = initial(&request, SigningMode::Human).unwrap();
+        let mut mandate = mandate_account_data(&record, true, false, u64::MAX);
+        mandate[8..40].copy_from_slice(&signer.verifying_key().to_bytes());
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let mandate = mandate.clone();
+            async move {
+                let result = match body["method"].as_str().unwrap() {
+                    "getAccountInfo" => json!({"value":{"owner":DEFAULT_PROGRAM_ID,"data":[BASE64.encode(mandate),"base64"]}}),
+                    "getSlot" => json!(1),
+                    method => panic!("Unexpected RPC {method}"),
+                };
+                Json(json!({"jsonrpc":"2.0","id":1,"result":result}))
+            }
+        });
+        let task = attach_rpc(&mut state, router).await;
+        assert!(
+            matches!(validate_owner_live(&state, &owner, &tx).await, Err(ApiError::BadRequest(message)) if message.contains("paused"))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn owner_backpressure_retry_preserves_bytes_and_rechecks_live_policy() {
+        let (mut state, _, _) = fixture();
+        let (tx, owner, asset) = owner_ata_fixture();
+        let wire = BASE64.encode(wincode::serialize(&tx).unwrap());
+        let key = format!("{}:owner-retry", owner.wallet);
+        let id = deterministic_id("transaction", &key);
+        let record = TransactionRecord {
+            transaction_id: id.clone(),
+            idempotency_key: key,
+            signature: Some(signature(&wire).unwrap()),
+            slot: None,
+            status: PaymentStatus::Submitted,
+            error: None,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+        };
+        let record = classify_transaction_send(&state, record, &RpcError::Busy)
+            .await
+            .unwrap();
+        assert_eq!(record.status, PaymentStatus::Prepared);
+        state.store.claim_operation(&id, &owner.wallet, json!({"message":hex_encode(&Sha256::digest(tx.message.serialize())),"receipts":[]}), json!(record)).await.unwrap();
+        state.store.put_transaction(record.clone()).await.unwrap();
+        let stage = Arc::new(AtomicUsize::new(0));
+        let sends = Arc::new(AtomicUsize::new(0));
+        let rpc_stage = stage.clone();
+        let rpc_sends = sends.clone();
+        let expected_wire = wire.clone();
+        let expected_signature = record.signature.clone().unwrap();
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let stage = rpc_stage.clone(); let sends = rpc_sends.clone(); let mut asset = asset.clone();
+            let expected_wire = expected_wire.clone(); let expected_signature = expected_signature.clone();
+            async move {
+                let result = match body["method"].as_str().unwrap() {
+                    "getSignatureStatuses" => {
+                        if stage.load(Ordering::SeqCst) == 0 {
+                            return Json(json!({"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"fixture unavailable"}}));
+                        }
+                        json!({"value":[if sends.load(Ordering::SeqCst) == 0 { Value::Null } else { json!({"slot":3,"confirmationStatus":"finalized","err":null}) }]})
+                    }
+                    "getAccountInfo" => {
+                        asset[104] = u8::from(stage.load(Ordering::SeqCst) >= 2);
+                        json!({"value":{"owner":DEFAULT_PROGRAM_ID,"data":[BASE64.encode(asset),"base64"]}})
+                    }
+                    "sendTransaction" => {
+                        assert_eq!(body["params"][0], expected_wire);
+                        sends.fetch_add(1, Ordering::SeqCst); json!(expected_signature)
+                    }
+                    method => panic!("Unexpected RPC {method}"),
+                };
+                Json(json!({"jsonrpc":"2.0","id":1,"result":result}))
+            }
+        });
+        let task = attach_rpc(&mut state, router).await;
+        assert_eq!(
+            transaction(&state, record).await.unwrap().status,
+            PaymentStatus::Prepared
+        );
+        stage.store(1, Ordering::SeqCst);
+        let request = || TransactionSubmissionRequest {
+            idempotency_key: "owner-retry".into(),
+            signed_transaction: wire.clone(),
+        };
+        assert!(
+            matches!(submit_transaction(State(state.clone()), Extension(owner.clone()), Json(request())).await, Err(ApiError::BadRequest(message)) if message.contains("disabled"))
+        );
+        assert_eq!(sends.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            state
+                .store
+                .get_transaction(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PaymentStatus::Prepared
+        );
+        stage.store(2, Ordering::SeqCst);
+        let Json(settled) = submit_transaction(
+            State(state.clone()),
+            Extension(owner.clone()),
+            Json(request()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(settled.status, PaymentStatus::Confirmed);
+        assert_eq!(settled.signature, Some(signature(&wire).unwrap()));
+        let _ = submit_transaction(State(state), Extension(owner), Json(request()))
+            .await
+            .unwrap();
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        task.abort();
+    }
 
     #[test]
     fn a_rejection_names_the_reason_the_chain_gave() {
@@ -811,6 +1065,407 @@ mod tests {
             .unwrap();
         (state, principal, request)
     }
+
+    fn crossmint_metadata() -> CrossmintPaymentMetadata {
+        CrossmintPaymentMetadata {
+            order_id: "order_once".into(),
+            order_url: None,
+            terms: json!({"amount":"10","mint":"fixture","phase":"payment"}),
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_crossmint_operations_reserve_exactly_one_order() {
+        let (state, principal, mut first) = fixture();
+        first.crossmint = Some(crossmint_metadata());
+        let mut second = first.clone();
+        second.idempotency_key = format!("{}:second", principal.wallet);
+        second.mandate = random_hex_32().unwrap();
+        let (one, two) = tokio::join!(
+            reserve_crossmint_order(&state, &principal, &first),
+            reserve_crossmint_order(&state, &principal, &second),
+        );
+        assert_ne!(one.is_ok(), two.is_ok());
+        let (winner, loser) = if one.is_ok() {
+            (&first, &second)
+        } else {
+            (&second, &first)
+        };
+        // Reservation itself protects the order, even before any payment row exists.
+        reserve_crossmint_order(&state, &principal, winner)
+            .await
+            .unwrap();
+        assert!(matches!(
+            reserve_crossmint_order(&state, &principal, loser).await,
+            Err(ApiError::Conflict(_))
+        ));
+        let mut record = initial(winner, SigningMode::Human).unwrap();
+        record.status = PaymentStatus::Failed;
+        persist_payment(&state, &record, connector_metadata(winner))
+            .await
+            .unwrap();
+        // A failure label never releases a claim into a new payment operation.
+        assert!(matches!(
+            reserve_crossmint_order(&state, &principal, loser).await,
+            Err(ApiError::Conflict(_))
+        ));
+    }
+
+    async fn assert_conflicting_payment_intents_leave_other_order_available(state: &BackendState) {
+        let (_, principal, mut first) = fixture();
+        first.crossmint = Some(crossmint_metadata());
+        let mut second = first.clone();
+        second.crossmint.as_mut().unwrap().order_id = "different_order".into();
+        let (one, two) = tokio::join!(
+            reserve_payment(&state, &principal, &first, SigningMode::Human),
+            reserve_payment(&state, &principal, &second, SigningMode::Human),
+        );
+        assert_ne!(one.is_ok(), two.is_ok());
+        let mut unreserved_order = if one.is_ok() { second } else { first };
+        unreserved_order.idempotency_key = format!("{}:fresh-key", principal.wallet);
+        // The losing intent never owned an order claim, so the different order
+        // can still be paid by a genuinely distinct payment operation.
+        reserve_payment(&state, &principal, &unreserved_order, SigningMode::Human)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn conflicting_payment_intents_do_not_strand_a_second_crossmint_order() {
+        let (state, _, _) = fixture();
+        assert_conflicting_payment_intents_leave_other_order_available(&state).await;
+    }
+
+    #[tokio::test]
+    async fn crossmint_reservations_are_isolated_by_authenticated_owner() {
+        let (state, principal, mut request) = fixture();
+        request.crossmint = Some(crossmint_metadata());
+        reserve_crossmint_order(&state, &principal, &request)
+            .await
+            .unwrap();
+        let mut record = initial(&request, SigningMode::Human).unwrap();
+        record.status = PaymentStatus::Confirmed;
+        persist_payment(&state, &record, connector_metadata(&request))
+            .await
+            .unwrap();
+        let (_, other, mut other_request) = fixture();
+        other_request.crossmint = request.crossmint.clone();
+        assert_ne!(other.wallet, principal.wallet);
+        reserve_crossmint_order(&state, &other, &other_request)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn historical_failed_crossmint_job_still_blocks_a_new_operation() {
+        let (state, principal, mut first) = fixture();
+        first.crossmint = Some(crossmint_metadata());
+        // Upgrade case: a historical row exists without an order reservation.
+        let mut record = initial(&first, SigningMode::Human).unwrap();
+        record.status = PaymentStatus::Failed;
+        persist_payment(&state, &record, connector_metadata(&first))
+            .await
+            .unwrap();
+        let mut second = first.clone();
+        second.idempotency_key = format!("{}:replacement", principal.wallet);
+        assert!(matches!(
+            reserve_crossmint_order(&state, &principal, &second).await,
+            Err(ApiError::Conflict(_))
+        ));
+        reserve_crossmint_order(&state, &principal, &first)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn crossmint_proofs_advance_without_changing_settlement_evidence() {
+        let (state, principal, mut request) = fixture();
+        request.crossmint = Some(crossmint_metadata());
+        let (_, mut record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
+            .await
+            .unwrap();
+        record.status = PaymentStatus::Confirmed;
+        persist_payment(&state, &record, connector_metadata(&request))
+            .await
+            .unwrap();
+        let user_key = request
+            .idempotency_key
+            .strip_prefix(&format!("{}:", principal.wallet))
+            .unwrap();
+        for (phase, expected_status) in [
+            ("payment", X402PaymentStatus::Confirmed),
+            ("delivery", X402PaymentStatus::Verified),
+            ("completed", X402PaymentStatus::Verified),
+        ] {
+            let Json(updated) = persist_crossmint_observation(
+                State(state.clone()),
+                Extension(principal.clone()),
+                Json(CrossmintOrderProofRequest {
+                    mandate: request.mandate.clone(),
+                    idempotency_key: user_key.into(),
+                    proof: json!({"orderId":"order_once"}),
+                    order_phase: phase.into(),
+                    response_status: 200,
+                    error: None,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.status, expected_status);
+            assert_eq!(updated.proof.as_ref().unwrap()["orderPhase"], phase);
+            assert_eq!(updated.transaction_signature, record.signature);
+            assert_eq!(updated.receipt_address, record.receipt_address);
+            assert_eq!(
+                updated.payment_id.as_deref(),
+                Some(record.payment_id.as_str())
+            );
+        }
+        // An x402-only endpoint may not overwrite this Crossmint evidence.
+        let rejected = record_x402_proof(
+            State(state.clone()),
+            Extension(principal),
+            Json(X402ProofRequest {
+                mandate: request.mandate,
+                idempotency_key: user_key.into(),
+                proof: json!({"wrongConnector":true}),
+                response_status: 200,
+                error: None,
+            }),
+        )
+        .await;
+        assert!(matches!(rejected, Err(ApiError::BadRequest(_))));
+        let saved = state
+            .store
+            .find_x402_by_idempotency(&request.idempotency_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.proof.unwrap()["orderPhase"], "completed");
+    }
+
+    #[test]
+    fn crossmint_provider_authorization_binds_every_payment_field_and_expires() {
+        use hmac::{Hmac, Mac};
+        let (_, principal, mut request) = fixture();
+        let secret = "fixture-secret-for-crossmint-at-least-32-bytes";
+        let terms = json!({"orderId":"order_once", "mint":request.mint, "recipient":request.recipient, "amount":request.amount.unwrap().to_string(), "tokenProgram":request.token_program});
+        let payload = json!({"version":1,"owner":principal.wallet,"mandate":request.mandate,"agent":request.agent,"invoiceHash":request.invoice_hash.to_ascii_lowercase(),"terms":terms,"expiresAtMs":"2000"}).to_string();
+        let mut mac = Hmac::<sha2_010::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload.as_bytes());
+        let mut authenticated_terms = terms.clone();
+        authenticated_terms["authorization"] =
+            json!({"payload":payload,"mac":hex_encode(&mac.finalize().into_bytes())});
+        request.crossmint = Some(CrossmintPaymentMetadata {
+            order_id: "order_once".into(),
+            order_url: None,
+            terms: authenticated_terms,
+        });
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 1000)
+                .is_ok()
+        );
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 2000)
+                .is_err()
+        );
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, "another-owner", secret, 1000)
+                .is_err()
+        );
+        let original = request.clone();
+        request.amount = Some(request.amount.unwrap() + 1);
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 1000)
+                .is_err()
+        );
+        request = original.clone();
+        request.crossmint.as_mut().unwrap().terms = terms;
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 1000)
+                .is_err()
+        );
+        request = original;
+        request.crossmint.as_mut().unwrap().terms["authorization"]["mac"] = json!("é".repeat(32));
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 1000)
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_x402_proofs_remain_immutable() {
+        let (state, principal, mut request) = fixture();
+        request.x402 = Some(X402PaymentMetadata {
+            resource: "https://merchant.example".into(),
+            challenge: json!({}),
+        });
+        let (_, mut record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
+            .await
+            .unwrap();
+        record.status = PaymentStatus::Confirmed;
+        persist_payment(&state, &record, connector_metadata(&request))
+            .await
+            .unwrap();
+        let user_key = request
+            .idempotency_key
+            .strip_prefix(&format!("{}:", principal.wallet))
+            .unwrap();
+        for proof in [json!({"original":true}), json!({"replacement":true})] {
+            let Json(updated) = record_x402_proof(
+                State(state.clone()),
+                Extension(principal.clone()),
+                Json(X402ProofRequest {
+                    mandate: request.mandate.clone(),
+                    idempotency_key: user_key.into(),
+                    proof,
+                    response_status: 200,
+                    error: None,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.status, X402PaymentStatus::Verified);
+            assert_eq!(updated.proof, Some(json!({"original":true})));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires explicitly isolated TEST_DATABASE_URL"]
+    async fn postgres_crossmint_claims_and_phase_updates_survive_reconnect() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("isolated fixture URL required");
+        assert!(
+            url.starts_with("postgresql://chainpay_test@127.0.0.1:55439/"),
+            "Only the explicitly provisioned local fixture is allowed"
+        );
+        let (mut state, principal, mut first) = fixture();
+        state.store = StatusStore::connect(&url).await.unwrap();
+        let mut another_instance = state.clone();
+        another_instance.store = StatusStore::connect(&url).await.unwrap();
+        first.crossmint = Some(crossmint_metadata());
+        let mut second = first.clone();
+        second.idempotency_key = format!("{}:second", principal.wallet);
+        let (one, two) = tokio::join!(
+            reserve_crossmint_order(&state, &principal, &first),
+            reserve_crossmint_order(&another_instance, &principal, &second),
+        );
+        assert_ne!(one.is_ok(), two.is_ok());
+        let (winner, loser) = if one.is_ok() {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let (_, mut payment) = reserve_payment(&state, &principal, &winner, SigningMode::Human)
+            .await
+            .unwrap();
+        payment.status = PaymentStatus::Confirmed;
+        persist_payment(&state, &payment, connector_metadata(&winner))
+            .await
+            .unwrap();
+
+        let (_, other, mut other_request) = fixture();
+        other_request.crossmint = winner.crossmint.clone();
+        // Executes the owner-filtered reference SQL against another owner's row.
+        reserve_crossmint_order(&another_instance, &other, &other_request)
+            .await
+            .unwrap();
+        assert!(matches!(
+            reserve_crossmint_order(&another_instance, &principal, &loser).await,
+            Err(ApiError::Conflict(_))
+        ));
+        let listed = state
+            .store
+            .list_connector_jobs(
+                &principal.wallet,
+                ConnectorKind::Crossmint,
+                Some(&winner.mandate),
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(
+            state
+                .store
+                .list_connector_jobs(&principal.wallet, ConnectorKind::X402, None, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let user_key = winner
+            .idempotency_key
+            .strip_prefix(&format!("{}:", principal.wallet))
+            .unwrap();
+        for (phase, status) in [
+            ("payment", X402PaymentStatus::Confirmed),
+            ("delivery", X402PaymentStatus::Verified),
+            ("completed", X402PaymentStatus::Verified),
+        ] {
+            let Json(updated) = persist_crossmint_observation(
+                State(another_instance.clone()),
+                Extension(principal.clone()),
+                Json(CrossmintOrderProofRequest {
+                    mandate: winner.mandate.clone(),
+                    idempotency_key: user_key.into(),
+                    proof: json!({"orderId":"order_once"}),
+                    order_phase: phase.into(),
+                    response_status: 200,
+                    error: None,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.status, status);
+            assert_eq!(updated.proof.as_ref().unwrap()["orderPhase"], phase);
+            assert_eq!(updated.transaction_signature, payment.signature);
+            assert_eq!(updated.receipt_address, payment.receipt_address);
+        }
+        let rejected = record_x402_proof(
+            State(state.clone()),
+            Extension(principal.clone()),
+            Json(X402ProofRequest {
+                mandate: winner.mandate.clone(),
+                idempotency_key: user_key.into(),
+                proof: json!({}),
+                response_status: 200,
+                error: None,
+            }),
+        )
+        .await;
+        assert!(matches!(rejected, Err(ApiError::BadRequest(_))));
+        drop(another_instance);
+        state.store = StatusStore::connect(&url).await.unwrap();
+        reserve_crossmint_order(&state, &principal, &winner)
+            .await
+            .unwrap();
+        assert!(matches!(
+            reserve_crossmint_order(&state, &principal, &loser).await,
+            Err(ApiError::Conflict(_))
+        ));
+        let saved = state
+            .store
+            .find_x402_by_idempotency(&winner.idempotency_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.proof.unwrap()["orderPhase"], "completed");
+
+        // A historical failed row without a claim also blocks replacement keys.
+        let (_, historical_owner, mut historical) = fixture();
+        historical.crossmint = Some(crossmint_metadata());
+        let mut failed = initial(&historical, SigningMode::Human).unwrap();
+        failed.status = PaymentStatus::Failed;
+        persist_payment(&state, &failed, connector_metadata(&historical))
+            .await
+            .unwrap();
+        historical.idempotency_key = format!("{}:replacement", historical_owner.wallet);
+        assert!(matches!(
+            reserve_crossmint_order(&state, &historical_owner, &historical).await,
+            Err(ApiError::Conflict(_))
+        ));
+        assert_conflicting_payment_intents_leave_other_order_available(&state).await;
+    }
+
     #[tokio::test]
     async fn rpc_backpressure_returns_the_reservation_to_prepared() {
         // `RpcError::Busy` is raised by `try_acquire` before the HTTP request is
@@ -939,7 +1594,7 @@ mod tests {
             resource: "https://fixture.invalid".into(),
             challenge: json!({"fixture":true}),
         };
-        persist_payment(&state, &record, Some(&metadata))
+        persist_payment(&state, &record, Some(ConnectorMetadata::X402(&metadata)))
             .await
             .unwrap();
         let mut proof = state
@@ -954,7 +1609,7 @@ mod tests {
         state.store.put_x402(proof).await.unwrap();
         record.status = PaymentStatus::Submitted;
         record.updated_at_ms += 10;
-        persist_payment(&state, &record, Some(&metadata))
+        persist_payment(&state, &record, Some(ConnectorMetadata::X402(&metadata)))
             .await
             .unwrap();
         assert_eq!(
@@ -1104,7 +1759,9 @@ mod tests {
                 "getSignatureStatuses"=>{assert_eq!(request["params"][0][0],signature);json!({"value":[if stage==0{Value::Null}else{json!({"slot":7,"confirmationStatus":if stage==1{"confirmed"}else{"finalized"},"err":if stage==1||stage==4{json!({"InstructionError":[0,"fixture"]})}else{Value::Null}})}]})},
                 "getAccountInfo"=>{
                     let address=request["params"][0].as_str().unwrap();
-                    json!({"value":if stage==2 && address!=fixture_record.mandate{Value::Null}else{rpc_account_info(address,&fixture_record.mandate,&mandate,&receipt)}})
+                    // No receipt exists before the first send (stage 0) or while
+                    // the finalized receipt is still missing (stage 2).
+                    json!({"value":if (stage==0||stage==2) && address!=fixture_record.mandate{Value::Null}else{rpc_account_info(address,&fixture_record.mandate,&mandate,&receipt)}})
                 },
                 "getSlot"=>json!(1),
                 other=>panic!("Unexpected RPC {other}"),
@@ -1182,7 +1839,7 @@ mod tests {
         let mut stale = record.clone();
         stale.status = PaymentStatus::Submitted;
         stale.updated_at_ms = now_ms() + 100;
-        persist_payment(&state, &stale, Some(&metadata))
+        persist_payment(&state, &stale, Some(ConnectorMetadata::X402(&metadata)))
             .await
             .unwrap();
         assert_eq!(
@@ -1474,12 +2131,17 @@ mod tests {
                     }
                     "getAccountInfo" => {
                         let address = body["params"][0].as_str().unwrap();
-                        json!({"value": rpc_account_info(
-                            address,
-                            &fixture_record.mandate,
-                            &mandate,
-                            &receipt,
-                        )})
+                        // The receipt account exists only once the payment lands.
+                        if address != fixture_record.mandate && landed.load(Ordering::SeqCst) == 0 {
+                            json!({"value": Value::Null})
+                        } else {
+                            json!({"value": rpc_account_info(
+                                address,
+                                &fixture_record.mandate,
+                                &mandate,
+                                &receipt,
+                            )})
+                        }
                     }
                     "getSlot" => json!(1),
                     other => panic!("Unexpected RPC {other}"),

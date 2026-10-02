@@ -103,10 +103,48 @@ pub enum X402PaymentStatus {
     Failed,
 }
 
+/// Which connector produced a job row. Rows written before connectors were
+/// named are x402 jobs, so that is the stored default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorKind {
+    X402,
+    Crossmint,
+}
+
+impl ConnectorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::X402 => "x402",
+            Self::Crossmint => "crossmint",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "x402" => Some(Self::X402),
+            "crossmint" => Some(Self::Crossmint),
+            _ => None,
+        }
+    }
+}
+
+impl Default for ConnectorKind {
+    fn default() -> Self {
+        Self::X402
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct X402PaymentRecord {
     pub x402_payment_id: String,
     pub idempotency_key: String,
+    #[serde(default)]
+    pub connector: ConnectorKind,
+    /// The connector's own identifier for the thing being paid for: a Crossmint
+    /// order id. Absent for x402, whose identity is its resource URL.
+    #[serde(default)]
+    pub connector_reference: Option<String>,
     pub resource: String,
     pub payment_id: Option<String>,
     pub receipt_address: Option<String>,

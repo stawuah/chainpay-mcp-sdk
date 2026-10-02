@@ -9,7 +9,7 @@ It takes you from wallet setup to a payment receipt on Solana Devnet.
 | --- | --- |
 | Try or run the product | [Walkthrough](getting-started/try-chainpay.md) · [Local development](getting-started/local-development.md) · [Troubleshooting](getting-started/troubleshooting.md) |
 | Connect an agent or application | [MCP](guides/connect-an-agent.md) · [TypeScript SDK](guides/use-the-sdk.md) |
-| Accept payments | [Merchant integration](guides/merchant-integration.md) · [Trusted seller configuration](guides/trusted-sellers.md) |
+| Accept payments | [Merchant integration](guides/merchant-integration.md) · [Trusted seller configuration](guides/trusted-sellers.md) · [Ask for a spending permission](guides/request-a-permission.md) |
 | Understand the protocol | [Architecture](reference/architecture.md) · [Settlement](reference/settlement.md) · [Receipts](reference/receipts.md) |
 | Contribute or verify a change | [Contributing](../CONTRIBUTING.md) · [Coding agent instructions](../AGENTS.md) · [Acceptance runbook](project/local-e2e-testing.md) |
 

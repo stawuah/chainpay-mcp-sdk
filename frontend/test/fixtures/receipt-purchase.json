@@ -1,0 +1,31 @@
+{
+  "invoiceHash": "199b284ebe8458d18cfa68667496d9626423281bc9a5f23fd2c4980ff2c2b3ab",
+  "request": {
+    "payload": {
+      "version": 1,
+      "cluster": "devnet",
+      "merchant": "2iXtA8oeZqUU5pofxK971TCEvFGfems2AcDRaZHKD2pQ",
+      "invoice": "INV-2026-0142",
+      "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      "tokenProgram": "spl-token",
+      "recipient": "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx",
+      "amount": "4500000",
+      "decimals": 6,
+      "nonce": "fixture-nonce-0142",
+      "description": "Market data API, October usage",
+      "lineItems": [
+        {
+          "label": "API calls",
+          "amount": "4000000",
+          "quantity": "4000"
+        },
+        {
+          "label": "Priority support",
+          "amount": "500000",
+          "quantity": "1"
+        }
+      ]
+    },
+    "signature": "xJlQ8N1gDo5WM4gVmcdn/cnJl4HGreSB3ZrbF4qPlbH1tSqbgL+WmGSqegxQOnNt/0aXYYTZdBNCyjkKW0bKDg=="
+  }
+}

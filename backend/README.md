@@ -24,7 +24,7 @@ cargo test -p chainpay-backend
 ```
 
 Startup applies every bundled migration in `backend/migrations`, currently
-`0001` through `0008`. These change schema and remove obsolete simulation columns;
+`0001` through `0012`. These change schema and remove obsolete simulation columns;
 use a development database for local work. HTTP MCP must use the same database
 and starts after those tables exist. Normal startup requires PostgreSQL;
 in-memory storage is only for local tests.
@@ -71,7 +71,15 @@ Trusted seller identities are public configuration (see
 enters this service. A missing or invalid seller statement does not change Paid.
 The RPC proxy only forwards named read methods, bounds batches/history/body and
 response sizes, and restricts program discovery to ChainPay with owner/mandate
-filters (the asset registry uses its fixed account size).
+filters (the asset registry uses its fixed account size). Receipt discovery
+accepts both receipt sizes: 282 bytes, and 371 bytes for receipts that carry
+a policy snapshot.
+
+A payment whose receipt account already exists is refused before anything is
+reserved or sent, with HTTP 422 and `{"code":"DuplicateInvoice","error":"This
+invoice was already paid. Nothing new was submitted."}`. A simulation that
+reports the receipt account "already in use" is recorded with the same
+sentence.
 
 Private endpoints derive the principal from a verified bearer credential:
 
@@ -79,11 +87,41 @@ Private endpoints derive the principal from a verified bearer credential:
   mandate-bound enrollment signature; `mint` and `mandate_nonce` bind the future
   PDA to the owner before provisioning, and existing mandates must belong to owner.
 - `/v1/payments` and `/v1/managed-payments`: owned mandate and explicit
-  `execute_payment` permission, or `execute_x402_payment` for x402 submissions.
+  `execute_payment` permission, `execute_x402_payment` for x402 submissions,
+  or `execute_crossmint_payment` for Crossmint submissions.
 - `/v1/payments/:id`, `/v1/receipts/:address`: owned/scoped mandate and
-  `get_payment` or `wait_for_payment` permission.
+  `get_payment` or `wait_for_payment` permission. The receipt response adds
+  `policy`: the limits beside the receipt, with `source` `on-chain` (the
+  receipt's own snapshot), `relay-observed` (read from the mandate by this
+  relay after the receipt finalized, never stored on Solana), or
+  `not-recorded`. A receipt the relay never relayed returns its mandate and
+  `policy` only.
+- `/v1/receipts/:address/request`: **owner wallet session only**; scoped
+  connections and other wallets are refused. Returns the merchant-signed
+  request whose SHA-256 is the receipt's invoice hash, once that receipt is
+  settled on chain. The relay keeps it when `/v1/payments` or
+  `/v1/managed-payments` carries an optional `payment_request` that is signed
+  by its merchant, hashes to `invoice_hash`, and names the payment's mint,
+  recipient and amount.
 - `/v1/x402-payments/proof`: `mandate`, idempotency key and
   `execute_x402_payment` permission are required.
+- `/v1/crossmint-orders/proof`: confirmed settlement and
+  `execute_crossmint_payment` or `get_crossmint_payment` permission are required.
+  The relay ignores submitted proof/status/phase and fetches the stored order
+  from the fixed Crossmint staging origin using server-only `CROSSMINT_API_KEY`.
+  Only an identity-matched provider response advancing to `delivery` or
+  `completed` verifies the order; failures preserve settlement. Later reads
+  update order evidence without replacing the settled signature or receipt.
+- `PUT /v1/mandates/{pda}/request`: owner session only. Body is a signed
+  mandate request `{payload, signature}` (see `sdk/src/mandate-request.ts`).
+  The relay checks the requester signature and every field, then reads the
+  live mandate: it must be a ChainPay mandate owned by the session wallet, use
+  the request's mint, and for a budget request approve the request's agent.
+  Limits the owner changed are recorded in `differsFromRequest`, not refused.
+  First write wins; an exact retry returns the stored record, a different
+  request for the same mandate is 409. `GET` on the same path is owner-only
+  (404 for anyone else) because a request names a vendor, a PO and a payee.
+  Link expiry is checked by the app before the owner signs, not here.
 - `/v1/transactions/submit`: owner-only mandate create+exact delegate approval,
   update, pause or revoke, homogeneous owner-signed payment batches (up to four),
   and revoke-all (up to 32; wire-size bound still applies). Every instruction
@@ -129,3 +167,38 @@ restart drill.
 Codec availability was checked on 2026-09-15 with `cargo info solana-transaction@4.2.0`
 and `npm view @solana/transactions version`. See the [official Rust codec](https://docs.rs/solana-transaction/4.2.0/solana_transaction/versioned/struct.VersionedTransaction.html)
 and [Solana v1 examples](https://github.com/solana-foundation/transaction-v1-examples).
+
+## Crossmint order reservations
+
+New Crossmint operations default disabled (`CHAINPAY_CROSSMINT_ENABLED`). When
+enabled, they additionally require MCP's short-lived authenticated provider
+preparation, verified with the shared server-only
+`CHAINPAY_CROSSMINT_AUTH_SECRET` (at least 32 characters). The authorization
+binds the owner, mandate, agent, invoice, order and exact transfer terms before
+initial reservation. Existing immutable-operation recovery does not require
+minting a replacement authorization. See the MCP README for acceptance limits.
+
+Before signing or broadcasting, the relay atomically binds an order ID within
+the authenticated owner's namespace to one payment idempotency key. This uses
+the durable `operation_claims` table, so concurrent requests and separate relay
+instances cannot reserve the same owner's order under different mandates.
+The immutable payment intent is reserved before its order claim. If two fresh
+payment keys compete for one order, the losing payment reservation may remain
+prepared, but it cannot sign or broadcast while the winning order claim exists.
+Caller-provided order IDs cannot block another owner's orders. This is local
+ChainPay deduplication, not proof of ownership or settlement at Crossmint.
+
+Claims remain reserved after errors and failed status records. Recover the
+original operation; do not submit a fresh key after an uncertain outcome.
+Historical connector rows also block replacement operations during upgrade.
+There is deliberately no automatic release or force-retry endpoint, even for a
+failed operation. If the original operation cannot be recovered, resolving the
+reservation requires operator investigation of authoritative settlement evidence;
+this release process is not implemented by the connector.
+Verified x402 proofs remain immutable; Crossmint order observations can advance
+from payment through delivery to completed without changing settlement proof.
+
+The ignored `postgres_crossmint_claims_and_phase_updates_survive_reconnect` test
+uses the same isolated `TEST_DATABASE_URL` fixture as the auth persistence test.
+It checks claims across independent pools, owner isolation, connector listing
+SQL, phase updates, legacy-route rejection, and persistence across reconnects.

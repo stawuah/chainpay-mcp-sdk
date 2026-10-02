@@ -23,13 +23,81 @@ export type CurrentMandateFields = {
   maxPaymentCount: string;
   cooldownSlots: string;
   expiresAtSlot: string;
+  /**
+   * Exact base units for the today check. Optional so an older cached view
+   * without them reads as "not checked" instead of a guessed comparison.
+   */
+  baseUnits?: {
+    maxPerPayment: string;
+    totalLimit: string;
+    amountSpent: string;
+  };
 };
+
+/** Mandate limits beside a receipt, as exact base-unit and slot strings. */
+export type PolicyLimitsView = {
+  maxPerPayment: string;
+  totalLimit: string;
+  amountSpentAfter: string;
+  paymentCountAfter: string;
+  /** "0" means no payment-count cap. */
+  maxPaymentCount: string;
+  expiresAtSlot: string;
+  cooldownSlots: string;
+};
+
+/**
+ * Where the "Spending permission at payment" limits came from.
+ * - on-chain: the program wrote them into the receipt account.
+ * - relay-observed: the ChainPay relay read the mandate after the payment.
+ *   Not stored on Solana; may already count later payments.
+ * - not-recorded: neither exists. Only today's limits can be shown.
+ */
+export type PolicyAtPaymentView =
+  | { source: "on-chain"; limits: PolicyLimitsView }
+  | { source: "relay-observed"; limits: PolicyLimitsView; observedAtSlot: string; includesLaterPayments: boolean }
+  | { source: "not-recorded" };
+
+export type PurchaseMismatch = "amount" | "mint" | "recipient";
+
+export type PurchaseLineItemView = {
+  label: string;
+  /** Already formatted in token units, or labeled base units. */
+  amount?: string;
+  quantity?: string;
+};
+
+/**
+ * What a merchant-signed request says was bought, after it was checked
+ * against this receipt's invoice hash and the seller's signature.
+ * - none: nothing verifiable. The Order match section is omitted.
+ * - verified: signature and hash match. `via` says where the request came
+ *   from: the owner's own relay session, or an audit link the owner shared.
+ * - failed: a request was offered but did not verify. Nothing from it shows.
+ */
+export type PurchaseProofState =
+  | { status: "none" }
+  | {
+      status: "verified";
+      via: "owner" | "link";
+      merchant: string;
+      invoice: string;
+      description?: string;
+      lineItems?: PurchaseLineItemView[];
+      mismatches: PurchaseMismatch[];
+      /** base64url fragment value the owner can share. Owner only. */
+      shareFragment?: string;
+    }
+  | { status: "failed"; via: "owner" | "link"; reason: string };
 
 export type SellerStatementState =
   | { status: "absent" }
   | { status: "valid"; contentHash: string; servedAt: string; seller: string; publishedAt?: string }
   | { status: "invalid"; reason: string }
-  | { status: "unavailable"; reason: string };
+  | { status: "unavailable"; reason: string }
+  // Crossmint is the seller for a Crossmint order, so its order status takes the
+  // seller slot. It is Crossmint's report, never ChainPay verification.
+  | { status: "crossmint"; phase: string; refunded: boolean; reportedAt?: string };
 
 export type ReceiptValidationCode =
   | "wrong_owner"
@@ -58,6 +126,10 @@ export type ReceiptView = {
   tokenLabel: string;
   currentMandate: CurrentMandateView;
   seller: SellerStatementState;
+  /** Absent on older cached views; read as not-recorded. */
+  policy?: PolicyAtPaymentView;
+  /** Slot when the receipt was read, for expiry checks and date estimates. */
+  currentSlot?: string;
 };
 
 export type PublicReceiptPageState =
@@ -116,7 +188,49 @@ export function formatMandatePaymentCount(paymentCount: string, maxPaymentCount:
   return maxPaymentCount === "0" ? `${paymentCount} · Unlimited` : `${paymentCount} / ${maxPaymentCount}`;
 }
 
+function reportedAtLabel(reportedAt: string | undefined): string {
+  if (!reportedAt) return "";
+  const date = new Date(reportedAt);
+  if (Number.isNaN(date.getTime())) return "";
+  return ` at ${date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
+}
+
+function crossmintStamp(seller: Extract<SellerStatementState, { status: "crossmint" }>): ReceiptStamp {
+  // A refunded order is still "completed" to Crossmint, so the refund wins.
+  if (seller.refunded) {
+    return {
+      key: "seller",
+      label: "Crossmint reports a refund",
+      detail: "Paid on Solana is unchanged. ChainPay cannot confirm the refund reached your wallet.",
+      tone: "unknown",
+    };
+  }
+  if (seller.phase === "completed") {
+    return {
+      key: "seller",
+      label: "Crossmint reports order complete",
+      detail: `Reported by Crossmint${reportedAtLabel(seller.reportedAt)}. Not checked on Solana.`,
+      tone: "neutral",
+    };
+  }
+  if (seller.phase === "payment" || seller.phase === "delivery") {
+    return {
+      key: "seller",
+      label: "Waiting for Crossmint",
+      detail: "Payment is on Solana. Crossmint has not reported the order complete.",
+      tone: "neutral",
+    };
+  }
+  return {
+    key: "seller",
+    label: "No Crossmint statement",
+    detail: "Crossmint has not reported on this order.",
+    tone: "neutral",
+  };
+}
+
 export function sellerStamp(seller: SellerStatementState): ReceiptStamp {
+  if (seller.status === "crossmint") return crossmintStamp(seller);
   if (seller.status === "valid") {
     return {
       key: "seller",
@@ -154,7 +268,7 @@ export function receiptStamps(receipt: ReceiptView): ReceiptStamp[] {
     {
       key: "allowed",
       label: "Allowed",
-      detail: "The program accepted this payment under the mandate.",
+      detail: allowedStampDetail(receipt.policy),
       tone: "yes",
     },
     {
@@ -245,4 +359,349 @@ export function failureCopy(state: Exclude<PublicReceiptPageState, { kind: "veri
     title: "This account is not a verified ChainPay receipt.",
     body: state.reason,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Spending permission at payment
+// ---------------------------------------------------------------------------
+
+/** Rough Solana slot time, only for "≈ date" labels. Never for a check. */
+export const APPROX_SECONDS_PER_SLOT = 0.4;
+
+function isUnsigned(value: string | undefined): value is string {
+  return typeof value === "string" && /^\d+$/.test(value);
+}
+
+/**
+ * Exact token units for a visible line: "4.50 USDC", "5 USDC", "4.500001 USDC".
+ * Whole amounts drop the decimals; fractional amounts keep at least two places
+ * and every significant digit. Unknown decimals stay labeled base units.
+ * Pure bigint/string arithmetic; never Number.
+ */
+export function formatTokenUnits(baseUnits: string, decimals: number | null, token: string): string {
+  if (!isUnsigned(baseUnits)) return `${baseUnits} base units`;
+  if (decimals === null || !Number.isInteger(decimals) || decimals < 0) {
+    return `${BigInt(baseUnits).toString()} base units`;
+  }
+  const value = BigInt(baseUnits);
+  if (decimals === 0) return `${value.toString()} ${token}`;
+  const scale = 10n ** BigInt(decimals);
+  const whole = value / scale;
+  const fraction = (value % scale).toString().padStart(decimals, "0").replace(/0+$/, "");
+  if (!fraction) return `${whole.toString()} ${token}`;
+  return `${whole.toString()}.${fraction.padEnd(2, "0")} ${token}`;
+}
+
+function tokenUnits(receipt: ReceiptView, baseUnits: string): string {
+  return formatTokenUnits(baseUnits, receipt.amount.decimals, receipt.tokenLabel);
+}
+
+/**
+ * "Oct 30, 2026" for a slot, estimated from the slot read with the receipt.
+ * Null when there is no reference slot or the date would be out of range.
+ */
+export function estimateSlotDate(
+  slot: string,
+  currentSlot: string | undefined,
+  nowMs: number,
+  secondsPerSlot = APPROX_SECONDS_PER_SLOT,
+): string | null {
+  if (!isUnsigned(slot) || !isUnsigned(currentSlot)) return null;
+  // Slot distances, not amounts: Number is fine here and the result is labeled approximate.
+  const deltaSlots = Number(BigInt(slot) - BigInt(currentSlot));
+  const when = new Date(nowMs + deltaSlots * secondsPerSlot * 1000);
+  if (!Number.isFinite(deltaSlots) || Number.isNaN(when.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(when);
+  } catch {
+    return null;
+  }
+}
+
+export const POLICY_SOURCE_CAPTION: Record<PolicyAtPaymentView["source"], string> = {
+  "on-chain": "Recorded on Solana at payment",
+  "relay-observed": "Seen by the ChainPay relay after payment, not stored on Solana",
+  "not-recorded": "Not recorded for this receipt. Showing today’s limits.",
+};
+
+export type PolicyAtPaymentDisplay = {
+  source: PolicyAtPaymentView["source"];
+  caption: string;
+  /** Plain lines in token units. Empty for not-recorded. */
+  rows: string[];
+};
+
+export function policyAtPayment(receipt: ReceiptView, nowMs = Date.now()): PolicyAtPaymentDisplay {
+  const policy = receipt.policy ?? { source: "not-recorded" as const };
+  if (policy.source === "not-recorded") {
+    return { source: policy.source, caption: POLICY_SOURCE_CAPTION[policy.source], rows: [] };
+  }
+  const limits = policy.limits;
+  const rows = [
+    `${tokenUnits(receipt, receipt.amount.baseUnits)} ≤ ${tokenUnits(receipt, limits.maxPerPayment)} per payment`,
+  ];
+  // A relay read taken after a later payment counts that payment too. Leave
+  // the running totals out rather than show numbers this payment never had.
+  const laterPaymentsCounted = policy.source === "relay-observed" && policy.includesLaterPayments;
+  if (!laterPaymentsCounted) {
+    rows.push(`${formatTokenUnits(limits.amountSpentAfter, receipt.amount.decimals, "")
+      .trim()} of ${tokenUnits(receipt, limits.totalLimit)} used after this payment`);
+    if (isUnsigned(limits.maxPaymentCount) && limits.maxPaymentCount !== "0") {
+      rows.push(`Payment ${limits.paymentCountAfter} of ${limits.maxPaymentCount}`);
+    }
+  }
+  const expiry = estimateSlotDate(limits.expiresAtSlot, receipt.currentSlot, nowMs);
+  rows.push(expiry ? `Paid before expiry (≈ ${expiry})` : "Paid before expiry");
+  return { source: policy.source, caption: POLICY_SOURCE_CAPTION[policy.source], rows };
+}
+
+export function allowedStampDetail(policy: PolicyAtPaymentView | undefined): string {
+  if (!policy || policy.source === "not-recorded") {
+    return "The program accepted this payment under this spending permission. Its limits at payment were not recorded for this receipt.";
+  }
+  return "The program accepted this payment under this spending permission. See Spending permission at payment for the limits it met.";
+}
+
+export type TodayCheck =
+  | { status: "within"; line: string }
+  | { status: "blocked"; reason: string; line: string }
+  | { status: "unknown"; line: string };
+
+/**
+ * Would this amount pass the mandate as it is today? Compares exact base
+ * units with the current mandate. Cooldown is left out: it depends on when
+ * the next payment is sent, not on the permission.
+ */
+export function todayCheck(receipt: ReceiptView): TodayCheck {
+  const current = receipt.currentMandate;
+  const unknown: TodayCheck = { status: "unknown", line: "If paid today: not checked. Today’s limits could not be read." };
+  if (current.status !== "present") return unknown;
+  const fields = current.fields;
+  const amount = receipt.amount.baseUnits;
+  const blocked = (reason: string): TodayCheck => ({ status: "blocked", reason, line: `If paid today: blocked — ${reason}` });
+  if (fields.revoked || fields.status === "revoked") return blocked("the spending permission was revoked");
+  if (fields.paused || fields.status === "paused") return blocked("the spending permission is paused");
+  const expiredBySlot = isUnsigned(receipt.currentSlot) && isUnsigned(fields.expiresAtSlot)
+    && BigInt(receipt.currentSlot) >= BigInt(fields.expiresAtSlot);
+  if (fields.status === "expired" || expiredBySlot) return blocked("the spending permission has expired");
+  const base = fields.baseUnits;
+  if (!base || !isUnsigned(amount) || !isUnsigned(base.maxPerPayment) || !isUnsigned(base.totalLimit) || !isUnsigned(base.amountSpent)) {
+    return unknown;
+  }
+  if (BigInt(amount) > BigInt(base.maxPerPayment)) {
+    return blocked(`${tokenUnits(receipt, amount)} is over today’s ${tokenUnits(receipt, base.maxPerPayment)} per-payment limit`);
+  }
+  if (isUnsigned(fields.maxPaymentCount) && fields.maxPaymentCount !== "0" && isUnsigned(fields.paymentCount)
+    && BigInt(fields.paymentCount) >= BigInt(fields.maxPaymentCount)) {
+    return blocked(`all ${fields.maxPaymentCount} payments have been used`);
+  }
+  const spent = BigInt(base.amountSpent);
+  const total = BigInt(base.totalLimit);
+  if (spent + BigInt(amount) > total) {
+    const left = total > spent ? total - spent : 0n;
+    return blocked(`only ${tokenUnits(receipt, left.toString())} of the ${tokenUnits(receipt, base.totalLimit)} allowance is left`);
+  }
+  return { status: "within", line: "If paid today: within limits" };
+}
+
+// ---------------------------------------------------------------------------
+// Order match: order · invoice · payment
+// ---------------------------------------------------------------------------
+
+/**
+ * Who is reading. "owner" is the signed-in owner's dashboard. "link" is
+ * /verify opened from an audit link whose request verified. "public" is
+ * anyone else, who never sees request content.
+ */
+export type OrderMatchAudience = "owner" | "link" | "public";
+
+/**
+ * Matched: an order, a seller-signed invoice and the payment agree (for a
+ * budget request: the order and the payment). Payee differs: the payment went
+ * to someone other than the order or invoice names. No invoice: an order but
+ * no verified invoice for this payment. No order: no linked order.
+ * Invoice differs: the signed invoice amount or token differs from the payment.
+ * Acceptance unverified: matching proposal supplied in a public fragment.
+ * Matched is a check made by ChainPay, not a guarantee from Solana.
+ */
+export type OrderMatchPill = "Matched" | "Payee differs" | "Invoice differs" | "Acceptance unverified" | "No invoice" | "No order";
+
+export type OrderMatchRow = {
+  key: "order" | "invoice" | "invoice-mismatch" | "payee" | "payment";
+  tone: "yes" | "no";
+  text: string;
+};
+
+/**
+ * A signed purchase order or budget request with compatible receipt fields.
+ * - owner: acceptance association read from the relay with the owner's session.
+ * - link: supplied in an audit link; owner acceptance is not authenticated.
+ * `payeeMatches` is null for a budget request, where the payee is open.
+ */
+export type OrderLinkState =
+  | { status: "none" }
+  | {
+      status: "linked";
+      via: "owner" | "link";
+      role: "vendor" | "grantee";
+      requester: string;
+      requesterName?: string;
+      poNumber?: string;
+      description: string;
+      expectedPayee?: string;
+      payeeMatches: boolean | null;
+      /** base64url fragment value the owner can share. Owner only. */
+      shareFragment?: string;
+    }
+  | { status: "failed"; via: "owner" | "link"; reason: string };
+
+export type OrderMatchDisplay = {
+  pill: OrderMatchPill;
+  rows: OrderMatchRow[];
+  /** Request content. Present only for the owner or a verified audit link. */
+  details?: {
+    invoice?: string;
+    description?: string;
+    lineItems?: PurchaseLineItemView[];
+    poNumber?: string;
+    orderDescription?: string;
+    expectedPayee?: string;
+  };
+  canShareDetails: boolean;
+};
+
+const MISMATCH_WORD: Record<PurchaseMismatch, string> = {
+  amount: "amount",
+  mint: "token",
+  recipient: "payee",
+};
+
+function shortRequester(value: string): string {
+  return value.length < 12 ? value : `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+/** "Purchase order PO-1042 from Acme Data (name not verified)". */
+export function orderRowText(order: Extract<OrderLinkState, { status: "linked" }>): string {
+  const from = order.requesterName ? `${order.requesterName} (name not verified)` : shortRequester(order.requester);
+  if (order.role === "grantee") return `Budget request from ${from}`;
+  return `Purchase order${order.poNumber ? ` ${order.poNumber}` : ""} from ${from}`;
+}
+
+function invoiceRows(purchase: PurchaseProofState | undefined, showContent: boolean): OrderMatchRow[] {
+  if (!purchase || purchase.status === "none") return [];
+  if (purchase.status === "failed") {
+    return [{ key: "invoice", tone: "no", text: `Invoice not verified: ${purchase.reason}. Nothing from it is shown.` }];
+  }
+  const rows: OrderMatchRow[] = [
+    { key: "invoice", tone: "yes", text: showContent ? "Invoice signed by seller" : "Invoice signed by seller · details private" },
+  ];
+  if (purchase.mismatches.length) {
+    const words = purchase.mismatches.map((item) => MISMATCH_WORD[item]).join(", ");
+    rows.push({ key: "invoice-mismatch", tone: "no", text: `This payment’s ${words} differs from the invoice` });
+  }
+  return rows;
+}
+
+/**
+ * The Order match section, or null when there is nothing verifiable to show.
+ * Without a linked order the pill is "No order" unless the payment went to a
+ * different payee than the invoice named. A public reader without an audit
+ * link sees no order content and no order-based pill.
+ */
+export function orderMatch(
+  purchase: PurchaseProofState | undefined,
+  audience: OrderMatchAudience,
+  order?: OrderLinkState,
+): OrderMatchDisplay | null {
+  const linked = order?.status === "linked" ? order : null;
+  const orderVisible = Boolean(linked) && (audience === "owner" || (audience === "link" && linked!.via === "link"));
+  const purchaseShows = Boolean(purchase && purchase.status !== "none" && !(purchase.status === "failed" && audience === "public"));
+  const orderFailed = order?.status === "failed" && audience !== "public" ? order : null;
+  if (!orderVisible && !purchaseShows && !orderFailed) return null;
+
+  const showContent = audience === "owner"
+    || (audience === "link" && ((purchase?.status !== "none" && purchase?.via === "link") || (linked?.via === "link")));
+  const purchaseContent = audience === "owner" || (audience === "link" && purchase?.status === "verified" && purchase.via === "link");
+  const rows: OrderMatchRow[] = [];
+  let pill: OrderMatchPill;
+
+  if (orderVisible && linked) {
+    rows.push({ key: "order", tone: "yes", text: orderRowText(linked) });
+    rows.push(...invoiceRows(purchase, purchaseContent));
+    const invoicePayeeDiffers = purchase?.status === "verified" && purchase.mismatches.includes("recipient");
+    if (linked.role === "vendor") {
+      const payeeDiffers = linked.payeeMatches === false || invoicePayeeDiffers;
+      rows.push(payeeDiffers
+        ? { key: "payee", tone: "no", text: "Paid to a different payee than the order names" }
+        : { key: "payee", tone: "yes", text: "Paid to the order’s payee" });
+      rows.push({ key: "payment", tone: "yes", text: "Paid on Solana" });
+      pill = payeeDiffers ? "Payee differs" : purchase?.status === "verified" ? "Matched" : "No invoice";
+    } else {
+      rows.push({ key: "payment", tone: "yes", text: "Paid on Solana" });
+      pill = "Matched";
+    }
+  } else {
+    if (orderFailed) rows.push({ key: "order", tone: "no", text: `Order not verified: ${orderFailed.reason}. Nothing from it is shown.` });
+    rows.push(...invoiceRows(purchase, purchaseContent));
+    rows.push({ key: "payment", tone: "yes", text: "Paid on Solana" });
+    pill = purchase?.status === "verified" && purchase.mismatches.includes("recipient") ? "Payee differs" : "No order";
+  }
+
+  // A valid invoice signature/hash does not establish agreement on its terms.
+  if (purchase?.status === "verified" && purchase.mismatches.some((field) => field === "amount" || field === "mint")) {
+    pill = "Invoice differs";
+  }
+  // A requester signature authenticates a proposal, not the owner's acceptance.
+  if (orderVisible && linked?.via === "link" && pill === "Matched") pill = "Acceptance unverified";
+
+  const details: NonNullable<OrderMatchDisplay["details"]> = {};
+  if (purchaseContent && purchase?.status === "verified") {
+    details.invoice = purchase.invoice;
+    if (purchase.description) details.description = purchase.description;
+    if (purchase.lineItems?.length) details.lineItems = purchase.lineItems;
+  }
+  if (orderVisible && linked && showContent) {
+    if (linked.poNumber) details.poNumber = linked.poNumber;
+    details.orderDescription = linked.description;
+    if (linked.expectedPayee) details.expectedPayee = linked.expectedPayee;
+  }
+  const purchaseShare = purchase?.status === "verified" && purchase.via === "owner" && Boolean(purchase.shareFragment);
+  const orderShare = Boolean(linked && linked.via === "owner" && linked.shareFragment);
+  return {
+    pill,
+    rows,
+    ...(Object.keys(details).length ? { details } : {}),
+    canShareDetails: audience === "owner" && (purchaseShare || orderShare),
+  };
+}
+
+/**
+ * `/verify/<pda>#purchase=<invoice>&order=<request>`: request content travels
+ * only in the fragment, which never reaches a server. Either part is optional.
+ */
+export function purchaseAuditPath(receiptPda: string, purchaseFragment?: string, orderFragment?: string): string {
+  const parts = [
+    ...(purchaseFragment ? [`purchase=${purchaseFragment}`] : []),
+    ...(orderFragment ? [`order=${orderFragment}`] : []),
+  ];
+  return parts.length ? `${publicReceiptPath(receiptPda)}#${parts.join("&")}` : publicReceiptPath(receiptPda);
+}
+
+function fragmentValue(hash: string, name: string): string | null {
+  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+  for (const part of raw.split("&")) {
+    const [key, value] = part.split("=");
+    if (key === name && value) return value;
+  }
+  return null;
+}
+
+/** The `purchase=` value from a location hash, or null when there is none. */
+export function purchaseFragmentFromHash(hash: string): string | null {
+  return fragmentValue(hash, "purchase");
+}
+
+/** The `order=` value (a signed mandate request) from a location hash, or null. */
+export function orderFragmentFromHash(hash: string): string | null {
+  return fragmentValue(hash, "order");
 }

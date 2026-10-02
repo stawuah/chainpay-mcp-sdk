@@ -16,7 +16,10 @@
     "test:dashboard-nav-browser": "node test/dashboard-nav.browser.mjs",
     "test:live-purchase-browser": "node test/live-purchase.browser.mjs",
     "test:record-details-scope-browser": "node test/record-details-scope.browser.mjs",
-    "test:browser": "npm run test:landing-browser && npm run test:landing-motion-browser && npm run test:permission-browser && npm run test:verify-public-browser && npm run test:dashboard-nav-browser && npm run test:live-purchase-browser && npm run test:record-details-scope-browser",
+    "test:receipts-owner-browser": "node test/receipts-owner.browser.mjs",
+    "test:permission-request-browser": "node test/permission-request.browser.mjs",
+    "test:browser": "npm run test:landing-browser && npm run test:landing-motion-browser && npm run test:permission-browser && npm run test:verify-public-browser && npm run test:dashboard-nav-browser && npm run test:live-purchase-browser && npm run test:record-details-scope-browser && npm run test:receipts-owner-browser && npm run test:permission-request-browser && npm run test:crossmint-browser",
+    "test:crossmint-browser": "node test/crossmint-inbox.browser.mjs",
     "test:owner-onboarding-browser": "node test/owner-onboarding.browser.mjs",
     "test:dashboard-owner": "node test/dashboard-owner.browser.mjs"
   },
@@ -42,11 +45,14 @@
     "@vitejs/plugin-react": "^4.6.0",
     "esbuild": "^0.28.1",
     "jsdom": "^30.0.1",
-    "playwright": "^1.49.1",
+    "playwright": "^1.63.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   },
   "overrides": {
     "nanoid": "3.3.18"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

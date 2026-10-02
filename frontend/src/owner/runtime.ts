@@ -9,6 +9,8 @@ import { tokenProgramAccountType } from "./tokenAccounts";
 import { settlementKey } from "./settlementKey";
 import { assetOrder, knownAsset } from "../config/knownAssets";
 
+import type { PermissionRequestRecord } from "../requests/permissionRequest";
+
 export type Action = "Send" | "Receive" | "Approve mandate" | "Receipts";
 export type Range = "1H" | "1D" | "1W" | "1M" | "1Y" | "All";
 
@@ -137,6 +139,8 @@ export type AgentApproval = {
   tokenAccount?: string;
   mint?: string;
   payment?: Record<string, unknown>;
+  crossmint?: CrossmintRequest;
+  continuation?: { tool: "execute_crossmint_payment"; arguments: Record<string, unknown> };
   transaction?: {
     feePayer?: string;
     requiredSigners?: string[];
@@ -159,7 +163,7 @@ export type AgentOutcome = {
   receiptUrl?: string;
 };
 export type AgentCheck = {
-  key: "limits" | "token" | "recipient" | "expiry" | "policy";
+  key: "limits" | "token" | "recipient" | "expiry" | "policy" | "crossmint_quote" | "crossmint_order";
   label: string;
   status: "pass" | "fail" | "missing" | "pending";
   detail: string;
@@ -169,12 +173,30 @@ export type AgentRequirements = {
   missing: string[];
   checks: AgentCheck[];
 };
-export type AgentResponse = { message: string; toolCalls?: string[]; approval?: AgentApproval; outcome?: AgentOutcome; requirements?: AgentRequirements; error?: string };
+export type AgentResponse = { message: string; toolCalls?: string[]; approval?: AgentApproval; outcome?: AgentOutcome; requirements?: AgentRequirements; crossmint?: CrossmintRequest; error?: string };
 export type AgentInboxStage = "received" | "understood" | "mandate_prepared" | "policy_checked" | "needs_details" | "waiting_for_approval" | "approved" | "receipt_ready" | "blocked";
+/**
+ * A request that pays a Crossmint checkout order. Everything here is Crossmint's
+ * own statement about the order; whether money moved comes only from the receipt.
+ */
+export type CrossmintRequest = {
+  orderId: string;
+  itemLabel?: string;
+  /** Base units Crossmint quoted, when its quote could be read exactly. */
+  quotedAmount?: string;
+  quoteCheck?: "match" | "mismatch" | "unavailable";
+  /** Crossmint order phase: quote, payment, delivery or completed. */
+  phase?: string;
+  refunded?: boolean;
+  reportedAt?: string;
+  /** Why ChainPay refused to pay this order before anything was submitted. */
+  blockedReason?: "closed" | "already_paid";
+};
+
 export type AgentInboxItem = {
   id: string;
   createdAt: string;
-  source: "message" | "invoice" | "mandate";
+  source: "message" | "invoice" | "mandate" | "permission-request";
   title: string;
   prompt: string;
   response: string;
@@ -186,6 +208,9 @@ export type AgentInboxItem = {
   requirements?: AgentRequirements;
   error?: string;
   archivedAt?: string;
+  crossmint?: CrossmintRequest;
+  /** Only for source "permission-request": the signed ask and what became of it. */
+  permissionRequest?: PermissionRequestRecord;
 };
 
 export { archiveInboxItem, isInboxItemArchived, restoreInboxItem } from "./inboxArchive";
@@ -270,6 +295,11 @@ export const coreToolReferences = [
   {
     name: "list_receipts",
     description: "List recent on-chain receipts for the connected wallet or one permission.",
+    inputSchema: { type: "object", properties: { owner: { type: "string" }, mandate: { type: "string" }, limit: { type: "string" } }, additionalProperties: false },
+  },
+  {
+    name: "export_receipts",
+    description: "Export receipts as one CSV, with the source of each receipt's limits.",
     inputSchema: { type: "object", properties: { owner: { type: "string" }, mandate: { type: "string" }, limit: { type: "string" } }, additionalProperties: false },
   },
   {
@@ -402,7 +432,7 @@ function unresolvedPayment(operation: Operation, reason: string, first?: Settlem
 }
 
 export async function callMcpTool(name: string, args: Record<string, unknown>) {
-  if (name !== "execute_payment" || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
+  if (!["execute_payment", "execute_crossmint_payment"].includes(name) || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
   const operation = await beginSettlement(BACKEND_URL, "payments", settlementKey(String(args.mandate), String(args.invoiceHash)), typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
   let result: McpToolResponse;
   try { result = await mcpRequest<McpToolResponse>("tools/call", { name, arguments: args }, operation); }
@@ -413,7 +443,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
   const first = result.structuredContent as Settlement | undefined;
   if (first?.payment_id !== operation.id) {
     const details = result.structuredContent as { action?: string; httpStatus?: number } | undefined;
-    const rejectedBeforeRelay = ["rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String(details?.action));
+    const rejectedBeforeRelay = ["crossmint_rejected_before_submission", "rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String(details?.action));
     const rejectedByRelay = ["backend_rejected", "managed_backend_rejected"].includes(String(details?.action)) && [400, 401, 403, 404, 422].includes(Number(details?.httpStatus));
     if (result.isError && (rejectedBeforeRelay || rejectedByRelay)) {
       rejectBeforeSubmission(operation, toolFailureReason(result));

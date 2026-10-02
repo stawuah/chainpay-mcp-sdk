@@ -1402,6 +1402,9 @@ h1 em, h2 em { color: var(--blue); font-style: normal; }
 .purchase-card-heading h3 { margin-top: 6px; color: var(--ink); font-size: 15px; font-weight: 600; line-height: 1.4; }
 .purchase-card-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 0; }
 .purchase-card-facts div { display: grid; gap: 4px; }
+/* Official seller mark, kept small so it never outranks the amount or Paid. */
+.purchase-card-facts .purchase-card-brand { display: flex; align-items: center; min-height: 20px; }
+.purchase-card-facts .purchase-card-brand img { height: 16px; width: auto; display: block; }
 .purchase-card-facts dt { color: var(--muted); font: 600 9px var(--mono); letter-spacing: .08em; }
 .purchase-card-facts dd { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; }
 .purchase-card-limit { margin: 0; color: var(--body); font-size: 12px; line-height: 1.5; }

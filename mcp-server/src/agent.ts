@@ -18,6 +18,7 @@ const AGENT_TOOL_NAMES = new Set([
   "get_asset",
   "prepare_token_accounts",
   "list_receipts",
+  "export_receipts",
   "get_payment",
   "create_demo_payment_request",
   "verify_payment_request",
@@ -27,6 +28,9 @@ const AGENT_TOOL_NAMES = new Set([
   "prepare_payment",
   "execute_payment",
   "execute_x402_payment",
+  "prepare_crossmint_payment",
+  "execute_crossmint_payment",
+  "get_crossmint_payment",
   "create_mandate",
 ]);
 const MAX_TOOL_ROUNDS = 6;
@@ -71,6 +75,7 @@ export type ChainPayAgentResponse = {
   approval?: ChainPayAgentApproval;
   outcome?: NormalizedOutcome;
   requirements?: ChainPayAgentRequirements;
+  crossmint?: Record<string, unknown>;
 };
 
 export type ChainPayAgentCheck = {
@@ -91,6 +96,7 @@ const agentInstructions = `You are the ChainPay assistant inside the user's conn
 ChainPay is a policy-controlled Solana payment rail. Be concise, clear, and friendly; your answer may be read aloud by a browser. Use the available tools to inspect live ChainPay state when that will answer the user's question. Speak as a capable ChainPay assistant, not as a generic language model.
 
 Safety rules:
+- Crossmint is staging-only and disabled until operator acceptance. Use prepare_crossmint_payment for an existing order. Set preparePayer only if the owner explicitly asks to configure the payer; never as an automatic retry. Execute only after explicit payment intent, with the returned expectedTerms and signing mode. Resume using the original paymentId and get_crossmint_payment; payment confirmation does not establish delivery.
 - You may inspect state and prepare demo requests or owner approval transactions. You may not sign owner transactions, pause, revoke, or update anything. execute_payment requires signingMode. Use human for an owner-wallet mandate and delegated only for an already provisioned automatic-payment mandate.
 - A create_mandate result is only a prepared request. Say that I prepared it and that the owner wallet must still approve it.
 - Never claim a mandate was created until the owner wallet approval flow reports success. Never claim a payment settled until execute_payment confirms it or the wallet approval flow reports success.
@@ -106,7 +112,8 @@ Safety rules:
 - For “my mandate” or “active mandate”, use the mandate address in the session context.
 - Automatic-payment mandates must be created from the dashboard, which provisions and binds the secure provider wallet. Never ask a user to paste a signer public key and never invent one. For a human-approval mandate, the owner wallet is the approved agent.
 - If the session includes a connected wallet but no mandate address, call get_spend_overview first. Fall back to list_mandates if that tool is unavailable. For a signed invoice, call find_compatible_mandate with the same wallet, the verified mint, amount, and token program before quoting.
-- For spend, remaining allowance, or what the agent spent, call get_spend_overview. For receipt history, call list_receipts. Ask for a receipt address only when looking up one payment.
+- For spend, remaining allowance, or what the agent spent, call get_spend_overview. For receipt history, call list_receipts. To download or reconcile receipts, call export_receipts. Ask for a receipt address only when looking up one payment.
+- When execute_payment settles a verified signed invoice, pass the same complete signed request in its request field so the receipt keeps what was bought.
 - If a tool says data was not found, say that plainly and suggest the next safe dashboard step.
 - Use human-readable explanations and do not expose internal chain-of-thought.
 - Token amounts are stored on-chain in base units. Prefer the tool's display.amounts values for user-facing answers: 10,000,000 base units with 6 decimals means 10 tokens, so say "10 PYUSD" when the display symbol is PYUSD. Never show a raw base-unit number as the main amount unless the user asks for technical details.
@@ -287,7 +294,7 @@ function approvalFromToolResult(result: unknown): ChainPayAgentApproval | undefi
   if (data.action === "token_account_signature_required") {
     return { kind: "token_account", ...data, action: String(data.action) };
   }
-  if (data.action === "agent_signature_required" || data.action === "x402_agent_signature_required") {
+  if (data.action === "agent_signature_required" || data.action === "x402_agent_signature_required" || data.action === "crossmint_agent_signature_required") {
     return { kind: "payment", ...data, action: String(data.action) };
   }
   return undefined;
@@ -451,6 +458,7 @@ export async function runChainPayAgent(
   let approval: ChainPayAgentApproval | undefined;
   let outcome: ChainPayAgentResponse["outcome"] | undefined;
   let requirements: ChainPayAgentRequirements | undefined;
+  let crossmint: Record<string, unknown> | undefined;
   const model = process.env.CHAINPAY_AGENT_MODEL ?? (
     provider === "openrouter" ? "openrouter/free" : "gpt-5-mini"
   );
@@ -492,6 +500,8 @@ export async function runChainPayAgent(
         approval = approvalFromToolResult(result) ?? approval;
         outcome = outcomeFromToolResult(result) ?? outcome;
         requirements = requirementsFromToolResult(result) ?? requirements;
+        const connector = (result as { structuredContent?: { crossmint?: Record<string, unknown> } })?.structuredContent?.crossmint;
+        if (connector && typeof connector.orderId === "string") crossmint = connector;
         if (requirements?.status === "needs_details") outcome = { kind: "details_required" };
         output = toolOutput(result);
       }
@@ -520,5 +530,6 @@ export async function runChainPayAgent(
     ...(approval ? { approval } : {}),
     ...(outcome ? { outcome } : {}),
     ...(requirements ? { requirements } : {}),
+    ...(crossmint ? { crossmint } : {}),
   };
 }

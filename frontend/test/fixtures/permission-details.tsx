@@ -13,6 +13,7 @@ import { chainpayClient } from "../../src/config/client";
 
 chainpayClient.connection.getAccountInfo = async () => null;
 chainpayClient.getCurrentSlot = async () => 420000000n;
+chainpayClient.getPaymentsByMandate = async () => [];
 chainpayClient.getMintDecimals = async () => { throw new Error("Metadata unavailable fixture"); };
 chainpayClient.connection.getRecentPerformanceSamples = async () => [];
 const owner = "11111111111111111111111111111111";

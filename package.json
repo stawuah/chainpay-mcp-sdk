@@ -20,17 +20,30 @@
     "bootstrap:devnet": "npm --prefix sdk run build && node scripts/bootstrap-devnet.mjs",
     "verify:devnet": "npm --prefix sdk run build && node scripts/verify-devnet.mjs",
     "verify:stack": "node scripts/verify-live-stack.mjs",
-    "check": "npm run check:sdk && npm run check:mcp && npm run check:merchant && npm run check:app && npm run check:frontend"
+    "check": "npm run check:sdk && npm run check:mcp && npm run check:merchant && npm run check:app && npm run check:frontend",
+    "check:convex": "tsc --noEmit -p convex/tsconfig.json",
+    "test:convex": "vitest run convex/storage.test.ts",
+    "test:migration": "node --test scripts/migrate-storage.test.mjs",
+    "stage:vercel": "node scripts/stage-vercel.mjs",
+    "test:migration:integration": "vitest run convex/migration.integration.test.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
+    "convex": "^1.46.0",
+    "lossless-json": "^4.3.1",
     "pg": "^8.16.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2"
+    "@types/node": "^26.1.2",
+    "convex-test": "^0.0.60",
+    "vitest": "^5.0.3"
   },
   "overrides": {
-    "qs": "6.16.0"
+    "qs": "6.16.0",
+    "rpc-websockets": "9.3.7"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

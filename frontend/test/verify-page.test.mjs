@@ -24,8 +24,8 @@ function stubReceiptLoadPlugin() {
   };
 }
 
-function installDom() {
-  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://chainpay.example/verify/InvalidPDA", pretendToBeVisual: true });
+function installDom(url = "https://chainpay.example/verify/InvalidPDA") {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url, pretendToBeVisual: true });
   const { window } = dom;
   globalThis.window = window;
   globalThis.document = window.document;
@@ -144,4 +144,69 @@ test("public verify renders a mocked settled receipt without inventing delivery"
     await unlink(outfile).catch(() => {});
     dom.window.close();
   }
+});
+
+async function renderVerify(receiptPda, url) {
+  const outfile = join(frontendRoot, `test/.tmp-verify-page-${Date.now()}.mjs`);
+  await esbuild.build({
+    absWorkingDir: frontendRoot,
+    entryPoints: ["src/verify/VerifyPage.tsx"],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    jsx: "automatic",
+    outfile,
+    loader: { ".css": "empty" },
+    external: ["react", "react-dom", "react/jsx-runtime", "@chainpay/sdk"],
+    plugins: [stubReceiptLoadPlugin()],
+  });
+  const dom = installDom(url);
+  try {
+    const { VerifyPage } = await import(`${pathToFileURL(outfile).href}?t=${Date.now()}`);
+    const host = document.body.appendChild(document.createElement("div"));
+    const reactRoot = createRoot(host);
+    await act(async () => {
+      reactRoot.render(createElement(VerifyPage, { receiptPda }));
+    });
+    for (let attempt = 0; attempt < 20 && !/Order match|Spending permission at payment/.test(host.textContent ?? ""); attempt += 1) {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    }
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+    const text = host.textContent ?? "";
+    await act(async () => reactRoot.unmount());
+    return text;
+  } finally {
+    await unlink(outfile).catch(() => {});
+    dom.window.close();
+  }
+}
+
+const purchaseFixture = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(join(frontendRoot, "test/fixtures/receipt-purchase.json"), "utf8")));
+const V2_PDA = "3Rcpt2v2SnapshotFixture111111111111111111";
+
+test("public verify without an audit link shows limits at payment and no purchase claim", async () => {
+  const text = await renderVerify(V2_PDA, `https://chainpay.example/verify/${V2_PDA}`);
+  assert.match(text, /Spending permission at payment/);
+  assert.match(text, /Recorded on Solana at payment/);
+  assert.equal(text.includes("Order match"), false);
+  assert.equal(text.includes("Invoice signed by seller"), false);
+  assert.equal(text.includes("Market data API"), false);
+});
+
+test("public verify shows invoice details only after the audit link verifies", async () => {
+  const fragment = Buffer.from(JSON.stringify(purchaseFixture.request)).toString("base64url");
+  const text = await renderVerify(V2_PDA, `https://chainpay.example/verify/${V2_PDA}#purchase=${fragment}`);
+  assert.match(text, /Order match/);
+  assert.match(text, /Invoice signed by seller/);
+  assert.match(text, /Market data API, October usage/);
+  assert.match(text, /Details from the link you opened/);
+  assert.equal(text.includes("Share with details"), false);
+});
+
+test("public verify rejects an audit link for a different receipt and shows none of it", async () => {
+  const fragment = Buffer.from(JSON.stringify(purchaseFixture.request)).toString("base64url");
+  const text = await renderVerify("2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1", `https://chainpay.example/verify/2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1#purchase=${fragment}`);
+  assert.match(text, /Invoice not verified: it is not the invoice this receipt paid\. Nothing from it is shown\./);
+  assert.equal(text.includes("Market data API"), false);
+  assert.equal(text.includes("INV-2026-0142"), false);
 });

@@ -253,6 +253,14 @@ mod tests {
     }
 
     #[test]
+    fn reports_payment_count_overflow_as_a_count_limit() {
+        let mut mandate = valid_mandate();
+        mandate.payment_count = u64::MAX;
+        let error = validate_payment(&mandate, &valid_payment(), 100).unwrap_err();
+        assert_eq!(error, error!(ChainPayError::PaymentCountExceeded));
+    }
+
+    #[test]
     fn rejects_replay_identifiers_that_are_all_zeroes() {
         let mandate = valid_mandate();
         let mut payment = valid_payment();

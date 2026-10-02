@@ -1,5 +1,20 @@
 export const TOOL_DEFINITIONS = [
   {
+    name: "prepare_crossmint_payment",
+    description: "Read an existing Crossmint staging order, validate exact Devnet USDC terms and mandate limits, and prepare a ChainPay transaction for review. Disabled until provider acceptance. preparePayer changes provider metadata only with explicit owner intent; it never pays.",
+    inputSchema: { type: "object", properties: { orderId: { type: "string" }, mandate: { type: "string" }, agent: { type: "string" }, preparePayer: { type: "boolean", description: "Explicit owner-session request to set this order's Solana USDC payer to the authenticated wallet" } }, required: ["orderId", "mandate", "agent"], additionalProperties: false },
+  },
+  {
+    name: "execute_crossmint_payment",
+    description: "Execute a reviewed Crossmint order only after explicit payment intent. Re-fetches provider terms and rejects stale review. Human mode relays the original wallet signature; delegated mode uses the mandate signer. Resume an existing operation with paymentId; never create a replacement after uncertainty.",
+    inputSchema: { type: "object", properties: { orderId: { type: "string" }, mandate: { type: "string" }, agent: { type: "string" }, invoiceHash: { type: "string" }, expectedTerms: { type: "string" }, signingMode: { type: "string", enum: ["human", "delegated"] }, signedTransaction: { type: "string" }, paymentId: { type: "string" } }, anyOf: [{ required: ["paymentId"] }, { required: ["orderId", "mandate", "agent", "invoiceHash", "expectedTerms", "signingMode"] }], additionalProperties: false },
+  },
+  {
+    name: "get_crossmint_payment",
+    description: "Reconcile the original Crossmint payment and refresh its provider order status without signing or paying again. A confirmed ChainPay payment and completed merchant delivery are separate states.",
+    inputSchema: { type: "object", properties: { paymentId: { type: "string" } }, required: ["paymentId"], additionalProperties: false },
+  },
+  {
     name: "list_mandates",
     description: "Discover spending permissions for a wallet. Use first when the owner asks about their mandate or limits. Tell the owner each permission's status, token, and remaining allowance in plain language.",
     inputSchema: {
@@ -239,6 +254,10 @@ export const TOOL_DEFINITIONS = [
           type: "string",
           description: "Base64 wallet-signed transaction for relay through the Rust backend",
         },
+        request: {
+          type: "object",
+          description: "The verified merchant-signed request this payment settles, when there is one. Its hash must equal invoiceHash. The relay keeps it with the receipt so the owner can see what was bought.",
+        },
       },
       required: [
         "mandate",
@@ -337,6 +356,19 @@ export const TOOL_DEFINITIONS = [
         owner: { type: "string", description: "Connected wallet. Filled from the session when omitted." },
         mandate: { type: "string", description: "Optional mandate PDA" },
         limit: { type: "string", description: "Maximum receipts to return, newest first" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "export_receipts",
+    description: "Export the connected wallet's receipts as one CSV for accounting. Use when the owner asks to download, export, or reconcile payments. Columns start with Date, Description, Amount, Payee, Reference; each row says whether its limits were recorded on Solana, observed by the relay, or not recorded.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        owner: { type: "string", description: "Connected wallet. Filled from the session when omitted." },
+        mandate: { type: "string", description: "Optional mandate PDA to export one permission" },
+        limit: { type: "string", description: "Maximum receipts, newest first. Default 500, at most 1000" },
       },
       additionalProperties: false,
     },

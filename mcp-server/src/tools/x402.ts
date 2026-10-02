@@ -59,21 +59,17 @@ function resourceUrl(value: unknown): string {
 }
 
 async function fetchResource(url: string, paymentHeader?: string): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), RESOURCE_TIMEOUT_MS);
-  try {
-    return await fetch(url, {
-      method: "GET",
-      redirect: "error",
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json, text/plain;q=0.9, */*;q=0.1",
-        ...(paymentHeader ? { "X-PAYMENT": paymentHeader } : {}),
-      },
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+  // Keep the deadline active through body consumption, not just receipt of
+  // headers. A merchant can send headers promptly and then stall its body.
+  return fetch(url, {
+    method: "GET",
+    redirect: "error",
+    signal: AbortSignal.timeout(RESOURCE_TIMEOUT_MS),
+    headers: {
+      Accept: "application/json, text/plain;q=0.9, */*;q=0.1",
+      ...(paymentHeader ? { "X-PAYMENT": paymentHeader } : {}),
+    },
+  });
 }
 
 async function limitedResponseBody(response: Response): Promise<{ text: string; parsed?: unknown }> {

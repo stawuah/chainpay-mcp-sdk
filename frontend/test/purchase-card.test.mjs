@@ -145,3 +145,81 @@ test("a purchase amount is only decimal-formatted when the mints match", async (
  const rows = ["waiting_for_approval", "needs_details", "blocked", "receipt_ready", "policy_checked", "approved"].map((stage) => ({ id: stage, stage }));
  assert.deepEqual(attentionInboxItems(rows).map(row => row.id), ["waiting_for_approval", "needs_details", "blocked"]);
  });
+
+test("a settled request never shows a dash or a bare 'token', and limits read in token units", async () => {
+  const purchaseCard = await loadPurchaseCard();
+  const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const stablecoinOptions = [{ value: USDC, mint: USDC, label: "USDC", detail: "Classic SPL Token", tokenProgram: "spl-token" }];
+  const settled = {
+    id: "req-settled", createdAt: new Date().toISOString(), source: "message", title: "Settled", prompt: "p", response: "r",
+    stage: "receipt_ready", toolCalls: [], attachments: [], outcome: { kind: "payment_settled", receiptAddress: "R" },
+  };
+  const mandate = { allowedMint: USDC, maxPerPayment: 5_000_000n, totalLimit: 250_000_000n };
+  const view = purchaseCard.purchaseCardFromInboxItem(settled, { stablecoinOptions, mandateDecimals: 6, mandate });
+  assert.equal(`${view.amountLabel} ${view.tokenLabel}`.trim(), "Amount unavailable");
+  assert.equal(view.recipientLabel, "Recipient unavailable");
+  assert.equal(view.limitDetail, "This permission allows up to 5 USDC per payment and 250 USDC total.");
+  // Unknown decimals keep the exact base units rather than guessing a scale.
+  const exact = purchaseCard.purchaseCardFromInboxItem(settled, { stablecoinOptions, mandateDecimals: null, mandate });
+  assert.match(exact.limitDetail, /5000000 base units per payment/);
+});
+
+test("a Crossmint order shows as Crossmint only behind the flag, and a mismatched quote blocks", async () => {
+  const purchaseCard = await loadPurchaseCard();
+  const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const stablecoinOptions = [{ value: USDC, mint: USDC, label: "USDC", detail: "Devnet", tokenProgram: "spl-token" }];
+  const mandate = { allowedMint: USDC, maxPerPayment: 25_000_000n, totalLimit: 250_000_000n };
+  const item = {
+    id: "cm", createdAt: new Date().toISOString(), source: "message", title: "Buy request", prompt: "buy", response: "r",
+    stage: "waiting_for_approval", toolCalls: [], attachments: [],
+    approval: { kind: "payment", action: "agent_signature_required", payment: { amount: "25100000", mint: USDC, recipient: "CrossmintRecipientAta1111111111111111111111" } },
+    requirements: { status: "ready", missing: [], checks: [{ key: "limits", label: "Limits", status: "pass", detail: "ok" }] },
+    crossmint: { orderId: "order-1", itemLabel: "Mad Lads #1234", quoteCheck: "match", quotedAmount: "24500000", phase: "payment" },
+  };
+  const options = { stablecoinOptions, mandateDecimals: 6, mandate };
+
+  const off = purchaseCard.purchaseCardFromInboxItem(item, options);
+  assert.equal(off.recipientBrand, undefined);
+  assert.notEqual(off.recipientLabel, "Crossmint");
+  assert.equal(off.description, "Buy request");
+
+  const on = purchaseCard.purchaseCardFromInboxItem(item, { ...options, crossmint: true });
+  assert.equal(on.recipientLabel, "Crossmint");
+  assert.equal(on.recipientBrand, "crossmint");
+  // The request title names it everywhere; the item label is only a fallback.
+  assert.equal(on.description, "Buy request");
+  const untitled = purchaseCard.purchaseCardFromInboxItem({ ...item, title: "", prompt: "" }, { ...options, crossmint: true });
+  assert.equal(untitled.description, "Mad Lads #1234");
+  assert.equal(on.status, "waiting_for_approval");
+  // A matching quote adds no row: the review card stays as short as any payment.
+  assert.equal(on.checks.length, 1);
+
+  const mismatch = purchaseCard.purchaseCardFromInboxItem(
+    { ...item, crossmint: { ...item.crossmint, quoteCheck: "mismatch" } },
+    { ...options, crossmint: true },
+  );
+  assert.equal(mismatch.status, "blocked");
+  const failed = mismatch.checks.find((check) => check.key === "crossmint_quote");
+  assert.equal(failed.status, "fail");
+  assert.equal(failed.detail, "Crossmint quoted 24.5 USDC; this payment is 25.1 USDC. Ask your agent for a new quote.");
+
+  // The safety check does not wait for the flag: branding does.
+  const mismatchFlagOff = purchaseCard.purchaseCardFromInboxItem(
+    { ...item, crossmint: { ...item.crossmint, quoteCheck: "mismatch" } },
+    options,
+  );
+  assert.equal(mismatchFlagOff.status, "blocked");
+  assert.equal(mismatchFlagOff.recipientBrand, undefined);
+
+  for (const [blockedReason, detail] of [
+    ["closed", "This Crossmint order no longer accepts payment. Nothing was submitted."],
+    ["already_paid", "This Crossmint order already has a payment. Nothing new was submitted."],
+  ]) {
+    const view = purchaseCard.purchaseCardFromInboxItem(
+      { ...item, crossmint: { ...item.crossmint, blockedReason } },
+      { ...options, crossmint: true },
+    );
+    assert.equal(view.status, "blocked");
+    assert.equal(view.checks.find((check) => check.key === "crossmint_order").detail, detail);
+  }
+});

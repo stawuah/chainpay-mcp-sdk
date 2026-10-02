@@ -5,11 +5,13 @@
 // directly with fixture props renders the genuine panels with zero production changes.
 //
 // Test-only Vite entry. Not imported by production and not in its build. It cannot
-// sign or submit a transaction: every handler here is inert. Amounts are fixture
+// sign a real transaction. Opt-in approval checks use invalid fixture bytes and
+// intercept every service request in memory. Amounts are fixture
 // base units, not balances.
 import "../../src/polyfills";
 import { chainpayClient, publicReceiptClient } from "../../src/config/client";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, type Transaction } from "@solana/web3.js";
+import { setSessionWallet } from "../../src/session";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import Dashboard from "../../src/dashboard/Dashboard";
@@ -20,6 +22,10 @@ import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
+import crossmintInbox from "./inbox-crossmint.json";
+import { ownerReceiptRelay } from "../../src/receipts/owner";
+import purchase from "./receipt-purchase.json";
+import orders from "./mandate-request.json";
 
 const OWNER = "7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q";
 const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -28,7 +34,7 @@ function mandate(over: Partial<Mandate> & { address: string }): Mandate {
   return {
     owner: OWNER,
     approvedAgent: "AgEnT111111111111111111111111111111111111111",
-    sourceTokenAccount: "SrcAta11111111111111111111111111111111111111",
+    sourceTokenAccount: "SrcAta1111111111111111111111111111111111111",
     allowedMint: USDC,
     maxPerPayment: 5_000_000n,
     totalLimit: 250_000_000n,
@@ -108,18 +114,150 @@ if (new URLSearchParams(location.search).has("ready")) {
   };
 }
 
-if (new URLSearchParams(location.search).has("receipts")) {
+// Crossmint prototype: every request state, seeded into the real inbox store.
+// Only visible when the dev server runs with VITE_CHAINPAY_CROSSMINT=true.
+const CROSSMINT = new URLSearchParams(location.search).has("crossmint");
+if (CROSSMINT) {
+  // Keep blocked metadata on an otherwise approvable request: a stage of
+  // "blocked" would hide the approval even if the Crossmint guard regressed.
+  const inbox = new URLSearchParams(location.search).has("crossmint-review")
+    ? crossmintInbox.map((item) => item.stage === "blocked" ? { ...item, stage: "waiting_for_approval" } : item)
+    : crossmintInbox;
+  localStorage.setItem(`chainpay.ai-inbox.v1:${OWNER}`, JSON.stringify(inbox));
+}
+
+if (CROSSMINT || new URLSearchParams(location.search).has("receipts")) {
+  // An original 282-byte receipt: no limits recorded at payment.
   const receipt: PaymentReceipt = {
     address:"2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1", mandate:MANDATES[0].address,
     invoiceHash:new Uint8Array(32).fill(1), paymentId:new Uint8Array(32).fill(2), mint:USDC,
     recipient:OWNER,sourceTokenAccount:OWNER,recipientTokenAccount:OWNER,amount:4500001n,
     agent:OWNER,executedAtSlot:399999000n,signatureReference:new Uint8Array(32),status:"confirmed",onChainStatus:1,bump:255,
+    policySnapshot:null,
   };
-  chainpayClient.getPaymentsByMandate = async () => [receipt];
+  // A 371-byte receipt with the program's policy snapshot, paying the
+  // fixture's seller-signed invoice (its hash is the invoice hash).
+  const v2: PaymentReceipt = {
+    address:"3Rcpt2v2SnapshotFixture111111111111111111", mandate:MANDATES[0].address,
+    invoiceHash:Uint8Array.from(purchase.invoiceHash.match(/../g)!.map((byte) => parseInt(byte, 16))), paymentId:new Uint8Array(32).fill(4), mint:USDC,
+    recipient:purchase.request.payload.recipient,sourceTokenAccount:OWNER,recipientTokenAccount:purchase.request.payload.recipient,amount:4500000n,
+    agent:"AgEnT111111111111111111111111111111111111111",executedAtSlot:399999200n,signatureReference:new Uint8Array(32).fill(5),status:"confirmed",onChainStatus:1,bump:254,
+    policySnapshot:{ version:1, maxPerPayment:5_000_000n, totalLimit:50_000_000n, amountSpentAfter:12_000_000n, paymentCountAfter:3n, maxPaymentCount:10n, expiresAtSlot:405_000_000n, cooldownSlots:0n },
+  };
+  const byAddress = new Map([receipt, v2].map((item) => [item.address, item]));
+  chainpayClient.getPaymentsByMandate = async (address) => (address === MANDATES[0].address ? [v2, receipt] : []);
   chainpayClient.getMintDecimals = async () => 6;
-  publicReceiptClient.readPublicReceipt = async () => ({
-    receipt:{valid:true,receipt}, amount:{baseUnits:"4500001",decimals:6,display:"4.500001",displayKind:"ui-amount"}, currentMandate:{status:"absent"},
-  }) as never;
+  publicReceiptClient.getCurrentSlot = async () => 399_999_500n;
+  publicReceiptClient.readPublicReceipt = async (address) => {
+    const found = byAddress.get(address) ?? receipt;
+    return {
+      receipt:{valid:true,receipt:found},
+      amount:{baseUnits:found.amount.toString(),decimals:6,display:found.amount === 4500000n ? "4.500000" : "4.500001",displayKind:"ui-amount"},
+      currentMandate:{status:"present",mandate:MANDATES[0]},
+    } as never;
+  };
+  // Stand-in for the owner's relay session: the signed invoice for the v2 receipt only.
+  ownerReceiptRelay.request = async (address) => (address === v2.address ? purchase.request : null);
+  ownerReceiptRelay.policy = async () => null;
+}
+
+// Permission requests: `?permission=vendor|grantee|expired|tampered` puts that
+// fixture link's `#req=` fragment in the URL, as a requester's link would, and
+// mounts Dashboard on the /app/requests/permission route. Deterministic keys;
+// not a real vendor or budget.
+const PERMISSION = new URLSearchParams(location.search).get("permission");
+if (PERMISSION && !location.hash.includes("req=")) {
+  const fragment = (orders as Record<string, { fragment?: string }>)[PERMISSION]?.fragment;
+  if (fragment) history.replaceState(null, "", `${location.pathname}${location.search}#req=${fragment}`);
+}
+if (PERMISSION) chainpayClient.getCurrentSlot = async () => BigInt(orders.currentSlot);
+
+// `?orders` adds accepted orders: a purchase order linked to the first
+// permission with a receipt that matches it, and a budget request linked to
+// the second, whose agent is the request's agent. The relay is a stand-in.
+if (new URLSearchParams(location.search).has("orders")) {
+  MANDATES[1] = { ...MANDATES[1], approvedAgent: orders.grantee.agent, status: "active", paused: false };
+  const hex = (value: string) => Uint8Array.from(value.match(/../g)!.map((byte) => parseInt(byte, 16)));
+  const matched: PaymentReceipt = {
+    address:"4RcptMatchedPurchaseFixture11111111111111", mandate:MANDATES[0].address,
+    invoiceHash:hex(orders.invoice.invoiceHash), paymentId:new Uint8Array(32).fill(6), mint:USDC,
+    recipient:orders.vendor.ata,sourceTokenAccount:OWNER,recipientTokenAccount:orders.vendor.ata,amount:4500000n,
+    agent:OWNER,executedAtSlot:399999300n,signatureReference:new Uint8Array(32).fill(7),status:"confirmed",onChainStatus:1,bump:253,
+    policySnapshot:{ version:1, maxPerPayment:5_000_000n, totalLimit:50_000_000n, amountSpentAfter:4_500_000n, paymentCountAfter:1n, maxPaymentCount:0n, expiresAtSlot:406_479_000n, cooldownSlots:0n },
+  };
+  const budget: PaymentReceipt = {
+    address:"5RcptBudgetFixture1111111111111111111111111", mandate:MANDATES[1].address,
+    invoiceHash:new Uint8Array(32).fill(8), paymentId:new Uint8Array(32).fill(9), mint:USDC,
+    recipient:OWNER,sourceTokenAccount:OWNER,recipientTokenAccount:"Dest1111111111111111111111111111111111111",amount:2000000n,
+    agent:orders.grantee.agent,executedAtSlot:399999400n,signatureReference:new Uint8Array(32).fill(10),status:"confirmed",onChainStatus:1,bump:252,
+    policySnapshot:null,
+  };
+  const all = [matched, budget];
+  const previousPayments = chainpayClient.getPaymentsByMandate.bind(chainpayClient);
+  chainpayClient.getPaymentsByMandate = async (address) => [
+    ...all.filter((item) => item.mandate === address),
+    ...(await previousPayments(address).catch(() => [])),
+  ];
+  chainpayClient.getMintDecimals = async () => 6;
+  publicReceiptClient.getCurrentSlot = async () => 399_999_500n;
+  const previousRead = publicReceiptClient.readPublicReceipt.bind(publicReceiptClient);
+  publicReceiptClient.readPublicReceipt = async (address, ...rest) => {
+    const found = all.find((item) => item.address === address);
+    if (!found) return previousRead(address, ...rest);
+    return {
+      receipt:{valid:true,receipt:found},
+      amount:{baseUnits:found.amount.toString(),decimals:6,display:(Number(found.amount) / 1e6).toFixed(6),displayKind:"ui-amount"},
+      currentMandate:{status:"present",mandate:MANDATES.find((item) => item.address === found.mandate) ?? MANDATES[0]},
+    } as never;
+  };
+  const previousRequest = ownerReceiptRelay.request;
+  ownerReceiptRelay.request = async (address) => (address === matched.address ? orders.invoice.request : previousRequest(address));
+  ownerReceiptRelay.policy = async () => null;
+  ownerReceiptRelay.mandateRequest = async (mandate) => (
+    mandate === MANDATES[0].address ? orders.vendor.request : mandate === MANDATES[1].address ? orders.grantee.request : null
+  );
+}
+
+// `?link=fail` makes the stand-in relay refuse the first link attempt, so the
+// retry path can be seen. Otherwise linking succeeds without a backend.
+{
+  let failures = new URLSearchParams(location.search).get("link") === "fail" ? 1 : 0;
+  ownerReceiptRelay.linkMandateRequest = async () => {
+    if (failures > 0) {
+      failures -= 1;
+      return new Response(JSON.stringify({ error: "The relay could not read the new permission yet" }), { status: 502 });
+    }
+    return new Response("{}", { status: 200 });
+  };
+}
+
+// Exercise the post-wallet continuation without keys or any network submission.
+const FIXTURE_APPROVAL = new URLSearchParams(location.search).has("fixture-approval");
+const approvalEvidence = { signatures: 0, submissions: 0, links: 0, slot: orders.currentSlot };
+Object.assign(window, { permissionApprovalEvidence: approvalEvidence });
+let fixtureSigner: ((transaction: Transaction) => Promise<Transaction>) | undefined;
+if (FIXTURE_APPROVAL) {
+  chainpayClient.getCurrentSlot = async () => BigInt(approvalEvidence.slot);
+  chainpayClient.connection.getLatestBlockhash = async () => ({ blockhash: OWNER, lastValidBlockHeight: 999999999 });
+  fixtureSigner = async () => {
+    approvalEvidence.signatures += 1;
+    return { serialize: () => new Uint8Array([0]) } as unknown as Transaction;
+  };
+  setSessionWallet({ address: OWNER, signMessage: async () => new Uint8Array(64) } as never);
+  // Deliberately no fallback: nothing in this fixture mode can reach a relay.
+  window.fetch = async (input) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
+    const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
+    if (url.pathname === "/v1/auth/challenge") return json({ challenge_id: "fixture", message: "Fixture sign-in" });
+    if (url.pathname === "/v1/auth/session") return json({ token: "fixture", wallet: OWNER, expires_at_ms: Date.now() + 600000 });
+    if (url.pathname === "/v1/transactions/submit") {
+      approvalEvidence.submissions += 1;
+      return json({ status: "confirmed", signature: "FixturePermissionSignature" });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const link = ownerReceiptRelay.linkMandateRequest;
+  ownerReceiptRelay.linkMandateRequest = async (...args) => { approvalEvidence.links += 1; return link(...args); };
 }
 
 const EMPTY = new URLSearchParams(location.search).has("empty");
@@ -132,6 +270,7 @@ function Harness() {
   return (
     <Dashboard
       wallet={OWNER}
+      walletSigner={fixtureSigner}
       walletName="Jupiter"
       walletCapabilities={null}
       mandate={EMPTY ? null : MANDATES[0]}
@@ -145,6 +284,7 @@ function Harness() {
       integrationError=""
       switchingWalletAccount={false}
       tab={tab}
+      permissionRequest={Boolean(PERMISSION)}
       onTabChange={(next) => setTab(next)}
       onNavigateHome={() => {}}
       onRefresh={noop}

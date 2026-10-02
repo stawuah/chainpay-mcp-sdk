@@ -3,7 +3,17 @@ import { useRef, useState } from "react";
 import { Arrow } from "../ui/marks";
 import {
   amountLabel,
+  estimateSlotDate,
   formatMandatePaymentCount,
+  formatTokenUnits,
+  orderMatch,
+  policyAtPayment,
+  purchaseAuditPath,
+  todayCheck,
+  type OrderLinkState,
+  type OrderMatchAudience,
+  type PurchaseLineItemView,
+  type PurchaseProofState,
   pageAllowsSuccessChrome,
   publicReceiptPath,
   publicReceiptUrl,
@@ -24,30 +34,133 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CurrentMandate({ receipt }: { receipt: ReceiptView }) {
+function capitalize(value: string): string {
+  return value ? value[0].toUpperCase() + value.slice(1) : value;
+}
+
+/** Today's limits, for a receipt whose limits at payment were not recorded. */
+function TodayLimits({ receipt }: { receipt: ReceiptView }) {
   const current = receipt.currentMandate;
+  if (current.status !== "present") {
+    return (
+      <p className="receipt-policy-note">
+        Today’s limits could not be read{current.status === "unavailable" ? `: ${current.reason}` : "."} Paid is unchanged.
+      </p>
+    );
+  }
+  const fields = current.fields;
+  const token = (baseUnits: string | undefined, fallback: string) => (
+    baseUnits === undefined ? fallback : formatTokenUnits(baseUnits, receipt.amount.decimals, receipt.tokenLabel)
+  );
+  const expiry = estimateSlotDate(fields.expiresAtSlot, receipt.currentSlot, Date.now());
   return (
-    <details className="receipt-current-mandate">
-      <summary>Current mandate</summary>
-      {current.status === "present" ? (
-        <>
-          <p>These limits are the mandate’s current on-chain state. They are not a historical snapshot from settlement. Changing or pausing the mandate does not undo Paid.</p>
-          <dl>
-            <Field label="Current status" value={current.fields.status} />
-            <Field label="Max per payment" value={current.fields.maxPerPayment} />
-            <Field label="Total limit" value={current.fields.totalLimit} />
-            <Field label="Amount spent" value={current.fields.amountSpent} />
-            <Field label="Payment count" value={formatMandatePaymentCount(current.fields.paymentCount, current.fields.maxPaymentCount)} />
-            <Field label="Cooldown slots" value={current.fields.cooldownSlots} />
-            <Field label="Expires at slot" value={current.fields.expiresAtSlot} />
-          </dl>
-        </>
-      ) : current.status === "unavailable" ? (
-        <p>Current mandate details are unavailable. {current.reason} Paid is unchanged.</p>
-      ) : (
-        <p>Current mandate details are not available. Paid is unchanged.</p>
+    <>
+      <dl className="receipt-policy-today-limits">
+        <Field label="Status today" value={capitalize(fields.status)} />
+        <Field label="Per payment" value={token(fields.baseUnits?.maxPerPayment, fields.maxPerPayment)} />
+        <Field label="Total allowance" value={token(fields.baseUnits?.totalLimit, fields.totalLimit)} />
+        <Field label="Used so far" value={token(fields.baseUnits?.amountSpent, fields.amountSpent)} />
+        <Field label="Payments" value={formatMandatePaymentCount(fields.paymentCount, fields.maxPaymentCount)} />
+        <Field label="Expires" value={expiry ? `≈ ${expiry}` : `Slot ${fields.expiresAtSlot}`} />
+      </dl>
+      <p className="receipt-policy-note">Changing or pausing this permission does not undo Paid.</p>
+    </>
+  );
+}
+
+function SpendingPermissionAtPayment({ receipt }: { receipt: ReceiptView }) {
+  const display = policyAtPayment(receipt);
+  const check = todayCheck(receipt);
+  const showTodayLine = !(display.source === "not-recorded" && check.status === "unknown");
+  return (
+    <section className="receipt-section receipt-policy" aria-labelledby={`receipt-policy-${receipt.address}`} data-policy-source={display.source}>
+      <h4 id={`receipt-policy-${receipt.address}`}>Spending permission at payment</h4>
+      {display.rows.length > 0 && (
+        <ul className="receipt-policy-rows">
+          {display.rows.map((row) => <li key={row}>{row}</li>)}
+        </ul>
       )}
-    </details>
+      <p className="receipt-section-caption">{display.caption}</p>
+      {display.source === "not-recorded" && <TodayLimits receipt={receipt} />}
+      {showTodayLine && <p className="receipt-policy-today" data-today={check.status}>{check.line}</p>}
+    </section>
+  );
+}
+
+function lineItemText(item: PurchaseLineItemView): string {
+  return [
+    item.label,
+    item.quantity === undefined ? "" : `× ${item.quantity}`,
+    item.amount === undefined ? "" : `· ${item.amount}`,
+  ].filter(Boolean).join(" ");
+}
+
+function OrderMatch({ receipt, purchase, order, audience }: { receipt: ReceiptView; purchase?: PurchaseProofState; order?: OrderLinkState; audience: OrderMatchAudience }) {
+  const match = orderMatch(purchase, audience, order);
+  if (!match) return null;
+  return (
+    <section className="receipt-section receipt-order-match" aria-labelledby={`receipt-match-${receipt.address}`} data-match={match.pill}>
+      <div className="receipt-section-head">
+        <h4 id={`receipt-match-${receipt.address}`}>Order match</h4>
+        <span className="receipt-pill" data-pill={match.pill}>{match.pill}</span>
+      </div>
+      <p className="receipt-section-caption">order · invoice · payment</p>
+      <ul className="receipt-match-rows">
+        {match.rows.map((row) => (
+          <li key={row.key} data-row={row.key} data-tone={row.tone}>
+            <span className="receipt-match-mark" aria-hidden="true">{row.tone === "yes" ? "✓" : "×"}</span>
+            <span>{row.text}</span>
+          </li>
+        ))}
+      </ul>
+      {match.details && (
+        <dl className="receipt-match-details">
+          {match.details.poNumber && <Field label="PO number" value={match.details.poNumber} />}
+          {match.details.orderDescription && <Field label="Order description" value={match.details.orderDescription} />}
+          {match.details.expectedPayee && <Field label="Expected payee" value={match.details.expectedPayee} />}
+          {match.details.invoice && <Field label="Seller’s invoice reference" value={match.details.invoice} />}
+          {match.details.description && <Field label="What was bought" value={match.details.description} />}
+          {match.details.lineItems && (
+            <>
+              <dt>Items</dt>
+              <dd><ul className="receipt-line-items">{match.details.lineItems.map((item, index) => <li key={`${item.label}-${index}`}>{lineItemText(item)}</li>)}</ul></dd>
+            </>
+          )}
+        </dl>
+      )}
+      {audience === "link" && match.details?.invoice && (
+        <p className="receipt-policy-note">Details from the link you opened. They match this receipt’s invoice hash and the seller’s signature.</p>
+      )}
+      {audience === "link" && order?.status === "linked" && order.via === "link" && (
+        <p className="receipt-policy-note">The order in this link carries a valid requester signature for this token. This link does not prove that the owner accepted this order for this permission.</p>
+      )}
+      {match.rows.some((row) => row.key === "payee") && (
+        <p className="receipt-policy-note">Matched is a check by ChainPay. Solana does not bind a permission to one payee.</p>
+      )}
+    </section>
+  );
+}
+
+function policyTechnicalFields(receipt: ReceiptView) {
+  const policy = receipt.policy;
+  if (!policy || policy.source === "not-recorded") return null;
+  const limits = policy.limits;
+  const laterCounted = policy.source === "relay-observed" && policy.includesLaterPayments;
+  return (
+    <>
+      <Field label="Limits source" value={policy.source} />
+      <Field label="Per-payment limit at payment (base units)" value={limits.maxPerPayment} />
+      <Field label="Total limit at payment (base units)" value={limits.totalLimit} />
+      <Field
+        label={laterCounted ? "Spent when the relay read it (base units, includes later payments)" : "Spent after this payment (base units)"}
+        value={limits.amountSpentAfter}
+      />
+      <Field label={laterCounted ? "Payment count when the relay read it" : "Payment count after this payment"} value={limits.paymentCountAfter} />
+      <Field label="Payment-count cap" value={limits.maxPaymentCount === "0" ? "None" : limits.maxPaymentCount} />
+      <Field label="Expiry slot" value={limits.expiresAtSlot} />
+      <Field label="Cooldown slots" value={limits.cooldownSlots} />
+      {policy.source === "relay-observed" && <Field label="Relay read at slot" value={policy.observedAtSlot} />}
+    </>
   );
 }
 
@@ -56,11 +169,17 @@ export function ReceiptCard({
   onShare,
   shareMode = "public",
   preparedInRequests = false,
+  purchase,
+  order,
 }: {
   receipt: ReceiptView;
   onShare?: () => void;
   shareMode?: "public" | "dashboard";
   preparedInRequests?: boolean;
+  /** Merchant-signed request checked against this receipt, if any. */
+  purchase?: PurchaseProofState;
+  /** The accepted purchase order or budget request for this receipt's mandate, if any. */
+  order?: OrderLinkState;
 }) {
   const cardRef = useRef<HTMLElement>(null);
   const receiptUrl = publicReceiptUrl(receipt.address, typeof window !== "undefined" ? window.location.origin : "");
@@ -68,6 +187,18 @@ export function ReceiptCard({
   const amount = amountLabel(receipt.amount);
   const stamps = receiptStamps(receipt);
   const seller = receipt.seller;
+  // The owner's dashboard sees request content. /verify sees it only from an
+  // audit link the owner shared, and only after it verified here.
+  const fromLink = (purchase && purchase.status !== "none" && purchase.via === "link")
+    || (order && order.status !== "none" && order.via === "link");
+  const audience: OrderMatchAudience = shareMode === "dashboard" ? "owner" : fromLink ? "link" : "public";
+  const auditFragment = shareMode === "dashboard" && purchase?.status === "verified" && purchase.via === "owner"
+    ? purchase.shareFragment
+    : undefined;
+  const orderFragment = shareMode === "dashboard" && order?.status === "linked" && order.via === "owner"
+    ? order.shareFragment
+    : undefined;
+  const canShareDetails = Boolean(auditFragment || orderFragment);
 
   async function share() {
     if (onShare) {
@@ -80,6 +211,17 @@ export function ReceiptCard({
       receiptPda: receipt.address,
     });
     setShareMessage(shareStatusCopy(result));
+  }
+
+  async function shareWithDetails() {
+    if (!canShareDetails) return;
+    const result = await sharePublicReceipt({
+      amountLabel: amount,
+      tokenLabel: receipt.tokenLabel,
+      receiptPda: receipt.address,
+      path: purchaseAuditPath(receipt.address, auditFragment, orderFragment),
+    });
+    setShareMessage(shareStatusCopy(result, auditFragment ? "invoice" : "order"));
   }
 
   return (
@@ -122,7 +264,8 @@ export function ReceiptCard({
           </div>
         ))}
       </div>
-      <CurrentMandate receipt={receipt} />
+      <SpendingPermissionAtPayment receipt={receipt} />
+      <OrderMatch receipt={receipt} purchase={purchase} order={order} audience={audience} />
       <details className="receipt-technical">
         <summary>Technical details</summary>
         <p className="receipt-identifier-note">These identifiers come from the on-chain receipt account. They are not Axum operation IDs or x402 job IDs.</p>
@@ -137,6 +280,8 @@ export function ReceiptCard({
           <Field label="On-chain status" value={receipt.onChainStatus} />
           <Field label="Bump" value={receipt.bump} />
           {receipt.transactionSignature && <Field label="Solana activity signature" value={receipt.transactionSignature} />}
+          {policyTechnicalFields(receipt)}
+          {receipt.currentSlot && <Field label="Slot when read" value={receipt.currentSlot} />}
         </dl>
       </details>
       <div className="receipt-card-actions">
@@ -146,10 +291,24 @@ export function ReceiptCard({
         <a className="button button-secondary-light button-small" href={publicReceiptPath(receipt.address)}>
           Open public receipt <Arrow />
         </a>
+        {canShareDetails && (
+          <button type="button" className="button button-secondary-light button-small" onClick={() => void shareWithDetails()} aria-describedby={`receipt-share-details-${receipt.address}`}>
+            Share with details <Arrow />
+          </button>
+        )}
         <button type="button" className="button button-secondary-light button-small" onClick={() => { if (cardRef.current) printReceipt(cardRef.current); }}>
           Print / Save as PDF
         </button>
       </div>
+      {canShareDetails && (
+        <p className="receipt-share-details-note" id={`receipt-share-details-${receipt.address}`}>
+          {auditFragment && orderFragment
+            ? "Share with details adds the seller’s invoice and the order to the link. Anyone with that link can read them."
+            : orderFragment
+              ? "Share with details adds the order to the link. Anyone with that link can read it."
+              : "Share with details adds the seller’s invoice to the link. Anyone with that link can read what was bought."}
+        </p>
+      )}
       <p className="receipt-public-url">Public receipt: <a href={receiptUrl}>{receiptUrl}</a></p>
       {shareMessage && <p className="receipt-share-status" role="status">{shareMessage}</p>}
     </article>
@@ -158,12 +317,16 @@ export function ReceiptCard({
 
 export function ReceiptPageState({
   state,
+  purchase,
+  order,
   onRetry,
   editableAddress,
   onAddressChange,
   onEditAddress,
 }: {
   state: PublicReceiptPageState;
+  purchase?: PurchaseProofState;
+  order?: OrderLinkState;
   onRetry?: () => void;
   editableAddress?: string;
   onAddressChange?: (value: string) => void;
@@ -179,7 +342,7 @@ export function ReceiptPageState({
   if (state.kind === "verified") {
     return (
       <div className="receipt-page-state" data-verified={pageAllowsSuccessChrome(state) ? "yes" : "no"}>
-        <ReceiptCard receipt={state.receipt} />
+        <ReceiptCard receipt={state.receipt} purchase={purchase} order={order} />
       </div>
     );
   }

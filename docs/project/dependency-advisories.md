@@ -7,6 +7,17 @@ downgrades that PR-12 forbids.
 
 ## Tested matrix after PR-12 lock refresh
 
+### Review refresh — 2026-10-02
+
+The current frontend lock had regressed to Playwright 1.49.1, affected by
+[GHSA-7mvr-c777-76hp](https://github.com/advisories/GHSA-7mvr-c777-76hp).
+Updated the development dependency and lock to 1.63.0, above the patched
+1.55.1 minimum. Installation used `--ignore-scripts`; no browser installer
+or system package installer was run. The frontend audit now reports zero
+advisories. The workspace audit still reports the nine entries described
+below (three high, six moderate); no forced Solana downgrade or major
+transitive override was applied.
+
 | Surface | Pin / resolved | Evidence 2026-09-15 |
 |---|---|---|
 | `qs` (workspace, Express / body-parser) | **6.15.3 → 6.16.0** exact pin on `@chainpay/demo-merchant` plus root `overrides` | Official patch for [GHSA-x5fp-wj9c-mxmx](https://github.com/advisories/GHSA-x5fp-wj9c-mxmx) (published 2026-08-29, reviewed 2026-09-02). `demo-merchant` query-parsing fixture plus merchant typecheck. |

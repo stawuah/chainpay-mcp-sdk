@@ -1,7 +1,7 @@
 /** Print only the public receipt document, never the surrounding private inbox. */
 export function printableReceipt(card: HTMLElement): HTMLElement {
   const copy = card.cloneNode(true) as HTMLElement;
-  copy.querySelectorAll(".receipt-card-actions, .receipt-share-status").forEach((node) => node.remove());
+  copy.querySelectorAll(".receipt-card-actions, .receipt-share-status, .receipt-share-details-note").forEach((node) => node.remove());
   copy.querySelectorAll("details").forEach((details) => { details.open = true; });
   return copy;
 }
@@ -33,6 +33,10 @@ export function printReceipt(card: HTMLElement): void {
     .receipt-stamp-mark { display: none; }
     .receipt-stamp p { margin: 4px 0; overflow-wrap: anywhere; }
     details { margin: 16px 0; }
+    .receipt-section { margin: 16px 0; break-inside: avoid; }
+    h4 { margin: 0 0 6px; font-size: 13px; }
+    ul { margin: 6px 0; padding-left: 16px; }
+    .receipt-pill { display: inline-block; border: 1px solid #ccd3df; border-radius: 999px; padding: 0 8px; }
     .receipt-public-url, a { overflow-wrap: anywhere; color: inherit; }
     .receipt-summary, .receipt-card-heading, .receipt-public-url { break-inside: avoid; }
   `;

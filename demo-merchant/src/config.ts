@@ -235,7 +235,7 @@ export function sellerPublishConfigFromSecret(input: {
   };
 }
 
-function parseSellerSecretKey(encoded: string): Uint8Array {
+export function parseSellerSecretKey(encoded: string): Uint8Array {
   try {
     if (encoded.startsWith("[")) {
       const values: unknown = JSON.parse(encoded);
@@ -256,7 +256,7 @@ function parseSellerSecretKey(encoded: string): Uint8Array {
   }
 }
 
-function sellerIdentity(secret: Uint8Array): { secretKey: Uint8Array; seller: string } {
+export function sellerIdentity(secret: Uint8Array): { secretKey: Uint8Array; seller: string } {
   try {
     if (secret.length === 32) {
       return { secretKey: new Uint8Array(secret), seller: Keypair.fromSeed(secret).publicKey.toBase58() };

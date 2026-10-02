@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
 import { Keypair, SystemProgram } from "@solana/web3.js";
 import { SPL_TOKEN_PROGRAM_ID as SDK_SPL_TOKEN, standardV2RecipientTokenAccount } from "@chainpay/sdk";
 import {
@@ -105,6 +106,26 @@ function withEnv(values, run) {
 function allowOrigin(run) {
   return withEnv({ CHAINPAY_X402_ALLOWED_ORIGINS: "https://merchant.example" }, run);
 }
+
+test("merchant timeout covers a body that stalls after successful headers", { timeout: 15_000 }, async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "text/plain" });
+    response.flushHeaders();
+    response.write("partial body");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await withEnv({ CHAINPAY_X402_ALLOW_HTTP: "true" }, async () => {
+      await assert.rejects(executeX402Payment({}, {
+        resource: `http://127.0.0.1:${server.address().port}/stalled`,
+        mandate: address(), agent: address(), signingMode: "human",
+      }), (error) => error.name === "AbortError" || error.name === "TimeoutError");
+    });
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
 
 /** ChainPay may read this merchant AND it verifies a ChainPay receipt PDA. */
 function allowReceiptMerchant(run) {

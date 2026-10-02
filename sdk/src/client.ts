@@ -16,7 +16,13 @@ import type {
   SupportedAsset,
   TokenProgram,
 } from "./types.js";
-import { DEFAULT_PROGRAM_ID, DEVNET_RPC_URL, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "./constants.js";
+import {
+  DEFAULT_PROGRAM_ID,
+  DEVNET_RPC_URL,
+  RECEIPT_ACCOUNT_LENGTHS,
+  SPL_TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+} from "./constants.js";
 import { decodeMandate, decodeProtocolConfig, decodeSupportedAsset } from "./accounts.js";
 import {
   address,
@@ -36,7 +42,11 @@ import {
   buildUpdateMandateInstruction,
 } from "./mandate.js";
 import {
+  DUPLICATE_INVOICE_MESSAGE,
+  DuplicateInvoiceError,
   buildExecutePaymentInstruction,
+  isDuplicateInvoiceError,
+  isReceiptAlreadyInUse,
   preflightPayment,
   preparePayment as preparePaymentRequest,
   preparedPaymentTransaction,
@@ -370,12 +380,24 @@ export class ChainPayClient {
 
   async getPaymentsByMandate(mandateAddress: Address): Promise<PaymentReceipt[]> {
     const mandate = address(mandateAddress);
-    const accounts = await this.connection.getProgramAccounts(publicKey(this.programId), {
-      commitment: this.commitment,
-      filters: [
-        { dataSize: 282 },
-        { memcmp: { offset: 8, bytes: mandate } },
-      ],
+    // RPC filters match one exact size, and original and snapshot receipts
+    // coexist after the program upgrade. Ask for each size; a query that
+    // asked for only one would silently drop the other half of the history.
+    const pages = await Promise.all(RECEIPT_ACCOUNT_LENGTHS.map((dataSize) => (
+      this.connection.getProgramAccounts(publicKey(this.programId), {
+        commitment: this.commitment,
+        filters: [
+          { dataSize },
+          { memcmp: { offset: 8, bytes: mandate } },
+        ],
+      })
+    )));
+    const seen = new Set<string>();
+    const accounts = pages.flat().filter((account) => {
+      const key = account.pubkey.toBase58();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
     const historyCommitment: "confirmed" | "finalized" =
       this.commitment === "finalized" ? "finalized" : "confirmed";
@@ -401,8 +423,8 @@ export class ChainPayClient {
         { programId: this.programId, requireSettled: false, transactionSignature },
       );
       // The getProgramAccounts filter is dataSize plus a memcmp on the mandate;
-      // it does not check the receipt discriminator. Any program-owned 282-byte
-      // account matching those bytes lands here, and a partially initialized or
+      // it does not check the receipt discriminator. Any program-owned account of
+      // a receipt size matching those bytes lands here, and a partially initialized or
       // future account type would otherwise reject the whole Promise.all and
       // empty an owner's entire history. Skip the row, keep the rest.
       return result.valid ? result.receipt : null;
@@ -548,6 +570,12 @@ export class ChainPayClient {
     if (untrustedRemainingAccounts?.length) {
       throw new Error("Caller-supplied remainingAccounts are not accepted; extension accounts must be resolved from verified on-chain state");
     }
+    const request: PaymentRequest = preparePaymentRequest({ ...input, tokenProgram });
+    const receiptAddress = deriveReceiptAddress(mandate.address, request.invoiceHash, this.programId);
+    // The receipt PDA is derived from mandate and invoice hash, so an existing
+    // account means this invoice is already paid. Stop before building anything.
+    const existingReceipt = await this.getPayment(receiptAddress);
+    if (existingReceipt !== null) throw new DuplicateInvoiceError(receiptAddress);
     const asset = await this.getSupportedAsset(input.mint);
     const expectedProgram = tokenProgram === "token-2022" ? TOKEN_2022_PROGRAM_ID : SPL_TOKEN_PROGRAM_ID;
     if (!asset || !asset.enabled) {
@@ -566,11 +594,8 @@ export class ChainPayClient {
     if (!capabilityProfile.compatible) {
       throw new Error(`Token capability check failed: ${capabilityProfile.blockers.join("; ")}`);
     }
-    const request: PaymentRequest = preparePaymentRequest({ ...input, tokenProgram });
     const currentSlot = await this.getCurrentSlot();
     const executionAgent = agent ?? mandate.approvedAgent;
-    const receiptAddress = deriveReceiptAddress(mandate.address, request.invoiceHash, this.programId);
-    const existingReceipt = await this.getPayment(receiptAddress);
     const sourceAccountInfo = await this.connection.getAccountInfo(
       publicKey(mandate.sourceTokenAccount),
       this.commitment,
@@ -583,7 +608,7 @@ export class ChainPayClient {
       mandate,
       currentSlot,
       executionAgent,
-      existingReceipt !== null,
+      false,
       sourceContext ?? undefined,
     );
     const instruction = buildExecutePaymentInstruction(request, executionAgent, mandate, this.programId);
@@ -619,10 +644,19 @@ export class ChainPayClient {
         slot,
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isDuplicateInvoiceError(error) || isReceiptAlreadyInUse(message, prepared.receiptAddress)) {
+        return {
+          status: "failed" as const,
+          receiptAddress: prepared.receiptAddress,
+          code: "DuplicateInvoice" as const,
+          error: DUPLICATE_INVOICE_MESSAGE,
+        };
+      }
       return {
         status: "failed" as const,
         receiptAddress: prepared.receiptAddress,
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       };
     }
   }
