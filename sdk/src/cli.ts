@@ -1,9 +1,18 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Keypair } from "@solana/web3.js";
 import { ChainPayClient } from "./client.js";
 import { address } from "./encoding.js";
+import {
+  buildMandateRequestPayload,
+  encodeMandateRequestLink,
+  mandateRequestSummary,
+  parseHumanTokenAmount,
+  signMandateRequest,
+} from "./mandate-request.js";
 import {
   formatOpsAnsi,
   formatPaymentLookupAnsi,
@@ -16,17 +25,39 @@ import {
 } from "./ops-snapshot.js";
 import { assetLabel } from "./known-assets.js";
 import { receiptPolicy, receiptsToCsv, type ReceiptCsvRow } from "./receipt-export.js";
-import type { Mandate, PaymentReceipt, PreparedTransaction } from "./types.js";
+import type { Mandate, PaymentReceipt, PreparedTransaction, TokenProgram } from "./types.js";
 
-type Flags = {
-  owner?: string;
-  mandate?: string;
-  rpc?: string;
-  program?: string;
-  out?: string;
+const VALUE_FLAGS = {
+  "--owner": "owner",
+  "--mandate": "mandate",
+  "--rpc": "rpc",
+  "--program": "program",
+  "--out": "out",
+  "--keypair": "keypair",
+  "--mint": "mint",
+  "--recipient": "recipient",
+  "--agent": "agent",
+  "--per-payment": "perPayment",
+  "--total": "total",
+  "--days": "days",
+  "--link-days": "linkDays",
+  "--description": "description",
+  "--po": "po",
+  "--name": "name",
+  "--app-url": "appUrl",
+  "--decimals": "decimals",
+  "--token-program": "tokenProgram",
+} as const;
+
+type ValueFlag = (typeof VALUE_FLAGS)[keyof typeof VALUE_FLAGS];
+
+type Flags = Partial<Record<ValueFlag, string>> & {
   json?: boolean;
   help?: boolean;
 };
+
+/** The default public app, the same one the MCP server links to. */
+export const DEFAULT_APP_URL = "https://chainpay-frontend.onrender.com";
 
 function usage(): string {
   return [
@@ -39,13 +70,23 @@ function usage(): string {
     "  chainpay export [--owner <wallet>] [--mandate <pda>] [--out <file.csv>]",
     "  chainpay pause <mandate> --owner <wallet>",
     "  chainpay revoke <mandate> --owner <wallet>",
+    "  chainpay request-mandate --keypair <file> --mint <mint> --recipient <addr>",
+    "      --per-payment <amount> --total <amount> --days <n> --description <text>",
+    "      [--po <id>] [--name <name>] [--app-url <url>]",
+    "  chainpay request-budget --keypair <file> --agent <addr> --mint <mint>",
+    "      --total <amount> [--per-payment <amount>] --days <n> --description <text>",
+    "      [--name <name>] [--app-url <url>]",
     "",
     "Flags: --owner --mandate --rpc --program --out --json --help",
     "       export writes receipts as CSV to --out, or to stdout.",
     "       --json prints the snapshot, or for pause/revoke the unsigned transaction.",
+    "       Requests also take --decimals --token-program --link-days (default 7).",
+    "       Amounts are whole tokens, e.g. 5 or 2.5, converted exactly.",
     "Env:   CHAINPAY_OWNER CHAINPAY_RPC_URL CHAINPAY_PROGRAM_ID CHAINPAY_APP_URL",
     "",
-    "This CLI never signs, stores keys, or submits a transaction.",
+    "This CLI never submits a transaction or prints a key. request-mandate and",
+    "request-budget sign only an off-chain request with your keypair file; the",
+    "owner who opens the link decides the limits and signs in their own wallet.",
   ].join("\n");
 }
 
@@ -56,14 +97,12 @@ function parseArgs(argv: string[]): { command: string; positional: string[]; fla
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") flags.help = true;
     else if (arg === "--json") flags.json = true;
-    else if (arg === "--owner" || arg === "--mandate" || arg === "--rpc" || arg === "--program" || arg === "--out") {
+    else if (Object.prototype.hasOwnProperty.call(VALUE_FLAGS, arg)) {
       const value = argv[index + 1];
-      if (!value || value.startsWith("-")) throw new Error(`${arg} needs a value`);
-      if (arg === "--owner") flags.owner = value;
-      if (arg === "--mandate") flags.mandate = value;
-      if (arg === "--rpc") flags.rpc = value;
-      if (arg === "--program") flags.program = value;
-      if (arg === "--out") flags.out = value;
+      if (value === undefined || value === "" || (value.startsWith("-") && arg !== "--description")) {
+        throw new Error(`${arg} needs a value`);
+      }
+      flags[VALUE_FLAGS[arg as keyof typeof VALUE_FLAGS]] = value;
       index += 1;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag: ${arg}`);
@@ -161,7 +200,107 @@ export async function exportReceiptsCsv(
   return { csv: receiptsToCsv(rows), rowCount: rows.length };
 }
 
-export async function runChainPayCli(argv: string[], env: Env = process.env): Promise<number> {
+/** What a request command reads from the network. Injected in tests. */
+export type RequestCommandDependencies = {
+  getCurrentSlot(): Promise<bigint>;
+  getMintDecimals(mint: string): Promise<number>;
+  getTokenProgram(mint: string): Promise<TokenProgram>;
+};
+
+function required(flags: Flags, name: ValueFlag, flag: string): string {
+  const value = flags[name]?.trim();
+  if (!value) throw new Error(`Pass ${flag}`);
+  return value;
+}
+
+function wholeNumber(value: string, flag: string): number {
+  if (!/^\d+$/.test(value)) throw new Error(`${flag} must be a whole number`);
+  return Number(value);
+}
+
+/** Solana CLI keypair file: a JSON array of 64 bytes. The secret is never printed. */
+function readKeypairFile(path: string): Keypair {
+  let values: unknown;
+  try {
+    values = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    throw new Error("Keypair file must be a Solana CLI JSON keypair");
+  }
+  if (
+    !Array.isArray(values)
+    || values.length !== 64
+    || !values.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)
+  ) {
+    throw new Error("Keypair file must be a Solana CLI JSON keypair");
+  }
+  try {
+    return Keypair.fromSecretKey(Uint8Array.from(values as number[]));
+  } catch {
+    throw new Error("Keypair file must be a Solana CLI JSON keypair");
+  }
+}
+
+async function runRequestCommand(
+  role: "vendor" | "grantee",
+  flags: Flags,
+  env: Env,
+  deps: RequestCommandDependencies,
+): Promise<number> {
+  const keypairPath = required(flags, "keypair", "--keypair <file>");
+  const mint = address(required(flags, "mint", "--mint <mint>"));
+  const recipient = role === "vendor" ? address(required(flags, "recipient", "--recipient <addr>")) : undefined;
+  const agent = role === "grantee" ? address(required(flags, "agent", "--agent <addr>")) : undefined;
+  const total = required(flags, "total", "--total <amount>");
+  const perPayment = role === "vendor"
+    ? required(flags, "perPayment", "--per-payment <amount>")
+    : flags.perPayment?.trim();
+  const days = wholeNumber(required(flags, "days", "--days <n>"), "--days");
+  const linkValidDays = flags.linkDays === undefined ? undefined : wholeNumber(flags.linkDays, "--link-days");
+  const description = required(flags, "description", "--description <text>");
+  if (flags.tokenProgram && flags.tokenProgram !== "spl-token" && flags.tokenProgram !== "token-2022") {
+    throw new Error("--token-program must be spl-token or token-2022");
+  }
+  const keypair = readKeypairFile(keypairPath);
+  const decimals = flags.decimals === undefined
+    ? await deps.getMintDecimals(mint)
+    : wholeNumber(flags.decimals, "--decimals");
+  const tokenProgram = (flags.tokenProgram as TokenProgram | undefined) ?? await deps.getTokenProgram(mint);
+  const currentSlot = await deps.getCurrentSlot();
+  const totalUnits = parseHumanTokenAmount(total, decimals);
+  const payload = buildMandateRequestPayload({
+    role,
+    requester: keypair.publicKey.toBase58(),
+    ...(flags.name ? { requesterName: flags.name } : {}),
+    ...(agent ? { agent } : {}),
+    ...(recipient ? { recipient } : {}),
+    mint,
+    tokenProgram,
+    total: totalUnits,
+    ...(perPayment ? { maxPerPayment: parseHumanTokenAmount(perPayment, decimals) } : {}),
+    decimals,
+    currentSlot,
+    days,
+    ...(linkValidDays === undefined ? {} : { linkValidDays }),
+    description,
+    ...(flags.po ? { poNumber: flags.po } : {}),
+  });
+  const signed = await signMandateRequest(payload, keypair.secretKey);
+  const appUrl = flags.appUrl ?? env.CHAINPAY_APP_URL?.trim() ?? DEFAULT_APP_URL;
+  const link = encodeMandateRequestLink(signed, appUrl || DEFAULT_APP_URL);
+  const summary = mandateRequestSummary(signed.payload, currentSlot);
+  print(
+    { link, summary, request: signed },
+    `${link}\n\n${summary}\nDays are estimated from 400 ms slots. Nothing moves until the owner signs a mandate.`,
+    flags.json,
+  );
+  return 0;
+}
+
+export async function runChainPayCli(
+  argv: string[],
+  env: Env = process.env,
+  requestDeps?: RequestCommandDependencies,
+): Promise<number> {
   const { command, positional, flags } = parseArgs(argv);
   if (flags.help || command === "help" || command === "") {
     process.stdout.write(`${usage()}\n`);
@@ -170,6 +309,15 @@ export async function runChainPayCli(argv: string[], env: Env = process.env): Pr
 
   const appUrl = env.CHAINPAY_APP_URL;
   const client = clientFrom(flags, env);
+
+  if (command === "request-mandate" || command === "request-budget") {
+    const deps: RequestCommandDependencies = requestDeps ?? {
+      getCurrentSlot: () => client.getCurrentSlot(),
+      getMintDecimals: (mint) => client.getMintDecimals(mint),
+      getTokenProgram: (mint) => client.getTokenProgram(mint),
+    };
+    return runRequestCommand(command === "request-mandate" ? "vendor" : "grantee", flags, env, deps);
+  }
 
   if (command === "status") {
     const owner = ownerFrom(flags, env);

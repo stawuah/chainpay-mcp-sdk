@@ -25,7 +25,8 @@ test("chainpay --help explains read-only commands and never-sign rule", async ()
   assert.match(text, /chainpay receipts/);
   assert.match(text, /chainpay receipt/);
   assert.match(text, /chainpay pause/);
-  assert.match(text, /never signs/);
+  assert.match(text, /never submits a transaction/);
+  assert.match(text, /request-mandate/);
 });
 
 test("cli binary --help exits 0", () => {

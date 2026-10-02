@@ -8,6 +8,7 @@ export * from "./mandate.js";
 export * from "./ops-snapshot.js";
 export * from "./payment.js";
 export * from "./payment-request.js";
+export * from "./mandate-request.js";
 export * from "./pda.js";
 export * from "./receipt.js";
 export * from "./receipt-export.js";
