@@ -1,7 +1,17 @@
 import type { ChainPayClient } from "./client.js";
 import { assetLabel } from "./known-assets.js";
 import { formatExactTokenAmount } from "./receipt.js";
-import type { Address, Mandate, MandateStatus, PaymentReceipt, PaymentStatus } from "./types.js";
+import { receiptPolicy } from "./receipt-export.js";
+import type {
+  Address,
+  Mandate,
+  MandateStatus,
+  PaymentReceipt,
+  PaymentRequestPayload,
+  PaymentStatus,
+  ReceiptPolicy,
+  ReceiptPolicySource,
+} from "./types.js";
 
 export const DEFAULT_RECEIPT_LIMIT = 10;
 
@@ -42,6 +52,48 @@ export type OpsMandateRow = {
   approvedAgent: Address;
 };
 
+/**
+ * Spending-permission limits beside one receipt, as display amounts. `source`
+ * says where they came from; only "on-chain" was recorded on Solana. Limit
+ * fields are absent when the source is "not-recorded".
+ */
+export type OpsReceiptPolicy = {
+  source: ReceiptPolicySource;
+  maxPerPayment?: string;
+  totalLimit?: string;
+  /** Absent for a relay read taken after a later payment. */
+  spentAfter?: string;
+  paymentCountAfter?: string;
+  /** "0" means no payment-count cap. */
+  maxPaymentCount?: string;
+  expiresAtSlot?: string;
+  observedAtSlot?: string;
+};
+
+/** What was bought, from a merchant-signed request checked against the receipt. */
+export type OpsReceiptPurpose = Partial<Pick<PaymentRequestPayload, "invoice" | "description" | "lineItems">> & {
+  /** False when the receipt paid a different amount, mint, or recipient than the request named. */
+  matched?: boolean;
+};
+
+export function opsReceiptPolicy(policy: ReceiptPolicy, decimals: number | null): OpsReceiptPolicy {
+  if (policy.source === "not-recorded") return { source: "not-recorded" };
+  const { limits } = policy;
+  const later = policy.source === "relay-observed" && policy.includesLaterPayments;
+  return {
+    source: policy.source,
+    maxPerPayment: humanTokenAmount(limits.maxPerPayment, decimals).display,
+    totalLimit: humanTokenAmount(limits.totalLimit, decimals).display,
+    ...(later ? {} : {
+      spentAfter: humanTokenAmount(limits.amountSpentAfter, decimals).display,
+      paymentCountAfter: limits.paymentCountAfter.toString(),
+    }),
+    maxPaymentCount: limits.maxPaymentCount.toString(),
+    expiresAtSlot: limits.expiresAtSlot.toString(),
+    ...(policy.source === "relay-observed" ? { observedAtSlot: policy.observedAtSlot.toString() } : {}),
+  };
+}
+
 export type OpsReceiptRow = {
   address: Address;
   mandate: Address;
@@ -53,6 +105,8 @@ export type OpsReceiptRow = {
   executedAtSlot: string;
   recipientTokenAccount: Address;
   receiptUrl?: string;
+  policy: OpsReceiptPolicy;
+  purpose?: OpsReceiptPurpose;
 };
 
 export type OpsAttentionItem = {
@@ -81,6 +135,8 @@ export type OpsReceiptList = {
 export type PaymentLookupCard = {
   kind: "payment_lookup";
   found: boolean;
+  policy?: OpsReceiptPolicy;
+  purpose?: OpsReceiptPurpose;
   receiptAddress?: Address;
   amount?: string;
   symbol?: string;
@@ -98,6 +154,18 @@ export type LoadOpsSnapshotInput = {
   appUrl?: string;
   currentSlot?: bigint;
   expiringSoonSlots?: bigint;
+  /**
+   * Optional off-chain context for each listed receipt, such as a relay
+   * observation of the limits or the verified merchant request. Called only
+   * for receipts inside the limit. A failure leaves the row as it was.
+   */
+  receiptContext?: (receipt: PaymentReceipt) => Promise<OpsReceiptContext>;
+};
+
+export type OpsReceiptContext = {
+  /** Used only when the receipt carries no on-chain snapshot. */
+  relayPolicy?: ReceiptPolicy | null;
+  purpose?: OpsReceiptPurpose;
 };
 
 export function tokenLabel(mint: Address): string {
@@ -211,6 +279,7 @@ export function buildOpsSnapshot(input: {
         executedAtSlot: receipt.executedAtSlot.toString(),
         recipientTokenAccount: receipt.recipientTokenAccount,
         ...(receiptUrl ? { receiptUrl } : {}),
+        policy: opsReceiptPolicy(receiptPolicy(receipt), decimals),
       } satisfies OpsReceiptRow;
     });
 
@@ -286,7 +355,7 @@ export async function loadOpsSnapshot(
     }
   }));
   const currentSlot = options.currentSlot ?? await client.getCurrentSlot().catch(() => undefined);
-  return buildOpsSnapshot({
+  const snapshot = buildOpsSnapshot({
     owner,
     mandates,
     receipts,
@@ -296,6 +365,24 @@ export async function loadOpsSnapshot(
     receiptLimit: options.receiptLimit,
     expiringSoonSlots: options.expiringSoonSlots,
   });
+  const receiptContext = options.receiptContext;
+  if (!receiptContext) return snapshot;
+  const byAddress = new Map(receipts.map((receipt) => [receipt.address, receipt]));
+  const rows = await Promise.all(snapshot.receipts.map(async (row) => {
+    const receipt = byAddress.get(row.address);
+    if (!receipt) return row;
+    try {
+      const context = await receiptContext(receipt);
+      return {
+        ...row,
+        policy: opsReceiptPolicy(receiptPolicy(receipt, context.relayPolicy), row.decimals),
+        ...(context.purpose ? { purpose: context.purpose } : {}),
+      };
+    } catch {
+      return row;
+    }
+  }));
+  return { ...snapshot, receipts: rows };
 }
 
 export function receiptListFromSnapshot(snapshot: OpsSnapshot): OpsReceiptList {
@@ -369,12 +456,29 @@ export function formatReceiptListMarkdown(list: OpsReceiptList): string {
     const verify = receipt.receiptUrl ? ` · [Verify](${receipt.receiptUrl})` : "";
     lines.push(
       `${index + 1}. **${receipt.amount} ${receipt.symbol}** — ${receipt.status}`,
+      ...(receipt.purpose?.description ? [`   For: ${receipt.purpose.description}`] : []),
       `   Receipt: \`${shortAddress(receipt.address)}\`${verify}`,
       `   Permission: \`${shortAddress(receipt.mandate)}\``,
+      `   ${receiptPolicyLine(receipt.policy, receipt.symbol)}`,
     );
   });
   lines.push("", "**Next step:** Open a verify link or call `get_payment` with a receipt address for the full card.");
   return lines.join("\n");
+}
+
+const POLICY_SOURCE_LABEL: Record<ReceiptPolicySource, string> = {
+  "on-chain": "recorded on Solana at payment",
+  "relay-observed": "seen by the ChainPay relay after payment, not stored on Solana",
+  "not-recorded": "not recorded for this receipt",
+};
+
+/** One plain line: the limits at payment and where they came from. */
+export function receiptPolicyLine(policy: OpsReceiptPolicy | undefined, symbol: string): string {
+  if (!policy || policy.source === "not-recorded" || !policy.maxPerPayment || !policy.totalLimit) {
+    return `Limits at payment: ${POLICY_SOURCE_LABEL["not-recorded"]}`;
+  }
+  const spent = policy.spentAfter ? ` · ${policy.spentAfter} of ${policy.totalLimit} ${symbol} used after` : ` · ${policy.totalLimit} ${symbol} total`;
+  return `Limits at payment: ${policy.maxPerPayment} ${symbol} per payment${spent} (${POLICY_SOURCE_LABEL[policy.source]})`;
 }
 
 export function formatPaymentLookupMarkdown(card: PaymentLookupCard): string {
@@ -386,7 +490,9 @@ export function formatPaymentLookupMarkdown(card: PaymentLookupCard): string {
     "**Payment receipt** on Solana Devnet.",
     ...(card.amount ? [`- Amount: **${card.amount}${card.symbol ? ` ${card.symbol}` : ""}**`] : []),
     ...(card.receiptAddress ? [`- Receipt: \`${shortAddress(card.receiptAddress)}\``] : []),
+    ...(card.purpose?.description ? [`- For: ${card.purpose.description}`] : []),
     ...(card.mandate ? [`- Permission: \`${shortAddress(card.mandate)}\``] : []),
+    ...(card.policy ? [`- ${receiptPolicyLine(card.policy, card.symbol ?? "")}`] : []),
     ...(card.status ? [`- Status: ${card.status}`] : []),
     ...(card.signature ? [`- Signature: \`${shortAddress(card.signature)}\``] : []),
     ...(card.receiptUrl ? [`- Verify: ${card.receiptUrl}`] : []),

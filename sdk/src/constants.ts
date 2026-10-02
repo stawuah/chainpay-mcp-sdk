@@ -38,5 +38,14 @@ export const RECEIPT_SEED = "receipt";
 export const ASSET_SEED = "asset";
 
 export const RECEIPT_STATUS_SETTLED = 1;
+/** Original PaymentReceipt account size. Still the minimum any reader accepts. */
 export const RECEIPT_ACCOUNT_LENGTH = 282;
+/**
+ * PaymentReceipt with the policy snapshot appended after `bump`. Offsets of
+ * every original field are unchanged, so a v2 receipt is a v1 receipt plus a
+ * tail. Both sizes exist on chain at once after the program upgrade.
+ */
+export const RECEIPT_ACCOUNT_LENGTH_V2 = 371;
+/** Every receipt account size a discovery query must ask for. */
+export const RECEIPT_ACCOUNT_LENGTHS = [RECEIPT_ACCOUNT_LENGTH, RECEIPT_ACCOUNT_LENGTH_V2] as const;
 export const MANDATE_ACCOUNT_LENGTH = 235;

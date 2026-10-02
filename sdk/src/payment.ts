@@ -22,6 +22,39 @@ import {
 } from "./encoding.js";
 import { deriveAssetAddress, deriveConfigAddress, deriveReceiptAddress } from "./pda.js";
 
+export const DUPLICATE_INVOICE_MESSAGE = "This invoice was already paid. Nothing new was submitted.";
+
+/**
+ * The receipt for this mandate and invoice hash already exists, so the invoice
+ * was paid before. Raised before anything is built, signed, or sent. The
+ * program would refuse the payment anyway; this says why in plain words.
+ */
+export class DuplicateInvoiceError extends Error {
+  readonly code = "DuplicateInvoice" as const;
+  readonly receiptAddress: Address;
+
+  constructor(receiptAddress: Address) {
+    super(DUPLICATE_INVOICE_MESSAGE);
+    this.name = "DuplicateInvoiceError";
+    this.receiptAddress = receiptAddress;
+  }
+}
+
+export function isDuplicateInvoiceError(error: unknown): error is DuplicateInvoiceError {
+  return error instanceof DuplicateInvoiceError
+    || (typeof error === "object" && error !== null && (error as { code?: unknown }).code === "DuplicateInvoice");
+}
+
+/**
+ * True when a simulation or send error says the receipt account already
+ * exists ("Allocate: account ... already in use"). Matches only when the
+ * message names this payment's receipt, so an unrelated account collision is
+ * still reported as itself.
+ */
+export function isReceiptAlreadyInUse(message: string, receiptAddress: Address): boolean {
+  return message.includes("already in use") && message.includes(receiptAddress);
+}
+
 export type PreparePaymentInput = {
   mandate: Address;
   invoiceHash: Uint8Array;

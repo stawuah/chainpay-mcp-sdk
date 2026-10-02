@@ -10,6 +10,7 @@ export * from "./payment.js";
 export * from "./payment-request.js";
 export * from "./pda.js";
 export * from "./receipt.js";
+export * from "./receipt-export.js";
 export * from "./solana.js";
 export * from "./token.js";
 export * from "./token-capabilities.js";
