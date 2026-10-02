@@ -1443,7 +1443,7 @@ async fn submit_transaction(
             Some(r) => r,
             None => serde_json::from_value(initial).map_err(|_| recovery::conflict())?,
         };
-        return Ok(Json(recovery::transaction(&state, record).await?));
+        return resume_owner_transaction(&state, &principal, &transaction, &request, record).await;
     }
     if state.store.get_transaction(&id).await?.is_some() {
         return Err(ApiError::Conflict(
@@ -1453,7 +1453,7 @@ async fn submit_transaction(
     }
     validate_owner_live(&state, &principal, &transaction).await?;
     let now = now_ms();
-    let mut record = TransactionRecord {
+    let record = TransactionRecord {
         transaction_id: id,
         idempotency_key: key,
         signature: Some(recovery::signature(&request.signed_transaction)?),
@@ -1484,7 +1484,8 @@ async fn submit_transaction(
             Some(r) => r,
             None => serde_json::from_value(initial).map_err(|_| recovery::conflict())?,
         };
-        return Ok(Json(recovery::transaction(&state, existing).await?));
+        return resume_owner_transaction(&state, &principal, &transaction, &request, existing)
+            .await;
     }
     state
         .store
@@ -1494,6 +1495,40 @@ async fn submit_transaction(
             i64::MAX as u64,
         )
         .await?;
+    send_owner_transaction(&state, &principal, &transaction, &request, record).await
+}
+
+async fn resume_owner_transaction(
+    state: &BackendState,
+    principal: &Principal,
+    transaction: &VersionedTransaction,
+    request: &TransactionSubmissionRequest,
+    record: TransactionRecord,
+) -> Result<Json<TransactionRecord>, ApiError> {
+    if record.signature.as_deref()
+        != Some(recovery::signature(&request.signed_transaction)?.as_str())
+    {
+        return Err(recovery::conflict());
+    }
+    let record = recovery::transaction(state, record).await?;
+    if record.status == PaymentStatus::Prepared {
+        // The intent and original signature were checked before reaching here.
+        // Only a send proven not to have left this process permits this retry.
+        return send_owner_transaction(state, principal, transaction, request, record).await;
+    }
+    Ok(Json(record))
+}
+
+async fn send_owner_transaction(
+    state: &BackendState,
+    principal: &Principal,
+    transaction: &VersionedTransaction,
+    request: &TransactionSubmissionRequest,
+    mut record: TransactionRecord,
+) -> Result<Json<TransactionRecord>, ApiError> {
+    validate_owner_live(state, principal, transaction).await?;
+    record.status = PaymentStatus::Submitted;
+    record.updated_at_ms = now_ms();
     state.store.put_transaction(record.clone()).await?;
     if let Err(error) = state
         .rpc
@@ -1544,9 +1579,8 @@ async fn validate_owner_live(
     principal: &Principal,
     transaction: &VersionedTransaction,
 ) -> Result<(), ApiError> {
-    let first = transaction
-        .message
-        .instructions()
+    let instructions = transactions::payload_instructions(transaction);
+    let first = instructions
         .first()
         .ok_or_else(|| ApiError::BadRequest("Transaction has no instructions".into()))?;
     let program_id = &state.config.program_id;
@@ -1678,9 +1712,8 @@ async fn validate_live_enabled_asset(
     state: &BackendState,
     transaction: &VersionedTransaction,
 ) -> Result<(), ApiError> {
-    let first = transaction
-        .message
-        .instructions()
+    let instructions = transactions::payload_instructions(transaction);
+    let first = instructions
         .first()
         .ok_or_else(|| ApiError::BadRequest("Transaction has no instructions".into()))?;
     let mint = address_at(transaction, &first.accounts, 3)?;

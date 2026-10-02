@@ -42,7 +42,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "esbuild": "^0.28.1",
     "jsdom": "^30.0.1",
-    "playwright": "^1.49.1",
+    "playwright": "^1.63.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   },

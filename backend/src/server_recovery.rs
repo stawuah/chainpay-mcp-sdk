@@ -438,6 +438,10 @@ pub(super) async fn transaction(
                 record.error=Some("Transaction finalized; batch receipt verification pending. Keep the existing operation.".into());
             }
         }
+        Ok(None) | Err(_) if record.status == PaymentStatus::Prepared => {
+            // Absent or unavailable RPC evidence does not undo proof that no
+            // submission left this process (for example local backpressure).
+        }
         _ => {
             record.status = PaymentStatus::Submitted;
             record.error = Some(
@@ -768,6 +772,238 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    fn prepend_budget(tx: &mut VersionedTransaction, signer: &ed25519_dalek::SigningKey) {
+        use ed25519_dalek::Signer;
+        let solana_message::VersionedMessage::Legacy(message) = &mut tx.message else {
+            panic!()
+        };
+        let index = message.account_keys.len() as u8;
+        message.account_keys.push(
+            "ComputeBudget111111111111111111111111111111"
+                .parse()
+                .unwrap(),
+        );
+        message.header.num_readonly_unsigned_accounts += 1;
+        let mut data = vec![2];
+        data.extend_from_slice(&200_000u32.to_le_bytes());
+        message.instructions.insert(
+            0,
+            solana_message::compiled_instruction::CompiledInstruction {
+                program_id_index: index,
+                accounts: vec![],
+                data,
+            },
+        );
+        tx.signatures = vec![signer.sign(&tx.message.serialize()).to_bytes().into()];
+    }
+
+    fn owner_ata_fixture() -> (VersionedTransaction, Principal, Vec<u8>) {
+        use ed25519_dalek::Signer;
+        use solana_address::Address;
+        use solana_message::{
+            Message, MessageHeader, VersionedMessage, compiled_instruction::CompiledInstruction,
+        };
+        let signer = ed25519_dalek::SigningKey::from_bytes(&[91; 32]);
+        let owner = Address::from(signer.verifying_key().to_bytes());
+        let mint = Address::from([5; 32]);
+        let token: Address = SPL_TOKEN_PROGRAM_ID.parse().unwrap();
+        let ata_program: Address = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+            .parse()
+            .unwrap();
+        let ata = Address::find_program_address(
+            &[owner.as_ref(), token.as_ref(), mint.as_ref()],
+            &ata_program,
+        )
+        .0;
+        let message = VersionedMessage::Legacy(Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 4,
+            },
+            account_keys: vec![
+                owner,
+                ata,
+                mint,
+                token,
+                "11111111111111111111111111111111".parse().unwrap(),
+                ata_program,
+            ],
+            recent_blockhash: Default::default(),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 5,
+                accounts: vec![0, 1, 0, 2, 4, 3],
+                data: vec![1],
+            }],
+        });
+        let mut tx = VersionedTransaction {
+            signatures: vec![signer.sign(&message.serialize()).to_bytes().into()],
+            message,
+        };
+        prepend_budget(&mut tx, &signer);
+        let mut asset = vec![0; 106];
+        asset[..8].copy_from_slice(&[129, 27, 96, 192, 89, 180, 227, 200]);
+        asset[40..72].copy_from_slice(mint.as_ref());
+        asset[72..104].copy_from_slice(token.as_ref());
+        asset[104] = 1;
+        (
+            tx,
+            Principal {
+                wallet: owner.to_string(),
+                scope: None,
+            },
+            asset,
+        )
+    }
+
+    async fn attach_rpc(state: &mut BackendState, router: Router) -> tokio::task::JoinHandle<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        state.config.rpc.url = format!("http://{}", listener.local_addr().unwrap());
+        state.rpc = RpcClient::new(state.config.rpc.clone()).unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() })
+    }
+
+    #[tokio::test]
+    async fn compute_prefix_cannot_bypass_disabled_asset_or_paused_payment() {
+        let (mut state, _, _) = fixture();
+        let (ata, owner, mut asset) = owner_ata_fixture();
+        validate_owner_transaction(&ata, &owner.wallet, DEFAULT_PROGRAM_ID).unwrap();
+        asset[104] = 0;
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let asset = asset.clone();
+            async move {
+                assert_eq!(body["method"], "getAccountInfo");
+                Json(json!({"jsonrpc":"2.0","id":1,"result":{"value":{"owner":DEFAULT_PROGRAM_ID,"data":[BASE64.encode(asset),"base64"]}}}))
+            }
+        });
+        let task = attach_rpc(&mut state, router).await;
+        assert!(
+            matches!(validate_owner_live(&state, &owner, &ata).await, Err(ApiError::BadRequest(message)) if message.contains("disabled"))
+        );
+        task.abort();
+
+        let (mut tx, request, signer) = transactions::tests::fixture(0);
+        prepend_budget(&mut tx, &signer);
+        let owner = Principal {
+            wallet: request.agent.clone().unwrap(),
+            scope: None,
+        };
+        validate_owner_transaction(&tx, &owner.wallet, DEFAULT_PROGRAM_ID).unwrap();
+        let record = initial(&request, SigningMode::Human).unwrap();
+        let mut mandate = mandate_account_data(&record, true, false, u64::MAX);
+        mandate[8..40].copy_from_slice(&signer.verifying_key().to_bytes());
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let mandate = mandate.clone();
+            async move {
+                let result = match body["method"].as_str().unwrap() {
+                    "getAccountInfo" => json!({"value":{"owner":DEFAULT_PROGRAM_ID,"data":[BASE64.encode(mandate),"base64"]}}),
+                    "getSlot" => json!(1),
+                    method => panic!("Unexpected RPC {method}"),
+                };
+                Json(json!({"jsonrpc":"2.0","id":1,"result":result}))
+            }
+        });
+        let task = attach_rpc(&mut state, router).await;
+        assert!(
+            matches!(validate_owner_live(&state, &owner, &tx).await, Err(ApiError::BadRequest(message)) if message.contains("paused"))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn owner_backpressure_retry_preserves_bytes_and_rechecks_live_policy() {
+        let (mut state, _, _) = fixture();
+        let (tx, owner, asset) = owner_ata_fixture();
+        let wire = BASE64.encode(wincode::serialize(&tx).unwrap());
+        let key = format!("{}:owner-retry", owner.wallet);
+        let id = deterministic_id("transaction", &key);
+        let record = TransactionRecord {
+            transaction_id: id.clone(),
+            idempotency_key: key,
+            signature: Some(signature(&wire).unwrap()),
+            slot: None,
+            status: PaymentStatus::Submitted,
+            error: None,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+        };
+        let record = classify_transaction_send(&state, record, &RpcError::Busy)
+            .await
+            .unwrap();
+        assert_eq!(record.status, PaymentStatus::Prepared);
+        state.store.claim_operation(&id, &owner.wallet, json!({"message":hex_encode(&Sha256::digest(tx.message.serialize())),"receipts":[]}), json!(record)).await.unwrap();
+        state.store.put_transaction(record.clone()).await.unwrap();
+        let stage = Arc::new(AtomicUsize::new(0));
+        let sends = Arc::new(AtomicUsize::new(0));
+        let rpc_stage = stage.clone();
+        let rpc_sends = sends.clone();
+        let expected_wire = wire.clone();
+        let expected_signature = record.signature.clone().unwrap();
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let stage = rpc_stage.clone(); let sends = rpc_sends.clone(); let mut asset = asset.clone();
+            let expected_wire = expected_wire.clone(); let expected_signature = expected_signature.clone();
+            async move {
+                let result = match body["method"].as_str().unwrap() {
+                    "getSignatureStatuses" => {
+                        if stage.load(Ordering::SeqCst) == 0 {
+                            return Json(json!({"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"fixture unavailable"}}));
+                        }
+                        json!({"value":[if sends.load(Ordering::SeqCst) == 0 { Value::Null } else { json!({"slot":3,"confirmationStatus":"finalized","err":null}) }]})
+                    }
+                    "getAccountInfo" => {
+                        asset[104] = u8::from(stage.load(Ordering::SeqCst) >= 2);
+                        json!({"value":{"owner":DEFAULT_PROGRAM_ID,"data":[BASE64.encode(asset),"base64"]}})
+                    }
+                    "sendTransaction" => {
+                        assert_eq!(body["params"][0], expected_wire);
+                        sends.fetch_add(1, Ordering::SeqCst); json!(expected_signature)
+                    }
+                    method => panic!("Unexpected RPC {method}"),
+                };
+                Json(json!({"jsonrpc":"2.0","id":1,"result":result}))
+            }
+        });
+        let task = attach_rpc(&mut state, router).await;
+        assert_eq!(
+            transaction(&state, record).await.unwrap().status,
+            PaymentStatus::Prepared
+        );
+        stage.store(1, Ordering::SeqCst);
+        let request = || TransactionSubmissionRequest {
+            idempotency_key: "owner-retry".into(),
+            signed_transaction: wire.clone(),
+        };
+        assert!(
+            matches!(submit_transaction(State(state.clone()), Extension(owner.clone()), Json(request())).await, Err(ApiError::BadRequest(message)) if message.contains("disabled"))
+        );
+        assert_eq!(sends.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            state
+                .store
+                .get_transaction(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PaymentStatus::Prepared
+        );
+        stage.store(2, Ordering::SeqCst);
+        let Json(settled) = submit_transaction(
+            State(state.clone()),
+            Extension(owner.clone()),
+            Json(request()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(settled.status, PaymentStatus::Confirmed);
+        assert_eq!(settled.signature, Some(signature(&wire).unwrap()));
+        let _ = submit_transaction(State(state), Extension(owner), Json(request()))
+            .await
+            .unwrap();
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        task.abort();
+    }
 
     #[test]
     fn a_rejection_names_the_reason_the_chain_gave() {

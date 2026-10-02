@@ -245,7 +245,15 @@ export function createHttpServer(
 
   const mcpServer = createMcpServer(context);
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    } catch {
+      // The request target and Host header are untrusted, including on public
+      // routes. An uncaught rejection in this async listener stops Node.
+      writeJson(res, 400, { error: "Invalid request URL" });
+      return;
+    }
     const cors = corsHeaders(req.headers.origin, resolved.allowedOrigins);
     if (cors === null) {
       writeJson(res, 403, { error: "Origin is not allowed" });

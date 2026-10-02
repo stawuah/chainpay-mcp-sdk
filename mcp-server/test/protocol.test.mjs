@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { request as httpRequest } from "node:http";
 import { Keypair } from "@solana/web3.js";
 import { createMcpServer, createStdioRuntime } from "../dist/server.js";
 import {
@@ -91,6 +92,23 @@ async function frontendCompatibilityHelper(base, method, params, token) {
   if (!response.ok || payload.error) throw new Error(payload.error?.message ?? `MCP request failed (${response.status})`);
   return payload.result;
 }
+
+test("malformed HTTP Host returns 400 and the server continues serving", async () => {
+  await withHttpServer(fixtureContext(), async (base) => {
+    for (const host of ["[", "example.test:invalid-port"]) {
+      const status = await new Promise((resolve, reject) => {
+        const request = httpRequest(`${base}/healthz`, { headers: { Host: host } }, (response) => {
+          response.resume();
+          response.on("end", () => resolve(response.statusCode));
+        });
+        request.on("error", reject);
+        request.end();
+      });
+      assert.equal(status, 400);
+      assert.equal((await fetch(`${base}/healthz`)).status, 200);
+    }
+  });
+});
 
 test("legacy initialize and modern discover share the same server instructions", async () => {
   const server = createMcpServer(fixtureContext());
