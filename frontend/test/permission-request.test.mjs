@@ -72,12 +72,13 @@ test("a valid link verifies, with the expiry checked against the current slot", 
   assert.deepEqual(check.signed, fixture.vendor.request);
 });
 
-test("an expired link is blocked when the slot is known, and passes unchecked without it", async () => {
+test("request acceptance fails closed when the expiry slot cannot be checked", async () => {
   const expired = await requests.checkPermissionRequestLink(fixture.expired.fragment, SLOT);
   assert.equal(expired.status, "invalid");
   assert.equal(expired.reason, "This request link has expired");
   const unchecked = await requests.checkPermissionRequestLink(fixture.expired.fragment, null);
-  assert.equal(unchecked.status, "valid");
+  assert.equal(unchecked.status, "invalid");
+  assert.match(unchecked.reason, /expiry could not be checked/);
   assert.equal(unchecked.checkedAtSlot, undefined, "the card says the expiry was not checked");
 });
 
@@ -351,7 +352,7 @@ test("an order for another agent or token does not attach to the receipt", async
   assert.deepEqual(tampered, { status: "failed", via: "link", reason: "the requester signature does not check out" });
 });
 
-test("the public never sees the order; an audit link with the order shows it and the same pill", async () => {
+test("public order fragments show the proposal without claiming verified acceptance", async () => {
   const receipt = receiptView();
   const ownerOrder = await order.verifyOrderForReceipt(receipt, fixture.vendor.request, "owner");
   const ownerInvoice = await purchase.verifyPurchaseForReceipt(receipt, fixture.invoice.request, "owner");
@@ -367,7 +368,7 @@ test("the public never sees the order; an audit link with the order shows it and
   const linkOrder = await order.verifyOrderForReceipt(receipt, order.decodeOrderFragment(model.orderFragmentFromHash(hash)), "link");
   const linkInvoice = await purchase.verifyPurchaseForReceipt(receipt, purchase.decodePurchaseFragment(model.purchaseFragmentFromHash(hash)), "link");
   const linkView = model.orderMatch(linkInvoice, "link", linkOrder);
-  assert.equal(linkView.pill, "Matched");
+  assert.equal(linkView.pill, "Acceptance unverified");
   assert.equal(linkView.details.poNumber, "PO-1042");
   assert.equal(linkView.canShareDetails, false);
   assert.equal(model.purchaseAuditPath("R", undefined, "abc"), "/verify/R#order=abc");
@@ -396,4 +397,55 @@ test("CSV appends PO number and Order match after the existing columns", async (
   assert.match(lines[1], /,PO-1042,Matched$/);
   assert.match(lines[2], /,,$/);
   assert.equal(exporter.statementCsvFilename("MdT1aaaaaaaaaaaa", new Date(2026, 9, 2)), "chainpay-statement-MdT1aaaa-2026-10-02.csv");
+});
+
+
+test("an imported request is rechecked at the acceptance deadline", async () => {
+  const checked = await requests.checkPermissionRequestLink(fixture.vendor.fragment, SLOT);
+  assert.equal(checked.status, "valid");
+  await requests.validatePermissionRequestForApproval(checked.signed, SLOT);
+  await assert.rejects(requests.validatePermissionRequestForApproval(checked.signed, BigInt(checked.signed.payload.validUntilSlot)), /expired/);
+  await assert.rejects(requests.validatePermissionRequestForApproval(checked.signed, null), /expiry could not be checked/);
+});
+
+test("a correctly signed request for another cluster is refused before approval", async () => {
+  const { Keypair } = require("@solana/web3.js");
+  const { signMandateRequest, encodeMandateRequestLink } = await import("@chainpay/sdk");
+  const key = Keypair.fromSeed(new Uint8Array(32).fill(43));
+  const signed = await signMandateRequest({ ...fixture.vendor.request.payload, cluster: "mainnet-beta", requester: key.publicKey.toBase58() }, key.secretKey);
+  await assert.rejects(requests.validatePermissionRequestForApproval(signed, SLOT), /different Solana cluster/);
+  const fragment = encodeMandateRequestLink(signed, "https://example.test").split("#req=")[1];
+  const checked = await requests.checkPermissionRequestLink(fragment, SLOT);
+  assert.equal(checked.status, "invalid");
+  assert.match(checked.reason, /different Solana cluster/);
+});
+
+test("a budget proposal in a public fragment never proves owner acceptance", async () => {
+  const linked = await order.verifyOrderForReceipt(receiptView(), fixture.grantee.request, "link");
+  assert.equal(linked.status, "linked");
+  assert.equal(model.orderMatch({ status: "none" }, "link", linked).pill, "Acceptance unverified");
+});
+
+test("invoice amount and mint mismatches propagate through order matching to CSV", async () => {
+  for (const field of ["amount", "mint"]) {
+    const receipt = receiptView(field === "amount" ? { amount: { baseUnits: "1", decimals: 6 } } : { mint: "So11111111111111111111111111111111111111112" });
+    const invoice = await purchase.verifyPurchaseForReceipt(receipt, fixture.invoice.request, "owner");
+    assert.equal(invoice.status, "verified");
+    assert.ok(invoice.mismatches.includes(field));
+    const vendor = await order.verifyOrderForReceipt(receiptView(), fixture.vendor.request, "owner");
+    const budget = await order.verifyOrderForReceipt(receiptView(), fixture.grantee.request, "owner");
+    for (const linked of [vendor, budget, undefined]) {
+      assert.equal(model.orderMatch(invoice, "owner", linked).pill, "Invoice differs");
+    }
+    const summary = model.orderMatch(invoice, "owner", vendor);
+    const row = {
+      address: receipt.address, mandate: receipt.mandate, invoiceHash: new Uint8Array(32), paymentId: new Uint8Array(32),
+      mint: receipt.mint, recipient: receipt.recipientTokenAccount, sourceTokenAccount: "Src", recipientTokenAccount: receipt.recipientTokenAccount,
+      amount: BigInt(receipt.amount.baseUnits), agent: receipt.agent, executedAtSlot: 1n, signatureReference: new Uint8Array(32),
+      status: "confirmed", onChainStatus: 1, bump: 255, policySnapshot: null,
+    };
+    const csv = await exporter.buildReceiptsCsv({ receipts: [row], decimalsByMint: new Map([[row.mint, 6]]), tokenLabel: () => "tokens", origin: "https://example.test", blockTime: async () => null,
+      order: async () => ({ poNumber: "PO-1042", orderMatch: summary.pill }) });
+    assert.match(csv.trimEnd(), /,PO-1042,Invoice differs$/);
+  }
 });

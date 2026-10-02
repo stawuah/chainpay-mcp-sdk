@@ -159,6 +159,7 @@ import { ownerOrderSummary } from "../receipts/owner";
 import {
   approvalOptions,
   checkPermissionRequestLink,
+  validatePermissionRequestForApproval,
   clearMandatePrefill,
   completePermissionRequest,
   declinePermissionRequest,
@@ -3665,6 +3666,7 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
       const expirySlot = parseExpirySlot(form.expiresAtSlot);
       const latestSlot = await chainpayClient.getCurrentSlot();
       setCurrentSlot(latestSlot);
+      if (prefill) await validatePermissionRequestForApproval(prefill.request, latestSlot);
       if (expirySlot <= latestSlot) throw new Error("The expiry slot must be after the current cluster slot.");
       const perPayment = parseTokenAmount(form.maxPerPayment, mintDecimals);
       const totalLimit = parseTokenAmount(form.totalLimit, mintDecimals);
@@ -3721,6 +3723,7 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
     try {
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
       const transaction = toWeb3Transaction(prepared.transaction, latest.blockhash);
+      if (prefill) await validatePermissionRequestForApproval(prefill.request, await chainpayClient.getCurrentSlot());
       const signed = await walletSigner(transaction);
       const mandateKey = `mandate:${prepared.mandateAddress}:${latest.blockhash}`;
       settlementOperationKey.current = mandateKey;

@@ -475,9 +475,11 @@ export type OrderMatchAudience = "owner" | "link" | "public";
  * budget request: the order and the payment). Payee differs: the payment went
  * to someone other than the order or invoice names. No invoice: an order but
  * no verified invoice for this payment. No order: no linked order.
+ * Invoice differs: the signed invoice amount or token differs from the payment.
+ * Acceptance unverified: matching proposal supplied in a public fragment.
  * Matched is a check made by ChainPay, not a guarantee from Solana.
  */
-export type OrderMatchPill = "Matched" | "Payee differs" | "No invoice" | "No order";
+export type OrderMatchPill = "Matched" | "Payee differs" | "Invoice differs" | "Acceptance unverified" | "No invoice" | "No order";
 
 export type OrderMatchRow = {
   key: "order" | "invoice" | "invoice-mismatch" | "payee" | "payment";
@@ -486,10 +488,9 @@ export type OrderMatchRow = {
 };
 
 /**
- * The purchase order or budget request the owner accepted for this receipt's
- * mandate, after its requester signature verified.
- * - owner: read from the relay with the owner's session.
- * - link: carried in an audit link the owner shared.
+ * A signed purchase order or budget request with compatible receipt fields.
+ * - owner: acceptance association read from the relay with the owner's session.
+ * - link: supplied in an audit link; owner acceptance is not authenticated.
  * `payeeMatches` is null for a budget request, where the payee is open.
  */
 export type OrderLinkState =
@@ -600,6 +601,13 @@ export function orderMatch(
     rows.push({ key: "payment", tone: "yes", text: "Paid on Solana" });
     pill = purchase?.status === "verified" && purchase.mismatches.includes("recipient") ? "Payee differs" : "No order";
   }
+
+  // A valid invoice signature/hash does not establish agreement on its terms.
+  if (purchase?.status === "verified" && purchase.mismatches.some((field) => field === "amount" || field === "mint")) {
+    pill = "Invoice differs";
+  }
+  // A requester signature authenticates a proposal, not the owner's acceptance.
+  if (orderVisible && linked?.via === "link" && pill === "Matched") pill = "Acceptance unverified";
 
   const details: NonNullable<OrderMatchDisplay["details"]> = {};
   if (purchaseContent && purchase?.status === "verified") {

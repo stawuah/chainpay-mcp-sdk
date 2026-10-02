@@ -132,7 +132,7 @@ function OrderMatch({ receipt, purchase, order, audience }: { receipt: ReceiptVi
         <p className="receipt-policy-note">Details from the link you opened. They match this receipt’s invoice hash and the seller’s signature.</p>
       )}
       {audience === "link" && order?.status === "linked" && order.via === "link" && (
-        <p className="receipt-policy-note">The order in this link carries a valid requester signature for this token. Which permission the owner accepted it for is recorded by the ChainPay relay, not on Solana.</p>
+        <p className="receipt-policy-note">The order in this link carries a valid requester signature for this token. This link does not prove that the owner accepted this order for this permission.</p>
       )}
       {match.rows.some((row) => row.key === "payee") && (
         <p className="receipt-policy-note">Matched is a check by ChainPay. Solana does not bind a permission to one payee.</p>

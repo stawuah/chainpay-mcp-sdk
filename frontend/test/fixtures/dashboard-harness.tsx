@@ -5,11 +5,13 @@
 // directly with fixture props renders the genuine panels with zero production changes.
 //
 // Test-only Vite entry. Not imported by production and not in its build. It cannot
-// sign or submit a transaction: every handler here is inert. Amounts are fixture
+// sign a real transaction. Opt-in approval checks use invalid fixture bytes and
+// intercept every service request in memory. Amounts are fixture
 // base units, not balances.
 import "../../src/polyfills";
 import { chainpayClient, publicReceiptClient } from "../../src/config/client";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, type Transaction } from "@solana/web3.js";
+import { setSessionWallet } from "../../src/session";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import Dashboard from "../../src/dashboard/Dashboard";
@@ -216,6 +218,35 @@ if (new URLSearchParams(location.search).has("orders")) {
   };
 }
 
+// Exercise the post-wallet continuation without keys or any network submission.
+const FIXTURE_APPROVAL = new URLSearchParams(location.search).has("fixture-approval");
+const approvalEvidence = { signatures: 0, submissions: 0, links: 0, slot: orders.currentSlot };
+Object.assign(window, { permissionApprovalEvidence: approvalEvidence });
+let fixtureSigner: ((transaction: Transaction) => Promise<Transaction>) | undefined;
+if (FIXTURE_APPROVAL) {
+  chainpayClient.getCurrentSlot = async () => BigInt(approvalEvidence.slot);
+  chainpayClient.connection.getLatestBlockhash = async () => ({ blockhash: OWNER, lastValidBlockHeight: 999999999 });
+  fixtureSigner = async () => {
+    approvalEvidence.signatures += 1;
+    return { serialize: () => new Uint8Array([0]) } as unknown as Transaction;
+  };
+  setSessionWallet({ address: OWNER, signMessage: async () => new Uint8Array(64) } as never);
+  // Deliberately no fallback: nothing in this fixture mode can reach a relay.
+  window.fetch = async (input) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
+    const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
+    if (url.pathname === "/v1/auth/challenge") return json({ challenge_id: "fixture", message: "Fixture sign-in" });
+    if (url.pathname === "/v1/auth/session") return json({ token: "fixture", wallet: OWNER, expires_at_ms: Date.now() + 600000 });
+    if (url.pathname === "/v1/transactions/submit") {
+      approvalEvidence.submissions += 1;
+      return json({ status: "confirmed", signature: "FixturePermissionSignature" });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const link = ownerReceiptRelay.linkMandateRequest;
+  ownerReceiptRelay.linkMandateRequest = async (...args) => { approvalEvidence.links += 1; return link(...args); };
+}
+
 const EMPTY = new URLSearchParams(location.search).has("empty");
 const noop = async () => {};
 
@@ -226,6 +257,7 @@ function Harness() {
   return (
     <Dashboard
       wallet={OWNER}
+      walletSigner={fixtureSigner}
       walletName="Jupiter"
       walletCapabilities={null}
       mandate={EMPTY ? null : MANDATES[0]}
