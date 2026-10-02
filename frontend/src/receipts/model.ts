@@ -154,7 +154,7 @@ export function receiptStamps(receipt: ReceiptView): ReceiptStamp[] {
     {
       key: "allowed",
       label: "Allowed",
-      detail: "The program accepted this payment under the mandate.",
+      detail: "The program accepted this payment under this spending permission.",
       tone: "yes",
     },
     {

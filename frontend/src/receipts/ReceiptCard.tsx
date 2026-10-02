@@ -28,10 +28,10 @@ function CurrentMandate({ receipt }: { receipt: ReceiptView }) {
   const current = receipt.currentMandate;
   return (
     <details className="receipt-current-mandate">
-      <summary>Current mandate</summary>
+      <summary>Current spending permission</summary>
       {current.status === "present" ? (
         <>
-          <p>These limits are the mandate’s current on-chain state. They are not a historical snapshot from settlement. Changing or pausing the mandate does not undo Paid.</p>
+          <p>These limits are the spending permission’s current on-chain state. They are not a historical snapshot from settlement. Changing or pausing the permission does not undo Paid.</p>
           <dl>
             <Field label="Current status" value={current.fields.status} />
             <Field label="Max per payment" value={current.fields.maxPerPayment} />
@@ -43,9 +43,9 @@ function CurrentMandate({ receipt }: { receipt: ReceiptView }) {
           </dl>
         </>
       ) : current.status === "unavailable" ? (
-        <p>Current mandate details are unavailable. {current.reason} Paid is unchanged.</p>
+        <p>Current spending permission details are unavailable. {current.reason} Paid is unchanged.</p>
       ) : (
-        <p>Current mandate details are not available. Paid is unchanged.</p>
+        <p>Current spending permission details are not available. Paid is unchanged.</p>
       )}
     </details>
   );

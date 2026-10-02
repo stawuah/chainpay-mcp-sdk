@@ -44,7 +44,7 @@ function purchaseDescription(item: AgentInboxItem): string {
 }
 
 function tokenLabelForMint(mint: string | undefined, stablecoinOptions: StablecoinOption[]): string {
-  if (!mint) return "token";
+  if (!mint) return "";
   return stablecoinOptions.find((option) => option.mint === mint)?.label ?? "token";
 }
 
@@ -54,7 +54,7 @@ function formatPaymentAmount(
   mandate: Mandate | null | undefined,
   mandateDecimals: number | null,
 ): string {
-  if (!amount) return "—";
+  if (!amount) return "Amount unavailable";
   // `mandateDecimals` describes the selected mandate's mint, not necessarily the
   // mint this payment is denominated in. Applying 6 to a 9-decimal token — or
   // the reverse — misstates the headline amount by 1000x while still labelling
@@ -69,10 +69,27 @@ function formatPaymentAmount(
   }
 }
 
-function limitDetailFromRequirements(item: AgentInboxItem, mandate: Mandate | null | undefined): string | undefined {
+function limitDetailFromRequirements(
+  item: AgentInboxItem,
+  mandate: Mandate | null | undefined,
+  mandateDecimals: number | null,
+  stablecoinOptions: StablecoinOption[],
+): string | undefined {
   const limitsCheck = item.requirements?.checks.find((check) => check.key === "limits");
   if (limitsCheck?.status === "fail" && limitsCheck.detail) return limitsCheck.detail;
   if (!mandate) return undefined;
+  // Token units only when the decimals and label are both known for the
+  // permission's own mint; otherwise the exact base units stay the honest form.
+  const token = stablecoinOptions.find((option) => option.mint === mandate.allowedMint)?.label;
+  if (mandateDecimals !== null && token) {
+    try {
+      const perPayment = formatTokenAmount(mandate.maxPerPayment, mandateDecimals);
+      const total = formatTokenAmount(mandate.totalLimit, mandateDecimals);
+      return `This permission allows up to ${perPayment} ${token} per payment and ${total} ${token} total.`;
+    } catch {
+      // Fall through to base units.
+    }
+  }
   return `This permission allows up to ${mandate.maxPerPayment.toString()} base units per payment and ${mandate.totalLimit.toString()} base units total.`;
 }
 
@@ -157,10 +174,10 @@ export function purchaseCardFromInboxItem(
     description: purchaseDescription(item),
     amountLabel: formatPaymentAmount(amount, mint, options.mandate, options.mandateDecimals),
     tokenLabel,
-    recipientLabel: recipient ? shortAddress(recipient) : "—",
+    recipientLabel: recipient ? shortAddress(recipient) : "Recipient unavailable",
     status,
     statusLabel: purchaseStatusLabel(status),
-    limitDetail: limitDetailFromRequirements(item, options.mandate),
+    limitDetail: limitDetailFromRequirements(item, options.mandate, options.mandateDecimals, options.stablecoinOptions),
     checks: item.requirements?.checks ?? [],
     showChecks: Boolean(item.requirements && item.requirements.checks.length > 0),
   };

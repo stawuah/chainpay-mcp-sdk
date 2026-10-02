@@ -145,3 +145,21 @@ test("a purchase amount is only decimal-formatted when the mints match", async (
  const rows = ["waiting_for_approval", "needs_details", "blocked", "receipt_ready", "policy_checked", "approved"].map((stage) => ({ id: stage, stage }));
  assert.deepEqual(attentionInboxItems(rows).map(row => row.id), ["waiting_for_approval", "needs_details", "blocked"]);
  });
+
+test("a settled request never shows a dash or a bare 'token', and limits read in token units", async () => {
+  const purchaseCard = await loadPurchaseCard();
+  const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const stablecoinOptions = [{ value: USDC, mint: USDC, label: "USDC", detail: "Classic SPL Token", tokenProgram: "spl-token" }];
+  const settled = {
+    id: "req-settled", createdAt: new Date().toISOString(), source: "message", title: "Settled", prompt: "p", response: "r",
+    stage: "receipt_ready", toolCalls: [], attachments: [], outcome: { kind: "payment_settled", receiptAddress: "R" },
+  };
+  const mandate = { allowedMint: USDC, maxPerPayment: 5_000_000n, totalLimit: 250_000_000n };
+  const view = purchaseCard.purchaseCardFromInboxItem(settled, { stablecoinOptions, mandateDecimals: 6, mandate });
+  assert.equal(`${view.amountLabel} ${view.tokenLabel}`.trim(), "Amount unavailable");
+  assert.equal(view.recipientLabel, "Recipient unavailable");
+  assert.equal(view.limitDetail, "This permission allows up to 5 USDC per payment and 250 USDC total.");
+  // Unknown decimals keep the exact base units rather than guessing a scale.
+  const exact = purchaseCard.purchaseCardFromInboxItem(settled, { stablecoinOptions, mandateDecimals: null, mandate });
+  assert.match(exact.limitDetail, /5000000 base units per payment/);
+});
