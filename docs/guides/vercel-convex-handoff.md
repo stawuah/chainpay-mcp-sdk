@@ -5,6 +5,110 @@ SDK, MCP tools, and public HTTP contracts. Convex replaces off-chain PostgreSQL
 storage. Vercel runs the existing Vite app, an Axum runtime adapter, and a Node
 MCP handler. There is no new payment authority or new signing approval.
 
+## Start here: repository owner and hosting owner
+
+**Kwasi owns the repository and merge; Dre owns Vercel and Convex.** Review the
+combined release in PR #24 before merging any of the overlapping runtime PRs.
+Its integration history includes #19–27 and the review corrections. Prefer a
+**merge commit**, which preserves the individual feature histories. If choosing
+squash, close the superseded feature PRs explicitly. Do not deploy intermediate
+feature heads: they do not contain the combined Convex implementations.
+
+- **Kwasi:** approve repository access for the Vercel GitHub app and Dre's GitHub
+  identity, review the combined diff, enable the `Release checks` required jobs,
+  and merge only when they pass. Supply the source schema/export and enabled
+  provider settings privately. Program upgrade authority stays with Kwasi.
+- **Dre:** configure the three existing Vercel projects below and their matching
+  Convex environment. Enter secrets through provider settings, not PR comments.
+  Select deployment types in the Convex dashboard; labels alone do not prove
+  that a URL is a preview or production database.
+- **Both:** record the release commit, each Vercel deployment ID, Convex deployment
+  name/type, three service origins, and who performs cutover/rollback. Keep
+  automatic production domain assignment paused until data acceptance passes.
+
+### Git-linked Vercel settings
+
+Connect **all three** projects to `stawuah/chainpay-mcp-sdk`, production branch
+`master`, in Dre's Vercel team. Enable **Include source files outside of the Root
+Directory** for every project. Node must be **24.x**. Clear old dashboard build
+command overrides so the checked-in `vercel.json` files are authoritative.
+
+| Vercel project | Root Directory | Framework/config |
+| --- | --- | --- |
+| `chainpay-web` | `frontend` | Vite; `frontend/vercel.json` |
+| `chainpay-relay` | `deploy/relay` | Other; isolated Cargo package and Rust adapter |
+| `chainpay-mcp` | `mcp-server` | Other; Node handler at `api/mcp.js` |
+
+These roots include shared SDK/backend source from outside their directories;
+without the include-source setting native Git builds cannot work. The Rust
+wrapper builds the relay only, never deploys the Anchor program. The old
+`stage-vercel.mjs` workflow remains available for an explicit CLI release.
+
+Git-linked pushes build previews automatically once repository access and
+branch-specific settings exist. For each tested preview branch, provision one
+isolated Convex dev/preview deployment, deploy its schema **before** starting
+the three service builds, and configure matching branch-specific Vercel variables.
+Use stable branch preview aliases for frontend/relay/MCP so later commits do not
+change their cross-service URLs. Authorize only that exact frontend origin in
+CORS. A preview without its own configured services/database must fail build,
+not use production or the historic review stack. Fork PR builds may require an
+authorized Vercel member's approval; never expose deployment keys to untrusted PR
+workflows. CI in this repository uses no cloud secrets.
+
+Set these nonsecret build guards in **each** project/environment:
+
+- `CHAINPAY_RELEASE_ENVIRONMENT=preview` or `production`, matching `VERCEL_ENV`.
+- `CHAINPAY_CONVEX_DEPLOYMENT_TYPE=dev`/`preview` for previews, `prod` for production.
+- `CHAINPAY_RELEASE_GROUP`: one shared identifier for the selected database and
+  three origins, such as `pr-24-review` or `release-20261002`.
+
+The guard checks required variables and paired RPC/agent URLs. It cannot verify
+provider account ownership or infer a deployment's type from its hostname.
+Before promotion, compare actual deployment settings across all projects and
+run the smoke test with those exact origins. Do not point previews at production
+credentials, provider signers, or source operational data.
+
+Deploy Convex schema once per release, then relay/MCP, then frontend. Keep schema
+changes backward compatible during rolling service deployment. Production native
+builds require production environment variables; redeploy against that environment
+rather than promoting a build containing preview URLs. Until first cutover is
+accepted, builds may complete but must not replace the existing live domains.
+
+### Combined database layout
+
+Canonical migration order is `0009_connector_jobs`, `0010_receipt_requests`,
+`0011_observed_policies`, `0012_mandate_requests`. There are **13** exported
+persistent tables, including the three new feature tables. Crossmint uses columns
+on `x402_payments`, not a separate jobs table. Rate-limit buckets are ephemeral.
+
+The exporter verifies SQLx migration checksums. It accepts canonical histories
+from `0008` onward; older sources export new feature tables as empty and normalize
+missing connector fields to `x402`/null. It refuses the competing branch-specific
+`0009_receipt_requests` history or tables/columns that disagree with the ledger.
+For such a source, stop and reconcile on an isolated copy; never edit the live
+SQLx history to suppress an error. Restore requires the current complete schema.
+
+If upgrading an existing **Convex** database in place, pause writers and run
+`maintenance:backfillConnectorIndexes` with `{ "cursor": null }`, repeating with
+the returned cursor until `done` is true. Fresh snapshot imports already create
+these indexes. Legacy history fails explicitly until the backfill completes.
+
+### Crossmint and receipt-program release gates
+
+Crossmint software is included but **disabled by default** on the server and UI.
+Set staging provider credentials privately; keep both `CHAINPAY_CROSSMINT_ENABLED`
+and `VITE_CHAINPAY_CROSSMINT` off until a separately approved staging transaction
+proves that Crossmint recognizes the mandate's inner transfer, the correct payer,
+and the intended order. A successful Solana receipt alone is insufficient.
+No direct transfer or agent-funded-wallet fallback is authorized by this release.
+Order delivery is separate from payment finality; unknown outcomes retain their
+original operation IDs. See [MCP Crossmint setup](../../mcp-server/README.md#crossmint-staging-connector) for supported terms.
+
+Deploy the dual-size receipt readers from #25 before upgrading #23's program.
+Both 282-byte and 371-byte receipts must remain readable. Kwasi uses the pinned
+Anchor toolchain for any separately authorized Devnet upgrade and checks the
+program ID. Hosting setup never upgrades the program automatically.
+
 ## Current deployment versus the existing service
 
 The new projects are `chainpay-web`, `chainpay-relay`, and `chainpay-mcp` in
@@ -24,8 +128,8 @@ from the old service. Reconcile and migrate its original records first.
 
 ## Kwasi's checklist before replacing the existing service
 
-- Confirm the existing deployment revision and that PostgreSQL migrations
-  through `0008` match this branch. Share access through provider invitations
+- Confirm the existing deployment revision and SQLx migration history against
+  the canonical layout above. Share access through provider invitations
   or a secret manager; never put credentials in this PR.
 - Provide a PostgreSQL snapshot/export or set `CHAINPAY_SOURCE_DATABASE_URL`
   locally for the read-only exporter below. Preserve every table, including
@@ -54,6 +158,10 @@ Both services require `CHAINPAY_STORAGE=convex` on Vercel and
 | `CHAINPAY_CONVEX_BACKEND_SECRET` | Convex and Axum only |
 | `CHAINPAY_CONVEX_MCP_SECRET` | Convex and MCP only |
 | `CHAINPAY_CONVEX_MIGRATION_SECRET` | Convex and operator environment only |
+| `CHAINPAY_CROSSMINT_ENABLED=false` | Axum and MCP until provider acceptance |
+| `CROSSMINT_API_KEY` | Axum and MCP only; staging Orders read/update access |
+| `CHAINPAY_CROSSMINT_AUTH_SECRET` | Matching Axum/MCP secret, at least 32 characters; never browser-visible |
+| `VITE_CHAINPAY_CROSSMINT=false` | Frontend until provider acceptance |
 | `CHAINPAY_ALLOWED_ORIGINS` | Axum/MCP: exact browser origins, no wildcard |
 | `CHAINPAY_RPC_URL` | Axum: Devnet provider; MCP: new relay `/rpc` |
 | `CHAINPAY_BACKEND_URL` | MCP: new relay base URL |
@@ -81,11 +189,14 @@ npm run check
 npm run check:convex
 npm run test:convex
 npm run test:migration
+npm run test:migration:integration
+node --test scripts/check-release-env.test.mjs
 npm --prefix mcp-server test
 npm --prefix frontend test
 npm --prefix frontend run build
 cargo test --workspace
 cargo check -p chainpay-backend --features vercel
+cargo check --manifest-path deploy/relay/Cargo.toml --locked
 ```
 
 Select the intended Convex deployment explicitly and inspect its type before
@@ -148,7 +259,7 @@ available, and transfer them privately. The exporter creates files with mode
    node scripts/migrate-storage.mjs compare .migration/source.ndjson .migration/roundtrip.ndjson
    ```
 
-   All ten tables must match by count and canonical row hash. Import preserves
+   All 13 tables must match by count and canonical row hash. Import preserves
    existing IDs and is resumable with the identical snapshot while writes remain
    paused. It rejects malformed/oversized rows instead of truncating them.
    The limit is 350KB per source row, 100 rows per batch, and 900KB per request.
@@ -176,9 +287,9 @@ available, and transfer them privately. The exporter creates files with mode
 
 ## Costs and evidence limits
 
-### Verification performed on 2 October 2026
+### Historical baseline verification (before combined-release review)
 
-- A synthetic PostgreSQL fixture covering all ten tables was exported, imported
+- A synthetic PostgreSQL fixture covering the original ten tables was exported, imported
   into the separate Convex `dev/rehearsal` deployment, exported again, and restored
   into an empty PostgreSQL database. All ten row counts and canonical hashes
   matched in both directions, including u64 maximum values, microsecond
@@ -197,6 +308,8 @@ available, and transfer them privately. The exporter creates files with mode
 AI chat and delegated signing still need the original provider configuration.
 The current stack is a review deployment, not acceptance of an existing-data
 cutover or a new settlement.
+
+For current combined-release results and limits, see the [release review](../project/release-review-2026-10-02.md).
 
 Target $50/month hosting, excluding RPC and AI providers. Dre's Vercel team
 already uses Pro; no plan upgrade is required for the initial setup. Use Convex

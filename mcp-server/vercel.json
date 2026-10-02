@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "cd .. && npm ci --include=dev --ignore-scripts",
+  "buildCommand": "node ../scripts/check-release-env.mjs mcp && npm run build",
+  "functions": {
+    "api/mcp.js": {
+      "maxDuration": 300,
+      "includeFiles": "assets/**"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/mcp"
+    }
+  ],
+  "outputDirectory": "public"
+}

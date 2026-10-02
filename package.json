@@ -42,5 +42,8 @@
   "overrides": {
     "qs": "6.16.0",
     "rpc-websockets": "9.3.7"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

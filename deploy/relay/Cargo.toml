@@ -1,0 +1,23 @@
+[package]
+name = "chainpay-vercel-relay"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Isolated deployment package: do not build/deploy the Anchor program here.
+[workspace]
+
+[[bin]]
+name = "relay"
+path = "api/relay.rs"
+
+[dependencies]
+chainpay-backend = { path = "../../backend", features = ["vercel"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = "0.5"
+vercel_runtime = { version = "2.4", features = ["axum"] }
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
