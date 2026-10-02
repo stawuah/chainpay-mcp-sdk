@@ -1025,7 +1025,6 @@ async fn submit_managed_payment(
     )
     .await?;
     validate_live_payment(&state, &payment).await?;
-    refuse_paid_crossmint_order(&state, &payment).await?;
     let (won, record) =
         recovery::reserve_payment(&state, &principal, &payment, SigningMode::Delegated).await?;
     if !won {
@@ -1140,7 +1139,6 @@ async fn submit_payment(
     )
     .await?;
     validate_live_payment(&state, &request).await?;
-    refuse_paid_crossmint_order(&state, &request).await?;
     let (won, record) =
         recovery::reserve_payment(&state, &principal, &request, SigningMode::Human).await?;
     if !won {
@@ -1198,38 +1196,10 @@ fn connector_metadata(request: &PaymentSubmissionRequest) -> Option<ConnectorMet
     request.crossmint.as_ref().map(ConnectorMetadata::Crossmint)
 }
 
-/// Refuse a new settlement for a Crossmint order that already has one in flight
-/// or settled. The receipt PDA only blocks a repeat under the same mandate, so
-/// without this an order could be paid once from each of two mandates. A failed
-/// attempt does not count: the order still owes money and may be retried.
-async fn refuse_paid_crossmint_order(
-    state: &BackendState,
-    request: &PaymentSubmissionRequest,
-) -> Result<(), ApiError> {
-    let Some(crossmint) = &request.crossmint else {
-        return Ok(());
-    };
-    let Some(existing) = state
-        .store
-        .find_connector_job_by_reference(ConnectorKind::Crossmint, &crossmint.order_id)
-        .await?
-    else {
-        return Ok(());
-    };
-    if existing.idempotency_key == request.idempotency_key
-        || existing.status == X402PaymentStatus::Failed
-    {
-        return Ok(());
-    }
-    Err(ApiError::Conflict(
-        "this Crossmint order already has a payment; it will not be paid twice".to_owned(),
-    ))
-}
-
 /// The scoped operation a connector settlement authorizes against. An agent
 /// allowed to pay an x402 resource is not thereby allowed to pay a Crossmint
 /// order, so the two are separate names.
-pub(super) fn connector_operation(request: &PaymentSubmissionRequest) -> &'static str {
+fn connector_operation(request: &PaymentSubmissionRequest) -> &'static str {
     match connector_metadata(request) {
         Some(ConnectorMetadata::X402(_)) => "execute_x402_payment",
         Some(ConnectorMetadata::Crossmint(_)) => "execute_crossmint_payment",

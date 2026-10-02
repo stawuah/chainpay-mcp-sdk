@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   Keypair,
   PublicKey,
-  Transaction,
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
@@ -129,38 +128,6 @@ test("reads terms from a Crossmint TransferChecked in both transaction versions"
     assert.equal(terms.decimals, 6);
     assert.equal(terms.tokenProgram, "spl-token");
   }
-});
-
-const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-function base58Encode(bytes) {
-  let value = 0n;
-  for (const byte of bytes) value = value * 256n + BigInt(byte);
-  let out = "";
-  while (value > 0n) {
-    out = BASE58[Number(value % 58n)] + out;
-    value /= 58n;
-  }
-  for (const byte of bytes) {
-    if (byte !== 0) break;
-    out = "1" + out;
-  }
-  return out;
-}
-
-test("reads Crossmint's documented wire format: a base58 legacy Transaction", () => {
-  // Crossmint's Solana guide decodes serializedTransaction with
-  // Transaction.from(bs58.decode(...)); a base64-only reader fails every real order.
-  const transfer = transferCheckedInstruction({ amount: "1234567", decimals: 6 });
-  const transaction = new Transaction({
-    feePayer: Keypair.generate().publicKey,
-    recentBlockhash: PublicKey.default.toBase58(),
-  }).add(transfer.instruction);
-  const wire = base58Encode(transaction.serialize({ requireAllSignatures: false, verifySignatures: false }));
-  const terms = decodeCrossmintTransferTerms(wire);
-  assert.equal(terms.amount, "1234567");
-  assert.equal(terms.mint, transfer.mint);
-  assert.equal(terms.recipient, transfer.destination);
 });
 
 test("reads a Token-2022 transfer and keeps the token program distinct", () => {

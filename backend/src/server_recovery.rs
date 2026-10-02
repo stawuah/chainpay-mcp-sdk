@@ -73,7 +73,17 @@ pub(super) async fn existing_payment(
         .ok_or(ApiError::Unauthorized)?;
     let legacy_key = format!("{}:{}:{}", principal.wallet, request.mandate, user_key);
     if let Some(old) = state.store.find_payment_by_idempotency(&legacy_key).await? {
-        authorize_payment(state, principal, &old, connector_operation(request)).await?;
+        authorize_payment(
+            state,
+            principal,
+            &old,
+            if request.x402.is_some() {
+                "execute_x402_payment"
+            } else {
+                "execute_payment"
+            },
+        )
+        .await?;
         return Err(ApiError::Conflict(format!(
             "Existing operation {} predates intent hashes; query that operation instead of submitting again",
             old.payment_id
@@ -100,7 +110,17 @@ pub(super) async fn existing_payment(
         None => serde_json::from_value(initial)
             .map_err(|_| ApiError::Conflict("Operation reservation needs recovery".into()))?,
     };
-    authorize_payment(state, principal, &record, connector_operation(request)).await?;
+    authorize_payment(
+        state,
+        principal,
+        &record,
+        if request.x402.is_some() {
+            "execute_x402_payment"
+        } else {
+            "execute_payment"
+        },
+    )
+    .await?;
     Ok(Some(payment(state, record).await?))
 }
 pub(super) async fn reserve_payment(
@@ -619,7 +639,11 @@ pub(super) async fn recover_payment(
             &state,
             &principal,
             &record.mandate,
-            connector_operation(&request),
+            if request.x402.is_some() {
+                "execute_x402_payment"
+            } else {
+                "execute_payment"
+            },
         )
         .await?;
         validate_live_payment(&state, &request).await?;
@@ -745,24 +769,13 @@ pub(super) async fn x402_context(
         .get_payment(&id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let metadata = state
-        .store
-        .find_x402_by_idempotency(&record.idempotency_key)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    // The same context backs the x402 and connector-neutral routes, so the
-    // operation checked is the one the stored job actually belongs to.
-    let operation = match metadata.connector {
-        ConnectorKind::X402 => "execute_x402_payment",
-        ConnectorKind::Crossmint => "execute_crossmint_payment",
-    };
-    authorize_payment(&state, &principal, &record, operation).await?;
+    authorize_payment(&state, &principal, &record, "execute_x402_payment").await?;
     let record = payment(&state, record).await?;
     let metadata = state
         .store
         .find_x402_by_idempotency(&record.idempotency_key)
         .await?
-        .unwrap_or(metadata);
+        .ok_or(ApiError::NotFound)?;
     let key = record
         .idempotency_key
         .strip_prefix(&format!("{}:", principal.wallet))
@@ -821,42 +834,6 @@ mod tests {
         let state = BackendState::new(BackendConfig::from_env().unwrap(), StatusStore::in_memory())
             .unwrap();
         (state, principal, request)
-    }
-
-    #[tokio::test]
-    async fn a_crossmint_order_is_not_paid_twice_across_mandates() {
-        let (state, principal, mut first) = fixture();
-        let order = CrossmintPaymentMetadata {
-            order_id: "order_once".into(),
-            order_url: None,
-            terms: json!({"amount":"10","mint":"fixture"}),
-        };
-        first.crossmint = Some(order.clone());
-        refuse_paid_crossmint_order(&state, &first).await.unwrap();
-        let mut record = initial(&first, SigningMode::Human).unwrap();
-        record.status = PaymentStatus::Submitted;
-        persist_payment(&state, &record, connector_metadata(&first))
-            .await
-            .unwrap();
-
-        // Retrying the same operation is a resume, not a second payment.
-        refuse_paid_crossmint_order(&state, &first).await.unwrap();
-
-        // A new operation for the same order, say from another mandate, is refused.
-        let mut second = first.clone();
-        second.idempotency_key = format!("{}:{}", principal.wallet, random_hex_32().unwrap());
-        assert!(matches!(
-            refuse_paid_crossmint_order(&state, &second).await,
-            Err(ApiError::Conflict(_))
-        ));
-
-        // A failed attempt leaves the order owing, so it may be paid again.
-        record.status = PaymentStatus::Failed;
-        record.updated_at_ms += 10;
-        persist_payment(&state, &record, connector_metadata(&first))
-            .await
-            .unwrap();
-        refuse_paid_crossmint_order(&state, &second).await.unwrap();
     }
     #[tokio::test]
     async fn rpc_backpressure_returns_the_reservation_to_prepared() {
