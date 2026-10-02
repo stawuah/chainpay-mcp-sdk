@@ -16,8 +16,8 @@ use tokio::sync::RwLock;
 
 use crate::delivery::{DeliveryAttestationPut, DeliveryAttestationRecord};
 use crate::status::{
-    ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord, PaymentStatus,
-    SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
+    ConnectorKind, ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord,
+    PaymentStatus, SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
 };
 
 #[derive(Debug, Error)]
@@ -476,10 +476,13 @@ impl StatusStore {
         }
     }
 
-    /// List x402 jobs for one owner wallet. Idempotency keys are `{wallet}:{user_key}`.
-    pub async fn list_x402_for_owner(
+    /// List one connector's jobs for one owner wallet. Idempotency keys are
+    /// `{wallet}:{user_key}`. The connector is required so an x402 listing can
+    /// never answer with a Crossmint job, or the reverse.
+    pub async fn list_connector_jobs(
         &self,
         owner_wallet: &str,
+        connector: ConnectorKind,
         mandate: Option<&str>,
         limit: u32,
     ) -> Result<Vec<(X402PaymentRecord, Option<String>)>, StorageError> {
@@ -491,6 +494,7 @@ impl StatusStore {
                 let mut rows: Vec<(X402PaymentRecord, Option<String>)> = state
                     .x402_payments
                     .values()
+                    .filter(|record| record.connector == connector)
                     .filter(|record| record.idempotency_key.starts_with(&prefix))
                     .filter_map(|record| {
                         let linked_mandate = record.payment_id.as_ref().and_then(|payment_id| {
@@ -515,6 +519,7 @@ impl StatusStore {
                 let rows = if let Some(mandate) = mandate {
                     sqlx::query(X402_LIST_FOR_OWNER_WITH_MANDATE)
                         .bind(format!("{prefix}%"))
+                        .bind(connector.as_str())
                         .bind(mandate)
                         .bind(limit as i64)
                         .fetch_all(pool)
@@ -522,6 +527,7 @@ impl StatusStore {
                 } else {
                     sqlx::query(X402_LIST_FOR_OWNER)
                         .bind(format!("{prefix}%"))
+                        .bind(connector.as_str())
                         .bind(limit as i64)
                         .fetch_all(pool)
                         .await?
@@ -551,6 +557,45 @@ impl StatusStore {
             StorageBackend::Postgres(pool) => {
                 let row = sqlx::query(X402_SELECT_BY_IDEMPOTENCY)
                     .bind(key)
+                    .fetch_optional(pool)
+                    .await?;
+                row.map(x402_from_row).transpose()
+            }
+        }
+    }
+
+    /// Find any other operation for the same owner's connector obligation.
+    /// Failed jobs count too; their status is not permission to charge again.
+    pub async fn find_other_connector_job_for_owner(
+        &self,
+        owner: &str,
+        connector: ConnectorKind,
+        reference: &str,
+        current_key: &str,
+    ) -> Result<Option<X402PaymentRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let state = state.read().await;
+                let mut rows: Vec<X402PaymentRecord> = state
+                    .x402_payments
+                    .values()
+                    .filter(|record| {
+                        record.connector == connector
+                            && record.connector_reference.as_deref() == Some(reference)
+                            && record.idempotency_key.starts_with(&format!("{owner}:"))
+                            && record.idempotency_key != current_key
+                    })
+                    .cloned()
+                    .collect();
+                rows.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
+                Ok(rows.into_iter().next())
+            }
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(X402_SELECT_BY_CONNECTOR_REFERENCE)
+                    .bind(connector.as_str())
+                    .bind(reference)
+                    .bind(owner)
+                    .bind(current_key)
                     .fetch_optional(pool)
                     .await?;
                 row.map(x402_from_row).transpose()
@@ -600,13 +645,17 @@ impl StatusStore {
                     INSERT INTO x402_payments (
                         x402_payment_id, idempotency_key, resource, payment_id,
                         receipt_address, transaction_signature, status, challenge,
-                        proof, response_status, error, created_at, updated_at
+                        proof, response_status, error, created_at, updated_at,
+                        connector, connector_reference
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                         TO_TIMESTAMP($12::DOUBLE PRECISION / 1000.0),
-                        TO_TIMESTAMP($13::DOUBLE PRECISION / 1000.0)
+                        TO_TIMESTAMP($13::DOUBLE PRECISION / 1000.0),
+                        $14, $15
                     )
                     ON CONFLICT (x402_payment_id) DO UPDATE SET
+                        connector = EXCLUDED.connector,
+                        connector_reference = COALESCE(EXCLUDED.connector_reference,x402_payments.connector_reference),
                         resource = EXCLUDED.resource,
                         payment_id = EXCLUDED.payment_id,
                         receipt_address = EXCLUDED.receipt_address,
@@ -633,11 +682,69 @@ impl StatusStore {
                 .bind(&record.error)
                 .bind(to_i64(Some(record.created_at_ms), "created_at_ms")?)
                 .bind(to_i64(Some(record.updated_at_ms), "updated_at_ms")?)
+                .bind(record.connector.as_str())
+                .bind(&record.connector_reference)
                 .execute(pool)
                 .await?;
                 Ok(())
             }
         }
+    }
+
+    /// Refresh off-chain order evidence without rewriting settlement fields.
+    /// Unlike x402 delivery proofs, Crossmint order phases can advance after
+    /// verification (delivery -> completed). Generic payment reconciliation
+    /// still cannot overwrite a verified job.
+    pub async fn put_crossmint_proof(
+        &self,
+        record: &X402PaymentRecord,
+    ) -> Result<(), StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                if let Some(old) = state.x402_payments.get_mut(&record.x402_payment_id) {
+                    if old.connector == ConnectorKind::Crossmint
+                        && matches!(
+                            old.status,
+                            X402PaymentStatus::Confirmed | X402PaymentStatus::Verified
+                        )
+                        && old.updated_at_ms <= record.updated_at_ms
+                    {
+                        old.proof = record.proof.clone();
+                        old.response_status = record.response_status;
+                        old.error = record.error.clone();
+                        // Verification that the order advanced is monotonic,
+                        // even if a later poll fails or returns an older phase.
+                        if old.status != X402PaymentStatus::Verified {
+                            old.status = record.status;
+                        }
+                        old.updated_at_ms = record.updated_at_ms;
+                    }
+                }
+            }
+            StorageBackend::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    UPDATE x402_payments SET
+                        proof = $2, response_status = $3, error = $4,
+                        status = CASE WHEN status = 'verified' THEN status ELSE $5 END,
+                        updated_at = TO_TIMESTAMP($6::DOUBLE PRECISION / 1000.0)
+                    WHERE x402_payment_id = $1 AND connector = 'crossmint'
+                      AND status IN ('confirmed', 'verified')
+                      AND updated_at <= TO_TIMESTAMP($6::DOUBLE PRECISION / 1000.0)
+                "#,
+                )
+                .bind(&record.x402_payment_id)
+                .bind(record.proof.clone().map(Json))
+                .bind(record.response_status.map(i32::from))
+                .bind(&record.error)
+                .bind(x402_status_name(record.status))
+                .bind(to_i64(Some(record.updated_at_ms), "updated_at_ms")?)
+                .execute(pool)
+                .await?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn put_managed_signer_challenge(
@@ -955,7 +1062,7 @@ const TRANSACTION_SELECT_BY_IDEMPOTENCY: &str = r#"
 "#;
 
 const X402_SELECT_BY_IDEMPOTENCY: &str = r#"
-    SELECT x402_payment_id, idempotency_key, resource, payment_id,
+    SELECT x402_payment_id, idempotency_key, connector, connector_reference, resource, payment_id,
            receipt_address, transaction_signature, status, challenge, proof,
            response_status, error,
            (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
@@ -963,8 +1070,22 @@ const X402_SELECT_BY_IDEMPOTENCY: &str = r#"
     FROM x402_payments WHERE idempotency_key = $1
 "#;
 
+const X402_SELECT_BY_CONNECTOR_REFERENCE: &str = r#"
+    SELECT x402_payment_id, idempotency_key, connector, connector_reference, resource, payment_id,
+           receipt_address, transaction_signature, status, challenge, proof,
+           response_status, error,
+           (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms,
+           (EXTRACT(EPOCH FROM updated_at) * 1000)::BIGINT AS updated_at_ms
+    FROM x402_payments
+    WHERE connector = $1 AND connector_reference = $2
+      AND split_part(idempotency_key, ':', 1) = $3
+      AND idempotency_key <> $4
+    ORDER BY updated_at DESC
+    LIMIT 1
+"#;
+
 const X402_LIST_FOR_OWNER: &str = r#"
-    SELECT x.x402_payment_id, x.idempotency_key, x.resource, x.payment_id,
+    SELECT x.x402_payment_id, x.idempotency_key, x.connector, x.connector_reference, x.resource, x.payment_id,
            x.receipt_address, x.transaction_signature, x.status, x.challenge, x.proof,
            x.response_status, x.error,
            (EXTRACT(EPOCH FROM x.created_at) * 1000)::BIGINT AS created_at_ms,
@@ -973,12 +1094,13 @@ const X402_LIST_FOR_OWNER: &str = r#"
     FROM x402_payments x
     LEFT JOIN payments p ON p.payment_id = x.payment_id
     WHERE x.idempotency_key LIKE $1 ESCAPE '\'
+      AND x.connector = $2
     ORDER BY x.updated_at DESC
-    LIMIT $2
+    LIMIT $3
 "#;
 
 const X402_LIST_FOR_OWNER_WITH_MANDATE: &str = r#"
-    SELECT x.x402_payment_id, x.idempotency_key, x.resource, x.payment_id,
+    SELECT x.x402_payment_id, x.idempotency_key, x.connector, x.connector_reference, x.resource, x.payment_id,
            x.receipt_address, x.transaction_signature, x.status, x.challenge, x.proof,
            x.response_status, x.error,
            (EXTRACT(EPOCH FROM x.created_at) * 1000)::BIGINT AS created_at_ms,
@@ -987,9 +1109,10 @@ const X402_LIST_FOR_OWNER_WITH_MANDATE: &str = r#"
     FROM x402_payments x
     INNER JOIN payments p ON p.payment_id = x.payment_id
     WHERE x.idempotency_key LIKE $1 ESCAPE '\'
-      AND p.mandate = $2
+      AND x.connector = $2
+      AND p.mandate = $3
     ORDER BY x.updated_at DESC
-    LIMIT $3
+    LIMIT $4
 "#;
 
 const MANAGED_SIGNER_CHALLENGE_SELECT_BY_ID: &str = r#"
@@ -1108,6 +1231,8 @@ fn x402_from_row(row: PgRow) -> Result<X402PaymentRecord, StorageError> {
     Ok(X402PaymentRecord {
         x402_payment_id: row.try_get("x402_payment_id")?,
         idempotency_key: row.try_get("idempotency_key")?,
+        connector: parse_connector(row.try_get("connector")?)?,
+        connector_reference: row.try_get("connector_reference")?,
         resource: row.try_get("resource")?,
         payment_id: row.try_get("payment_id")?,
         receipt_address: row.try_get("receipt_address")?,
@@ -1196,6 +1321,13 @@ fn parse_managed_signer_status(value: String) -> Result<ManagedSignerStatus, Sto
     }
 }
 
+fn parse_connector(value: String) -> Result<ConnectorKind, StorageError> {
+    ConnectorKind::parse(&value).ok_or(StorageError::InvalidValue {
+        field: "connector",
+        value,
+    })
+}
+
 fn x402_status_name(status: X402PaymentStatus) -> &'static str {
     match status {
         X402PaymentStatus::Prepared => "prepared",
@@ -1282,6 +1414,28 @@ fn from_i64(value: Option<i64>, field: &'static str) -> Result<Option<u64>, Stor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn highest_placeholder(sql: &str) -> usize {
+        sql.split('$')
+            .skip(1)
+            .filter_map(|tail| {
+                let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().ok()
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    // The memory store cannot catch a query whose placeholders drift from the
+    // binds in `list_connector_jobs`; Postgres rejects the mismatch at runtime.
+    #[test]
+    fn connector_list_queries_filter_by_connector_and_match_binds() {
+        assert_eq!(highest_placeholder(X402_LIST_FOR_OWNER), 3);
+        assert_eq!(highest_placeholder(X402_LIST_FOR_OWNER_WITH_MANDATE), 4);
+        assert!(X402_LIST_FOR_OWNER.contains("x.connector = $2"));
+        assert!(X402_LIST_FOR_OWNER_WITH_MANDATE.contains("x.connector = $2"));
+        assert_eq!(highest_placeholder(X402_SELECT_BY_CONNECTOR_REFERENCE), 4);
+    }
 
     fn payment() -> PaymentRecord {
         PaymentRecord {
@@ -1403,6 +1557,8 @@ mod tests {
                     proof: None,
                     response_status: None,
                     error: None,
+                    connector: ConnectorKind::X402,
+                    connector_reference: None,
                     created_at_ms: updated_at_ms,
                     updated_at_ms,
                 })
@@ -1410,12 +1566,15 @@ mod tests {
                 .unwrap();
         }
 
-        let owner_jobs = store.list_x402_for_owner(owner, None, 10).await.unwrap();
+        let owner_jobs = store
+            .list_connector_jobs(owner, ConnectorKind::X402, None, 10)
+            .await
+            .unwrap();
         assert_eq!(owner_jobs.len(), 2);
         assert_eq!(owner_jobs[0].0.x402_payment_id, "x402-b");
 
         let filtered = store
-            .list_x402_for_owner(owner, Some(mandate_a), 10)
+            .list_connector_jobs(owner, ConnectorKind::X402, Some(mandate_a), 10)
             .await
             .unwrap();
         assert_eq!(filtered.len(), 1);
