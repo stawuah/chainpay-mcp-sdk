@@ -15,7 +15,15 @@ export type DashboardTab = (typeof DASHBOARD_TABS)[number];
 
 export type AppRoute =
   | { kind: "landing" }
-  | { kind: "app"; tab: DashboardTab; mandateBuilder?: boolean; mandateDetail?: string; receiptDetail?: string }
+  | {
+      kind: "app";
+      tab: DashboardTab;
+      mandateBuilder?: boolean;
+      mandateDetail?: string;
+      receiptDetail?: string;
+      /** `/app/requests/permission#req=…`: a signed permission request to review in Requests. */
+      permissionRequest?: boolean;
+    }
   | { kind: "app-not-found"; path: string }
   | { kind: "public-not-found"; path: string }
   | { kind: "verify"; receiptPda: string }
@@ -34,6 +42,7 @@ export function parsePathname(pathname: string): AppRoute {
   if (normalized.startsWith("/app/")) {
     const rest = normalized.slice("/app/".length);
     if (rest === "requests") return { kind: "app", tab: "assistant" };
+    if (rest === "requests/permission") return { kind: "app", tab: "assistant", permissionRequest: true };
     if (rest === "settings/advanced" || rest === "settings/advanced/tools") return { kind: "app", tab: "tools" };
     if (rest === "settings/advanced/protocol") return { kind: "app", tab: "protocol" };
     if (rest === "receipts") return { kind: "app", tab: "payments" };
@@ -97,6 +106,7 @@ export function buildPath(route: AppRoute): string {
   if (route.mandateBuilder && route.tab === "mandates") return "/app/mandates/new";
   if (route.mandateDetail && route.tab === "mandates") return `/app/mandates/${encodeURIComponent(route.mandateDetail)}`;
   if (route.receiptDetail && route.tab === "receipts") return `/app/receipts/${encodeURIComponent(route.receiptDetail)}`;
+  if (route.permissionRequest && route.tab === "assistant") return "/app/requests/permission";
   if (route.tab === "assistant") return "/app/requests";
   if (route.tab === "tools") return "/app/settings/advanced/tools";
   if (route.tab === "protocol") return "/app/settings/advanced/protocol";

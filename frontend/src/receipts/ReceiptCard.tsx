@@ -10,6 +10,7 @@ import {
   policyAtPayment,
   purchaseAuditPath,
   todayCheck,
+  type OrderLinkState,
   type OrderMatchAudience,
   type PurchaseLineItemView,
   type PurchaseProofState,
@@ -94,8 +95,8 @@ function lineItemText(item: PurchaseLineItemView): string {
   ].filter(Boolean).join(" ");
 }
 
-function OrderMatch({ receipt, purchase, audience }: { receipt: ReceiptView; purchase?: PurchaseProofState; audience: OrderMatchAudience }) {
-  const match = orderMatch(purchase, audience);
+function OrderMatch({ receipt, purchase, order, audience }: { receipt: ReceiptView; purchase?: PurchaseProofState; order?: OrderLinkState; audience: OrderMatchAudience }) {
+  const match = orderMatch(purchase, audience, order);
   if (!match) return null;
   return (
     <section className="receipt-section receipt-order-match" aria-labelledby={`receipt-match-${receipt.address}`} data-match={match.pill}>
@@ -114,7 +115,10 @@ function OrderMatch({ receipt, purchase, audience }: { receipt: ReceiptView; pur
       </ul>
       {match.details && (
         <dl className="receipt-match-details">
-          <Field label="Seller’s invoice reference" value={match.details.invoice} />
+          {match.details.poNumber && <Field label="PO number" value={match.details.poNumber} />}
+          {match.details.orderDescription && <Field label="Order description" value={match.details.orderDescription} />}
+          {match.details.expectedPayee && <Field label="Expected payee" value={match.details.expectedPayee} />}
+          {match.details.invoice && <Field label="Seller’s invoice reference" value={match.details.invoice} />}
           {match.details.description && <Field label="What was bought" value={match.details.description} />}
           {match.details.lineItems && (
             <>
@@ -124,8 +128,14 @@ function OrderMatch({ receipt, purchase, audience }: { receipt: ReceiptView; pur
           )}
         </dl>
       )}
-      {audience === "link" && match.details && (
+      {audience === "link" && match.details?.invoice && (
         <p className="receipt-policy-note">Details from the link you opened. They match this receipt’s invoice hash and the seller’s signature.</p>
+      )}
+      {audience === "link" && order?.status === "linked" && order.via === "link" && (
+        <p className="receipt-policy-note">The order in this link carries a valid requester signature for this token. Which permission the owner accepted it for is recorded by the ChainPay relay, not on Solana.</p>
+      )}
+      {match.rows.some((row) => row.key === "payee") && (
+        <p className="receipt-policy-note">Matched is a check by ChainPay. Solana does not bind a permission to one payee.</p>
       )}
     </section>
   );
@@ -160,6 +170,7 @@ export function ReceiptCard({
   shareMode = "public",
   preparedInRequests = false,
   purchase,
+  order,
 }: {
   receipt: ReceiptView;
   onShare?: () => void;
@@ -167,6 +178,8 @@ export function ReceiptCard({
   preparedInRequests?: boolean;
   /** Merchant-signed request checked against this receipt, if any. */
   purchase?: PurchaseProofState;
+  /** The accepted purchase order or budget request for this receipt's mandate, if any. */
+  order?: OrderLinkState;
 }) {
   const cardRef = useRef<HTMLElement>(null);
   const receiptUrl = publicReceiptUrl(receipt.address, typeof window !== "undefined" ? window.location.origin : "");
@@ -176,12 +189,16 @@ export function ReceiptCard({
   const seller = receipt.seller;
   // The owner's dashboard sees request content. /verify sees it only from an
   // audit link the owner shared, and only after it verified here.
-  const audience: OrderMatchAudience = shareMode === "dashboard"
-    ? "owner"
-    : purchase && purchase.status !== "none" && purchase.via === "link" ? "link" : "public";
+  const fromLink = (purchase && purchase.status !== "none" && purchase.via === "link")
+    || (order && order.status !== "none" && order.via === "link");
+  const audience: OrderMatchAudience = shareMode === "dashboard" ? "owner" : fromLink ? "link" : "public";
   const auditFragment = shareMode === "dashboard" && purchase?.status === "verified" && purchase.via === "owner"
     ? purchase.shareFragment
     : undefined;
+  const orderFragment = shareMode === "dashboard" && order?.status === "linked" && order.via === "owner"
+    ? order.shareFragment
+    : undefined;
+  const canShareDetails = Boolean(auditFragment || orderFragment);
 
   async function share() {
     if (onShare) {
@@ -197,14 +214,14 @@ export function ReceiptCard({
   }
 
   async function shareWithDetails() {
-    if (!auditFragment) return;
+    if (!canShareDetails) return;
     const result = await sharePublicReceipt({
       amountLabel: amount,
       tokenLabel: receipt.tokenLabel,
       receiptPda: receipt.address,
-      path: purchaseAuditPath(receipt.address, auditFragment),
+      path: purchaseAuditPath(receipt.address, auditFragment, orderFragment),
     });
-    setShareMessage(shareStatusCopy(result, true));
+    setShareMessage(shareStatusCopy(result, auditFragment ? "invoice" : "order"));
   }
 
   return (
@@ -248,7 +265,7 @@ export function ReceiptCard({
         ))}
       </div>
       <SpendingPermissionAtPayment receipt={receipt} />
-      <OrderMatch receipt={receipt} purchase={purchase} audience={audience} />
+      <OrderMatch receipt={receipt} purchase={purchase} order={order} audience={audience} />
       <details className="receipt-technical">
         <summary>Technical details</summary>
         <p className="receipt-identifier-note">These identifiers come from the on-chain receipt account. They are not Axum operation IDs or x402 job IDs.</p>
@@ -274,7 +291,7 @@ export function ReceiptCard({
         <a className="button button-secondary-light button-small" href={publicReceiptPath(receipt.address)}>
           Open public receipt <Arrow />
         </a>
-        {auditFragment && (
+        {canShareDetails && (
           <button type="button" className="button button-secondary-light button-small" onClick={() => void shareWithDetails()} aria-describedby={`receipt-share-details-${receipt.address}`}>
             Share with details <Arrow />
           </button>
@@ -283,9 +300,13 @@ export function ReceiptCard({
           Print / Save as PDF
         </button>
       </div>
-      {auditFragment && (
+      {canShareDetails && (
         <p className="receipt-share-details-note" id={`receipt-share-details-${receipt.address}`}>
-          Share with details adds the seller’s invoice to the link. Anyone with that link can read what was bought.
+          {auditFragment && orderFragment
+            ? "Share with details adds the seller’s invoice and the order to the link. Anyone with that link can read them."
+            : orderFragment
+              ? "Share with details adds the order to the link. Anyone with that link can read it."
+              : "Share with details adds the seller’s invoice to the link. Anyone with that link can read what was bought."}
         </p>
       )}
       <p className="receipt-public-url">Public receipt: <a href={receiptUrl}>{receiptUrl}</a></p>
@@ -297,6 +318,7 @@ export function ReceiptCard({
 export function ReceiptPageState({
   state,
   purchase,
+  order,
   onRetry,
   editableAddress,
   onAddressChange,
@@ -304,6 +326,7 @@ export function ReceiptPageState({
 }: {
   state: PublicReceiptPageState;
   purchase?: PurchaseProofState;
+  order?: OrderLinkState;
   onRetry?: () => void;
   editableAddress?: string;
   onAddressChange?: (value: string) => void;
@@ -319,7 +342,7 @@ export function ReceiptPageState({
   if (state.kind === "verified") {
     return (
       <div className="receipt-page-state" data-verified={pageAllowsSuccessChrome(state) ? "yes" : "no"}>
-        <ReceiptCard receipt={state.receipt} purchase={purchase} />
+        <ReceiptCard receipt={state.receipt} purchase={purchase} order={order} />
       </div>
     );
   }

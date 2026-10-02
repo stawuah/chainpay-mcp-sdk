@@ -1,0 +1,121 @@
+/* Permission request card, builder request helpers and the mandate statement.
+   Scoped to these components; nothing here restyles app-wide controls. */
+
+.permission-request-card {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid #cbdcff;
+  border-radius: 14px;
+  background: #f7faff;
+  min-width: 0;
+}
+.permission-request-card[data-state="blocked"] { border-color: var(--line); background: #fff; }
+.permission-request-card h3 {
+  margin: 0;
+  color: var(--ink);
+  font: 500 18px/1.35 var(--sans, Inter, sans-serif);
+  overflow-wrap: anywhere;
+}
+.permission-request-role { margin: -4px 0 0; color: var(--body); font: 600 13px var(--sans, Inter, sans-serif); }
+.permission-request-requester {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fff;
+  min-width: 0;
+}
+.permission-request-requester p { margin: 0; }
+.permission-request-name { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ink); font-weight: 600; }
+.permission-request-unverified {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--body);
+  background: var(--soft, #f4f6fa);
+  font: 500 12px var(--sans, Inter, sans-serif);
+}
+.permission-request-key { color: var(--body); font-size: 12px; overflow-wrap: anywhere; }
+.permission-request-signature { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; color: var(--ink); font-size: 13px; }
+.permission-request-signature > span { color: #0a3d2a; font-weight: 600; }
+.permission-request-signature small { color: var(--body); font-size: 12px; }
+.permission-request-rows {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fff;
+}
+.permission-request-rows > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+.permission-request-rows dt { color: var(--body); font-size: 12px; }
+.permission-request-rows dd { margin: 0; color: var(--ink); font: 500 13px/1.45 var(--sans, Inter, sans-serif); overflow-wrap: anywhere; min-width: 0; }
+.permission-request-rows dd.mono { font: 500 12px/1.45 var(--mono, "JetBrains Mono", monospace); }
+.permission-request-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.permission-request-note { margin: 0; color: var(--body); font-size: 12px; line-height: 1.5; }
+.permission-request-blocked { display: grid; gap: 4px; margin: 0; padding: 12px; border-radius: 10px; background: var(--soft, #f4f6fa); color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+.permission-request-outcome { display: grid; gap: 8px; justify-items: start; }
+.permission-request-outcome p { margin: 0; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+
+@media (max-width: 560px) {
+  .permission-request-card { padding: 16px; }
+  .permission-request-rows > div { grid-template-columns: 1fr; gap: 2px; }
+  .permission-request-actions > * { flex: 1 1 100%; }
+}
+
+/* Builder: requested values beside the owner's limits. */
+.owner-amount-requested { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: var(--body); font-size: 12px; }
+.owner-amount-requested [data-note="above"] {
+  display: inline-flex;
+  min-height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--soft, #f4f6fa);
+}
+.mandate-request-banner {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #cbdcff;
+  border-radius: 10px;
+  background: #f7faff;
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.mandate-request-banner small { color: var(--body); font-size: 12px; }
+.mandate-summary .mandate-summary-helper { display: block; margin-top: 4px; color: var(--body); font-size: 12px; font-weight: 400; line-height: 1.45; }
+.mandate-link-status { display: grid; gap: 8px; justify-items: start; margin-top: 12px; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+
+/* Mandate detail: sponsor statement. */
+.mandate-statement { display: grid; gap: 12px; padding: 16px 0 0; border-top: 1px solid var(--line-soft, #eef1f6); }
+.mandate-statement-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.mandate-statement-head h3 { margin: 0; color: var(--ink); font: 600 15px var(--sans, Inter, sans-serif); }
+.mandate-statement-totals { margin: 0; color: var(--ink); font: 500 13px/1.5 var(--sans, Inter, sans-serif); overflow-wrap: anywhere; }
+.mandate-statement-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.mandate-statement-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft, #eef1f6);
+}
+.mandate-statement-list li:first-child { border-top: 0; }
+.mandate-statement-list strong { color: var(--ink); font: 600 13px var(--sans, Inter, sans-serif); }
+.mandate-statement-list small { display: block; color: var(--body); font-size: 12px; overflow-wrap: anywhere; }
+.mandate-statement-list a { font-size: 12px; }
+.mandate-statement-note { margin: 0; color: var(--body); font-size: 12px; line-height: 1.5; }
+.permission-request-kicker { color: var(--muted); font: 600 11px var(--sans, Inter, sans-serif); letter-spacing: .06em; }

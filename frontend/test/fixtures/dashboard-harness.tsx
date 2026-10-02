@@ -22,6 +22,7 @@ import "../../src/styles.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
 import { ownerReceiptRelay } from "../../src/receipts/owner";
 import purchase from "./receipt-purchase.json";
+import orders from "./mandate-request.json";
 
 const OWNER = "7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q";
 const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -30,7 +31,7 @@ function mandate(over: Partial<Mandate> & { address: string }): Mandate {
   return {
     owner: OWNER,
     approvedAgent: "AgEnT111111111111111111111111111111111111111",
-    sourceTokenAccount: "SrcAta11111111111111111111111111111111111111",
+    sourceTokenAccount: "SrcAta1111111111111111111111111111111111111",
     allowedMint: USDC,
     maxPerPayment: 5_000_000n,
     totalLimit: 250_000_000n,
@@ -145,6 +146,76 @@ if (new URLSearchParams(location.search).has("receipts")) {
   ownerReceiptRelay.policy = async () => null;
 }
 
+// Permission requests: `?permission=vendor|grantee|expired|tampered` puts that
+// fixture link's `#req=` fragment in the URL, as a requester's link would, and
+// mounts Dashboard on the /app/requests/permission route. Deterministic keys;
+// not a real vendor or budget.
+const PERMISSION = new URLSearchParams(location.search).get("permission");
+if (PERMISSION && !location.hash.includes("req=")) {
+  const fragment = (orders as Record<string, { fragment?: string }>)[PERMISSION]?.fragment;
+  if (fragment) history.replaceState(null, "", `${location.pathname}${location.search}#req=${fragment}`);
+}
+if (PERMISSION) chainpayClient.getCurrentSlot = async () => BigInt(orders.currentSlot);
+
+// `?orders` adds accepted orders: a purchase order linked to the first
+// permission with a receipt that matches it, and a budget request linked to
+// the second, whose agent is the request's agent. The relay is a stand-in.
+if (new URLSearchParams(location.search).has("orders")) {
+  MANDATES[1] = { ...MANDATES[1], approvedAgent: orders.grantee.agent, status: "active", paused: false };
+  const hex = (value: string) => Uint8Array.from(value.match(/../g)!.map((byte) => parseInt(byte, 16)));
+  const matched: PaymentReceipt = {
+    address:"4RcptMatchedPurchaseFixture11111111111111", mandate:MANDATES[0].address,
+    invoiceHash:hex(orders.invoice.invoiceHash), paymentId:new Uint8Array(32).fill(6), mint:USDC,
+    recipient:orders.vendor.ata,sourceTokenAccount:OWNER,recipientTokenAccount:orders.vendor.ata,amount:4500000n,
+    agent:OWNER,executedAtSlot:399999300n,signatureReference:new Uint8Array(32).fill(7),status:"confirmed",onChainStatus:1,bump:253,
+    policySnapshot:{ version:1, maxPerPayment:5_000_000n, totalLimit:50_000_000n, amountSpentAfter:4_500_000n, paymentCountAfter:1n, maxPaymentCount:0n, expiresAtSlot:406_479_000n, cooldownSlots:0n },
+  };
+  const budget: PaymentReceipt = {
+    address:"5RcptBudgetFixture1111111111111111111111111", mandate:MANDATES[1].address,
+    invoiceHash:new Uint8Array(32).fill(8), paymentId:new Uint8Array(32).fill(9), mint:USDC,
+    recipient:OWNER,sourceTokenAccount:OWNER,recipientTokenAccount:"Dest1111111111111111111111111111111111111",amount:2000000n,
+    agent:orders.grantee.agent,executedAtSlot:399999400n,signatureReference:new Uint8Array(32).fill(10),status:"confirmed",onChainStatus:1,bump:252,
+    policySnapshot:null,
+  };
+  const all = [matched, budget];
+  const previousPayments = chainpayClient.getPaymentsByMandate.bind(chainpayClient);
+  chainpayClient.getPaymentsByMandate = async (address) => [
+    ...all.filter((item) => item.mandate === address),
+    ...(await previousPayments(address).catch(() => [])),
+  ];
+  chainpayClient.getMintDecimals = async () => 6;
+  publicReceiptClient.getCurrentSlot = async () => 399_999_500n;
+  const previousRead = publicReceiptClient.readPublicReceipt.bind(publicReceiptClient);
+  publicReceiptClient.readPublicReceipt = async (address, ...rest) => {
+    const found = all.find((item) => item.address === address);
+    if (!found) return previousRead(address, ...rest);
+    return {
+      receipt:{valid:true,receipt:found},
+      amount:{baseUnits:found.amount.toString(),decimals:6,display:(Number(found.amount) / 1e6).toFixed(6),displayKind:"ui-amount"},
+      currentMandate:{status:"present",mandate:MANDATES.find((item) => item.address === found.mandate) ?? MANDATES[0]},
+    } as never;
+  };
+  const previousRequest = ownerReceiptRelay.request;
+  ownerReceiptRelay.request = async (address) => (address === matched.address ? orders.invoice.request : previousRequest(address));
+  ownerReceiptRelay.policy = async () => null;
+  ownerReceiptRelay.mandateRequest = async (mandate) => (
+    mandate === MANDATES[0].address ? orders.vendor.request : mandate === MANDATES[1].address ? orders.grantee.request : null
+  );
+}
+
+// `?link=fail` makes the stand-in relay refuse the first link attempt, so the
+// retry path can be seen. Otherwise linking succeeds without a backend.
+{
+  let failures = new URLSearchParams(location.search).get("link") === "fail" ? 1 : 0;
+  ownerReceiptRelay.linkMandateRequest = async () => {
+    if (failures > 0) {
+      failures -= 1;
+      return new Response(JSON.stringify({ error: "The relay could not read the new permission yet" }), { status: 502 });
+    }
+    return new Response("{}", { status: 200 });
+  };
+}
+
 const EMPTY = new URLSearchParams(location.search).has("empty");
 const noop = async () => {};
 
@@ -168,6 +239,7 @@ function Harness() {
       integrationError=""
       switchingWalletAccount={false}
       tab={tab}
+      permissionRequest={Boolean(PERMISSION)}
       onTabChange={(next) => setTab(next)}
       onNavigateHome={() => {}}
       onRefresh={noop}

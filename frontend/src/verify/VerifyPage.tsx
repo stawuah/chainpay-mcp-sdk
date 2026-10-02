@@ -4,11 +4,14 @@ import { loadPublicReceiptView } from "../receipts/load";
 import {
   classifyReceiptPda,
   initialPageState,
+  orderFragmentFromHash,
   publicReceiptPath,
   purchaseFragmentFromHash,
+  type OrderLinkState,
   type PublicReceiptPageState,
   type PurchaseProofState,
 } from "../receipts/model";
+import { decodeOrderFragment, verifyOrderForReceipt } from "../receipts/order";
 import { decodePurchaseFragment, verifyPurchaseForReceipt } from "../receipts/purchase";
 import { ReceiptPageState } from "../receipts/ReceiptCard";
 import { configuredDemoReceiptPath } from "../owner/onboarding";
@@ -59,6 +62,7 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
     trimmed ? initialPageState(trimmed) : { kind: "malformed", receiptPda: "" }
   ));
   const [purchase, setPurchase] = useState<PurchaseProofState | undefined>(undefined);
+  const [order, setOrder] = useState<OrderLinkState | undefined>(undefined);
   const [hash, setHash] = useState(() => (typeof window === "undefined" ? "" : window.location.hash));
 
   useEffect(() => {
@@ -83,6 +87,28 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
     }
     void verifyPurchaseForReceipt(state.receipt, request, "link").then((result) => {
       if (active) setPurchase(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, [state, hash]);
+
+  // The same audit link may also carry the requester-signed order. It shows
+  // only after its signature verifies and it matches this receipt's token
+  // (and, for a budget request, the agent that paid).
+  useEffect(() => {
+    setOrder(undefined);
+    if (state.kind !== "verified") return;
+    const fragment = orderFragmentFromHash(hash);
+    if (!fragment) return;
+    let active = true;
+    const request = decodeOrderFragment(fragment);
+    if (!request) {
+      setOrder({ status: "failed", via: "link", reason: "the order in this link could not be read" });
+      return;
+    }
+    void verifyOrderForReceipt(state.receipt, request, "link").then((result) => {
+      if (active) setOrder(result);
     });
     return () => {
       active = false;
@@ -135,6 +161,7 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
           <ReceiptPageState
             state={state}
             purchase={purchase}
+            order={order}
             editableAddress={draftAddress}
             onAddressChange={setDraftAddress}
             onRetry={() => {

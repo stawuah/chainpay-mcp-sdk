@@ -470,22 +470,56 @@ export function todayCheck(receipt: ReceiptView): TodayCheck {
  */
 export type OrderMatchAudience = "owner" | "link" | "public";
 
-export type OrderMatchPill = "Matched" | "Payee differs" | "No order";
+/**
+ * Matched: an order, a seller-signed invoice and the payment agree (for a
+ * budget request: the order and the payment). Payee differs: the payment went
+ * to someone other than the order or invoice names. No invoice: an order but
+ * no verified invoice for this payment. No order: no linked order.
+ * Matched is a check made by ChainPay, not a guarantee from Solana.
+ */
+export type OrderMatchPill = "Matched" | "Payee differs" | "No invoice" | "No order";
 
 export type OrderMatchRow = {
-  key: "order" | "invoice" | "invoice-mismatch" | "payment";
+  key: "order" | "invoice" | "invoice-mismatch" | "payee" | "payment";
   tone: "yes" | "no";
   text: string;
 };
+
+/**
+ * The purchase order or budget request the owner accepted for this receipt's
+ * mandate, after its requester signature verified.
+ * - owner: read from the relay with the owner's session.
+ * - link: carried in an audit link the owner shared.
+ * `payeeMatches` is null for a budget request, where the payee is open.
+ */
+export type OrderLinkState =
+  | { status: "none" }
+  | {
+      status: "linked";
+      via: "owner" | "link";
+      role: "vendor" | "grantee";
+      requester: string;
+      requesterName?: string;
+      poNumber?: string;
+      description: string;
+      expectedPayee?: string;
+      payeeMatches: boolean | null;
+      /** base64url fragment value the owner can share. Owner only. */
+      shareFragment?: string;
+    }
+  | { status: "failed"; via: "owner" | "link"; reason: string };
 
 export type OrderMatchDisplay = {
   pill: OrderMatchPill;
   rows: OrderMatchRow[];
   /** Request content. Present only for the owner or a verified audit link. */
   details?: {
-    invoice: string;
+    invoice?: string;
     description?: string;
     lineItems?: PurchaseLineItemView[];
+    poNumber?: string;
+    orderDescription?: string;
+    expectedPayee?: string;
   };
   canShareDetails: boolean;
 };
@@ -496,27 +530,22 @@ const MISMATCH_WORD: Record<PurchaseMismatch, string> = {
   recipient: "payee",
 };
 
-/**
- * The Order match section, or null when there is nothing verifiable to show.
- * There is no purchase order yet, so the pill is "No order" unless the
- * payment went to a different payee than the invoice named. A later order
- * row slots in ahead of the invoice row and can turn the pill to "Matched".
- */
-export function orderMatch(purchase: PurchaseProofState | undefined, audience: OrderMatchAudience): OrderMatchDisplay | null {
-  if (!purchase || purchase.status === "none") return null;
+function shortRequester(value: string): string {
+  return value.length < 12 ? value : `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+/** "Purchase order PO-1042 from Acme Data (name not verified)". */
+export function orderRowText(order: Extract<OrderLinkState, { status: "linked" }>): string {
+  const from = order.requesterName ? `${order.requesterName} (name not verified)` : shortRequester(order.requester);
+  if (order.role === "grantee") return `Budget request from ${from}`;
+  return `Purchase order${order.poNumber ? ` ${order.poNumber}` : ""} from ${from}`;
+}
+
+function invoiceRows(purchase: PurchaseProofState | undefined, showContent: boolean): OrderMatchRow[] {
+  if (!purchase || purchase.status === "none") return [];
   if (purchase.status === "failed") {
-    // A public reader without a verified request gets no claim at all.
-    if (audience === "public") return null;
-    return {
-      pill: "No order",
-      rows: [
-        { key: "invoice", tone: "no", text: `Invoice not verified: ${purchase.reason}. Nothing from it is shown.` },
-        { key: "payment", tone: "yes", text: "Paid on Solana" },
-      ],
-      canShareDetails: false,
-    };
+    return [{ key: "invoice", tone: "no", text: `Invoice not verified: ${purchase.reason}. Nothing from it is shown.` }];
   }
-  const showContent = audience === "owner" || (audience === "link" && purchase.via === "link");
   const rows: OrderMatchRow[] = [
     { key: "invoice", tone: "yes", text: showContent ? "Invoice signed by seller" : "Invoice signed by seller · details private" },
   ];
@@ -524,34 +553,102 @@ export function orderMatch(purchase: PurchaseProofState | undefined, audience: O
     const words = purchase.mismatches.map((item) => MISMATCH_WORD[item]).join(", ");
     rows.push({ key: "invoice-mismatch", tone: "no", text: `This payment’s ${words} differs from the invoice` });
   }
-  rows.push({ key: "payment", tone: "yes", text: "Paid on Solana" });
+  return rows;
+}
+
+/**
+ * The Order match section, or null when there is nothing verifiable to show.
+ * Without a linked order the pill is "No order" unless the payment went to a
+ * different payee than the invoice named. A public reader without an audit
+ * link sees no order content and no order-based pill.
+ */
+export function orderMatch(
+  purchase: PurchaseProofState | undefined,
+  audience: OrderMatchAudience,
+  order?: OrderLinkState,
+): OrderMatchDisplay | null {
+  const linked = order?.status === "linked" ? order : null;
+  const orderVisible = Boolean(linked) && (audience === "owner" || (audience === "link" && linked!.via === "link"));
+  const purchaseShows = Boolean(purchase && purchase.status !== "none" && !(purchase.status === "failed" && audience === "public"));
+  const orderFailed = order?.status === "failed" && audience !== "public" ? order : null;
+  if (!orderVisible && !purchaseShows && !orderFailed) return null;
+
+  const showContent = audience === "owner"
+    || (audience === "link" && ((purchase?.status !== "none" && purchase?.via === "link") || (linked?.via === "link")));
+  const purchaseContent = audience === "owner" || (audience === "link" && purchase?.status === "verified" && purchase.via === "link");
+  const rows: OrderMatchRow[] = [];
+  let pill: OrderMatchPill;
+
+  if (orderVisible && linked) {
+    rows.push({ key: "order", tone: "yes", text: orderRowText(linked) });
+    rows.push(...invoiceRows(purchase, purchaseContent));
+    const invoicePayeeDiffers = purchase?.status === "verified" && purchase.mismatches.includes("recipient");
+    if (linked.role === "vendor") {
+      const payeeDiffers = linked.payeeMatches === false || invoicePayeeDiffers;
+      rows.push(payeeDiffers
+        ? { key: "payee", tone: "no", text: "Paid to a different payee than the order names" }
+        : { key: "payee", tone: "yes", text: "Paid to the order’s payee" });
+      rows.push({ key: "payment", tone: "yes", text: "Paid on Solana" });
+      pill = payeeDiffers ? "Payee differs" : purchase?.status === "verified" ? "Matched" : "No invoice";
+    } else {
+      rows.push({ key: "payment", tone: "yes", text: "Paid on Solana" });
+      pill = "Matched";
+    }
+  } else {
+    if (orderFailed) rows.push({ key: "order", tone: "no", text: `Order not verified: ${orderFailed.reason}. Nothing from it is shown.` });
+    rows.push(...invoiceRows(purchase, purchaseContent));
+    rows.push({ key: "payment", tone: "yes", text: "Paid on Solana" });
+    pill = purchase?.status === "verified" && purchase.mismatches.includes("recipient") ? "Payee differs" : "No order";
+  }
+
+  const details: NonNullable<OrderMatchDisplay["details"]> = {};
+  if (purchaseContent && purchase?.status === "verified") {
+    details.invoice = purchase.invoice;
+    if (purchase.description) details.description = purchase.description;
+    if (purchase.lineItems?.length) details.lineItems = purchase.lineItems;
+  }
+  if (orderVisible && linked && showContent) {
+    if (linked.poNumber) details.poNumber = linked.poNumber;
+    details.orderDescription = linked.description;
+    if (linked.expectedPayee) details.expectedPayee = linked.expectedPayee;
+  }
+  const purchaseShare = purchase?.status === "verified" && purchase.via === "owner" && Boolean(purchase.shareFragment);
+  const orderShare = Boolean(linked && linked.via === "owner" && linked.shareFragment);
   return {
-    pill: purchase.mismatches.includes("recipient") ? "Payee differs" : "No order",
+    pill,
     rows,
-    ...(showContent
-      ? {
-          details: {
-            invoice: purchase.invoice,
-            ...(purchase.description ? { description: purchase.description } : {}),
-            ...(purchase.lineItems?.length ? { lineItems: purchase.lineItems } : {}),
-          },
-        }
-      : {}),
-    canShareDetails: audience === "owner" && purchase.via === "owner" && Boolean(purchase.shareFragment),
+    ...(Object.keys(details).length ? { details } : {}),
+    canShareDetails: audience === "owner" && (purchaseShare || orderShare),
   };
 }
 
-/** `/verify/<pda>#purchase=<fragment>`: request content travels only in the fragment. */
-export function purchaseAuditPath(receiptPda: string, fragment: string): string {
-  return `${publicReceiptPath(receiptPda)}#purchase=${fragment}`;
+/**
+ * `/verify/<pda>#purchase=<invoice>&order=<request>`: request content travels
+ * only in the fragment, which never reaches a server. Either part is optional.
+ */
+export function purchaseAuditPath(receiptPda: string, purchaseFragment?: string, orderFragment?: string): string {
+  const parts = [
+    ...(purchaseFragment ? [`purchase=${purchaseFragment}`] : []),
+    ...(orderFragment ? [`order=${orderFragment}`] : []),
+  ];
+  return parts.length ? `${publicReceiptPath(receiptPda)}#${parts.join("&")}` : publicReceiptPath(receiptPda);
+}
+
+function fragmentValue(hash: string, name: string): string | null {
+  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+  for (const part of raw.split("&")) {
+    const [key, value] = part.split("=");
+    if (key === name && value) return value;
+  }
+  return null;
 }
 
 /** The `purchase=` value from a location hash, or null when there is none. */
 export function purchaseFragmentFromHash(hash: string): string | null {
-  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
-  for (const part of raw.split("&")) {
-    const [key, value] = part.split("=");
-    if (key === "purchase" && value) return value;
-  }
-  return null;
+  return fragmentValue(hash, "purchase");
+}
+
+/** The `order=` value (a signed mandate request) from a location hash, or null. */
+export function orderFragmentFromHash(hash: string): string | null {
+  return fragmentValue(hash, "order");
 }

@@ -59,9 +59,11 @@ export async function sharePublicReceipt(input: {
   }
 }
 
-export function shareStatusCopy(result: ShareResult, withDetails = false): string {
-  if (result.status === "shared") return withDetails ? "Receipt with invoice details sent from your browser." : "Receipt sent from your browser.";
-  if (result.status === "copied") return withDetails ? "Receipt link with invoice details copied." : "ChainPay receipt link copied.";
+/** `details`: true or "invoice" when the link carries the invoice, "order" when it carries only the order. */
+export function shareStatusCopy(result: ShareResult, details: boolean | "invoice" | "order" = false): string {
+  const what = details === "order" ? "order details" : "invoice details";
+  if (result.status === "shared") return details ? `Receipt with ${what} sent from your browser.` : "Receipt sent from your browser.";
+  if (result.status === "copied") return details ? `Receipt link with ${what} copied.` : "ChainPay receipt link copied.";
   if (result.status === "cancelled") return "";
   return result.message;
 }

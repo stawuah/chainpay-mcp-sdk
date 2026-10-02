@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { loadPublicReceiptView } from "./load";
-import { type PublicReceiptPageState, type PurchaseProofState, type ReceiptView } from "./model";
+import { type OrderLinkState, type PublicReceiptPageState, type PurchaseProofState, type ReceiptView } from "./model";
 import { loadOwnerReceiptContext } from "./owner";
 import { ReceiptCard, ReceiptPageState } from "./ReceiptCard";
 
@@ -16,7 +16,7 @@ export function LoadedReceiptCard({
   preparedInRequests?: boolean;
 }) {
   const [state, setState] = useState<PublicReceiptPageState>({ kind: "loading", receiptPda });
-  const [owner, setOwner] = useState<{ receiptPda: string; policy?: ReceiptView["policy"]; purchase: PurchaseProofState } | null>(null);
+  const [owner, setOwner] = useState<{ receiptPda: string; policy?: ReceiptView["policy"]; purchase: PurchaseProofState; order: OrderLinkState } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -47,6 +47,7 @@ export function LoadedReceiptCard({
       <ReceiptCard
         receipt={receipt}
         purchase={ownerContext?.purchase}
+        order={ownerContext?.order}
         shareMode={shareMode}
         onShare={onShare}
         // Both dashboard call sites pass shareMode="dashboard", so OR-ing it here

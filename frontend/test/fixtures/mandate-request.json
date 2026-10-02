@@ -1,0 +1,80 @@
+{
+  "_note": "Test fixture. Deterministic keys from fixed seeds, Devnet USDC. Not a real vendor, budget, or payment.",
+  "currentSlot": "399999000",
+  "vendor": {
+    "request": {
+      "payload": {
+        "version": 1,
+        "cluster": "devnet",
+        "role": "vendor",
+        "requester": "GqJJE3Ard1GLuaumyLe1ZrFpCQK55KTdWHfHfiS3Bk1t",
+        "requesterName": "Acme Data",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "tokenProgram": "spl-token",
+        "recipient": "GqJJE3Ard1GLuaumyLe1ZrFpCQK55KTdWHfHfiS3Bk1t",
+        "suggestedMaxPerPayment": "5000000",
+        "suggestedTotal": "50000000",
+        "decimals": 6,
+        "suggestedExpirySlot": "406479000",
+        "validUntilSlot": "401511000",
+        "description": "Market data API, Q4 usage",
+        "poNumber": "PO-1042",
+        "nonce": "fixture-po-1042"
+      },
+      "signature": "uKDeizGrGsXkbRtk2_B4hjWYxfO5OJ74HT0X8etgedplkTHFuSFKLSBAXr3cnYQdV9yN1Sddb6DLRwXjtmCiCw"
+    },
+    "requestHash": "689c356fce30151a44c2df8ac81876d065f49a0442c03986843861d12b7aafd5",
+    "fragment": "eyJwYXlsb2FkIjp7InZlcnNpb24iOjEsImNsdXN0ZXIiOiJkZXZuZXQiLCJyb2xlIjoidmVuZG9yIiwicmVxdWVzdGVyIjoiR3FKSkUzQXJkMUdMdWF1bXlMZTFackZwQ1FLNTVLVGRXSGZIZmlTM0JrMXQiLCJyZXF1ZXN0ZXJOYW1lIjoiQWNtZSBEYXRhIiwibWludCI6IjR6TU1DOXNydDVSaTVYMTRHQWdYaGFIaWkzR25QQUVFUllQSmdaSkRuY0RVIiwidG9rZW5Qcm9ncmFtIjoic3BsLXRva2VuIiwicmVjaXBpZW50IjoiR3FKSkUzQXJkMUdMdWF1bXlMZTFackZwQ1FLNTVLVGRXSGZIZmlTM0JrMXQiLCJzdWdnZXN0ZWRNYXhQZXJQYXltZW50IjoiNTAwMDAwMCIsInN1Z2dlc3RlZFRvdGFsIjoiNTAwMDAwMDAiLCJkZWNpbWFscyI6Niwic3VnZ2VzdGVkRXhwaXJ5U2xvdCI6IjQwNjQ3OTAwMCIsInZhbGlkVW50aWxTbG90IjoiNDAxNTExMDAwIiwiZGVzY3JpcHRpb24iOiJNYXJrZXQgZGF0YSBBUEksIFE0IHVzYWdlIiwicG9OdW1iZXIiOiJQTy0xMDQyIiwibm9uY2UiOiJmaXh0dXJlLXBvLTEwNDIifSwic2lnbmF0dXJlIjoidUtEZWl6R3JHc1hrYlJ0azJfQjRoaldZeGZPNU9KNzRIVDBYOGV0Z2VkcGxrVEhGdVNGS0xTQkFYcjNjbllRZFY5eU4xU2RkYjZETFJ3WGp0bUNpQ3cifQ",
+    "ata": "BBu5oZakiLm8xJ35GBa6JNYK9GLPwZSZGehsW2EEU4aB"
+  },
+  "grantee": {
+    "request": {
+      "payload": {
+        "version": 1,
+        "cluster": "devnet",
+        "role": "grantee",
+        "requester": "Cc4bzD3QKvj9C3XEbWMgM1czXskcruCnvkF8AFjBjQiL",
+        "requesterName": "Team Lumen",
+        "agent": "53MB24vjJbaXvMK47viBGLH9LcCPkRSpKRcv2GYnYz97",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "tokenProgram": "spl-token",
+        "suggestedMaxPerPayment": "25000000",
+        "suggestedTotal": "25000000",
+        "decimals": 6,
+        "suggestedExpirySlot": "406479000",
+        "validUntilSlot": "401511000",
+        "description": "Hackathon API credits",
+        "nonce": "fixture-budget-1"
+      },
+      "signature": "Dt3aPG4Yg_qC_JfzeAb8WFzS23yWkPZDveFjCr6HsdBFtaIi8qWYpJzMASf8rMdr4rbVPJ0DCTZ1hHc6W4y0Cw"
+    },
+    "requestHash": "999aa226e3d7ff68eb9026fffb67379dc9b658195cac3416d0f4996265467269",
+    "fragment": "eyJwYXlsb2FkIjp7InZlcnNpb24iOjEsImNsdXN0ZXIiOiJkZXZuZXQiLCJyb2xlIjoiZ3JhbnRlZSIsInJlcXVlc3RlciI6IkNjNGJ6RDNRS3ZqOUMzWEViV01nTTFjelhza2NydUNudmtGOEFGakJqUWlMIiwicmVxdWVzdGVyTmFtZSI6IlRlYW0gTHVtZW4iLCJhZ2VudCI6IjUzTUIyNHZqSmJhWHZNSzQ3dmlCR0xIOUxjQ1BrUlNwS1JjdjJHWW5Zejk3IiwibWludCI6IjR6TU1DOXNydDVSaTVYMTRHQWdYaGFIaWkzR25QQUVFUllQSmdaSkRuY0RVIiwidG9rZW5Qcm9ncmFtIjoic3BsLXRva2VuIiwic3VnZ2VzdGVkTWF4UGVyUGF5bWVudCI6IjI1MDAwMDAwIiwic3VnZ2VzdGVkVG90YWwiOiIyNTAwMDAwMCIsImRlY2ltYWxzIjo2LCJzdWdnZXN0ZWRFeHBpcnlTbG90IjoiNDA2NDc5MDAwIiwidmFsaWRVbnRpbFNsb3QiOiI0MDE1MTEwMDAiLCJkZXNjcmlwdGlvbiI6IkhhY2thdGhvbiBBUEkgY3JlZGl0cyIsIm5vbmNlIjoiZml4dHVyZS1idWRnZXQtMSJ9LCJzaWduYXR1cmUiOiJEdDNhUEc0WWdfcUNfSmZ6ZUFiOFdGelMyM3lXa1BaRHZlRmpDcjZIc2RCRnRhSWk4cVdZcEp6TUFTZjhyTWRyNHJiVlBKMERDVFoxaEhjNlc0eTBDdyJ9",
+    "agent": "53MB24vjJbaXvMK47viBGLH9LcCPkRSpKRcv2GYnYz97"
+  },
+  "expired": {
+    "fragment": "eyJwYXlsb2FkIjp7InZlcnNpb24iOjEsImNsdXN0ZXIiOiJkZXZuZXQiLCJyb2xlIjoidmVuZG9yIiwicmVxdWVzdGVyIjoiR3FKSkUzQXJkMUdMdWF1bXlMZTFackZwQ1FLNTVLVGRXSGZIZmlTM0JrMXQiLCJyZXF1ZXN0ZXJOYW1lIjoiQWNtZSBEYXRhIiwibWludCI6IjR6TU1DOXNydDVSaTVYMTRHQWdYaGFIaWkzR25QQUVFUllQSmdaSkRuY0RVIiwidG9rZW5Qcm9ncmFtIjoic3BsLXRva2VuIiwicmVjaXBpZW50IjoiR3FKSkUzQXJkMUdMdWF1bXlMZTFackZwQ1FLNTVLVGRXSGZIZmlTM0JrMXQiLCJzdWdnZXN0ZWRNYXhQZXJQYXltZW50IjoiNTAwMDAwMCIsInN1Z2dlc3RlZFRvdGFsIjoiNTAwMDAwMDAiLCJkZWNpbWFscyI6Niwic3VnZ2VzdGVkRXhwaXJ5U2xvdCI6IjQwNjQ3OTAwMCIsInZhbGlkVW50aWxTbG90IjoiMzk5NzgzMDAwIiwiZGVzY3JpcHRpb24iOiJNYXJrZXQgZGF0YSBBUEksIFE0IHVzYWdlIiwicG9OdW1iZXIiOiJQTy0xMDQyIiwibm9uY2UiOiJmaXh0dXJlLWV4cGlyZWQifSwic2lnbmF0dXJlIjoiZkxfM1F6d25aTWZXODEtdXVzenJ6MnVuSktva05ZR3VqNWtNYTEtWFVobTJWOGNRNVByQTdDVE5KNkt6QlBBTGhUbWtVWnllclBTNkYxRVV2Z3k4Q0EifQ"
+  },
+  "tampered": {
+    "fragment": "eyJwYXlsb2FkIjp7InZlcnNpb24iOjEsImNsdXN0ZXIiOiJkZXZuZXQiLCJyb2xlIjoidmVuZG9yIiwicmVxdWVzdGVyIjoiR3FKSkUzQXJkMUdMdWF1bXlMZTFackZwQ1FLNTVLVGRXSGZIZmlTM0JrMXQiLCJyZXF1ZXN0ZXJOYW1lIjoiQWNtZSBEYXRhIiwibWludCI6IjR6TU1DOXNydDVSaTVYMTRHQWdYaGFIaWkzR25QQUVFUllQSmdaSkRuY0RVIiwidG9rZW5Qcm9ncmFtIjoic3BsLXRva2VuIiwicmVjaXBpZW50IjoiR3FKSkUzQXJkMUdMdWF1bXlMZTFackZwQ1FLNTVLVGRXSGZIZmlTM0JrMXQiLCJzdWdnZXN0ZWRNYXhQZXJQYXltZW50IjoiNTAwMDAwMCIsInN1Z2dlc3RlZFRvdGFsIjoiNTAwMDAwMDAwIiwiZGVjaW1hbHMiOjYsInN1Z2dlc3RlZEV4cGlyeVNsb3QiOiI0MDY0NzkwMDAiLCJ2YWxpZFVudGlsU2xvdCI6IjQwMTUxMTAwMCIsImRlc2NyaXB0aW9uIjoiTWFya2V0IGRhdGEgQVBJLCBRNCB1c2FnZSIsInBvTnVtYmVyIjoiUE8tMTA0MiIsIm5vbmNlIjoiZml4dHVyZS1wby0xMDQyIn0sInNpZ25hdHVyZSI6InVLRGVpekdyR3NYa2JSdGsyX0I0aGpXWXhmTzVPSjc0SFQwWDhldGdlZHBsa1RIRnVTRktMU0JBWHIzY25ZUWRWOXlOMVNkZGI2RExSd1hqdG1DaUN3In0"
+  },
+  "invoice": {
+    "request": {
+      "payload": {
+        "version": 1,
+        "cluster": "devnet",
+        "merchant": "GqJJE3Ard1GLuaumyLe1ZrFpCQK55KTdWHfHfiS3Bk1t",
+        "invoice": "INV-2026-0188",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "tokenProgram": "spl-token",
+        "recipient": "BBu5oZakiLm8xJ35GBa6JNYK9GLPwZSZGehsW2EEU4aB",
+        "amount": "4500000",
+        "decimals": 6,
+        "nonce": "fixture-invoice-0188",
+        "description": "Market data API, October usage"
+      },
+      "signature": "cBzayoia1Pt+G7J6j2989HQQiMc4bET5q+Nyd6GS6UXcVcPt1jPKSIi2UxdyGzOxioiH36EKVOagWdfPgoh1BA=="
+    },
+    "invoiceHash": "0be618b5bd6b343423549ecff0b94e1a9341f6a573cb48992cec3a1f150a8965"
+  }
+}

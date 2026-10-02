@@ -9,6 +9,8 @@ import { tokenProgramAccountType } from "./tokenAccounts";
 import { settlementKey } from "./settlementKey";
 import { assetOrder, knownAsset } from "../config/knownAssets";
 
+import type { PermissionRequestRecord } from "../requests/permissionRequest";
+
 export type Action = "Send" | "Receive" | "Approve mandate" | "Receipts";
 export type Range = "1H" | "1D" | "1W" | "1M" | "1Y" | "All";
 
@@ -174,7 +176,7 @@ export type AgentInboxStage = "received" | "understood" | "mandate_prepared" | "
 export type AgentInboxItem = {
   id: string;
   createdAt: string;
-  source: "message" | "invoice" | "mandate";
+  source: "message" | "invoice" | "mandate" | "permission-request";
   title: string;
   prompt: string;
   response: string;
@@ -186,6 +188,8 @@ export type AgentInboxItem = {
   requirements?: AgentRequirements;
   error?: string;
   archivedAt?: string;
+  /** Only for source "permission-request": the signed ask and what became of it. */
+  permissionRequest?: PermissionRequestRecord;
 };
 
 export { archiveInboxItem, isInboxItemArchived, restoreInboxItem } from "./inboxArchive";

@@ -7,15 +7,25 @@ import {
 } from "@chainpay/sdk";
 import { publicReceiptUrl } from "./model";
 
-/** chainpay-receipts-YYYY-MM-DD.csv, in the reader's local date. */
-export function receiptsCsvFilename(now: Date = new Date()): string {
+function localDate(now: Date): string {
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
-  return `chainpay-receipts-${year}-${month}-${day}.csv`;
+  return `${year}-${month}-${day}`;
+}
+
+/** chainpay-receipts-YYYY-MM-DD.csv, in the reader's local date. */
+export function receiptsCsvFilename(now: Date = new Date()): string {
+  return `chainpay-receipts-${localDate(now)}.csv`;
+}
+
+/** chainpay-statement-<first 8 of the mandate>-YYYY-MM-DD.csv for one permission. */
+export function statementCsvFilename(mandateAddress: string, now: Date = new Date()): string {
+  return `chainpay-statement-${mandateAddress.slice(0, 8)}-${localDate(now)}.csv`;
 }
 
 const BLOCK_TIME_TIMEOUT_MS = 4_000;
+const ORDER_TIMEOUT_MS = 6_000;
 
 function withTimeout<T>(promise: Promise<T>, fallback: T, ms: number): Promise<T> {
   return new Promise((resolve) => {
@@ -40,6 +50,8 @@ export async function buildReceiptsCsv(input: {
   origin: string;
   blockTime: (slot: bigint) => Promise<number | null>;
   relayPolicy?: (receiptAddress: string) => Promise<unknown>;
+  /** PO number and Order match pill for a receipt, as the owner sees it. Empty when unknown. */
+  order?: (receipt: PaymentReceipt) => Promise<{ poNumber?: string; orderMatch?: string } | null>;
 }): Promise<string> {
   const slots = [...new Set(input.receipts.map((receipt) => receipt.executedAtSlot))];
   const times = new Map<bigint, number | null>();
@@ -51,6 +63,9 @@ export async function buildReceiptsCsv(input: {
     const relay = !snapshot && input.relayPolicy
       ? relayObservedPolicy(await input.relayPolicy(receipt.address).catch(() => null))
       : null;
+    const order = input.order
+      ? await withTimeout(input.order(receipt), null, ORDER_TIMEOUT_MS)
+      : null;
     return {
       receipt,
       decimals: input.decimalsByMint.get(receipt.mint) ?? null,
@@ -58,6 +73,8 @@ export async function buildReceiptsCsv(input: {
       blockTime: times.get(receipt.executedAtSlot) ?? null,
       policy: receiptPolicy({ policySnapshot: snapshot }, relay),
       verifyUrl: publicReceiptUrl(receipt.address, input.origin),
+      ...(order?.poNumber ? { poNumber: order.poNumber } : {}),
+      ...(order?.orderMatch ? { orderMatch: order.orderMatch } : {}),
     };
   }));
   return receiptsToCsv(rows);
