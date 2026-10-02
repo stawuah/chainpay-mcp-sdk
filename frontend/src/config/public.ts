@@ -1,3 +1,6 @@
+// Crossmint orders stay hidden until a devnet order has been paid through a
+// spending permission and Crossmint has marked it paid.
+export const CROSSMINT_ENABLED = import.meta.env.VITE_CHAINPAY_CROSSMINT === "true";
 export const PROGRAM_ID = "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4";
 export const DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 export const DEVNET_PYUSD_TOKEN_2022_MINT = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM";

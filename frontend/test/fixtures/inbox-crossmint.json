@@ -1,0 +1,333 @@
+[
+  {
+    "id": "cm-review",
+    "createdAt": "2026-10-02T14:10:00.000Z",
+    "source": "message",
+    "title": "Mad Lads #1234",
+    "prompt": "Buy Mad Lads #1234 on Crossmint, up to 5 USDC",
+    "response": "I read the price from Crossmint's prepared payment and checked it against your spending permission.",
+    "stage": "waiting_for_approval",
+    "toolCalls": [
+      "prepare_payment"
+    ],
+    "attachments": [],
+    "approval": {
+      "kind": "payment",
+      "action": "agent_signature_required",
+      "payment": {
+        "amount": "4500000",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "recipient": "CrossmintRecipientAta1111111111111111111111"
+      }
+    },
+    "requirements": {
+      "status": "ready",
+      "missing": [],
+      "checks": [
+        {
+          "key": "limits",
+          "label": "Limits",
+          "status": "pass",
+          "detail": "Within this spending permission."
+        },
+        {
+          "key": "token",
+          "label": "Token",
+          "status": "pass",
+          "detail": "USDC allowed."
+        }
+      ]
+    },
+    "crossmint": {
+      "orderId": "b8f1c2d4-crossmint-order-7e21",
+      "itemLabel": "Mad Lads #1234",
+      "quoteCheck": "match",
+      "phase": "payment"
+    }
+  },
+  {
+    "id": "cm-mismatch",
+    "createdAt": "2026-10-02T14:11:00.000Z",
+    "source": "message",
+    "title": "Mad Lads #1235",
+    "prompt": "Buy Mad Lads #1234 on Crossmint, up to 5 USDC",
+    "response": "I read the price from Crossmint's prepared payment and checked it against your spending permission.",
+    "stage": "blocked",
+    "toolCalls": [
+      "prepare_payment"
+    ],
+    "attachments": [],
+    "approval": {
+      "kind": "payment",
+      "action": "agent_signature_required",
+      "payment": {
+        "amount": "4800000",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "recipient": "CrossmintRecipientAta1111111111111111111111"
+      }
+    },
+    "requirements": {
+      "status": "ready",
+      "missing": [],
+      "checks": [
+        {
+          "key": "limits",
+          "label": "Limits",
+          "status": "pass",
+          "detail": "Within this spending permission."
+        },
+        {
+          "key": "token",
+          "label": "Token",
+          "status": "pass",
+          "detail": "USDC allowed."
+        }
+      ]
+    },
+    "crossmint": {
+      "orderId": "c9a2-crossmint-order-0042",
+      "itemLabel": "Mad Lads #1235",
+      "quoteCheck": "mismatch",
+      "quotedAmount": "4500000",
+      "phase": "payment"
+    }
+  },
+  {
+    "id": "cm-closed",
+    "createdAt": "2026-10-02T14:12:00.000Z",
+    "source": "message",
+    "title": "Mad Lads #1236",
+    "prompt": "Buy Mad Lads #1234 on Crossmint, up to 5 USDC",
+    "response": "I read the price from Crossmint's prepared payment and checked it against your spending permission.",
+    "stage": "blocked",
+    "toolCalls": [
+      "prepare_payment"
+    ],
+    "attachments": [],
+    "approval": {
+      "kind": "payment",
+      "action": "agent_signature_required",
+      "payment": {
+        "amount": "4500000",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "recipient": "CrossmintRecipientAta1111111111111111111111"
+      }
+    },
+    "requirements": {
+      "status": "blocked",
+      "missing": [],
+      "checks": [
+        {
+          "key": "limits",
+          "label": "Limits",
+          "status": "pass",
+          "detail": "Within this spending permission."
+        },
+        {
+          "key": "crossmint_order",
+          "label": "Crossmint order",
+          "status": "fail",
+          "detail": "This Crossmint order no longer accepts payment. Nothing was submitted."
+        }
+      ]
+    },
+    "crossmint": {
+      "orderId": "d3b7-crossmint-order-0043",
+      "itemLabel": "Mad Lads #1236",
+      "phase": "completed"
+    }
+  },
+  {
+    "id": "cm-paid-twice",
+    "createdAt": "2026-10-02T14:13:00.000Z",
+    "source": "message",
+    "title": "Mad Lads #1234 (again)",
+    "prompt": "Buy Mad Lads #1234 on Crossmint, up to 5 USDC",
+    "response": "I read the price from Crossmint's prepared payment and checked it against your spending permission.",
+    "stage": "blocked",
+    "toolCalls": [
+      "prepare_payment"
+    ],
+    "attachments": [],
+    "approval": {
+      "kind": "payment",
+      "action": "agent_signature_required",
+      "payment": {
+        "amount": "4500000",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "recipient": "CrossmintRecipientAta1111111111111111111111"
+      }
+    },
+    "requirements": {
+      "status": "blocked",
+      "missing": [],
+      "checks": [
+        {
+          "key": "limits",
+          "label": "Limits",
+          "status": "pass",
+          "detail": "Within this spending permission."
+        },
+        {
+          "key": "crossmint_order",
+          "label": "Crossmint order",
+          "status": "fail",
+          "detail": "This Crossmint order already has a payment. Nothing new was submitted."
+        }
+      ]
+    },
+    "crossmint": {
+      "orderId": "b8f1c2d4-crossmint-order-7e21",
+      "itemLabel": "Mad Lads #1234"
+    }
+  },
+  {
+    "id": "cm-complete",
+    "createdAt": "2026-10-02T14:05:00.000Z",
+    "source": "message",
+    "title": "Mad Lads #1230",
+    "prompt": "Buy Mad Lads #1234 on Crossmint, up to 5 USDC",
+    "response": "I read the price from Crossmint's prepared payment and checked it against your spending permission.",
+    "stage": "receipt_ready",
+    "toolCalls": [
+      "prepare_payment"
+    ],
+    "attachments": [],
+    "approval": {
+      "kind": "payment",
+      "action": "agent_signature_required",
+      "payment": {
+        "amount": "4500001",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "recipient": "CrossmintRecipientAta1111111111111111111111"
+      }
+    },
+    "requirements": {
+      "status": "ready",
+      "missing": [],
+      "checks": [
+        {
+          "key": "limits",
+          "label": "Limits",
+          "status": "pass",
+          "detail": "Within this spending permission."
+        },
+        {
+          "key": "token",
+          "label": "Token",
+          "status": "pass",
+          "detail": "USDC allowed."
+        }
+      ]
+    },
+    "crossmint": {
+      "orderId": "a1-crossmint-order-0040",
+      "itemLabel": "Mad Lads #1230",
+      "phase": "completed",
+      "reportedAt": "2026-10-02T14:02:00.000Z"
+    },
+    "outcome": {
+      "kind": "payment_settled",
+      "receiptAddress": "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1"
+    }
+  },
+  {
+    "id": "cm-waiting",
+    "createdAt": "2026-10-02T14:06:00.000Z",
+    "source": "message",
+    "title": "Mad Lads #1231",
+    "prompt": "Buy Mad Lads #1234 on Crossmint, up to 5 USDC",
+    "response": "I read the price from Crossmint's prepared payment and checked it against your spending permission.",
+    "stage": "receipt_ready",
+    "toolCalls": [
+      "prepare_payment"
+    ],
+    "attachments": [],
+    "approval": {
+      "kind": "payment",
+      "action": "agent_signature_required",
+      "payment": {
+        "amount": "4500001",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "recipient": "CrossmintRecipientAta1111111111111111111111"
+      }
+    },
+    "requirements": {
+      "status": "ready",
+      "missing": [],
+      "checks": [
+        {
+          "key": "limits",
+          "label": "Limits",
+          "status": "pass",
+          "detail": "Within this spending permission."
+        },
+        {
+          "key": "token",
+          "label": "Token",
+          "status": "pass",
+          "detail": "USDC allowed."
+        }
+      ]
+    },
+    "crossmint": {
+      "orderId": "a2-crossmint-order-0041",
+      "itemLabel": "Mad Lads #1231",
+      "phase": "delivery"
+    },
+    "outcome": {
+      "kind": "payment_settled",
+      "receiptAddress": "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1"
+    }
+  },
+  {
+    "id": "cm-refund",
+    "createdAt": "2026-10-02T14:04:00.000Z",
+    "source": "message",
+    "title": "Mad Lads #1229",
+    "prompt": "Buy Mad Lads #1234 on Crossmint, up to 5 USDC",
+    "response": "I read the price from Crossmint's prepared payment and checked it against your spending permission.",
+    "stage": "receipt_ready",
+    "toolCalls": [
+      "prepare_payment"
+    ],
+    "attachments": [],
+    "approval": {
+      "kind": "payment",
+      "action": "agent_signature_required",
+      "payment": {
+        "amount": "4500001",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "recipient": "CrossmintRecipientAta1111111111111111111111"
+      }
+    },
+    "requirements": {
+      "status": "ready",
+      "missing": [],
+      "checks": [
+        {
+          "key": "limits",
+          "label": "Limits",
+          "status": "pass",
+          "detail": "Within this spending permission."
+        },
+        {
+          "key": "token",
+          "label": "Token",
+          "status": "pass",
+          "detail": "USDC allowed."
+        }
+      ]
+    },
+    "crossmint": {
+      "orderId": "a0-crossmint-order-0039",
+      "itemLabel": "Mad Lads #1229",
+      "phase": "completed",
+      "refunded": true
+    },
+    "outcome": {
+      "kind": "payment_settled",
+      "receiptAddress": "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1"
+    }
+  }
+]

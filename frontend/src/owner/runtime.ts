@@ -159,7 +159,7 @@ export type AgentOutcome = {
   receiptUrl?: string;
 };
 export type AgentCheck = {
-  key: "limits" | "token" | "recipient" | "expiry" | "policy";
+  key: "limits" | "token" | "recipient" | "expiry" | "policy" | "crossmint_quote" | "crossmint_order";
   label: string;
   status: "pass" | "fail" | "missing" | "pending";
   detail: string;
@@ -171,6 +171,22 @@ export type AgentRequirements = {
 };
 export type AgentResponse = { message: string; toolCalls?: string[]; approval?: AgentApproval; outcome?: AgentOutcome; requirements?: AgentRequirements; error?: string };
 export type AgentInboxStage = "received" | "understood" | "mandate_prepared" | "policy_checked" | "needs_details" | "waiting_for_approval" | "approved" | "receipt_ready" | "blocked";
+/**
+ * A request that pays a Crossmint checkout order. Everything here is Crossmint's
+ * own statement about the order; whether money moved comes only from the receipt.
+ */
+export type CrossmintRequest = {
+  orderId: string;
+  itemLabel?: string;
+  /** Base units Crossmint quoted, when its quote could be read exactly. */
+  quotedAmount?: string;
+  quoteCheck?: "match" | "mismatch" | "unavailable";
+  /** Crossmint order phase: quote, payment, delivery or completed. */
+  phase?: string;
+  refunded?: boolean;
+  reportedAt?: string;
+};
+
 export type AgentInboxItem = {
   id: string;
   createdAt: string;
@@ -186,6 +202,7 @@ export type AgentInboxItem = {
   requirements?: AgentRequirements;
   error?: string;
   archivedAt?: string;
+  crossmint?: CrossmintRequest;
 };
 
 export { archiveInboxItem, isInboxItemArchived, restoreInboxItem } from "./inboxArchive";

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { loadPublicReceiptView } from "./load";
-import { type PublicReceiptPageState } from "./model";
+import { type PublicReceiptPageState, type SellerStatementState } from "./model";
 import { ReceiptCard, ReceiptPageState } from "./ReceiptCard";
 
 export function LoadedReceiptCard({
@@ -8,11 +8,14 @@ export function LoadedReceiptCard({
   shareMode = "public",
   onShare,
   preparedInRequests = false,
+  seller,
 }: {
   receiptPda: string;
   shareMode?: "public" | "dashboard";
   onShare?: () => void;
   preparedInRequests?: boolean;
+  /** A seller statement known privately to this request, such as Crossmint's order status. */
+  seller?: SellerStatementState;
 }) {
   const [state, setState] = useState<PublicReceiptPageState>({ kind: "loading", receiptPda });
 
@@ -30,7 +33,7 @@ export function LoadedReceiptCard({
   if (state.kind === "verified") {
     return (
       <ReceiptCard
-        receipt={state.receipt}
+        receipt={seller ? { ...state.receipt, seller } : state.receipt}
         shareMode={shareMode}
         onShare={onShare}
         // Both dashboard call sites pass shareMode="dashboard", so OR-ing it here
@@ -57,9 +60,11 @@ export function LoadedReceiptCard({
 export function InboxReceipt({
   receiptAddress,
   preparedInRequests = true,
+  seller,
 }: {
   receiptAddress?: string;
   preparedInRequests?: boolean;
+  seller?: SellerStatementState;
 }) {
   if (!receiptAddress) {
     return (
@@ -72,7 +77,7 @@ export function InboxReceipt({
 
   return (
     <div className="inbox-receipt">
-      <LoadedReceiptCard receiptPda={receiptAddress} shareMode="dashboard" preparedInRequests={preparedInRequests} />
+      <LoadedReceiptCard receiptPda={receiptAddress} shareMode="dashboard" preparedInRequests={preparedInRequests} seller={seller} />
     </div>
   );
 }

@@ -163,3 +163,40 @@ test("a settled request never shows a dash or a bare 'token', and limits read in
   const exact = purchaseCard.purchaseCardFromInboxItem(settled, { stablecoinOptions, mandateDecimals: null, mandate });
   assert.match(exact.limitDetail, /5000000 base units per payment/);
 });
+
+test("a Crossmint order shows as Crossmint only behind the flag, and a mismatched quote blocks", async () => {
+  const purchaseCard = await loadPurchaseCard();
+  const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const stablecoinOptions = [{ value: USDC, mint: USDC, label: "USDC", detail: "Devnet", tokenProgram: "spl-token" }];
+  const mandate = { allowedMint: USDC, maxPerPayment: 25_000_000n, totalLimit: 250_000_000n };
+  const item = {
+    id: "cm", createdAt: new Date().toISOString(), source: "message", title: "Buy request", prompt: "buy", response: "r",
+    stage: "waiting_for_approval", toolCalls: [], attachments: [],
+    approval: { kind: "payment", action: "agent_signature_required", payment: { amount: "25100000", mint: USDC, recipient: "CrossmintRecipientAta1111111111111111111111" } },
+    requirements: { status: "ready", missing: [], checks: [{ key: "limits", label: "Limits", status: "pass", detail: "ok" }] },
+    crossmint: { orderId: "order-1", itemLabel: "Mad Lads #1234", quoteCheck: "match", quotedAmount: "24500000", phase: "payment" },
+  };
+  const options = { stablecoinOptions, mandateDecimals: 6, mandate };
+
+  const off = purchaseCard.purchaseCardFromInboxItem(item, options);
+  assert.equal(off.recipientBrand, undefined);
+  assert.notEqual(off.recipientLabel, "Crossmint");
+  assert.equal(off.description, "Buy request");
+
+  const on = purchaseCard.purchaseCardFromInboxItem(item, { ...options, crossmint: true });
+  assert.equal(on.recipientLabel, "Crossmint");
+  assert.equal(on.recipientBrand, "crossmint");
+  assert.equal(on.description, "Mad Lads #1234");
+  assert.equal(on.status, "waiting_for_approval");
+  // A matching quote adds no row: the review card stays as short as any payment.
+  assert.equal(on.checks.length, 1);
+
+  const mismatch = purchaseCard.purchaseCardFromInboxItem(
+    { ...item, crossmint: { ...item.crossmint, quoteCheck: "mismatch" } },
+    { ...options, crossmint: true },
+  );
+  assert.equal(mismatch.status, "blocked");
+  const failed = mismatch.checks.find((check) => check.key === "crossmint_quote");
+  assert.equal(failed.status, "fail");
+  assert.equal(failed.detail, "Crossmint quoted 24.5 USDC; this payment is 25.1 USDC. Ask your agent for a new quote.");
+});

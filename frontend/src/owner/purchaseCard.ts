@@ -3,6 +3,7 @@ import type { AgentCheck, AgentInboxItem, AgentInboxStage, StablecoinOption } fr
 import { isInboxItemArchived } from "./inboxArchive";
 import { formatTokenAmount } from "./amounts";
 import { shortAddress } from "../ui/marks";
+import { crossmintQuoteCheck } from "./crossmint";
 
 export type PurchaseAttentionStage =
   | "needs_details"
@@ -19,6 +20,8 @@ export type PurchaseCardView = {
   amountLabel: string;
   tokenLabel: string;
   recipientLabel: string;
+  /** A known seller shown by its official mark next to the recipient. */
+  recipientBrand?: "crossmint";
   status: PurchaseAttentionStage;
   statusLabel: string;
   limitDetail?: string;
@@ -158,6 +161,8 @@ export function purchaseCardFromInboxItem(
     stablecoinOptions: StablecoinOption[];
     mandateDecimals: number | null;
     mandate?: Mandate | null;
+    /** Crossmint orders render as Crossmint only behind the CROSSMINT_ENABLED flag. */
+    crossmint?: boolean;
   },
 ): PurchaseCardView {
   const payment = item.approval?.kind === "payment" && item.approval.payment && typeof item.approval.payment === "object"
@@ -167,19 +172,31 @@ export function purchaseCardFromInboxItem(
   const amount = typeof payment?.amount === "string" ? payment.amount : undefined;
   const recipient = typeof payment?.recipient === "string" ? payment.recipient : undefined;
   const tokenLabel = tokenLabelForMint(mint, options.stablecoinOptions);
-  const status = purchaseAttentionStage(item.stage);
+  const amountLabel = formatPaymentAmount(amount, mint, options.mandate, options.mandateDecimals);
+  const order = options.crossmint ? item.crossmint : undefined;
+  const checks = [...(item.requirements?.checks ?? [])];
+  const quoteCheck = order && crossmintQuoteCheck(
+    order,
+    `${formatPaymentAmount(order.quotedAmount, mint, options.mandate, options.mandateDecimals)} ${tokenLabel}`.trim(),
+    `${amountLabel} ${tokenLabel}`.trim(),
+  );
+  if (quoteCheck) checks.push(quoteCheck);
+  // A mismatched quote blocks whatever stage the request reached: the owner is
+  // never asked to approve an amount Crossmint did not quote.
+  const status = quoteCheck ? "blocked" : purchaseAttentionStage(item.stage);
 
   return {
     id: item.id,
-    description: purchaseDescription(item),
-    amountLabel: formatPaymentAmount(amount, mint, options.mandate, options.mandateDecimals),
+    description: order?.itemLabel?.trim() || purchaseDescription(item),
+    amountLabel,
     tokenLabel,
-    recipientLabel: recipient ? shortAddress(recipient) : "Recipient unavailable",
+    recipientLabel: order ? "Crossmint" : recipient ? shortAddress(recipient) : "Recipient unavailable",
+    ...(order ? { recipientBrand: "crossmint" as const } : {}),
     status,
     statusLabel: purchaseStatusLabel(status),
     limitDetail: limitDetailFromRequirements(item, options.mandate, options.mandateDecimals, options.stablecoinOptions),
-    checks: item.requirements?.checks ?? [],
-    showChecks: Boolean(item.requirements && item.requirements.checks.length > 0),
+    checks,
+    showChecks: checks.length > 0,
   };
 }
 
