@@ -2,6 +2,8 @@
 mod delivery_routes;
 #[path = "server_receipts.rs"]
 mod receipt_routes;
+#[path = "server_mandate_requests.rs"]
+mod mandate_request_routes;
 #[path = "server_recovery.rs"]
 mod recovery;
 #[path = "server_transactions.rs"]
@@ -22,7 +24,7 @@ use axum::{
     http::{HeaderName, HeaderValue, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -367,6 +369,11 @@ pub fn build_router(state: BackendState) -> Router {
             "/v1/delivery-attestations/{receipt_address}",
             get(delivery_routes::get_delivery_attestation),
         )
+        .route(
+            "/v1/mandates/{mandate_pda}/request",
+            put(mandate_request_routes::put_mandate_request)
+                .get(mandate_request_routes::get_mandate_request),
+        )
         .route("/v1/x402-payments", get(list_x402_payments))
         .route("/v1/x402-payments/proof", post(record_x402_proof))
         .route("/v1/catalog/paysh", get(fetch_paysh_catalog))
@@ -515,6 +522,7 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
+            axum::http::Method::PUT,
             axum::http::Method::OPTIONS,
             axum::http::Method::DELETE,
         ])

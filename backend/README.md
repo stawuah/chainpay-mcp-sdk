@@ -104,6 +104,16 @@ Private endpoints derive the principal from a verified bearer credential:
   recipient and amount.
 - `/v1/x402-payments/proof`: `mandate`, idempotency key and
   `execute_x402_payment` permission are required.
+- `PUT /v1/mandates/{pda}/request`: owner session only. Body is a signed
+  mandate request `{payload, signature}` (see `sdk/src/mandate-request.ts`).
+  The relay checks the requester signature and every field, then reads the
+  live mandate: it must be a ChainPay mandate owned by the session wallet, use
+  the request's mint, and for a budget request approve the request's agent.
+  Limits the owner changed are recorded in `differsFromRequest`, not refused.
+  First write wins; an exact retry returns the stored record, a different
+  request for the same mandate is 409. `GET` on the same path is owner-only
+  (404 for anyone else) because a request names a vendor, a PO and a payee.
+  Link expiry is checked by the app before the owner signs, not here.
 - `/v1/transactions/submit`: owner-only mandate create+exact delegate approval,
   update, pause or revoke, homogeneous owner-signed payment batches (up to four),
   and revoke-all (up to 32; wire-size bound still applies). Every instruction

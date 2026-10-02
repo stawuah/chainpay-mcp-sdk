@@ -47,6 +47,15 @@ struct MemoryState {
     delivery_attestations: HashMap<String, DeliveryAttestationRecord>,
     receipt_requests: HashMap<String, ReceiptRequestRecord>,
     observed_policies: HashMap<String, ObservedPolicyRecord>,
+    mandate_requests: HashMap<String, serde_json::Value>,
+}
+
+/// Outcome of a first-write-wins keyed record put. The caller decides whether
+/// an existing record is the same one or a conflict.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyedRecordPut {
+    Created(serde_json::Value),
+    Existing(serde_json::Value),
 }
 
 #[derive(Debug, Clone)]
@@ -887,6 +896,73 @@ impl StatusStore {
                     .fetch_one(pool)
                     .await?;
                 Ok(delivery_put_result(delivery_from_row(existing)?, &record))
+            }
+        }
+    }
+
+    /// Keyed JSON record for the mandate request an owner accepted, keyed by
+    /// mandate PDA. First write wins; rows are never updated. Stored as one
+    /// key and one JSON value so it maps onto a generic `records` table with
+    /// kind `mandate_requests`.
+    pub async fn put_mandate_request(
+        &self,
+        mandate_pda: &str,
+        record: serde_json::Value,
+        created_at_ms: u64,
+    ) -> Result<KeyedRecordPut, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                if let Some(existing) = state.mandate_requests.get(mandate_pda) {
+                    return Ok(KeyedRecordPut::Existing(existing.clone()));
+                }
+                state
+                    .mandate_requests
+                    .insert(mandate_pda.to_owned(), record.clone());
+                Ok(KeyedRecordPut::Created(record))
+            }
+            StorageBackend::Postgres(pool) => {
+                let inserted = sqlx::query(
+                    "INSERT INTO mandate_requests (mandate_pda, record, created_at_ms) VALUES ($1, $2, $3) ON CONFLICT (mandate_pda) DO NOTHING",
+                )
+                .bind(mandate_pda)
+                .bind(Json(&record))
+                .bind(to_i64(Some(created_at_ms), "created_at_ms")?)
+                .execute(pool)
+                .await?
+                .rows_affected()
+                    == 1;
+                if inserted {
+                    return Ok(KeyedRecordPut::Created(record));
+                }
+                let row = sqlx::query("SELECT record FROM mandate_requests WHERE mandate_pda = $1")
+                    .bind(mandate_pda)
+                    .fetch_one(pool)
+                    .await?;
+                Ok(KeyedRecordPut::Existing(
+                    row.get::<Json<serde_json::Value>, _>("record").0,
+                ))
+            }
+        }
+    }
+
+    pub async fn get_mandate_request(
+        &self,
+        mandate_pda: &str,
+    ) -> Result<Option<serde_json::Value>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .mandate_requests
+                .get(mandate_pda)
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query("SELECT record FROM mandate_requests WHERE mandate_pda = $1")
+                    .bind(mandate_pda)
+                    .fetch_optional(pool)
+                    .await?;
+                Ok(row.map(|row| row.get::<Json<serde_json::Value>, _>("record").0))
             }
         }
     }
@@ -1746,5 +1822,64 @@ mod tests {
             .unwrap();
         assert_eq!(stored.served_at, first.served_at);
         assert_eq!(stored.published_at_ms, 1_000);
+    }
+
+    async fn mandate_request_round_trip(store: &StatusStore, key: &str) {
+        let first = serde_json::json!({"requestHash": "aa", "owner": "o"});
+        assert_eq!(
+            store
+                .put_mandate_request(key, first.clone(), 1_000)
+                .await
+                .unwrap(),
+            KeyedRecordPut::Created(first.clone())
+        );
+        let second = serde_json::json!({"requestHash": "bb", "owner": "o"});
+        assert_eq!(
+            store.put_mandate_request(key, second, 2_000).await.unwrap(),
+            KeyedRecordPut::Existing(first.clone())
+        );
+        assert_eq!(store.get_mandate_request(key).await.unwrap(), Some(first));
+        assert_eq!(
+            store
+                .get_mandate_request(&format!("{key}-missing"))
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn mandate_requests_are_first_write_wins() {
+        mandate_request_round_trip(&StatusStore::in_memory(), "mandate-a").await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires explicitly isolated TEST_DATABASE_URL"]
+    async fn postgres_mandate_requests_match_memory() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("isolated fixture URL required");
+        assert!(
+            url.starts_with("postgresql://chainpay_test@127.0.0.1:55439/"),
+            "Only the explicitly provisioned local fixture is allowed"
+        );
+        let store = StatusStore::connect(&url).await.unwrap();
+        let mut suffix = [0_u8; 8];
+        getrandom::fill(&mut suffix).unwrap();
+        let key = format!(
+            "mandate-{}",
+            suffix
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+        mandate_request_round_trip(&store, &key).await;
+        let reconnected = StatusStore::connect(&url).await.unwrap();
+        assert_eq!(
+            reconnected
+                .get_mandate_request(&key)
+                .await
+                .unwrap()
+                .unwrap()["requestHash"],
+            "aa"
+        );
     }
 }

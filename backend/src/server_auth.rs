@@ -256,6 +256,26 @@ pub(super) async fn mandate(
             ));
         }
     }
+    let account = owned_mandate_account(state, &principal.wallet, address).await?;
+    if let Some(scope) = &principal.scope {
+        if scope["agents"][address].as_str()
+            != Some(&bs58::encode(&account.data[40..72]).into_string())
+        {
+            return Err(ApiError::Forbidden(
+                "Mandate agent changed. Reconnect.".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The live mandate account, checked to be a ChainPay `PaymentMandate` whose
+/// on-chain owner is `wallet`. Callers read limits from the returned bytes.
+pub(super) async fn owned_mandate_account(
+    state: &BackendState,
+    wallet: &str,
+    address: &str,
+) -> Result<RpcAccount, ApiError> {
     validate_solana_address(address, "mandate")?;
     let account = state
         .rpc
@@ -268,18 +288,9 @@ pub(super) async fn mandate(
     {
         return Err(ApiError::Forbidden("Invalid mandate".into()));
     }
-    if let Some(scope) = &principal.scope {
-        if scope["agents"][address].as_str()
-            != Some(&bs58::encode(&account.data[40..72]).into_string())
-        {
-            return Err(ApiError::Forbidden(
-                "Mandate agent changed. Reconnect.".into(),
-            ));
-        }
-    }
-    verify_account_pubkey(&account.data[8..40], &principal.wallet, "owner")
+    verify_account_pubkey(&account.data[8..40], wallet, "owner")
         .map_err(|_| ApiError::Forbidden("Mandate belongs to another owner".into()))?;
-    Ok(())
+    Ok(account)
 }
 
 pub(super) async fn principal(
