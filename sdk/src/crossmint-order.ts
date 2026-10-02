@@ -267,6 +267,60 @@ function accountKeyResolver(message: unknown): (index: number) => PublicKey {
   };
 }
 
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function base58Decode(value: string): Uint8Array | undefined {
+  const bytes: number[] = [];
+  for (const char of value) {
+    let carry = BASE58_ALPHABET.indexOf(char);
+    if (carry < 0) return undefined;
+    for (let index = 0; index < bytes.length; index += 1) {
+      carry += bytes[index] * 58;
+      bytes[index] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  for (const char of value) {
+    if (char !== "1") break;
+    bytes.push(0);
+  }
+  return new Uint8Array(bytes.reverse());
+}
+
+function base64Decode(value: string): Uint8Array | undefined {
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return undefined;
+  return new Uint8Array(Buffer.from(value, "base64"));
+}
+
+/**
+ * Crossmint documents its Solana `serializedTransaction` as base58 and parses
+ * it as a legacy transaction. Base64 is still accepted because a payload that
+ * decodes as a valid transaction under either encoding is unambiguous, and
+ * fixtures and other tooling commonly use base64.
+ */
+function deserializeCrossmintTransaction(wire: string): VersionedTransaction {
+  let lastError: unknown;
+  for (const decode of [base58Decode, base64Decode]) {
+    const bytes = decode(wire);
+    if (!bytes || bytes.length === 0) continue;
+    try {
+      return VersionedTransaction.deserialize(bytes);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  fail(
+    "malformed",
+    lastError === undefined
+      ? "Crossmint serializedTransaction is neither base58 nor base64"
+      : `Crossmint serializedTransaction is not a Solana transaction: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+  );
+}
+
 /**
  * Derive what a Crossmint order actually charges from the transaction Crossmint
  * prepared for its own payer. Exactly one SPL Token or Token-2022 transfer must
@@ -281,22 +335,7 @@ export function decodeCrossmintTransferTerms(
   if (wire === "" || wire.length > MAX_SERIALIZED_TRANSACTION_CHARS) {
     fail("malformed", "Crossmint serializedTransaction is missing or too large");
   }
-  let bytes: Uint8Array;
-  try {
-    bytes = new Uint8Array(Buffer.from(wire, "base64"));
-  } catch {
-    fail("malformed", "Crossmint serializedTransaction is not base64");
-  }
-  if (bytes.length === 0) fail("malformed", "Crossmint serializedTransaction decoded to zero bytes");
-  let transaction: VersionedTransaction;
-  try {
-    transaction = VersionedTransaction.deserialize(bytes);
-  } catch (error) {
-    fail(
-      "malformed",
-      `Crossmint serializedTransaction is not a Solana transaction: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+  const transaction = deserializeCrossmintTransaction(wire);
   const message = transaction.message;
   const keyAt = accountKeyResolver(message);
   const transfers: CrossmintTransferTerms[] = [];
