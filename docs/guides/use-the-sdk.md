@@ -67,6 +67,7 @@ read; verify the selected cluster and program before continuing.
 | Export receipts as one CSV | `receiptsToCsv(rows)` |
 | Prepare a payment and inspect policy | `preparePayment(input, approvedAgent)`; throws `DuplicateInvoiceError` when the invoice is already paid |
 | Terminal without the dashboard | `npx --prefix sdk chainpay status --owner <wallet>` |
+| Receipts CSV from the terminal | `npx --prefix sdk chainpay export --owner <wallet> --out receipts.csv` |
 
 A PDA is a program-derived account address. A receipt PDA records a settlement;
 its address is derived from the mandate and invoice hash. Use validated receipt

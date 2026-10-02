@@ -67,3 +67,47 @@ test("pause --json prints the unsigned transaction and never submits", async () 
   assert.equal(card.transaction.instructions[0].name, "pause_mandate");
   assert.match(card.transaction.instructions[0].dataBase64, /^[A-Za-z0-9+/]+=*$/);
 });
+
+test("chainpay export writes one CSV row per receipt, newest first, with its limits source", async () => {
+  const { exportReceiptsCsv } = await import("../dist/cli.js");
+  const mint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const base = {
+    mandate: MANDATE_KEY,
+    invoiceHash: new Uint8Array(32).fill(1),
+    paymentId: new Uint8Array(32).fill(2),
+    mint,
+    sourceTokenAccount: OWNER_KEY,
+    recipientTokenAccount: OWNER_KEY,
+    agent: OWNER_KEY,
+    signatureReference: new Uint8Array(32),
+    status: "confirmed",
+    onChainStatus: 1,
+    bump: 255,
+  };
+  const older = { ...base, address: "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1", amount: 4_500_001n, executedAtSlot: 100n, policySnapshot: null };
+  const newer = {
+    ...base,
+    address: "3Rcpt2v2SnapshotFixture111111111111111111",
+    amount: 4_500_000n,
+    executedAtSlot: 200n,
+    policySnapshot: { version: 1, maxPerPayment: 5_000_000n, totalLimit: 50_000_000n, amountSpentAfter: 12_000_000n, paymentCountAfter: 3n, maxPaymentCount: 10n, expiresAtSlot: 9_000n, cooldownSlots: 0n },
+  };
+  const client = {
+    getMandatesByOwner: async (owner) => (owner === OWNER_KEY ? [{ address: MANDATE_KEY }] : []),
+    getPaymentsByMandate: async () => [older, newer],
+    getMintDecimals: async () => 6,
+    connection: { getBlockTime: async (slot) => (slot === 200 ? Date.UTC(2026, 9, 1) / 1000 : null) },
+  };
+  const { csv, rowCount } = await exportReceiptsCsv(client, { owner: OWNER_KEY, appUrl: "https://chainpay.example" });
+  assert.equal(rowCount, 2);
+  const lines = csv.trimEnd().split("\r\n");
+  assert.match(lines[0], /^Date,Description,Amount,Payee,Reference,/);
+  assert.match(lines[1], /^2026-10-01,,4\.5,/);
+  assert.match(lines[1], /,5,50,12,on-chain,3Rcpt2v2SnapshotFixture1+,https:\/\/chainpay\.example\/verify\//);
+  assert.match(lines[2], /^,,4\.500001,/);
+  assert.match(lines[2], /,,,,not-recorded,/);
+});
+
+test("chainpay export without owner fails closed", async () => {
+  await assert.rejects(runChainPayCli(["export"], {}), /CHAINPAY_OWNER|Pass --owner/);
+});

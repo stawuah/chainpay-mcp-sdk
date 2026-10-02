@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChainPayClient } from "./client.js";
@@ -13,13 +14,16 @@ import {
   receiptUrlForAddress,
   tokenLabel,
 } from "./ops-snapshot.js";
-import type { Mandate, PreparedTransaction } from "./types.js";
+import { assetLabel } from "./known-assets.js";
+import { receiptPolicy, receiptsToCsv, type ReceiptCsvRow } from "./receipt-export.js";
+import type { Mandate, PaymentReceipt, PreparedTransaction } from "./types.js";
 
 type Flags = {
   owner?: string;
   mandate?: string;
   rpc?: string;
   program?: string;
+  out?: string;
   json?: boolean;
   help?: boolean;
 };
@@ -32,10 +36,12 @@ function usage(): string {
     "  chainpay status [--owner <wallet>]",
     "  chainpay receipts [--owner <wallet>] [--mandate <pda>]",
     "  chainpay receipt <pda>",
+    "  chainpay export [--owner <wallet>] [--mandate <pda>] [--out <file.csv>]",
     "  chainpay pause <mandate> --owner <wallet>",
     "  chainpay revoke <mandate> --owner <wallet>",
     "",
-    "Flags: --owner --mandate --rpc --program --json --help",
+    "Flags: --owner --mandate --rpc --program --out --json --help",
+    "       export writes receipts as CSV to --out, or to stdout.",
     "       --json prints the snapshot, or for pause/revoke the unsigned transaction.",
     "Env:   CHAINPAY_OWNER CHAINPAY_RPC_URL CHAINPAY_PROGRAM_ID CHAINPAY_APP_URL",
     "",
@@ -50,13 +56,14 @@ function parseArgs(argv: string[]): { command: string; positional: string[]; fla
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") flags.help = true;
     else if (arg === "--json") flags.json = true;
-    else if (arg === "--owner" || arg === "--mandate" || arg === "--rpc" || arg === "--program") {
+    else if (arg === "--owner" || arg === "--mandate" || arg === "--rpc" || arg === "--program" || arg === "--out") {
       const value = argv[index + 1];
       if (!value || value.startsWith("-")) throw new Error(`${arg} needs a value`);
       if (arg === "--owner") flags.owner = value;
       if (arg === "--mandate") flags.mandate = value;
       if (arg === "--rpc") flags.rpc = value;
       if (arg === "--program") flags.program = value;
+      if (arg === "--out") flags.out = value;
       index += 1;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag: ${arg}`);
@@ -109,6 +116,49 @@ function print(value: unknown, text: string, asJson: boolean | undefined): void 
     return;
   }
   process.stdout.write(`${text}\n`);
+}
+
+type ExportClient = Pick<ChainPayClient, "getMandatesByOwner" | "getPaymentsByMandate" | "getMintDecimals"> & {
+  connection: Pick<ChainPayClient["connection"], "getBlockTime">;
+};
+
+/**
+ * Every receipt under the owner's mandates as one CSV, newest first. Limits
+ * come from each receipt's on-chain snapshot or read "not-recorded": the CLI
+ * has no relay session, so it never shows a relay observation. Dates come from
+ * block time and stay empty when unknown.
+ */
+export async function exportReceiptsCsv(
+  client: ExportClient,
+  options: { owner: string; mandateFilter?: (mandate: Mandate) => boolean; appUrl?: string },
+): Promise<{ csv: string; rowCount: number }> {
+  const mandates = (await client.getMandatesByOwner(options.owner))
+    .filter((mandate) => !options.mandateFilter || options.mandateFilter(mandate));
+  const receipts: PaymentReceipt[] = (await Promise.all(
+    mandates.map((mandate) => client.getPaymentsByMandate(mandate.address)),
+  ))
+    .flat()
+    .sort((left, right) => (right.executedAtSlot > left.executedAtSlot ? 1 : right.executedAtSlot < left.executedAtSlot ? -1 : 0));
+  const decimals = new Map<string, number | null>();
+  await Promise.all([...new Set(receipts.map((receipt) => receipt.mint))].map(async (mint) => {
+    decimals.set(mint, await client.getMintDecimals(mint).catch(() => null));
+  }));
+  const blockTimes = new Map<bigint, number | null>();
+  await Promise.all([...new Set(receipts.map((receipt) => receipt.executedAtSlot))].map(async (slot) => {
+    blockTimes.set(slot, await client.connection.getBlockTime(Number(slot)).catch(() => null));
+  }));
+  const rows: ReceiptCsvRow[] = receipts.map((receipt) => {
+    const verifyUrl = receiptUrlForAddress(receipt.address, options.appUrl);
+    return {
+      receipt,
+      decimals: decimals.get(receipt.mint) ?? null,
+      symbol: assetLabel(receipt.mint, receipt.mint),
+      blockTime: blockTimes.get(receipt.executedAtSlot) ?? null,
+      policy: receiptPolicy(receipt),
+      ...(verifyUrl ? { verifyUrl } : {}),
+    };
+  });
+  return { csv: receiptsToCsv(rows), rowCount: rows.length };
 }
 
 export async function runChainPayCli(argv: string[], env: Env = process.env): Promise<number> {
@@ -165,6 +215,22 @@ export async function runChainPayCli(argv: string[], env: Env = process.env): Pr
     };
     print(card, formatPaymentLookupAnsi(card), flags.json);
     return card.found ? 0 : 1;
+  }
+
+  if (command === "export") {
+    const owner = ownerFrom(flags, env);
+    const { csv, rowCount } = await exportReceiptsCsv(client, {
+      owner,
+      mandateFilter: mandateFilterFrom(flags),
+      appUrl,
+    });
+    if (flags.out) {
+      await writeFile(flags.out, csv, "utf8");
+      process.stderr.write(`Wrote ${rowCount} ${rowCount === 1 ? "receipt" : "receipts"} to ${flags.out}\n`);
+    } else {
+      process.stdout.write(csv);
+    }
+    return 0;
   }
 
   if (command === "pause" || command === "revoke") {
