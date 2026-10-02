@@ -19,6 +19,7 @@ import {
   deriveCrossmintPaymentReferences,
   parseCrossmintOrder,
   scaleDecimalString,
+  validateCrossmintCheckoutOrder,
 } from "../dist/crossmint-order.js";
 import {
   crossmintFieldsToPreparePaymentInput,
@@ -390,4 +391,28 @@ test("order URLs are built against the documented orders path over HTTPS", () =>
     () => crossmintOrderUrl("http://staging.crossmint.com", "order_1"),
     (error) => error instanceof CrossmintOrderError && error.code === "malformed",
   );
+});
+
+test("checkout rejects unsafe preparation while generic decoding remains descriptive", () => {
+  const owner = address();
+  const mint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const transfer = transferCheckedInstruction({ mint, amount: "1234567" });
+  const raw = crossmintOrder({ serialized: serializedTransaction([transfer.instruction]), quoteAmount: "1.234567" });
+  raw.order.payment.preparation.payerAddress = owner;
+  raw.order.payment.preparation.chain = "solana";
+  raw.order.quote.status = "valid";
+  raw.order.quote.expiresAt = "2030-01-01T00:00:00Z";
+  const order = parseCrossmintOrder(raw);
+  const expected = { orderId: order.orderId, owner, source: transfer.source, mint, now: 1 };
+  assert.equal(validateCrossmintCheckoutOrder(order, expected).amount, "1234567");
+  for (const patch of [
+    { preparationChain: "ethereum" }, { payerAddress: address() }, { orderId: "other" },
+    { quoteStatus: "expired" }, { quoteExpiresAt: "not-a-date" }, { quoteExpiresAt: "1970-01-01T00:00:00Z" },
+    { paymentStatus: "completed" }, { currency: "eth" },
+    { quotedTotal: { amount: "1.234567", currency: "usd" } },
+    { quotedTotal: { amount: "1.234568", currency: "usdc" } },
+  ]) assert.throws(() => validateCrossmintCheckoutOrder({ ...order, ...patch }, expected), CrossmintOrderError);
+  assert.throws(() => validateCrossmintCheckoutOrder(order, { ...expected, source: address() }), /source/);
+  const extra = new TransactionInstruction({ programId: new PublicKey(SYSTEM_PROGRAM), keys: [], data: Buffer.from([1]) });
+  assert.throws(() => validateCrossmintCheckoutOrder({ ...order, serializedTransaction: serializedTransaction([extra, transfer.instruction]) }, expected), /cannot preserve/);
 });

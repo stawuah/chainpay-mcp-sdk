@@ -32,11 +32,13 @@ const SETTLED_ACTIONS = new Set([
   "backend_relayed",
   "payment_confirmed",
   "x402_verified",
+  "crossmint_settled",
 ]);
 
 const PENDING_ACTIONS = new Set([
   "payment_pending",
   "x402_payment_pending",
+  "crossmint_payment_pending",
 ]);
 
 function pickString(...values: unknown[]): string | undefined {
@@ -95,7 +97,7 @@ export function normalizeToolOutcome(result: unknown): NormalizedOutcome | undef
   if (action === "token_account_signature_required") {
     return { kind: "token_account_approval_required", ...base };
   }
-  if (action === "agent_signature_required" || action === "x402_agent_signature_required") {
+  if (action === "agent_signature_required" || action === "x402_agent_signature_required" || action === "crossmint_agent_signature_required") {
     if (response.isError === true) {
       return { kind: "payment_blocked", ...base, status: status ?? "blocked" };
     }

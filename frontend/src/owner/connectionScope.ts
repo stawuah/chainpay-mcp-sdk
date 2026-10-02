@@ -15,12 +15,15 @@ export const CONNECTION_READ_TOOLS = [
   "verify_payment_request",
   "get_payment",
   "wait_for_payment",
+  "get_crossmint_payment",
 ] as const;
 
 export const CONNECTION_PAYMENT_TOOLS = [
   "execute_payment",
   "prepare_x402_payment",
   "execute_x402_payment",
+  "prepare_crossmint_payment",
+  "execute_crossmint_payment",
 ] as const;
 
 export type ScopedMandate = {

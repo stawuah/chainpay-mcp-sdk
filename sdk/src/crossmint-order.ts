@@ -54,6 +54,9 @@ export type CrossmintOrderSummary = {
   lineItemLocators: string[];
   serializedTransaction?: string;
   payerAddress?: string;
+  preparationChain?: string;
+  quoteExpiresAt?: string;
+  quoteStatus?: string;
 };
 
 export type CrossmintQuoteCheck = "match" | "mismatch" | "unavailable";
@@ -217,6 +220,9 @@ export function parseCrossmintOrder(value: unknown): CrossmintOrderSummary {
     ...(total ? { quotedTotal: total } : {}),
     ...(serializedTransaction ? { serializedTransaction } : {}),
     ...(payerAddress ? { payerAddress } : {}),
+    preparationChain: optionalString(preparation?.chain, 64),
+    quoteExpiresAt: optionalString(optionalRecord(order.quote)?.expiresAt, 64),
+    quoteStatus: optionalString(optionalRecord(order.quote)?.status, 32),
   };
 }
 
@@ -329,7 +335,7 @@ function deserializeCrossmintTransaction(wire: string): VersionedTransaction {
  */
 export function decodeCrossmintTransferTerms(
   serializedTransaction: string,
-  expected: { mint?: Address; tokenProgram?: TokenProgram } = {},
+  expected: { mint?: Address; tokenProgram?: TokenProgram; strict?: boolean } = {},
 ): CrossmintTransferTerms {
   const wire = serializedTransaction.trim();
   if (wire === "" || wire.length > MAX_SERIALIZED_TRANSACTION_CHARS) {
@@ -347,9 +353,15 @@ export function decodeCrossmintTransferTerms(
       if (error instanceof CrossmintOrderError) throw error;
       continue;
     }
-    if (programId !== SPL_TOKEN_PROGRAM_ID && programId !== TOKEN_2022_PROGRAM_ID) continue;
+    if (programId !== SPL_TOKEN_PROGRAM_ID && programId !== TOKEN_2022_PROGRAM_ID) {
+      if (expected.strict) fail("terms_unavailable", "Crossmint preparation requires instructions the mandate adapter cannot preserve");
+      continue;
+    }
     const tag = compiled.data[0];
-    if (tag !== SPL_TRANSFER_TAG && tag !== SPL_TRANSFER_CHECKED_TAG) continue;
+    if (tag !== SPL_TRANSFER_TAG && tag !== SPL_TRANSFER_CHECKED_TAG) {
+      if (expected.strict) fail("terms_unavailable", "Crossmint preparation contains unsupported token instructions");
+      continue;
+    }
     const checked = tag === SPL_TRANSFER_CHECKED_TAG;
     const expectedLength = checked ? 10 : 9;
     if (compiled.data.length !== expectedLength) {
@@ -358,6 +370,9 @@ export function decodeCrossmintTransferTerms(
     const minimumAccounts = checked ? 4 : 3;
     if (compiled.accountKeyIndexes.length < minimumAccounts) {
       fail("malformed", "Crossmint transfer instruction is missing required accounts");
+    }
+    if (expected.strict && (!checked || compiled.accountKeyIndexes.length !== minimumAccounts)) {
+      fail("terms_unavailable", "Checkout requires exactly one TransferChecked without extra reference accounts");
     }
     const view = new DataView(compiled.data.buffer, compiled.data.byteOffset, compiled.data.byteLength);
     const amount = view.getBigUint64(1, true);
@@ -422,9 +437,28 @@ export function decodeCrossmintTransferTerms(
 
 function quoteCheckFor(order: CrossmintOrderSummary, terms: CrossmintTransferTerms): CrossmintQuoteCheck {
   if (!order.quotedTotal || terms.decimals === undefined) return "unavailable";
+  if (!order.currency || order.quotedTotal.currency !== order.currency) return "unavailable";
   const scaled = scaleDecimalString(order.quotedTotal.amount, terms.decimals);
   if (scaled === undefined) return "unavailable";
   return scaled === BigInt(terms.amount) ? "match" : "mismatch";
+}
+
+/** Narrow, fail-closed staging checkout contract; generic decoding is not checkout authorization. */
+export function validateCrossmintCheckoutOrder(
+  order: CrossmintOrderSummary,
+  expected: { orderId: string; owner: Address; source: Address; mint: Address; now?: number },
+): CrossmintPaymentTerms {
+  if (order.orderId !== expected.orderId || order.payerAddress !== expected.owner) fail("terms_mismatch", "Order or payer differs from the authenticated owner");
+  if (order.paymentMethod !== "solana" || order.preparationChain !== "solana") fail("terms_unavailable", "Only Solana staging preparation is supported");
+  if (order.currency !== "usdc" || expected.mint !== "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU") fail("terms_unavailable", "Checkout currently supports only canonical Devnet USDC");
+  const expires = Date.parse(order.quoteExpiresAt ?? "");
+  if (order.quoteStatus !== "valid" || !Number.isFinite(expires) || expires <= (expected.now ?? Date.now())) fail("order_not_payable", "Crossmint quote is expired or unavailable");
+  if (order.paymentStatus !== "awaiting-payment") fail("order_not_payable", "Crossmint order is not awaiting payment");
+  const transfer = decodeCrossmintTransferTerms(order.serializedTransaction ?? "", { mint: expected.mint, tokenProgram: "spl-token", strict: true });
+  if (transfer.source !== expected.source || transfer.decimals !== 6) fail("terms_mismatch", "Prepared transfer differs from the mandate source or USDC decimals");
+  const terms = crossmintPaymentTerms(order, { mint: expected.mint, tokenProgram: "spl-token" });
+  if (terms.quoteCheck !== "match") fail("terms_mismatch", "Quote amount or currency does not match the prepared transfer");
+  return terms;
 }
 
 /**

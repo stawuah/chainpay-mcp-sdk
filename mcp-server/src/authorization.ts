@@ -70,7 +70,7 @@ export async function authorizeTool(context: ChainPayMcpContext, name: string, a
   if (["list_mandates", "find_compatible_mandate", "create_mandate", "prepare_token_accounts", "get_spend_overview", "list_receipts", "export_receipts"].includes(name)) args.owner = principal.wallet;
   // Existing-operation resume is authorized again by Axum against the stored
   // owner and mandate. It never prepares or signs a new payment.
-  if (name === "execute_x402_payment" && typeof args.paymentId === "string") return;
+  if (["execute_x402_payment", "execute_crossmint_payment", "get_crossmint_payment"].includes(name) && typeof args.paymentId === "string" && /^payment_/.test(args.paymentId)) return;
   let address = name === "get_mandate" && typeof args.address === "string" ? args.address : typeof args.mandate === "string" ? args.mandate : typeof args.mandateAddress === "string" ? args.mandateAddress : undefined;
   if (!address && typeof args.receiptAddress === "string") {
     const receipt = await context.client.getPayment(args.receiptAddress);

@@ -1,5 +1,25 @@
 import type { SellerStatementState } from "../receipts/model";
-import type { AgentCheck, CrossmintRequest } from "./runtime";
+import type { AgentApproval, AgentCheck, CrossmintRequest } from "./runtime";
+import type { Operation } from "../settlement";
+import { settlementKey } from "./settlementKey";
+
+export function originalCrossmintOperation(approval: AgentApproval, operations: Operation[], wallet: string) {
+  const continuation = crossmintApprovalContinuation(approval);
+  if (!continuation) return undefined;
+  const key = settlementKey(String(continuation.arguments.mandate), String(continuation.arguments.invoiceHash));
+  return operations.find(operation => operation.wallet === wallet && operation.kind === "payments" && operation.key === key && !(operation.status === "failed" && operation.result?.error?.startsWith("Request rejected before submission")));
+}
+
+/** Resolve the original connector before opening a wallet; never downgrade it to direct payment. */
+export function crossmintApprovalContinuation(approval: AgentApproval) {
+  if (approval.action !== "crossmint_agent_signature_required") return undefined;
+  const continuation = approval.continuation;
+  if (continuation?.tool !== "execute_crossmint_payment" || !continuation.arguments || !approval.payment) throw new Error("Crossmint approval is missing its original continuation. Review the order again.");
+  for (const field of ["orderId", "mandate", "agent", "invoiceHash", "expectedTerms"]) {
+    if (typeof continuation.arguments[field] !== "string" || continuation.arguments[field] !== approval.payment[field]) throw new Error("Crossmint approval no longer matches its reviewed order. Review it again.");
+  }
+  return continuation;
+}
 
 /** Copy for a Crossmint order that cannot be paid. Every case says nothing was submitted. */
 export const CROSSMINT_BLOCKED_COPY = {

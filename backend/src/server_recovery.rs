@@ -765,7 +765,7 @@ pub(super) async fn x402_context(
     // operation checked is the one the stored job actually belongs to.
     let operation = match metadata.connector {
         ConnectorKind::X402 => "execute_x402_payment",
-        ConnectorKind::Crossmint => "execute_crossmint_payment",
+        ConnectorKind::Crossmint => crossmint_read_operation(&principal),
     };
     authorize_payment(&state, &principal, &record, operation).await?;
     let record = payment(&state, record).await?;
@@ -1197,7 +1197,7 @@ mod tests {
             ("delivery", X402PaymentStatus::Verified),
             ("completed", X402PaymentStatus::Verified),
         ] {
-            let Json(updated) = record_crossmint_order_proof(
+            let Json(updated) = persist_crossmint_observation(
                 State(state.clone()),
                 Extension(principal.clone()),
                 Json(CrossmintOrderProofRequest {
@@ -1241,6 +1241,55 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(saved.proof.unwrap()["orderPhase"], "completed");
+    }
+
+    #[test]
+    fn crossmint_provider_authorization_binds_every_payment_field_and_expires() {
+        use hmac::{Hmac, Mac};
+        let (_, principal, mut request) = fixture();
+        let secret = "fixture-secret-for-crossmint-at-least-32-bytes";
+        let terms = json!({"orderId":"order_once", "mint":request.mint, "recipient":request.recipient, "amount":request.amount.unwrap().to_string(), "tokenProgram":request.token_program});
+        let payload = json!({"version":1,"owner":principal.wallet,"mandate":request.mandate,"agent":request.agent,"invoiceHash":request.invoice_hash.to_ascii_lowercase(),"terms":terms,"expiresAtMs":"2000"}).to_string();
+        let mut mac = Hmac::<sha2_010::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload.as_bytes());
+        let mut authenticated_terms = terms.clone();
+        authenticated_terms["authorization"] =
+            json!({"payload":payload,"mac":hex_encode(&mac.finalize().into_bytes())});
+        request.crossmint = Some(CrossmintPaymentMetadata {
+            order_id: "order_once".into(),
+            order_url: None,
+            terms: authenticated_terms,
+        });
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 1000)
+                .is_ok()
+        );
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 2000)
+                .is_err()
+        );
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, "another-owner", secret, 1000)
+                .is_err()
+        );
+        let original = request.clone();
+        request.amount = Some(request.amount.unwrap() + 1);
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 1000)
+                .is_err()
+        );
+        request = original.clone();
+        request.crossmint.as_mut().unwrap().terms = terms;
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 1000)
+                .is_err()
+        );
+        request = original;
+        request.crossmint.as_mut().unwrap().terms["authorization"]["mac"] = json!("é".repeat(32));
+        assert!(
+            verify_crossmint_authorization_with_secret(&request, &principal.wallet, secret, 1000)
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1352,7 +1401,7 @@ mod tests {
             ("delivery", X402PaymentStatus::Verified),
             ("completed", X402PaymentStatus::Verified),
         ] {
-            let Json(updated) = record_crossmint_order_proof(
+            let Json(updated) = persist_crossmint_observation(
                 State(another_instance.clone()),
                 Extension(principal.clone()),
                 Json(CrossmintOrderProofRequest {

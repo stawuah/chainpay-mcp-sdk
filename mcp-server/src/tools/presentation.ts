@@ -273,7 +273,7 @@ function formatBlocked(record: RecordLike): string {
     lines.push("", "**Next step:** Fix the failed checks or choose a different spending permission.");
   } else if (action === "duplicate_invoice") {
     lines.push("", "**Next step:** Nothing to retry. Open the existing receipt with `get_payment` if the owner wants proof.");
-  } else if (action === "payment_pending" || action === "x402_payment_pending") {
+  } else if (action === "payment_pending" || action === "x402_payment_pending" || action === "crossmint_payment_pending") {
     lines.push("", "**Next step:** Poll \`wait_for_payment\` with the same \`paymentId\`. Do not approve a second payment.");
   } else {
     lines.push("", "**Next step:** Report the stop reason plainly and suggest the safest dashboard or read-only follow-up.");
@@ -318,7 +318,7 @@ function formatActionResult(record: RecordLike, isError: boolean): string {
   if (action === "details_required" || action === "requirements_ready" || action === "requirements_blocked") {
     return formatRequirements(record);
   }
-  if (action === "agent_signature_required" || action === "x402_agent_signature_required") {
+  if (action === "agent_signature_required" || action === "x402_agent_signature_required" || action === "crossmint_agent_signature_required") {
     return formatApprovalRequired(record);
   }
   if (action === "owner_wallet_signature_required") {
@@ -331,6 +331,7 @@ function formatActionResult(record: RecordLike, isError: boolean): string {
     action === "backend_relayed"
     || action === "managed_payment_settled"
     || action === "x402_verified"
+    || action === "crossmint_settled"
     || (action === "payment_terminal" && record.status === "confirmed")
   ) {
     return formatSettled(record);
@@ -347,7 +348,7 @@ function formatActionResult(record: RecordLike, isError: boolean): string {
   ) {
     return formatBlocked(record);
   }
-  if (action === "payment_pending" || action === "x402_payment_pending") {
+  if (action === "payment_pending" || action === "x402_payment_pending" || action === "crossmint_payment_pending") {
     return formatBlocked(record);
   }
   return fallbackPresentation(record, isError, action);

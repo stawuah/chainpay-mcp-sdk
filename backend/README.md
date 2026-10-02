@@ -106,8 +106,11 @@ Private endpoints derive the principal from a verified bearer credential:
 - `/v1/x402-payments/proof`: `mandate`, idempotency key and
   `execute_x402_payment` permission are required.
 - `/v1/crossmint-orders/proof`: confirmed settlement and
-  `execute_crossmint_payment` permission are required. HTTP 2xx only verifies an
-  order after its phase reaches `delivery` or `completed`; later phase reads
+  `execute_crossmint_payment` or `get_crossmint_payment` permission are required.
+  The relay ignores submitted proof/status/phase and fetches the stored order
+  from the fixed Crossmint staging origin using server-only `CROSSMINT_API_KEY`.
+  Only an identity-matched provider response advancing to `delivery` or
+  `completed` verifies the order; failures preserve settlement. Later reads
   update order evidence without replacing the settled signature or receipt.
 - `PUT /v1/mandates/{pda}/request`: owner session only. Body is a signed
   mandate request `{payload, signature}` (see `sdk/src/mandate-request.ts`).
@@ -166,6 +169,14 @@ and `npm view @solana/transactions version`. See the [official Rust codec](https
 and [Solana v1 examples](https://github.com/solana-foundation/transaction-v1-examples).
 
 ## Crossmint order reservations
+
+New Crossmint operations default disabled (`CHAINPAY_CROSSMINT_ENABLED`). When
+enabled, they additionally require MCP's short-lived authenticated provider
+preparation, verified with the shared server-only
+`CHAINPAY_CROSSMINT_AUTH_SECRET` (at least 32 characters). The authorization
+binds the owner, mandate, agent, invoice, order and exact transfer terms before
+initial reservation. Existing immutable-operation recovery does not require
+minting a replacement authorization. See the MCP README for acceptance limits.
 
 Before signing or broadcasting, the relay atomically binds an order ID within
 the authenticated owner's namespace to one payment idempotency key. This uses

@@ -28,6 +28,9 @@ const AGENT_TOOL_NAMES = new Set([
   "prepare_payment",
   "execute_payment",
   "execute_x402_payment",
+  "prepare_crossmint_payment",
+  "execute_crossmint_payment",
+  "get_crossmint_payment",
   "create_mandate",
 ]);
 const MAX_TOOL_ROUNDS = 6;
@@ -72,6 +75,7 @@ export type ChainPayAgentResponse = {
   approval?: ChainPayAgentApproval;
   outcome?: NormalizedOutcome;
   requirements?: ChainPayAgentRequirements;
+  crossmint?: Record<string, unknown>;
 };
 
 export type ChainPayAgentCheck = {
@@ -92,6 +96,7 @@ const agentInstructions = `You are the ChainPay assistant inside the user's conn
 ChainPay is a policy-controlled Solana payment rail. Be concise, clear, and friendly; your answer may be read aloud by a browser. Use the available tools to inspect live ChainPay state when that will answer the user's question. Speak as a capable ChainPay assistant, not as a generic language model.
 
 Safety rules:
+- Crossmint is staging-only and disabled until operator acceptance. Use prepare_crossmint_payment for an existing order. Set preparePayer only if the owner explicitly asks to configure the payer; never as an automatic retry. Execute only after explicit payment intent, with the returned expectedTerms and signing mode. Resume using the original paymentId and get_crossmint_payment; payment confirmation does not establish delivery.
 - You may inspect state and prepare demo requests or owner approval transactions. You may not sign owner transactions, pause, revoke, or update anything. execute_payment requires signingMode. Use human for an owner-wallet mandate and delegated only for an already provisioned automatic-payment mandate.
 - A create_mandate result is only a prepared request. Say that I prepared it and that the owner wallet must still approve it.
 - Never claim a mandate was created until the owner wallet approval flow reports success. Never claim a payment settled until execute_payment confirms it or the wallet approval flow reports success.
@@ -289,7 +294,7 @@ function approvalFromToolResult(result: unknown): ChainPayAgentApproval | undefi
   if (data.action === "token_account_signature_required") {
     return { kind: "token_account", ...data, action: String(data.action) };
   }
-  if (data.action === "agent_signature_required" || data.action === "x402_agent_signature_required") {
+  if (data.action === "agent_signature_required" || data.action === "x402_agent_signature_required" || data.action === "crossmint_agent_signature_required") {
     return { kind: "payment", ...data, action: String(data.action) };
   }
   return undefined;
@@ -453,6 +458,7 @@ export async function runChainPayAgent(
   let approval: ChainPayAgentApproval | undefined;
   let outcome: ChainPayAgentResponse["outcome"] | undefined;
   let requirements: ChainPayAgentRequirements | undefined;
+  let crossmint: Record<string, unknown> | undefined;
   const model = process.env.CHAINPAY_AGENT_MODEL ?? (
     provider === "openrouter" ? "openrouter/free" : "gpt-5-mini"
   );
@@ -494,6 +500,8 @@ export async function runChainPayAgent(
         approval = approvalFromToolResult(result) ?? approval;
         outcome = outcomeFromToolResult(result) ?? outcome;
         requirements = requirementsFromToolResult(result) ?? requirements;
+        const connector = (result as { structuredContent?: { crossmint?: Record<string, unknown> } })?.structuredContent?.crossmint;
+        if (connector && typeof connector.orderId === "string") crossmint = connector;
         if (requirements?.status === "needs_details") outcome = { kind: "details_required" };
         output = toolOutput(result);
       }
@@ -522,5 +530,6 @@ export async function runChainPayAgent(
     ...(approval ? { approval } : {}),
     ...(outcome ? { outcome } : {}),
     ...(requirements ? { requirements } : {}),
+    ...(crossmint ? { crossmint } : {}),
   };
 }

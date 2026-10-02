@@ -1,9 +1,9 @@
 #[path = "server_delivery.rs"]
 mod delivery_routes;
-#[path = "server_receipts.rs"]
-mod receipt_routes;
 #[path = "server_mandate_requests.rs"]
 mod mandate_request_routes;
+#[path = "server_receipts.rs"]
+mod receipt_routes;
 #[path = "server_recovery.rs"]
 mod recovery;
 #[path = "server_transactions.rs"]
@@ -19,17 +19,17 @@ use std::{
 };
 
 use axum::{
+    Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{header, HeaderName, HeaderValue, Request, StatusCode},
+    http::{HeaderName, HeaderValue, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
-    Json, Router,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use solana_transaction::versioned::VersionedTransaction;
 use thiserror::Error;
@@ -1017,6 +1017,9 @@ async fn submit_managed_payment(
         return resume_managed_payment(&state, provider, &principal, &request, payment, existing)
             .await;
     }
+    if payment.crossmint.is_some() {
+        require_crossmint_checkout_enabled()?;
+    }
     auth::mandate(
         &state,
         &principal,
@@ -1025,6 +1028,7 @@ async fn submit_managed_payment(
     )
     .await?;
     validate_live_payment(&state, &payment).await?;
+    verify_crossmint_authorization(&payment, &principal.wallet)?;
     let (won, record) =
         recovery::reserve_payment(&state, &principal, &payment, SigningMode::Delegated).await?;
     if !won {
@@ -1134,6 +1138,9 @@ async fn submit_payment(
         }
         return Ok(Json(existing));
     }
+    if request.crossmint.is_some() {
+        require_crossmint_checkout_enabled()?;
+    }
     auth::mandate(
         &state,
         &principal,
@@ -1142,6 +1149,7 @@ async fn submit_payment(
     )
     .await?;
     validate_live_payment(&state, &request).await?;
+    verify_crossmint_authorization(&request, &principal.wallet)?;
     let (won, record) =
         recovery::reserve_payment(&state, &principal, &request, SigningMode::Human).await?;
     if !won {
@@ -1171,7 +1179,7 @@ async fn settle_payment(
             record.signature = Some(own);
             record.status = PaymentStatus::Submitted;
             record.updated_at_ms = now_ms();
-            persist_payment(state, &record, request.x402.as_ref()).await?;
+            persist_payment(state, &record, connector_metadata(&request)).await?;
             return Ok(Json(recovery::payment(state, record).await?));
         }
         other => other?,
@@ -1546,7 +1554,244 @@ async fn list_crossmint_orders(
 /// not exist. A non-2xx Crossmint response leaves the job confirmed rather than
 /// verified, so an order that took the money but never advanced is visible
 /// instead of being reported as complete.
+fn verify_crossmint_authorization(
+    request: &PaymentSubmissionRequest,
+    owner: &str,
+) -> Result<(), ApiError> {
+    if request.crossmint.is_none() {
+        return Ok(());
+    }
+    let secret = std::env::var("CHAINPAY_CROSSMINT_AUTH_SECRET").unwrap_or_default();
+    verify_crossmint_authorization_with_secret(request, owner, &secret, now_ms())
+}
+
+fn verify_crossmint_authorization_with_secret(
+    request: &PaymentSubmissionRequest,
+    owner: &str,
+    secret: &str,
+    now: u64,
+) -> Result<(), ApiError> {
+    use hmac::{Hmac, Mac};
+    let reject = || {
+        ApiError::Forbidden("Crossmint requires a fresh authenticated provider preparation".into())
+    };
+    let Some(metadata) = &request.crossmint else {
+        return Ok(());
+    };
+    if secret.len() < 32 {
+        return Err(reject());
+    }
+    let authorization = &metadata.terms["authorization"];
+    let payload = authorization["payload"]
+        .as_str()
+        .filter(|s| s.len() <= 32_000)
+        .ok_or_else(reject)?;
+    let signature = authorization["mac"]
+        .as_str()
+        .filter(|s| s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit()))
+        .ok_or_else(reject)?;
+    let signature = (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&signature[i..i + 2], 16))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| reject())?;
+    let mut mac =
+        Hmac::<sha2_010::Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| reject())?;
+    mac.update(payload.as_bytes());
+    mac.verify_slice(&signature).map_err(|_| reject())?;
+    let bound: Value = serde_json::from_str(payload).map_err(|_| reject())?;
+    let expires = bound["expiresAtMs"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .ok_or_else(reject)?;
+    let mut terms = metadata.terms.clone();
+    terms
+        .as_object_mut()
+        .ok_or_else(reject)?
+        .remove("authorization");
+    if expires <= now
+        || expires > now.saturating_add(120_000)
+        || bound["version"] != 1
+        || bound["owner"] != owner
+        || bound["mandate"] != request.mandate
+        || bound["agent"].as_str() != request.agent.as_deref()
+        || bound["invoiceHash"] != request.invoice_hash.to_ascii_lowercase()
+        || bound["terms"] != terms
+        || terms["orderId"] != metadata.order_id
+        || terms["mint"].as_str() != request.mint.as_deref()
+        || terms["recipient"] != request.recipient
+        || terms["amount"].as_str() != request.amount.map(|v| v.to_string()).as_deref()
+        || terms["tokenProgram"].as_str() != request.token_program.as_deref()
+    {
+        return Err(reject());
+    }
+    Ok(())
+}
+
+fn require_crossmint_checkout_enabled() -> Result<(), ApiError> {
+    if std::env::var("CHAINPAY_CROSSMINT_ENABLED").as_deref() != Ok("true") {
+        return Err(ApiError::Forbidden(
+            "Crossmint checkout is disabled pending provider acceptance".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn crossmint_read_operation(principal: &Principal) -> &'static str {
+    if principal
+        .scope
+        .as_ref()
+        .and_then(|s| s["tools"].as_array())
+        .is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|t| t.as_str() == Some("get_crossmint_payment"))
+        })
+    {
+        "get_crossmint_payment"
+    } else {
+        "execute_crossmint_payment"
+    }
+}
+
 async fn record_crossmint_order_proof(
+    State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
+    Json(mut request): Json<CrossmintOrderProofRequest>,
+) -> Result<Json<X402PaymentRecord>, ApiError> {
+    // Caller-supplied phase/status/proof are never provider evidence. Authorize
+    // the stored operation first, then obtain a fresh observation ourselves.
+    let job = state
+        .store
+        .find_x402_by_idempotency(&format!("{}:{}", principal.wallet, request.idempotency_key))
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if job.connector != ConnectorKind::Crossmint {
+        return Err(ApiError::BadRequest("Not a Crossmint operation".into()));
+    }
+    let payment = state
+        .store
+        .get_payment(job.payment_id.as_deref().ok_or(ApiError::NotFound)?)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if payment.mandate != request.mandate || payment.status != PaymentStatus::Confirmed {
+        return Err(recovery::conflict());
+    }
+    recovery::authorize_payment(
+        &state,
+        &principal,
+        &payment,
+        crossmint_read_operation(&principal),
+    )
+    .await?;
+    let order_id = job
+        .connector_reference
+        .as_deref()
+        .ok_or(ApiError::NotFound)?;
+    if order_id.len() > 128
+        || order_id.is_empty()
+        || !order_id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    {
+        return Err(ApiError::BadRequest(
+            "Invalid stored Crossmint order ID".into(),
+        ));
+    }
+    let key = std::env::var("CROSSMINT_API_KEY")
+        .map_err(|_| ApiError::BadRequest("Crossmint staging readback is not configured".into()))?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| ApiError::BadRequest("Crossmint readback unavailable".into()))?;
+    let mut response = client
+        .get(format!(
+            "https://staging.crossmint.com/api/2022-06-09/orders/{order_id}"
+        ))
+        .header("X-API-KEY", key)
+        .send()
+        .await
+        .map_err(|_| {
+            ApiError::BadRequest("Crossmint readback unavailable; settlement is unchanged".into())
+        })?;
+    if !response.status().is_success() {
+        return Err(ApiError::BadRequest(
+            "Crossmint readback rejected; settlement is unchanged".into(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| ApiError::BadRequest("Crossmint readback incomplete".into()))?
+    {
+        if bytes.len() + chunk.len() > 128_000 {
+            return Err(ApiError::BadRequest("Crossmint response too large".into()));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let body: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| ApiError::BadRequest("Invalid Crossmint response".into()))?;
+    let (phase, proof) = crossmint_observation(&body, order_id, &principal.wallet)?;
+    request.order_phase = phase;
+    request.proof = proof;
+    request.response_status = 200;
+    request.error = None;
+    persist_crossmint_observation(State(state), Extension(principal), Json(request)).await
+}
+
+fn crossmint_observation(
+    body: &Value,
+    order_id: &str,
+    owner: &str,
+) -> Result<(String, Value), ApiError> {
+    let order = body.get("order").unwrap_or(body);
+    if order
+        .get("orderId")
+        .or_else(|| order.get("id"))
+        .and_then(Value::as_str)
+        != Some(order_id)
+        || order["payment"]["preparation"]["payerAddress"].as_str() != Some(owner)
+        || order["payment"]["method"].as_str() != Some("solana")
+    {
+        return Err(ApiError::BadRequest(
+            "Crossmint order identity or payer did not match".into(),
+        ));
+    }
+    let phase = order["phase"]
+        .as_str()
+        .filter(|p| matches!(*p, "quote" | "payment" | "delivery" | "completed"))
+        .ok_or_else(|| ApiError::BadRequest("Unknown Crossmint order phase".into()))?;
+    Ok((
+        phase.into(),
+        json!({"orderId":order_id,"orderPhase":phase,"evidenceSource":"crossmint-staging-orders-api","reportedAtMs":now_ms()}),
+    ))
+}
+
+#[cfg(test)]
+mod crossmint_observation_tests {
+    use super::*;
+    #[test]
+    fn provider_observation_requires_matching_identity_and_drops_private_payload() {
+        let body = json!({"clientSecret":"private", "order":{"orderId":"order_1", "phase":"delivery", "payment":{"method":"solana", "preparation":{"payerAddress":"owner"}}, "recipient":{"email":"private@example.com"}}});
+        let (phase, proof) = crossmint_observation(&body, "order_1", "owner").unwrap();
+        assert_eq!(phase, "delivery");
+        assert_eq!(proof["evidenceSource"], "crossmint-staging-orders-api");
+        assert!(!proof.to_string().contains("private"));
+        assert!(crossmint_observation(&body, "another_order", "owner").is_err());
+        assert!(crossmint_observation(&body, "order_1", "another_owner").is_err());
+        let mut malformed = body.clone();
+        malformed["order"]["phase"] = json!("something_new");
+        assert!(crossmint_observation(&malformed, "order_1", "owner").is_err());
+        malformed["order"]["phase"] = json!("completed");
+        malformed["order"]["payment"]["method"] = json!("ethereum");
+        assert!(crossmint_observation(&malformed, "order_1", "owner").is_err());
+    }
+}
+
+// Only the authenticated provider readback above calls this in production.
+async fn persist_crossmint_observation(
     State(state): State<BackendState>,
     Extension(principal): Extension<Principal>,
     Json(request): Json<CrossmintOrderProofRequest>,
@@ -1590,7 +1835,13 @@ async fn record_crossmint_order_proof(
     if payment.mandate != request.mandate {
         return Err(recovery::conflict());
     }
-    recovery::authorize_payment(&state, &principal, &payment, "execute_crossmint_payment").await?;
+    recovery::authorize_payment(
+        &state,
+        &principal,
+        &payment,
+        crossmint_read_operation(&principal),
+    )
+    .await?;
     let order_advanced = matches!(request.order_phase.as_str(), "delivery" | "completed");
     let mut proof = request.proof;
     if let Some(object) = proof.as_object_mut() {
@@ -2699,11 +2950,13 @@ mod tests {
         let state = BackendState::new(BackendConfig::from_env().unwrap(), StatusStore::in_memory())
             .unwrap();
         for _ in 0..600 {
-            assert!(state
-                .store
-                .auth_rate("public-rpc", now_ms(), 600)
-                .await
-                .unwrap());
+            assert!(
+                state
+                    .store
+                    .auth_rate("public-rpc", now_ms(), 600)
+                    .await
+                    .unwrap()
+            );
         }
         assert!(matches!(
             latest_blockhash(State(state)).await,

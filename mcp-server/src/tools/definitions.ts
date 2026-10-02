@@ -1,5 +1,20 @@
 export const TOOL_DEFINITIONS = [
   {
+    name: "prepare_crossmint_payment",
+    description: "Read an existing Crossmint staging order, validate exact Devnet USDC terms and mandate limits, and prepare a ChainPay transaction for review. Disabled until provider acceptance. preparePayer changes provider metadata only with explicit owner intent; it never pays.",
+    inputSchema: { type: "object", properties: { orderId: { type: "string" }, mandate: { type: "string" }, agent: { type: "string" }, preparePayer: { type: "boolean", description: "Explicit owner-session request to set this order's Solana USDC payer to the authenticated wallet" } }, required: ["orderId", "mandate", "agent"], additionalProperties: false },
+  },
+  {
+    name: "execute_crossmint_payment",
+    description: "Execute a reviewed Crossmint order only after explicit payment intent. Re-fetches provider terms and rejects stale review. Human mode relays the original wallet signature; delegated mode uses the mandate signer. Resume an existing operation with paymentId; never create a replacement after uncertainty.",
+    inputSchema: { type: "object", properties: { orderId: { type: "string" }, mandate: { type: "string" }, agent: { type: "string" }, invoiceHash: { type: "string" }, expectedTerms: { type: "string" }, signingMode: { type: "string", enum: ["human", "delegated"] }, signedTransaction: { type: "string" }, paymentId: { type: "string" } }, anyOf: [{ required: ["paymentId"] }, { required: ["orderId", "mandate", "agent", "invoiceHash", "expectedTerms", "signingMode"] }], additionalProperties: false },
+  },
+  {
+    name: "get_crossmint_payment",
+    description: "Reconcile the original Crossmint payment and refresh its provider order status without signing or paying again. A confirmed ChainPay payment and completed merchant delivery are separate states.",
+    inputSchema: { type: "object", properties: { paymentId: { type: "string" } }, required: ["paymentId"], additionalProperties: false },
+  },
+  {
     name: "list_mandates",
     description: "Discover spending permissions for a wallet. Use first when the owner asks about their mandate or limits. Tell the owner each permission's status, token, and remaining allowance in plain language.",
     inputSchema: {

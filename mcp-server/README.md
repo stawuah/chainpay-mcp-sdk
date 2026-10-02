@@ -91,6 +91,43 @@ is recognized and rejected before signing. See the
 Code and fixture tests do not prove that a running deployment or signer provider
 has accepted the complete flow.
 
+## Crossmint staging connector
+
+`prepare_crossmint_payment` reads an existing order from the fixed Crossmint
+staging Orders API, checks the owner's mandate and exact quote, and returns a
+wallet approval plus an `execute_crossmint_payment` continuation. Explicit
+`preparePayer: true` on preparation lets an owner session request a payer PATCH;
+ordinary preparation and all status retries only read the provider. No order
+creation, purchase, or provider mutation was performed as implementation testing.
+
+The feature defaults off. MCP and Axum both require
+`CHAINPAY_CROSSMINT_ENABLED=true` for new checkout. Configure `CROSSMINT_API_KEY`
+server-side in both services and the same random, at-least-32-character
+`CHAINPAY_CROSSMINT_AUTH_SECRET` in both services. Never use Vite variables for
+these credentials. The latter authenticates a short-lived provider preparation
+bound to owner, mandate, agent, order, invoice and exact terms; a scoped caller
+cannot fabricate Crossmint metadata and bypass the connector through Axum.
+
+Current executable preparation is intentionally narrow: canonical Devnet USDC,
+Solana staging, a valid unexpired matching quote, the mandate's exact source,
+and exactly one TransferChecked instruction without extra reference accounts.
+Other tokens, unchecked transfers, lookup tables, additional instructions and
+missing/changed terms fail closed. A newly required provider instruction needs
+an explicitly reviewed adapter, not an instruction-discarding fallback.
+
+Resume `get_crossmint_payment` with the original relay `payment_id`. This never
+prepares, signs or pays again and remains available if new checkout is disabled.
+Axum independently reads provider status; supplied proof/phase fields are
+ignored. Provider failures preserve confirmed settlement and report unknown
+order status. The existing order claim is never automatically released.
+
+Keep the server and `VITE_CHAINPAY_CROSSMINT` visibility flags off until the
+operator has separately authorized and documented a staging acceptance payment:
+matching final receipt, provider order advancement, and recovery evidence.
+The provider's documented prepared-transaction workflow does not establish
+that replacing its transfer with ChainPay CPI will be recognized. Passing local
+fixtures proves the software paths, not that provider compatibility assumption.
+
 ## Verify changes
 
 From the repository root:

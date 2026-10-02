@@ -24,6 +24,7 @@ import { verifyPaymentRequest } from "./tools/verify_payment_request.js";
 import { waitForPayment } from "./tools/wait_for_payment.js";
 import { executeX402Payment, prepareX402Payment } from "./tools/x402.js";
 import { toolResult } from "./tools/common.js";
+import { prepareCrossmintPayment, executeCrossmintPayment, crossmintPaymentStatus } from "./tools/crossmint.js";
 
 export { TOOL_DEFINITIONS };
 export type { ChainPayMcpContext };
@@ -151,6 +152,12 @@ async function dispatchTool(
       return quotePayment(context, args);
     case "verify_payment_request":
       return verifyPaymentRequest(context, args);
+    case "prepare_crossmint_payment":
+      return prepareCrossmintPayment(context, args);
+    case "execute_crossmint_payment":
+      return executeCrossmintPayment(context, args);
+    case "get_crossmint_payment":
+      return crossmintPaymentStatus(context, args);
     case "prepare_x402_payment":
       return prepareX402Payment(context, args);
     case "execute_x402_payment":

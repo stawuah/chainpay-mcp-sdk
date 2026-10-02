@@ -139,6 +139,8 @@ export type AgentApproval = {
   tokenAccount?: string;
   mint?: string;
   payment?: Record<string, unknown>;
+  crossmint?: CrossmintRequest;
+  continuation?: { tool: "execute_crossmint_payment"; arguments: Record<string, unknown> };
   transaction?: {
     feePayer?: string;
     requiredSigners?: string[];
@@ -171,7 +173,7 @@ export type AgentRequirements = {
   missing: string[];
   checks: AgentCheck[];
 };
-export type AgentResponse = { message: string; toolCalls?: string[]; approval?: AgentApproval; outcome?: AgentOutcome; requirements?: AgentRequirements; error?: string };
+export type AgentResponse = { message: string; toolCalls?: string[]; approval?: AgentApproval; outcome?: AgentOutcome; requirements?: AgentRequirements; crossmint?: CrossmintRequest; error?: string };
 export type AgentInboxStage = "received" | "understood" | "mandate_prepared" | "policy_checked" | "needs_details" | "waiting_for_approval" | "approved" | "receipt_ready" | "blocked";
 /**
  * A request that pays a Crossmint checkout order. Everything here is Crossmint's
@@ -430,7 +432,7 @@ function unresolvedPayment(operation: Operation, reason: string, first?: Settlem
 }
 
 export async function callMcpTool(name: string, args: Record<string, unknown>) {
-  if (name !== "execute_payment" || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
+  if (!["execute_payment", "execute_crossmint_payment"].includes(name) || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
   const operation = await beginSettlement(BACKEND_URL, "payments", settlementKey(String(args.mandate), String(args.invoiceHash)), typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
   let result: McpToolResponse;
   try { result = await mcpRequest<McpToolResponse>("tools/call", { name, arguments: args }, operation); }
@@ -441,7 +443,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
   const first = result.structuredContent as Settlement | undefined;
   if (first?.payment_id !== operation.id) {
     const details = result.structuredContent as { action?: string; httpStatus?: number } | undefined;
-    const rejectedBeforeRelay = ["rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String(details?.action));
+    const rejectedBeforeRelay = ["crossmint_rejected_before_submission", "rejected_by_preflight", "agent_identity_mismatch", "backend_required", "managed_backend_required", "delegated_signature_rejected"].includes(String(details?.action));
     const rejectedByRelay = ["backend_rejected", "managed_backend_rejected"].includes(String(details?.action)) && [400, 401, 403, 404, 422].includes(Number(details?.httpStatus));
     if (result.isError && (rejectedBeforeRelay || rejectedByRelay)) {
       rejectBeforeSubmission(operation, toolFailureReason(result));

@@ -10,7 +10,7 @@ import { PendingSettlements } from "../settlement";
 import "./owner-dashboard.css";
 import { BrandLogo } from "../brand/Brand";
 import { useSidebarCollapse } from "./useSidebarCollapse";
-import { useSettlementFormStatus, settlementPendingEvent, settlementTerminalEvent, listStoredOperations, type Operation, isPendingSettlement } from "../settlement";
+import { useSettlementFormStatus, settlementPendingEvent, settlementTerminalEvent, listStoredOperations, publishSettlement, PendingSettlementError, type Operation, isPendingSettlement } from "../settlement";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveReceiptAddress, deriveVersionedMandateAddress, formatExactTokenAmount, toWeb3Transaction } from "@chainpay/sdk";
 import type { Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, TokenProgram } from "@chainpay/sdk";
@@ -153,7 +153,7 @@ import {
 } from "../owner/runtime";
 import { pausedAfterMandateAction } from "../owner/mandateAction";
 import { CROSSMINT_ENABLED } from "../config/public";
-import { crossmintBlocksApproval, crossmintSellerStatement } from "../owner/crossmint";
+import { crossmintApprovalContinuation, originalCrossmintOperation, crossmintBlocksApproval, crossmintSellerStatement } from "../owner/crossmint";
 import { assetLabel } from "@chainpay/sdk";
 import { PermissionRequestCard } from "../requests/PermissionRequestCard";
 import { MandateStatement } from "../requests/MandateStatement";
@@ -748,6 +748,8 @@ export function Dashboard({
         stage: inboxStageForResult(result),
         toolCalls: result.toolCalls ?? [],
         ...(result.approval ? { approval: result.approval } : {}),
+        ...(result.approval?.crossmint ? { crossmint: result.approval.crossmint } : {}),
+        ...(result.crossmint ? { crossmint: result.crossmint } : {}),
         ...(result.outcome ? { outcome: result.outcome } : {}),
         ...(result.requirements ? { requirements: result.requirements } : {}),
       });
@@ -827,6 +829,7 @@ export function Dashboard({
     const inboxItem = agentInbox.find((item) => item.id === inboxId);
     const agentApproval = inboxItem?.approval;
     if (!agentApproval || !inboxItem) return;
+    if (crossmintBlocksApproval(inboxItem.crossmint)) return;
     if (!walletSigner) {
       setApprovalStatuses((current) => ({ ...current, [inboxId]: "error" }));
       setApprovalErrors((current) => ({ ...current, [inboxId]: "The connected wallet does not expose transaction signing." }));
@@ -836,6 +839,18 @@ export function Dashboard({
     setApprovalErrors((current) => ({ ...current, [inboxId]: "" }));
     updateAgentInboxItem(inboxId, { stage: "waiting_for_approval" });
     try {
+      const crossmintContinuation = crossmintApprovalContinuation(agentApproval);
+      const original = originalCrossmintOperation(agentApproval, listStoredOperations(), wallet);
+      if (original) {
+        const readback = await onCallMcp("get_crossmint_payment", { paymentId: original.id });
+        const result = readback.structuredContent as { status?: string; signature?: string; receiptAddress?: string; receipt_address?: string; crossmint?: AgentInboxItem["crossmint"] } | undefined;
+        if (result?.status !== "confirmed" || !result.signature || !result.receiptAddress) throw new PendingSettlementError("The original Crossmint operation still needs reconciliation. Use Check settlement; do not approve a replacement.");
+        publishSettlement(original, result);
+        setApprovalStatuses(current => ({ ...current, [inboxId]: "success" }));
+        updateAgentInboxItem(inboxId, { stage: "receipt_ready", approval: undefined, response: "The original payment is finalized. No new transaction was signed.", ...(result.crossmint ? { crossmint: result.crossmint } : {}), outcome: { kind: "payment_settled", status: "confirmed", signature: result.signature, receiptAddress: result.receiptAddress } });
+        await onRefresh();
+        return;
+      }
       const prepared = preparedTransactionFromAgentApproval(agentApproval);
       const feePayer = prepared.feePayer ?? prepared.requiredSigners[0];
       if (feePayer !== wallet || !prepared.requiredSigners.includes(wallet)) {
@@ -871,12 +886,12 @@ export function Dashboard({
         if (!agentApproval.payment || typeof agentApproval.payment !== "object") {
           throw new Error("The prepared payment did not include its policy request details.");
         }
-        const paymentResult = await onCallMcp("execute_payment", {
-          ...(agentApproval.payment as Record<string, unknown>),
+        const paymentResult = await onCallMcp(crossmintContinuation?.tool ?? "execute_payment", {
+          ...(crossmintContinuation?.arguments ?? agentApproval.payment as Record<string, unknown>),
           signingMode: "human",
           signedTransaction: Buffer.from(signed.serialize()).toString("base64"),
         });
-        const settled = paymentResult.structuredContent as { status?: string; signature?: string; error?: string; receiptAddress?: string } | undefined;
+        const settled = paymentResult.structuredContent as { status?: string; signature?: string; error?: string; receiptAddress?: string; crossmint?: AgentInboxItem["crossmint"] } | undefined;
         if (paymentResult.isError || settled?.status === "failed") {
           throw new Error(settled?.error ?? toolText(paymentResult));
         }
@@ -886,8 +901,8 @@ export function Dashboard({
         const response = `The payment settled. Transaction ${shortAddress(settled.signature)}. The receipt is on this page.`;
         setApprovalStatuses((current) => ({ ...current, [inboxId]: "success" }));
         setReply(response);
-        updateAgentInboxItem(inboxId, { response, stage: "receipt_ready", approval: undefined, outcome: { kind: "payment_settled", signature: settled.signature, receiptAddress: settled.receiptAddress, status: settled.status } });
-        setAgentToolsUsed((current) => [...current, "wallet_approval", "execute_payment"]);
+        updateAgentInboxItem(inboxId, { response, stage: "receipt_ready", approval: undefined, ...(settled.crossmint ? { crossmint: settled.crossmint } : {}), outcome: { kind: "payment_settled", signature: settled.signature, receiptAddress: settled.receiptAddress, status: settled.status } });
+        setAgentToolsUsed((current) => [...current, "wallet_approval", crossmintContinuation?.tool ?? "execute_payment"]);
         await onRefresh();
       }
     } catch (error) {
