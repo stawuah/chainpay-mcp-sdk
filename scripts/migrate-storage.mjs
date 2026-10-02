@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Explicit operator commands only. This program never changes platform settings
 // or submits a transaction. Snapshot files contain private operational records.
-import { open } from "node:fs/promises";
+import { open, readdir, readFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { createHash } from "node:crypto";
@@ -10,6 +10,9 @@ import { parse, stringify, isLosslessNumber } from "lossless-json";
 import pg from "pg";
 
 export const TABLES = {
+  receipt_requests: ["cluster", "program_id", "receipt_address"],
+  observed_policies: ["cluster", "program_id", "receipt_address"],
+  mandate_requests: ["mandate_pda"],
   payments: ["payment_id"], transactions: ["transaction_id"],
   agent_connections: ["connection_id"], inbox_messages: ["message_id"],
   x402_payments: ["x402_payment_id"], managed_signer_challenges: ["challenge_id"],
@@ -78,14 +81,46 @@ async function writer(file, source) {
   };
 }
 function required(name) { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value; }
+// Migration identities are checksummed: never reinterpret either branch's 0009.
+// A source through 0008 is supported; unapplied new feature tables are empty.
+const FEATURE_MIGRATIONS = { receipt_requests: 10, observed_policies: 11, mandate_requests: 12 };
+export async function validateSchema(client, requireLatest = false) {
+  const directory = new URL("../backend/migrations/", import.meta.url);
+  const files = (await readdir(directory)).filter(f => /^\d+_.+\.sql$/.test(f)).sort();
+  const expected = await Promise.all(files.map(async file => ({ version: Number(file.split("_")[0]), checksum: createHash("sha384").update(await readFile(new URL(file, directory))).digest("hex") })));
+  const applied = (await client.query("SELECT version::text, encode(checksum, 'hex') AS checksum, success FROM _sqlx_migrations ORDER BY _sqlx_migrations.version")).rows;
+  if (applied.length < 8 || applied.length > expected.length || applied.some((row, i) => !row.success || Number(row.version) !== expected[i].version || row.checksum !== expected[i].checksum)) {
+    throw new Error("Unsupported migration history: source must match canonical migrations beginning at 0001. Reconcile branch-specific 0009/checksums on an isolated copy before cutover; never edit live migration history.");
+  }
+  if (requireLatest && applied.length !== expected.length) throw new Error("Restore target must have all current migrations applied");
+  const versions = new Set(applied.map(row => Number(row.version)));
+  for (const [table, version] of Object.entries(FEATURE_MIGRATIONS)) {
+    if (!versions.has(version) && (await client.query("SELECT to_regclass($1) AS relation", [`public.${table}`])).rows[0].relation !== null) {
+      throw new Error(`Unsupported migration history: ${table} exists before its recorded migration ${version}; reconcile the schema on an isolated copy before cutover`);
+    }
+  }
+  if (!versions.has(9) && (await client.query("SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='x402_payments' AND column_name IN ('connector','connector_reference') LIMIT 1")).rows.length) {
+    throw new Error("Unsupported migration history: connector columns exist before recorded migration 9; reconcile the schema on an isolated copy before cutover");
+  }
+  return versions;
+}
 async function exportPostgres(file) {
   const client = new pg.Client({ connectionString: required("CHAINPAY_SOURCE_DATABASE_URL") });
   await client.connect(); const output = await writer(file, "postgres");
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const versions = await validateSchema(client);
     for (const [table, keys] of Object.entries(TABLES)) {
+      if (FEATURE_MIGRATIONS[table] && !versions.has(FEATURE_MIGRATIONS[table])) continue;
       await client.query(`DECLARE migration_rows NO SCROLL CURSOR FOR SELECT row_to_json(t)::text AS row FROM "${table}" t ORDER BY ${keys.map(k => `"${k}"`).join(",")}`);
-      for (;;) { const batch = await client.query("FETCH 100 FROM migration_rows"); if (!batch.rows.length) break; for (const row of batch.rows) await output.row(table, row.row); }
+      for (;;) { const batch = await client.query("FETCH 100 FROM migration_rows"); if (!batch.rows.length) break; for (const row of batch.rows) {
+        // Legacy rows are x402 jobs. Export the canonical new-schema defaults
+        // without changing the source, preserving full-width JSON numbers.
+        const canonicalRow = table === "x402_payments" && !versions.has(9)
+          ? stringify({ ...parse(row.row), connector: "x402", connector_reference: null })
+          : row.row;
+        await output.row(table, canonicalRow);
+      } }
       await client.query("CLOSE migration_rows");
     }
     await client.query("COMMIT"); return await output.finish();
@@ -141,6 +176,7 @@ async function restorePostgres(file) {
   await client.connect();
   try {
     await client.query("BEGIN");
+    await validateSchema(client, true);
     await client.query(`LOCK TABLE ${Object.keys(TABLES).map(t => `"${t}"`).join(",")} IN ACCESS EXCLUSIVE MODE`);
     for (const table of Object.keys(TABLES)) {
       const { rows } = await client.query(`SELECT 1 FROM "${table}" LIMIT 1`);
