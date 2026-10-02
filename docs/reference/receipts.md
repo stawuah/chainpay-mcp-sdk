@@ -98,20 +98,46 @@ receipt's invoice hash, checks the merchant signature (not the request's
 expiry, since the payment already happened), and reports any amount, mint, or
 recipient the receipt paid differently.
 
-On the receipt card this is **Order match** (order · invoice · payment). It is
-shown only when a signed request verifies: "✓ Invoice signed by seller" and
-"✓ Paid on Solana", with the seller's invoice reference, description and line
-items for the owner. A mismatch is a failed line, and a request that does not
-verify shows nothing from it. There is no purchase order yet, so the pill
-reads "No order", or "Payee differs" when the receipt paid another account
-than the invoice named.
+## Order match
 
-Public `/verify` never fetches request content. The owner can choose
-**Share with details**, which builds `/verify/<receipt>#purchase=<base64url
-signed request>`. The fragment is not sent to any server. `/verify` decodes it,
-runs `verifyReceiptPurchase` against the on-chain invoice hash, and only then
-shows the details. Without such a link, `/verify` shows no purchase content and
-no Order match.
+On the receipt card this is **Order match** (order · invoice · payment), with
+one pill:
+
+| Pill | When |
+|---|---|
+| Matched | Purchase order: an order is linked to the receipt's permission, a seller-signed invoice verifies against the receipt, and the payment went to the order's expected payee. Budget request: the order is linked and the payment is on Solana; the payee is open |
+| Payee differs | The payment went to another account than the order's expected payee, or than the invoice named |
+| No invoice | A purchase order is linked but no seller-signed invoice verifies for this payment |
+| No order | No order is linked to the permission |
+
+The **order** is the purchase order or budget request the owner accepted (see
+[ask an owner for a spending permission](../guides/request-a-permission.md)).
+The dashboard stores it against the permission with
+`PUT /v1/mandates/{pda}/request` and reads it back with the owner session
+(`GET`, owner only). It shows only after its requester signature verifies, it
+is for the receipt's token, and, for a budget request, it names the agent that
+signed. "Paid to the order's payee" means the receipt's recipient token
+account is the expected payee, or the payee's associated token account for the
+mint.
+
+**Matched is a check by ChainPay, not a guarantee from Solana.** A permission
+does not bind one payee on chain; a payment to someone else settles and is
+flagged here.
+
+The owner sees the rows: "Purchase order PO-1042 from Acme Data (name not
+verified)" or "Budget request from …", "✓ Invoice signed by seller" with its
+reference, description and line items, the payee row, and "✓ Paid on Solana".
+A mismatch is a failed line, and a request or order that does not verify shows
+nothing from it.
+
+Public `/verify` never fetches request content. The owner can choose **Share
+with details**, which builds `/verify/<receipt>#purchase=<base64url signed
+invoice>&order=<base64url signed order>` (either part only when it exists).
+The fragment is not sent to any server. `/verify` checks the invoice against
+the on-chain invoice hash and the order's requester signature, token and agent,
+and only then shows the details and the same pill. Which permission an order
+was accepted for is recorded by the relay, not on Solana, and `/verify` says
+so. Without such a link, `/verify` shows no order and no new rows.
 
 ## Duplicate invoices
 
@@ -125,7 +151,10 @@ building or relaying a payment and stop with a typed `DuplicateInvoice` error:
 `receiptsToCsv(rows)` writes one CSV. The first columns suit accounting imports
 (Date, Description, Amount, Payee, Reference); the rest are ChainPay columns
 (Token, Agent, Spending permission, Per-payment limit, Total limit, Spent
-after, Limits source, Receipt, Verify URL, Explorer URL). Amounts are exact
+after, Limits source, Receipt, Verify URL, Explorer URL, PO number, Order
+match). PO number and Order match are appended last so earlier imports keep
+their columns; they are filled from the owner's view and empty when there is no
+order or the check could not run. Amounts are exact
 decimals from base units, and amounts whose mint decimals are unknown stay
 labeled base units. Dates come from the executed slot's block time and are
 left empty when unknown. Cells that a spreadsheet would run as a formula are
@@ -133,7 +162,10 @@ prefixed with an apostrophe. The MCP `export_receipts` tool returns this CSV
 for the connected wallet. In the dashboard, **Export CSV** on the Receipts tab
 downloads `chainpay-receipts-YYYY-MM-DD.csv`; from a terminal,
 `chainpay export --owner <wallet> [--out file]` writes the same file (limits
-from the on-chain snapshot only, since the CLI has no relay session).
+from the on-chain snapshot only, and PO number and Order match left empty,
+since the CLI has no relay session). The **Statement** in a permission's
+detail panel downloads `chainpay-statement-<mandate>-YYYY-MM-DD.csv` with only
+that permission's receipts.
 
 ## Optional seller statement
 

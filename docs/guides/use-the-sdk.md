@@ -160,7 +160,8 @@ in `sdk/src/mandate-request.ts`.
 
 The expected payee in a vendor request is checked when receipts are matched to
 the request. Solana does not block a payment to someone else under a nonce
-mandate.
+mandate. The owner's side, Order match and the Statement are in
+[ask an owner for a spending permission](request-a-permission.md).
 
 A compact public widget also lives at `/embed/overview/<owner>` — spend meters
 and the latest receipt card, no wallet.

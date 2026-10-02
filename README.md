@@ -121,6 +121,14 @@ After a successful payment, the dashboard shows the same human-readable
   in the URL fragment. A plain public receipt shows none of it.
 - **Export:** **Export CSV** on the Receipts tab, `chainpay export --owner
   <wallet>`, or MCP `export_receipts`.
+- **Purchase orders for agents:** a vendor (`chainpay request-mandate`, or the
+  demo merchant's **Request permission**) or a builder (`chainpay
+  request-budget`) sends a signed link; the owner reviews it in Requests and
+  approves a permission in the usual builder. Receipts then show **Order
+  match** (Matched / Payee differs / No invoice / No order), the CSV adds PO
+  number and match status, and each permission has a **Statement**. The
+  expected payee is checked, not enforced on Solana — see
+  [ask for a spending permission](docs/guides/request-a-permission.md).
 - **Owner deep link:** `/app/receipts/:pda` opens the inbox receipt card when
   signed in.
 - **Settlement recovery:** in-app **Check settlement**, **Retry same approval**,
