@@ -4,6 +4,7 @@ import { useRoute } from "./routing/useRoute";
 import { LandingPage } from "./landing/LandingPage";
 import { AppNotFoundPage, PublicNotFoundPage } from "./routing/NotFoundPages";
 import { usePublicWallet } from "./wallet/public-session";
+import { PetMount } from "./pet/PetMount";
 
 const WalletController = lazy(() => import("./wallet/WalletController"));
 const AppWorkspace = lazy(() => import("./dashboard/AppWorkspace"));
@@ -104,10 +105,16 @@ function Shell() {
   );
 }
 
+function Pet() {
+  const { currentRoute } = useRoute();
+  return <PetMount routeKind={currentRoute.kind} />;
+}
+
 export default function AppShell() {
   return (
     <Router>
       <Shell />
+      <Pet />
     </Router>
   );
 }

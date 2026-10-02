@@ -173,3 +173,17 @@ test("the verify route renders without mounting WalletController", async () => {
     "wallet-free routes must return before WalletController is mounted",
   );
 });
+
+test("three.js and the pet stay off the every-route path", async () => {
+  // The robot is a treat, not the product. AppShell renders PetMount on every
+  // route, so PetMount must reach three.js and the pet layer only through lazy
+  // imports, after the page has loaded.
+  const { specifiers, visited } = await collectSpecifiers("AppShell.tsx");
+  const eager = [...visited].filter((file) => file.includes("/src/pet/"));
+  assert.deepEqual(eager.map((file) => file.slice(file.indexOf("/src/"))), ["/src/pet/PetMount.tsx"]);
+  assert.equal(specifiers.some((value) => value === "three" || value.startsWith("three/") || value.startsWith("@react-three")), false);
+  const mount = await readFile(resolve(root, "pet/PetMount.tsx"), "utf8");
+  assert.match(mount, /lazy\(\(\) => import\("\.\/PetLayer"\)\)/);
+  const vite = await readFile(resolve(root, "../vite.config.ts"), "utf8");
+  assert.match(vite, /!id\.includes\("\/src\/pet\/PetMount"\)/);
+});
