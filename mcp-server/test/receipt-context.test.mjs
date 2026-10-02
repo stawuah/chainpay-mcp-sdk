@@ -169,8 +169,10 @@ test("export_receipts returns one CSV with labeled limit sources and verified pu
       assert.match(lines[1], new RegExp(`^,,4\\.5,${RECIPIENT},[0-9a-f]{64},${MINT},${AGENT},${MANDATE},5,50,9,on-chain,${upgraded.address},https://app\\.example/verify/`));
       assert.equal(
         lines[2],
-        `2026-09-21,"Two widgets, boxed",4.5,${RECIPIENT},PO-1042,${MINT},${AGENT},${MANDATE},5,50,4.5,relay-observed,${original.address},https://app.example/verify/${original.address},https://explorer.solana.com/address/${original.address}?cluster=devnet`,
+        `2026-09-21,"Two widgets, boxed",4.5,${RECIPIENT},PO-1042,${MINT},${AGENT},${MANDATE},5,50,4.5,relay-observed,${original.address},https://app.example/verify/${original.address},https://explorer.solana.com/address/${original.address}?cluster=devnet,,`,
       );
+      // PO number and Order match are appended last and left empty here.
+      assert.match(lines[0], /,Explorer URL,PO number,Order match$/);
       assert.match(result.content[0].text, /Limits seen by the ChainPay relay after payment, not stored on Solana: 1/);
       assert.match(result.content[0].text, /```csv/);
     });

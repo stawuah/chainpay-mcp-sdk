@@ -349,6 +349,8 @@ test("receiptsToCsv writes the golden QuickBooks-first export", () => {
       blockTime: 1_790_000_000,
       purpose: { invoice: "PO-1042", description: "=HYPERLINK(\"http://evil\"), \"boxed\"" },
       verifyUrl: "https://app.example/verify/r1",
+      poNumber: "PO-1042",
+      orderMatch: "Matched",
     },
     {
       receipt: decodePaymentReceipt(relay.data, relay.address),
@@ -374,7 +376,7 @@ test("receiptsToCsv writes the golden QuickBooks-first export", () => {
   assert.equal(lines[0], RECEIPT_CSV_HEADERS.join(","));
   assert.equal(
     lines[0],
-    "Date,Description,Amount,Payee,Reference,Token,Agent,Spending permission,Per-payment limit,Total limit,Spent after,Limits source,Receipt,Verify URL,Explorer URL",
+    "Date,Description,Amount,Payee,Reference,Token,Agent,Spending permission,Per-payment limit,Total limit,Spent after,Limits source,Receipt,Verify URL,Explorer URL,PO number,Order match",
   );
   assert.equal(
     lines[1],
@@ -394,6 +396,8 @@ test("receiptsToCsv writes the golden QuickBooks-first export", () => {
       onChain.address,
       "https://app.example/verify/r1",
       "https://explorer.solana.com/tx/sig1?cluster=devnet",
+      "PO-1042",
+      "Matched",
     ].join(","),
   );
   assert.equal(
@@ -414,6 +418,8 @@ test("receiptsToCsv writes the golden QuickBooks-first export", () => {
       relay.address,
       "",
       `https://explorer.solana.com/address/${relay.address}?cluster=devnet`,
+      "",
+      "",
     ].join(","),
   );
   assert.equal(
@@ -434,6 +440,8 @@ test("receiptsToCsv writes the golden QuickBooks-first export", () => {
       unknown.address,
       "",
       `https://explorer.solana.com/address/${unknown.address}?cluster=devnet`,
+      "",
+      "",
     ].join(","),
   );
   assert.equal(lines.length, 5);

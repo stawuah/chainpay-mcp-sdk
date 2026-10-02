@@ -82,11 +82,19 @@ export type ReceiptCsvRow = {
   purpose?: Partial<Pick<PaymentRequestPayload, "invoice" | "description" | "lineItems">>;
   verifyUrl?: string;
   explorerUrl?: string;
+  /** From the mandate request the owner accepted, when one is linked. */
+  poNumber?: string;
+  /**
+   * The Order match pill as the reader saw it ("Matched", "Payee differs",
+   * "No order", ...). Empty when it was not checked. A check, not a guarantee.
+   */
+  orderMatch?: string;
 };
 
 /**
  * Accounting tools read the first five columns; the rest let a reader trace
- * every row back to Solana.
+ * every row back to Solana. New columns are appended so existing imports keep
+ * their column positions.
  */
 export const RECEIPT_CSV_HEADERS = [
   "Date",
@@ -104,6 +112,8 @@ export const RECEIPT_CSV_HEADERS = [
   "Receipt",
   "Verify URL",
   "Explorer URL",
+  "PO number",
+  "Order match",
 ] as const;
 
 /** Exact decimal, trailing zeros trimmed. Unknown decimals stay labeled base units. */
@@ -159,6 +169,8 @@ function rowCells(row: ReceiptCsvRow): string[] {
     receipt.address,
     row.verifyUrl ?? "",
     row.explorerUrl ?? receiptExplorerUrl(receipt),
+    row.poNumber ?? "",
+    row.orderMatch ?? "",
   ];
 }
 
