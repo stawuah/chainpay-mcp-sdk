@@ -1,0 +1,15 @@
+-- Synthetic records only. No keys, credentials, or network transactions.
+INSERT INTO payments(payment_id,idempotency_key,mandate,invoice_hash,receipt_address,amount,status,created_at_ms,updated_at_ms,created_at,updated_at)
+SELECT 'payment-'||i,'owner:payment-'||i,'mandate','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','receipt-'||i,18446744073709551615,'submitted',100,200,'2026-10-02 00:00:00.123456+00','2026-10-02 00:00:00.123456+00' FROM generate_series(1,105) i;
+INSERT INTO transactions(transaction_id,idempotency_key,status,created_at_ms,updated_at_ms) VALUES ('transaction','owner:transaction','submitted',100,200);
+INSERT INTO agent_connections(connection_id,wallet_address,agent_name,scope,token_hash,total_calls,tools_called) VALUES ('connection','owner','Fixture agent','Unscoped','fixture-token-hash',4,'[{"name":"get_payment","count":4,"lastCalledAt":"2026-10-02T00:00:00Z"}]');
+INSERT INTO inbox_messages(message_id,wallet_address,role,content) VALUES ('message','owner','assistant','{"status":"unknown","amount":18446744073709551615}');
+INSERT INTO x402_payments(x402_payment_id,idempotency_key,resource,payment_id,status,challenge,proof,connector,connector_reference) VALUES ('crossmint','owner:crossmint','https://merchant.invalid/order','payment-1','submitted','{"amount":18446744073709551615}','{"slot":9007199254740993}','crossmint','order-unresolved');
+INSERT INTO managed_signer_challenges VALUES ('challenge','owner','mandate','synthetic signed message',200,150,100);
+INSERT INTO managed_signers(signer_id,owner_wallet,public_key,provider,provider_wallet_id,provider_policy_id,mandate_pda,status,created_at_ms,updated_at_ms) VALUES ('signer','owner','public-key','privy','fixture-provider-id','fixture-policy-id','mandate','active',100,200);
+INSERT INTO owner_auth VALUES ('session:synthetic-hash','{"owner":"owner","counter":9007199254740993}',200);
+INSERT INTO operation_claims VALUES ('unresolved-operation','owner','{"amount":18446744073709551615,"connector":"crossmint"}','{"status":"unknown","signature":null}');
+INSERT INTO delivery_attestations VALUES ('devnet','program','receipt-1','seller',repeat('a',64),'2026-10-02T00:00:00.123456Z','synthetic-signature','exact seller payload',100);
+INSERT INTO receipt_requests VALUES ('devnet','program','receipt-1','mandate',repeat('a',64),'merchant','{"amount":"18446744073709551615","description":"Synthetic invoice"}','synthetic-invoice-signature',100);
+INSERT INTO observed_policies VALUES ('devnet','program','receipt-1','mandate','{"max_per_payment":"18446744073709551615","total_limit":"18446744073709551615","amount_spent_after":"18446744073709551615","payment_count_after":"1","max_payment_count":"0","expires_at_slot":"18446744073709551615","cooldown_slots":"0"}',9007199254740993,false,100);
+INSERT INTO mandate_requests VALUES ('mandate','{"owner":"owner","requestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","request":{"payload":{"role":"vendor","reference":"PO-FIXTURE","totalLimit":"18446744073709551615"},"signature":"synthetic-request-signature"},"ownerChangedLimits":false}',100);
