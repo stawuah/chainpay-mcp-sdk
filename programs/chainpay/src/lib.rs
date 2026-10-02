@@ -13,6 +13,8 @@ use policy::{validate_mandate_params, validate_payment, validate_supported_mints
 use state::is_mandate_nonce;
 
 pub const RECEIPT_STATUS_SETTLED: u8 = 1;
+/// Layout version of the policy snapshot appended to `PaymentReceipt`.
+pub const RECEIPT_SNAPSHOT_VERSION: u8 = 1;
 
 #[event]
 pub struct AssetRegistered {
@@ -291,7 +293,7 @@ pub mod chainpay {
             .mandate
             .payment_count
             .checked_add(1)
-            .ok_or(error!(errors::ChainPayError::TotalLimitExceeded))?;
+            .ok_or(error!(errors::ChainPayError::PaymentCountExceeded))?;
 
         let bump_seed = [mandate_bump];
         let legacy_signer_seeds: &[&[u8]] = &[b"mandate", mandate_owner.as_ref(), &bump_seed];
@@ -362,6 +364,18 @@ pub mod chainpay {
         receipt.signature_reference = params.signature_reference;
         receipt.status = RECEIPT_STATUS_SETTLED;
         receipt.bump = ctx.bumps.receipt;
+        // Record the limits this payment was checked against, with the spend
+        // and count after it, so the receipt alone proves the payment was
+        // within policy even if the owner later edits or revokes the mandate.
+        receipt.snapshot_version = RECEIPT_SNAPSHOT_VERSION;
+        receipt.policy_max_per_payment = mandate.max_per_payment;
+        receipt.policy_total_limit = mandate.total_limit;
+        receipt.policy_amount_spent_after = mandate.amount_spent;
+        receipt.policy_payment_count_after = mandate.payment_count;
+        receipt.policy_max_payment_count = mandate.max_payment_count;
+        receipt.policy_expires_at_slot = mandate.expires_at_slot;
+        receipt.policy_cooldown_slots = mandate.cooldown_slots;
+        receipt.reserved = [0u8; 32];
 
         emit!(PaymentExecuted {
             receipt: receipt.key(),

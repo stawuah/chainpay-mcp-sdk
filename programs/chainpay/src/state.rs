@@ -74,10 +74,26 @@ pub struct PaymentReceipt {
     pub signature_reference: [u8; 32],
     pub status: u8,
     pub bump: u8,
+    // Snapshot of the mandate policy in force when this payment executed.
+    // Appended after `bump` so every earlier byte offset is unchanged and
+    // older 282-byte receipts still decode up to `bump`.
+    pub snapshot_version: u8,
+    pub policy_max_per_payment: u64,
+    pub policy_total_limit: u64,
+    /// Mandate `amount_spent` including this payment.
+    pub policy_amount_spent_after: u64,
+    /// Mandate `payment_count` including this payment.
+    pub policy_payment_count_after: u64,
+    pub policy_max_payment_count: u64,
+    pub policy_expires_at_slot: u64,
+    pub policy_cooldown_slots: u64,
+    /// Zeroed. Reserved for a future delivery-attestation field.
+    pub reserved: [u8; 32],
 }
 
 impl PaymentReceipt {
     // Five Pubkeys plus three 32-byte hashes/references, two u64 values, and
-    // the status/bump bytes.
-    pub const LEN: usize = 32 * 8 + 8 * 2 + 2;
+    // the status/bump bytes; then the snapshot version byte, seven u64 policy
+    // values, and 32 reserved bytes.
+    pub const LEN: usize = 32 * 8 + 8 * 2 + 2 + 1 + 8 * 7 + 32;
 }
