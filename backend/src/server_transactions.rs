@@ -1386,8 +1386,11 @@ pub(super) mod tests {
     /// A wallet's priority fee also adds its program to the account keys, so an
     /// exact key count has to describe the ChainPay accounts rather than the raw
     /// list. Counting the raw list rejected every mandate a real wallet signed.
-    #[test]
-    fn create_mandate_survives_a_wallet_priority_fee() {
+    /// A signed create_mandate with its exact delegate approval. `agent` is the
+    /// approved agent written into the instruction; None means the owner wallet.
+    fn create_mandate_transaction(
+        agent: Option<[u8; 32]>,
+    ) -> (VersionedTransaction, String, SigningKey) {
         let (_, request, signer) = fixture(0);
         let wallet = request.agent.unwrap();
         let mint = bs58::encode([5; 32]).into_string();
@@ -1405,7 +1408,7 @@ pub(super) mod tests {
         let config = pda(DEFAULT_PROGRAM_ID, &[b"config"]).unwrap();
         let asset = pda(DEFAULT_PROGRAM_ID, &[b"asset", &[5; 32]]).unwrap();
         let mut data = vec![230, 170, 158, 68, 33, 169, 16, 158];
-        data.extend_from_slice(&signer.verifying_key().to_bytes());
+        data.extend_from_slice(&agent.unwrap_or(signer.verifying_key().to_bytes()));
         data.extend_from_slice(&[6; 32]);
         data.extend_from_slice(&[5; 32]);
         for n in [10u64, 100, 1000, 0, 0] {
@@ -1452,9 +1455,26 @@ pub(super) mod tests {
             signatures: vec![signer.sign(&message.serialize()).to_bytes().into()],
             message,
         };
+        (tx, wallet, signer)
+    }
+
+    #[test]
+    fn create_mandate_survives_a_wallet_priority_fee() {
+        let (tx, wallet, signer) = create_mandate_transaction(None);
         owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
         let signed_by_wallet = with_wallet_priority_fee(&tx, &signer);
         owner(&signed_by_wallet, &wallet, DEFAULT_PROGRAM_ID).unwrap();
+    }
+
+    /// A budget request names the builder's own agent key. The owner still
+    /// signs and pays for the mandate; the approved agent is neither the owner
+    /// nor a ChainPay-managed signer, and the relay must accept that.
+    #[test]
+    fn create_mandate_accepts_an_external_approved_agent() {
+        let external = [9_u8; 32];
+        let (tx, wallet, _) = create_mandate_transaction(Some(external));
+        assert_ne!(bs58::encode(external).into_string(), wallet);
+        owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
     }
 
     #[test]
