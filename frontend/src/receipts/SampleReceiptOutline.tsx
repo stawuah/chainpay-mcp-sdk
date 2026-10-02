@@ -22,7 +22,7 @@ const FIELDS: { label: string; hint: string }[] = [
 ];
 
 const STAMPS: { label: string; detail: string }[] = [
-  { label: "Allowed", detail: "Set when the program accepts the payment under the mandate." },
+  { label: "Allowed", detail: "Set when the program accepts the payment under this spending permission." },
   { label: "Paid", detail: "Set from the finalized receipt on Solana, not from a submitted signature." },
   { label: "Delivered", detail: "A seller's own statement. It is never the buyer's acceptance." },
 ];

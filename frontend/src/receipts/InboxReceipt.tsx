@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { loadPublicReceiptView } from "./load";
-import { type PublicReceiptPageState } from "./model";
+import { type PublicReceiptPageState, type PurchaseProofState, type ReceiptView } from "./model";
+import { loadOwnerReceiptContext } from "./owner";
 import { ReceiptCard, ReceiptPageState } from "./ReceiptCard";
 
 export function LoadedReceiptCard({
@@ -15,22 +16,37 @@ export function LoadedReceiptCard({
   preparedInRequests?: boolean;
 }) {
   const [state, setState] = useState<PublicReceiptPageState>({ kind: "loading", receiptPda });
+  const [owner, setOwner] = useState<{ receiptPda: string; policy?: ReceiptView["policy"]; purchase: PurchaseProofState } | null>(null);
 
   useEffect(() => {
     let active = true;
     setState({ kind: "loading", receiptPda });
+    setOwner(null);
     void loadPublicReceiptView(receiptPda).then((next) => {
-      if (active) setState(next);
+      if (!active) return;
+      setState(next);
+      // Owner-only additions from the relay: observed limits for a receipt
+      // without an on-chain snapshot, and the verified signed invoice.
+      if (next.kind === "verified" && shareMode === "dashboard") {
+        void loadOwnerReceiptContext(next.receipt).then((context) => {
+          if (active) setOwner({ receiptPda, ...context });
+        }).catch(() => undefined);
+      }
     });
     return () => {
       active = false;
     };
-  }, [receiptPda]);
+  }, [receiptPda, shareMode]);
 
   if (state.kind === "verified") {
+    const ownerContext = owner?.receiptPda === receiptPda ? owner : null;
+    const receipt = ownerContext?.policy && state.receipt.policy?.source !== "on-chain"
+      ? { ...state.receipt, policy: ownerContext.policy }
+      : state.receipt;
     return (
       <ReceiptCard
-        receipt={state.receipt}
+        receipt={receipt}
+        purchase={ownerContext?.purchase}
         shareMode={shareMode}
         onShare={onShare}
         // Both dashboard call sites pass shareMode="dashboard", so OR-ing it here

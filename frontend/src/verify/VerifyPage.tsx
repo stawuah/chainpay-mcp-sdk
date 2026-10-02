@@ -1,7 +1,15 @@
 import { BrandLogo } from "../brand/Brand";
 import { useEffect, useState } from "react";
 import { loadPublicReceiptView } from "../receipts/load";
-import { classifyReceiptPda, initialPageState, publicReceiptPath, type PublicReceiptPageState } from "../receipts/model";
+import {
+  classifyReceiptPda,
+  initialPageState,
+  publicReceiptPath,
+  purchaseFragmentFromHash,
+  type PublicReceiptPageState,
+  type PurchaseProofState,
+} from "../receipts/model";
+import { decodePurchaseFragment, verifyPurchaseForReceipt } from "../receipts/purchase";
 import { ReceiptPageState } from "../receipts/ReceiptCard";
 import { configuredDemoReceiptPath } from "../owner/onboarding";
 
@@ -50,6 +58,36 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
   const [state, setState] = useState<PublicReceiptPageState>(() => (
     trimmed ? initialPageState(trimmed) : { kind: "malformed", receiptPda: "" }
   ));
+  const [purchase, setPurchase] = useState<PurchaseProofState | undefined>(undefined);
+  const [hash, setHash] = useState(() => (typeof window === "undefined" ? "" : window.location.hash));
+
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // An audit link carries the seller-signed invoice in the URL fragment, which
+  // never reaches a server. Nothing from it shows until it verifies against
+  // this receipt's on-chain invoice hash and the seller's signature.
+  useEffect(() => {
+    setPurchase(undefined);
+    if (state.kind !== "verified") return;
+    const fragment = purchaseFragmentFromHash(hash);
+    if (!fragment) return;
+    let active = true;
+    const request = decodePurchaseFragment(fragment);
+    if (!request) {
+      setPurchase({ status: "failed", via: "link", reason: "the invoice in this link could not be read" });
+      return;
+    }
+    void verifyPurchaseForReceipt(state.receipt, request, "link").then((result) => {
+      if (active) setPurchase(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, [state, hash]);
 
   useEffect(() => {
     setDraftAddress(trimmed);
@@ -96,6 +134,7 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
         {trimmed && (
           <ReceiptPageState
             state={state}
+            purchase={purchase}
             editableAddress={draftAddress}
             onAddressChange={setDraftAddress}
             onRetry={() => {
