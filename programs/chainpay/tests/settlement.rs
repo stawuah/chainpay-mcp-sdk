@@ -1,7 +1,8 @@
 use anchor_lang::solana_program::{pubkey::Pubkey, system_program};
-use anchor_lang::{InstructionData, ToAccountMetas};
+use anchor_lang::{AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas};
 use chainpay::instructions::create_mandate::MandateParams;
 use chainpay::instructions::execute_payment::PaymentParams;
+use chainpay::state::{PaymentMandate, PaymentReceipt};
 use chainpay::{accounts, instruction};
 use litesvm::LiteSVM;
 use solana_keypair::Keypair;
@@ -154,7 +155,85 @@ fn mandate_nonce() -> Pubkey {
     Pubkey::new_from_array(bytes)
 }
 
-fn run_settlement(label: &str, kind: TokenKind) {
+struct Fixture {
+    svm: LiteSVM,
+    owner: Keypair,
+    agent: Keypair,
+    source: Keypair,
+    recipient: Keypair,
+    mint: Keypair,
+    token_program: Pubkey,
+    config: Pubkey,
+    asset: Pubkey,
+    mandate: Pubkey,
+    expiration: u64,
+}
+
+impl Fixture {
+    fn payment(
+        &self,
+        invoice_hash: [u8; 32],
+        payment_seed: u8,
+        amount: u64,
+    ) -> (solana_instruction::Instruction, Pubkey) {
+        let (receipt, _) = Pubkey::find_program_address(
+            &[b"receipt", self.mandate.as_ref(), invoice_hash.as_ref()],
+            &chainpay::ID,
+        );
+        let instruction = chainpay_instruction(
+            accounts::ExecutePayment {
+                config: self.config,
+                asset_registry: self.asset,
+                mandate: self.mandate,
+                receipt,
+                agent: self.agent.pubkey(),
+                allowed_mint: self.mint.pubkey(),
+                source_token_account: self.source.pubkey(),
+                recipient_token_account: self.recipient.pubkey(),
+                token_program: self.token_program,
+                system_program: system_program::ID,
+            },
+            instruction::ExecutePayment {
+                params: PaymentParams {
+                    invoice_hash,
+                    payment_id: [payment_seed; 32],
+                    signature_reference: [payment_seed.wrapping_add(1); 32],
+                    amount,
+                },
+            },
+        );
+        (instruction, receipt)
+    }
+
+    fn mandate_state(&self) -> PaymentMandate {
+        let account = self.svm.get_account(&self.mandate).expect("mandate exists");
+        PaymentMandate::try_deserialize(&mut account.data.as_slice()).unwrap()
+    }
+
+    fn receipt_state(&self, receipt: &Pubkey) -> PaymentReceipt {
+        let account = self.svm.get_account(receipt).expect("receipt exists");
+        assert_eq!(account.data.len(), 8 + PaymentReceipt::LEN);
+        PaymentReceipt::try_deserialize(&mut account.data.as_slice()).unwrap()
+    }
+}
+
+/// Asserts that a receipt's policy snapshot matches the mandate as it stood
+/// immediately after the payment that created the receipt.
+fn assert_snapshot_matches(receipt: &PaymentReceipt, mandate: &PaymentMandate) {
+    assert_eq!(receipt.snapshot_version, chainpay::RECEIPT_SNAPSHOT_VERSION);
+    assert_eq!(receipt.policy_max_per_payment, mandate.max_per_payment);
+    assert_eq!(receipt.policy_total_limit, mandate.total_limit);
+    assert_eq!(receipt.policy_amount_spent_after, mandate.amount_spent);
+    assert_eq!(receipt.policy_payment_count_after, mandate.payment_count);
+    assert_eq!(receipt.policy_max_payment_count, mandate.max_payment_count);
+    assert_eq!(receipt.policy_expires_at_slot, mandate.expires_at_slot);
+    assert_eq!(receipt.policy_cooldown_slots, mandate.cooldown_slots);
+    assert_eq!(receipt.reserved, [0u8; 32]);
+}
+
+/// Creates config, asset registry, a nonce-scoped mandate, and the token
+/// delegation, leaving the mandate ready for its first payment.
+fn setup(kind: TokenKind) -> Fixture {
     let mut svm = LiteSVM::new();
     svm.add_program_from_file(chainpay::ID, program_path())
         .unwrap();
@@ -177,13 +256,6 @@ fn run_settlement(label: &str, kind: TokenKind) {
             mint.pubkey().as_ref(),
             mandate_nonce.as_ref(),
         ],
-        &chainpay::ID,
-    );
-    let invoice_hash = [11u8; 32];
-    let payment_id = [12u8; 32];
-    let signature_reference = [13u8; 32];
-    let (receipt, _) = Pubkey::find_program_address(
-        &[b"receipt", mandate.as_ref(), invoice_hash.as_ref()],
         &chainpay::ID,
     );
 
@@ -307,6 +379,44 @@ fn run_settlement(label: &str, kind: TokenKind) {
         &[&owner],
     );
 
+    Fixture {
+        svm,
+        owner,
+        agent,
+        source,
+        recipient,
+        mint,
+        token_program,
+        config,
+        asset,
+        mandate,
+        expiration,
+    }
+}
+
+fn run_settlement(label: &str, kind: TokenKind) {
+    let fixture = setup(kind);
+    let Fixture {
+        mut svm,
+        owner,
+        agent,
+        source,
+        recipient,
+        mint,
+        token_program,
+        config,
+        asset,
+        mandate,
+        expiration,
+    } = fixture;
+    let invoice_hash = [11u8; 32];
+    let payment_id = [12u8; 32];
+    let signature_reference = [13u8; 32];
+    let (receipt, _) = Pubkey::find_program_address(
+        &[b"receipt", mandate.as_ref(), invoice_hash.as_ref()],
+        &chainpay::ID,
+    );
+
     submit(
         &mut svm,
         vec![chainpay_instruction(
@@ -343,6 +453,19 @@ fn run_settlement(label: &str, kind: TokenKind) {
         svm.get_account(&receipt).is_some(),
         "{label} receipt was not created"
     );
+    let receipt_account = svm.get_account(&receipt).unwrap();
+    assert_eq!(receipt_account.data.len(), 8 + PaymentReceipt::LEN);
+    let receipt_state = PaymentReceipt::try_deserialize(&mut receipt_account.data.as_slice())
+        .expect("receipt decodes");
+    let mandate_state =
+        PaymentMandate::try_deserialize(&mut svm.get_account(&mandate).unwrap().data.as_slice())
+            .expect("mandate decodes");
+    assert_eq!(mandate_state.amount_spent, PAYMENT_AMOUNT);
+    assert_eq!(mandate_state.payment_count, 1);
+    assert_snapshot_matches(&receipt_state, &mandate_state);
+    assert_eq!(receipt_state.policy_max_per_payment, PAYMENT_AMOUNT);
+    assert_eq!(receipt_state.policy_total_limit, INITIAL_BALANCE);
+    assert_eq!(receipt_state.policy_expires_at_slot, expiration);
 
     let duplicate = chainpay_instruction(
         accounts::ExecutePayment {
@@ -539,4 +662,80 @@ fn settles_pyusd_through_token_2022_and_rejects_replay() {
 #[test]
 fn settles_usdg_through_token_2022_and_rejects_replay() {
     run_settlement("USDG", TokenKind::Token2022);
+}
+
+#[test]
+fn receipt_snapshots_cumulative_policy_state_across_payments() {
+    for kind in [TokenKind::Spl, TokenKind::Token2022] {
+        let mut fixture = setup(kind);
+
+        let (first, first_receipt) = fixture.payment([41u8; 32], 42, PAYMENT_AMOUNT);
+        submit(&mut fixture.svm, vec![first], &[&fixture.agent]);
+        let first_state = fixture.receipt_state(&first_receipt);
+        assert_snapshot_matches(&first_state, &fixture.mandate_state());
+        assert_eq!(first_state.policy_amount_spent_after, PAYMENT_AMOUNT);
+        assert_eq!(first_state.policy_payment_count_after, 1);
+
+        // A smaller second payment shows the snapshot records the running
+        // total, not just this payment's amount.
+        let second_amount = PAYMENT_AMOUNT - 100;
+        let (second, second_receipt) = fixture.payment([43u8; 32], 44, second_amount);
+        submit(&mut fixture.svm, vec![second], &[&fixture.agent]);
+        let second_state = fixture.receipt_state(&second_receipt);
+        assert_snapshot_matches(&second_state, &fixture.mandate_state());
+        assert_eq!(second_state.amount, second_amount);
+        assert_eq!(
+            second_state.policy_amount_spent_after,
+            PAYMENT_AMOUNT + second_amount
+        );
+        assert_eq!(second_state.policy_payment_count_after, 2);
+
+        // The first receipt keeps the state at its own payment.
+        let first_again = fixture.receipt_state(&first_receipt);
+        assert_eq!(first_again.policy_amount_spent_after, PAYMENT_AMOUNT);
+        assert_eq!(first_again.policy_payment_count_after, 1);
+
+        assert_eq!(
+            token_balance(&fixture.svm, &fixture.recipient.pubkey()),
+            PAYMENT_AMOUNT + second_amount
+        );
+    }
+}
+
+#[test]
+fn payment_count_overflow_is_reported_as_a_count_limit() {
+    let mut fixture = setup(TokenKind::Spl);
+
+    // No real mandate can reach u64::MAX payments, so write the counter
+    // directly. max_payment_count stays 0 (unlimited), so only the overflow
+    // can stop this payment.
+    let mut mandate_state = fixture.mandate_state();
+    assert_eq!(mandate_state.max_payment_count, 0);
+    mandate_state.payment_count = u64::MAX;
+    let mut mandate_account = fixture.svm.get_account(&fixture.mandate).unwrap();
+    let mut data = Vec::with_capacity(mandate_account.data.len());
+    mandate_state.try_serialize(&mut data).unwrap();
+    data.resize(mandate_account.data.len(), 0);
+    mandate_account.data = data;
+    fixture
+        .svm
+        .set_account(fixture.mandate, mandate_account)
+        .unwrap();
+
+    let (payment, receipt) = fixture.payment([51u8; 32], 52, PAYMENT_AMOUNT);
+    let transaction = Transaction::new(
+        &[&fixture.agent],
+        Message::new(&[payment], Some(&fixture.agent.pubkey())),
+        fixture.svm.latest_blockhash(),
+    );
+    let failure = fixture.svm.send_transaction(transaction).unwrap_err();
+    let code = u32::from(chainpay::errors::ChainPayError::PaymentCountExceeded);
+    assert!(
+        format!("{:?}", failure.err).contains(&format!("Custom({code})")),
+        "expected PaymentCountExceeded ({code}), got {:?}: {:?}",
+        failure.err,
+        failure.meta.logs
+    );
+    assert!(fixture.svm.get_account(&receipt).is_none());
+    assert_eq!(token_balance(&fixture.svm, &fixture.recipient.pubkey()), 0);
 }
