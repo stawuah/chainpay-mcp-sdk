@@ -20,6 +20,7 @@ import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
+import crossmintInbox from "./inbox-crossmint.json";
 
 const OWNER = "7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q";
 const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -108,7 +109,19 @@ if (new URLSearchParams(location.search).has("ready")) {
   };
 }
 
-if (new URLSearchParams(location.search).has("receipts")) {
+// Crossmint prototype: every request state, seeded into the real inbox store.
+// Only visible when the dev server runs with VITE_CHAINPAY_CROSSMINT=true.
+const CROSSMINT = new URLSearchParams(location.search).has("crossmint");
+if (CROSSMINT) {
+  // Keep blocked metadata on an otherwise approvable request: a stage of
+  // "blocked" would hide the approval even if the Crossmint guard regressed.
+  const inbox = new URLSearchParams(location.search).has("crossmint-review")
+    ? crossmintInbox.map((item) => item.stage === "blocked" ? { ...item, stage: "waiting_for_approval" } : item)
+    : crossmintInbox;
+  localStorage.setItem(`chainpay.ai-inbox.v1:${OWNER}`, JSON.stringify(inbox));
+}
+
+if (CROSSMINT || new URLSearchParams(location.search).has("receipts")) {
   const receipt: PaymentReceipt = {
     address:"2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1", mandate:MANDATES[0].address,
     invoiceHash:new Uint8Array(32).fill(1), paymentId:new Uint8Array(32).fill(2), mint:USDC,

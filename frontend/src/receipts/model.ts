@@ -29,7 +29,10 @@ export type SellerStatementState =
   | { status: "absent" }
   | { status: "valid"; contentHash: string; servedAt: string; seller: string; publishedAt?: string }
   | { status: "invalid"; reason: string }
-  | { status: "unavailable"; reason: string };
+  | { status: "unavailable"; reason: string }
+  // Crossmint is the seller for a Crossmint order, so its order status takes the
+  // seller slot. It is Crossmint's report, never ChainPay verification.
+  | { status: "crossmint"; phase: string; refunded: boolean; reportedAt?: string };
 
 export type ReceiptValidationCode =
   | "wrong_owner"
@@ -116,7 +119,49 @@ export function formatMandatePaymentCount(paymentCount: string, maxPaymentCount:
   return maxPaymentCount === "0" ? `${paymentCount} · Unlimited` : `${paymentCount} / ${maxPaymentCount}`;
 }
 
+function reportedAtLabel(reportedAt: string | undefined): string {
+  if (!reportedAt) return "";
+  const date = new Date(reportedAt);
+  if (Number.isNaN(date.getTime())) return "";
+  return ` at ${date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
+}
+
+function crossmintStamp(seller: Extract<SellerStatementState, { status: "crossmint" }>): ReceiptStamp {
+  // A refunded order is still "completed" to Crossmint, so the refund wins.
+  if (seller.refunded) {
+    return {
+      key: "seller",
+      label: "Crossmint reports a refund",
+      detail: "Paid on Solana is unchanged. ChainPay cannot confirm the refund reached your wallet.",
+      tone: "unknown",
+    };
+  }
+  if (seller.phase === "completed") {
+    return {
+      key: "seller",
+      label: "Crossmint reports order complete",
+      detail: `Reported by Crossmint${reportedAtLabel(seller.reportedAt)}. Not checked on Solana.`,
+      tone: "neutral",
+    };
+  }
+  if (seller.phase === "payment" || seller.phase === "delivery") {
+    return {
+      key: "seller",
+      label: "Waiting for Crossmint",
+      detail: "Payment is on Solana. Crossmint has not reported the order complete.",
+      tone: "neutral",
+    };
+  }
+  return {
+    key: "seller",
+    label: "No Crossmint statement",
+    detail: "Crossmint has not reported on this order.",
+    tone: "neutral",
+  };
+}
+
 export function sellerStamp(seller: SellerStatementState): ReceiptStamp {
+  if (seller.status === "crossmint") return crossmintStamp(seller);
   if (seller.status === "valid") {
     return {
       key: "seller",
@@ -154,7 +199,7 @@ export function receiptStamps(receipt: ReceiptView): ReceiptStamp[] {
     {
       key: "allowed",
       label: "Allowed",
-      detail: "The program accepted this payment under the mandate.",
+      detail: "The program accepted this payment under this spending permission.",
       tone: "yes",
     },
     {
