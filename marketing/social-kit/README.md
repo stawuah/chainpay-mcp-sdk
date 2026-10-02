@@ -1,6 +1,6 @@
 <p align="center"><img src="../../frontend/public/brand/chainpay-icon-512.png" width="72" alt="ChainPay"></p>
 <h1 align="center">ChainPay social kit</h1>
-<p align="center"><b>Payments for agents. Controlled by you.</b><br><sub>54 ready-to-post images for X, Facebook, Reddit and Instagram · exact platform sizes · JPG</sub></p>
+<p align="center"><b>Payments for agents. Controlled by you.</b><br><sub>54 ready-to-post images and 8 looping motion clips for X, Facebook, Reddit and Instagram · exact platform sizes</sub></p>
 
 <p align="center"><img src="_previews/overview.jpg" alt="Overview of the ChainPay social kit" width="100%"></p>
 
@@ -13,6 +13,7 @@
 | [`03-square-posts/`](03-square-posts) | Square posts (26) | Instagram feed · X · Facebook · Reddit |
 | [`04-instagram-stories/`](04-instagram-stories) | Stories (3) | Instagram · Facebook stories |
 | [`05-carousels/`](05-carousels) | Carousels (9) | Instagram · LinkedIn document posts |
+| [`06-motion/`](06-motion) | Motion clips (8): 5 s silent loops | X · Instagram · Facebook feeds |
 | [`99-hold-not-yet-accurate/`](99-hold-not-yet-accurate) | On hold (1) | — |
 | [`_previews/`](_previews) | Contact sheets per section | Review |
 | [`_source/`](_source) | Prompts and scripts that produced every image | Regenerating |
@@ -157,6 +158,20 @@ Do not post until the claim is true. Crossmint is a flag-off prototype (PRs #19�
 <tr><td width="33%" valign="top"><a href="99-hold-not-yet-accurate/crossmint-live.jpg"><img src="99-hold-not-yet-accurate/crossmint-live.jpg" alt="Your agent can shop now. Paid on Crossmint." width="100%"></a><br><sub><code>crossmint-live.jpg</code> · 1080×1080</sub><br><b>Your agent can shop now. Paid on Crossmint.</b></td></tr>
 </table>
 
+## Motion
+
+Looping 5-second clips made from the cards above. Each starts and ends on the original card, so it loops without a jump. They are silent (feeds autoplay muted) and encoded as H.264 MP4 with faststart, ready to upload to X, Instagram or Facebook. Click a preview for the full-quality MP4. The GIFs in `_gif-previews/` are low-resolution README previews only, not for posting.
+
+<table>
+<tr><td width="33%" valign="top"><a href="06-motion/wide/allowance.mp4"><img src="06-motion/_gif-previews/allowance.gif" alt="Your agent's got an allowance now. (animated preview)" width="100%"></a><br><sub><code>wide/allowance.mp4</code> · 1280×720</sub><br><b>Your agent's got an allowance now.</b><br><sub>Robot bobs and blinks, card sways, glint on the tile</sub></td><td width="33%" valign="top"><a href="06-motion/wide/nope.mp4"><img src="06-motion/_gif-previews/nope.gif" alt="Over the limit? Solana says no. (animated preview)" width="100%"></a><br><sub><code>wide/nope.mp4</code> · 1280×720</sub><br><b>Over the limit? Solana says no.</b><br><sub>2 USDC chip hits the limit, barrier ripples, chip bounces back</sub></td><td width="33%" valign="top"><a href="06-motion/wide/receipts.mp4"><img src="06-motion/_gif-previews/receipts.gif" alt="Every payment comes with receipts. (animated preview)" width="100%"></a><br><sub><code>wide/receipts.mp4</code> · 1280×720</sub><br><b>Every payment comes with receipts.</b><br><sub>Receipt floats and flutters, check pulses</sub></td></tr>
+<tr><td width="33%" valign="top"><a href="06-motion/wide/tokens.mp4"><img src="06-motion/_gif-previews/tokens.gif" alt="Dollars, euros, PayPal USD. Your call. (animated preview)" width="100%"></a><br><sub><code>wide/tokens.mp4</code> · 1280×720</sub><br><b>Dollars, euros, PayPal USD. Your call.</b><br><sub>Coins orbit and flip around the ChainPay tile</sub></td><td width="33%" valign="top"><a href="06-motion/square/meme-lunch.mp4"><img src="06-motion/_gif-previews/meme-lunch.gif" alt="POV: your agent asks for lunch money. (animated preview)" width="100%"></a><br><sub><code>square/meme-lunch.mp4</code> · 960×960</sub><br><b>POV: your agent asks for lunch money.</b><br><sub>Hopeful hop, “1 USDC?” bubble pulses</sub></td><td width="33%" valign="top"><a href="06-motion/square/meme-habits.mp4"><img src="06-motion/_gif-previews/meme-habits.gif" alt="My agent has better spending habits than me. (animated preview)" width="100%"></a><br><sub><code>square/meme-habits.mp4</code> · 960×960</sub><br><b>My agent has better spending habits than me.</b><br><sub>Robot nods over its books, plant sways</sub></td></tr>
+<tr><td width="33%" valign="top"><a href="06-motion/square/verify.mp4"><img src="06-motion/_gif-previews/verify.gif" alt="Share a receipt. Anyone can verify it. (animated preview)" width="100%"></a><br><sub><code>square/verify.mp4</code> · 960×960</sub><br><b>Share a receipt. Anyone can verify it.</b><br><sub>Magnifier sweeps the receipt, check glows</sub></td><td width="33%" valign="top"><a href="06-motion/banner/x-header.mp4"><img src="06-motion/_gif-previews/x-header.gif" alt="Payments for agents. Controlled by you. (animated preview)" width="100%"></a><br><sub><code>banner/x-header.mp4</code> · 1500×500</sub><br><b>Payments for agents. Controlled by you.</b><br><sub>Tile floats on blue, background shapes drift</sub></td></tr>
+</table>
+
+- X doesn't support video profile headers. Use `banner/x-header.mp4` as a post or pinned tweet; keep the static JPG as the profile banner.
+- Made with `bytedance/seedance-2-mini` on KIE.ai at 720p (41 credits per clip). The prompt sets the card as both the first and last frame and locks the text, logos, background color and logo tiles.
+- The x402, pause and "ask me first" cards were blocked by Seedance's copyright filter on every attempt, so they have no motion version yet.
+
 ## Regenerating
 
 Images were generated on [KIE.ai](https://kie.ai) with `gpt-image-2-5-flare-image-to-image` at 2K, then cropped and stamped locally.
@@ -165,5 +180,7 @@ Images were generated on [KIE.ai](https://kie.ai) with `gpt-image-2-5-flare-imag
 2. `node rast.mjs` turns official logos in `logos/` into reference PNGs.
 3. `KIE_API_KEY=… PROMPTS=./prompts2.mjs node gen.mjs [id …]` generates into `~/Desktop/ChainPay Social/raw/` (about 10 credits per image).
 4. `PROMPTS=./prompts2.mjs node compose.mjs` crops to exact sizes and stamps the logo; `node kit.mjs <this folder>` exports JPGs here.
+
+Motion: `KIE_API_KEY=… node animate.mjs [id …]` animates cards listed in `motion.mjs` into `~/Desktop/ChainPay Social/motion/raw/`, then `./finish.sh <id> <version>` exports the X-ready MP4 (`header21.mjs` builds the 21:9 header source, because Seedance accepts at most 2.5:1).
 
 Never commit the API key. The scripts read it from the environment only.
