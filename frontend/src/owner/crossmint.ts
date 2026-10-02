@@ -25,6 +25,27 @@ export function crossmintQuoteCheck(
   };
 }
 
+/** Every reason a Crossmint order cannot be approved, as failed checks. */
+export function crossmintBlockingChecks(request: CrossmintRequest, quoted: string, paying: string): AgentCheck[] {
+  const checks: AgentCheck[] = [];
+  const quote = crossmintQuoteCheck(request, quoted, paying);
+  if (quote) checks.push(quote);
+  if (request.blockedReason) {
+    checks.push({
+      key: "crossmint_order",
+      label: "Crossmint order",
+      status: "fail",
+      detail: request.blockedReason === "closed" ? CROSSMINT_BLOCKED_COPY.closed : CROSSMINT_BLOCKED_COPY.alreadyPaid,
+    });
+  }
+  return checks;
+}
+
+/** True when the owner must not be offered a wallet approval for this request. */
+export function crossmintBlocksApproval(request: CrossmintRequest | undefined): boolean {
+  return Boolean(request && (request.quoteCheck === "mismatch" || request.blockedReason));
+}
+
 /** Crossmint's order status as the receipt's seller statement. */
 export function crossmintSellerStatement(request: CrossmintRequest): SellerStatementState {
   return {

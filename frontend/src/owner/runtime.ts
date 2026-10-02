@@ -185,6 +185,8 @@ export type CrossmintRequest = {
   phase?: string;
   refunded?: boolean;
   reportedAt?: string;
+  /** Why ChainPay refused to pay this order before anything was submitted. */
+  blockedReason?: "closed" | "already_paid";
 };
 
 export type AgentInboxItem = {

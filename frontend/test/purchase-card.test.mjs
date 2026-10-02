@@ -186,7 +186,10 @@ test("a Crossmint order shows as Crossmint only behind the flag, and a mismatche
   const on = purchaseCard.purchaseCardFromInboxItem(item, { ...options, crossmint: true });
   assert.equal(on.recipientLabel, "Crossmint");
   assert.equal(on.recipientBrand, "crossmint");
-  assert.equal(on.description, "Mad Lads #1234");
+  // The request title names it everywhere; the item label is only a fallback.
+  assert.equal(on.description, "Buy request");
+  const untitled = purchaseCard.purchaseCardFromInboxItem({ ...item, title: "", prompt: "" }, { ...options, crossmint: true });
+  assert.equal(untitled.description, "Mad Lads #1234");
   assert.equal(on.status, "waiting_for_approval");
   // A matching quote adds no row: the review card stays as short as any payment.
   assert.equal(on.checks.length, 1);
@@ -199,4 +202,24 @@ test("a Crossmint order shows as Crossmint only behind the flag, and a mismatche
   const failed = mismatch.checks.find((check) => check.key === "crossmint_quote");
   assert.equal(failed.status, "fail");
   assert.equal(failed.detail, "Crossmint quoted 24.5 USDC; this payment is 25.1 USDC. Ask your agent for a new quote.");
+
+  // The safety check does not wait for the flag: branding does.
+  const mismatchFlagOff = purchaseCard.purchaseCardFromInboxItem(
+    { ...item, crossmint: { ...item.crossmint, quoteCheck: "mismatch" } },
+    options,
+  );
+  assert.equal(mismatchFlagOff.status, "blocked");
+  assert.equal(mismatchFlagOff.recipientBrand, undefined);
+
+  for (const [blockedReason, detail] of [
+    ["closed", "This Crossmint order no longer accepts payment. Nothing was submitted."],
+    ["already_paid", "This Crossmint order already has a payment. Nothing new was submitted."],
+  ]) {
+    const view = purchaseCard.purchaseCardFromInboxItem(
+      { ...item, crossmint: { ...item.crossmint, blockedReason } },
+      { ...options, crossmint: true },
+    );
+    assert.equal(view.status, "blocked");
+    assert.equal(view.checks.find((check) => check.key === "crossmint_order").detail, detail);
+  }
 });

@@ -3,7 +3,7 @@ import type { AgentCheck, AgentInboxItem, AgentInboxStage, StablecoinOption } fr
 import { isInboxItemArchived } from "./inboxArchive";
 import { formatTokenAmount } from "./amounts";
 import { shortAddress } from "../ui/marks";
-import { crossmintQuoteCheck } from "./crossmint";
+import { crossmintBlockingChecks } from "./crossmint";
 
 export type PurchaseAttentionStage =
   | "needs_details"
@@ -173,21 +173,25 @@ export function purchaseCardFromInboxItem(
   const recipient = typeof payment?.recipient === "string" ? payment.recipient : undefined;
   const tokenLabel = tokenLabelForMint(mint, options.stablecoinOptions);
   const amountLabel = formatPaymentAmount(amount, mint, options.mandate, options.mandateDecimals);
+  // Branding waits for the flag; the safety checks do not. A request carrying
+  // Crossmint data is never offered for approval with a mismatched quote or a
+  // closed or already-paid order, whether or not Crossmint is shown by name.
   const order = options.crossmint ? item.crossmint : undefined;
-  const checks = [...(item.requirements?.checks ?? [])];
-  const quoteCheck = order && crossmintQuoteCheck(
-    order,
-    `${formatPaymentAmount(order.quotedAmount, mint, options.mandate, options.mandateDecimals)} ${tokenLabel}`.trim(),
-    `${amountLabel} ${tokenLabel}`.trim(),
-  );
-  if (quoteCheck) checks.push(quoteCheck);
-  // A mismatched quote blocks whatever stage the request reached: the owner is
-  // never asked to approve an amount Crossmint did not quote.
-  const status = quoteCheck ? "blocked" : purchaseAttentionStage(item.stage);
+  const blocking = item.crossmint
+    ? crossmintBlockingChecks(
+      item.crossmint,
+      `${formatPaymentAmount(item.crossmint.quotedAmount, mint, options.mandate, options.mandateDecimals)} ${tokenLabel}`.trim(),
+      `${amountLabel} ${tokenLabel}`.trim(),
+    )
+    : [];
+  const checks = [...(item.requirements?.checks ?? []), ...blocking];
+  const status = blocking.length > 0 ? "blocked" : purchaseAttentionStage(item.stage);
+  const description = purchaseDescription(item);
 
   return {
     id: item.id,
-    description: order?.itemLabel?.trim() || purchaseDescription(item),
+    // The request's own title names it everywhere; the item is the fallback.
+    description: description === "Purchase description unavailable" && order?.itemLabel?.trim() ? order.itemLabel.trim() : description,
     amountLabel,
     tokenLabel,
     recipientLabel: order ? "Crossmint" : recipient ? shortAddress(recipient) : "Recipient unavailable",

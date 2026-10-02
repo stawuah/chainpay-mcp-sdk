@@ -114,7 +114,7 @@
       }
     },
     "requirements": {
-      "status": "blocked",
+      "status": "ready",
       "missing": [],
       "checks": [
         {
@@ -124,17 +124,18 @@
           "detail": "Within this spending permission."
         },
         {
-          "key": "crossmint_order",
-          "label": "Crossmint order",
-          "status": "fail",
-          "detail": "This Crossmint order no longer accepts payment. Nothing was submitted."
+          "key": "token",
+          "label": "Token",
+          "status": "pass",
+          "detail": "USDC allowed."
         }
       ]
     },
     "crossmint": {
       "orderId": "d3b7-crossmint-order-0043",
       "itemLabel": "Mad Lads #1236",
-      "phase": "completed"
+      "phase": "completed",
+      "blockedReason": "closed"
     }
   },
   {
@@ -159,7 +160,7 @@
       }
     },
     "requirements": {
-      "status": "blocked",
+      "status": "ready",
       "missing": [],
       "checks": [
         {
@@ -169,16 +170,17 @@
           "detail": "Within this spending permission."
         },
         {
-          "key": "crossmint_order",
-          "label": "Crossmint order",
-          "status": "fail",
-          "detail": "This Crossmint order already has a payment. Nothing new was submitted."
+          "key": "token",
+          "label": "Token",
+          "status": "pass",
+          "detail": "USDC allowed."
         }
       ]
     },
     "crossmint": {
       "orderId": "b8f1c2d4-crossmint-order-7e21",
-      "itemLabel": "Mad Lads #1234"
+      "itemLabel": "Mad Lads #1234",
+      "blockedReason": "already_paid"
     }
   },
   {
