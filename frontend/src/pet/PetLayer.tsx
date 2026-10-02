@@ -1,52 +1,70 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { isNight, moodOf, NIGHT_END_UTC, stageFor, type Mood, type PetAction } from "./sim/needs";
-import { petStore, usePet, type Reaction } from "./store";
-import { useRoamer } from "./roam/roamer";
+import { petStore, usePet, type Reaction, type ReactionKind } from "./store";
+import { pinAt, useRoamer, type Pin } from "./roam/roamer";
 import { RobotStill } from "./RobotStill";
-import { PetPanel } from "./PetPanel";
+import { PetPanel, type PanelView } from "./PetPanel";
+import { SpeechBubble } from "./play/SpeechBubble";
+import { CoinToss, LandedCoin } from "./play/CoinToss";
+import { BugLayer, useBugs, type Bug } from "./play/Bugs";
+import { useAttentionCalls, useKeySecrets, useLandingTour, usePatCombo, useShake } from "./play/hooks";
+import {
+  BOOT_LINE,
+  BUG_LINES,
+  CALL_LINES,
+  COIN_LINES,
+  COOLING_LINES,
+  CTA_LINE,
+  DONE_LINES,
+  GAME_COPY,
+  GREETINGS,
+  MOOD_LINES,
+  SECRET_LINES,
+} from "./play/lines";
 import type { Expression, Motion } from "./RobotModel";
 import "./pet.css";
 
 const RobotCanvas = lazy(() => import("./RobotCanvas"));
 
-// Copy per the council ruling, P6/P7: he speaks lowercase, no exclamation marks.
-const LINES: Record<Mood, string> = {
-  happy: "life's good. thanks for stopping by.",
-  okay: "just floating around. you?",
-  meh: "could use some attention, not gonna lie.",
-  low: "low power… someone plug me in?",
-  asleep: "zzz. dreaming in UTC.",
-  grumpy: "i was SLEEPING.",
-};
-
-const DONE_LINES: Record<PetAction, string> = {
-  feed: "nom. battery up.",
-  play: "wheee.",
-  clean: "squeaky clean.",
-  pet: "hehe.",
-  poke: "hey.",
-};
-
-const COOLING_LINES: Partial<Record<PetAction, (m: number) => string>> = {
-  feed: (m) => `still full. back in ${m}m.`,
-  play: (m) => `need a breather. ${m}m.`,
-  clean: (m) => `already shiny. ${m}m.`,
-};
-
-const FIRST_LINE = "oh hi. i'm new here. no name yet.";
-const MET_KEY = "chainpay.pet.met";
-const SAY_MS = 4_000;
 const DAY = 86_400_000;
+const DEBUG_KEY = "chainpay.pet.debug";
+const PIN_KEY = "chainpay.pet.pin";
+/** Lines he volunteers (tour, bugs) wait for this much quiet after the last one. */
+const QUIET_MS = 10_000;
 
-function firstMeeting(): boolean {
+function readPin(): Pin | null {
   try {
-    if (window.localStorage.getItem(MET_KEY)) return false;
-    window.localStorage.setItem(MET_KEY, "1");
-    return true;
+    const value = JSON.parse(window.localStorage.getItem(PIN_KEY) ?? "null") as Pin | null;
+    return value && typeof value.fx === "number" && typeof value.fy === "number" ? value : null;
   } catch {
-    return false;
+    return null;
   }
 }
+
+function writePin(pin: Pin | null) {
+  try {
+    if (pin) window.localStorage.setItem(PIN_KEY, JSON.stringify(pin));
+    else window.localStorage.removeItem(PIN_KEY);
+  } catch {
+    // Memory only.
+  }
+}
+
+/** True when he has been quiet long enough to volunteer something. */
+function quiet(ms = QUIET_MS) {
+  const speech = petStore.get().speech;
+  return !speech || Date.now() - (speech.at + speech.ms) > ms;
+}
+
+/** Tour lines follow the reader, so they only need a short gap between them. */
+const TOUR_GAP_MS = 3_000;
+
+/** How long each reaction drives his face and body. */
+const REACTION_MS: Partial<Record<ReactionKind, number>> = { dizzy: 3_000, dance: 2_400, excited: 2_000, flip: 1_000 };
+const reactionLive = (reaction: Reaction | null, now: number): reaction is Reaction =>
+  Boolean(reaction && now - reaction.at < (REACTION_MS[reaction.kind] ?? 1_500));
+
+const pickLine = <T,>(options: readonly T[]) => options[Math.floor(Math.random() * options.length)]!;
 
 /** Next 06:00 UTC, in the visitor's own clock. */
 function wakeTime(now: number) {
@@ -78,56 +96,92 @@ function useMedia(query: string) {
   return matches;
 }
 
-function expressionFor(mood: Mood, reaction: Reaction | null, now: number): Expression {
-  const fresh = reaction && now - reaction.at < 1_500;
-  if (fresh && reaction.kind === "surprised") return "surprised";
-  if (mood === "grumpy" || (fresh && reaction.kind === "grumpy")) return "grumpy";
+function expressionFor(mood: Mood, reaction: Reaction | null, now: number, booting: boolean, calling: boolean): Expression {
+  if (booting) return "off";
+  const live = reactionLive(reaction, now) ? reaction : null;
+  if (live?.kind === "dizzy") return "dizzy";
+  if (live?.kind === "surprised") return "surprised";
+  if (mood === "grumpy" || live?.kind === "grumpy") return "grumpy";
+  if (live?.kind === "excited" || live?.kind === "flip") return "excited";
   if (mood === "asleep") return "sleep";
-  if (fresh && ["happy", "eat", "spin", "shake"].includes(reaction.kind)) return "happy";
+  if (calling) return "excited";
+  if (live && ["happy", "eat", "spin", "shake", "dance"].includes(live.kind)) return "happy";
   if (mood === "low") return "low";
   return mood === "happy" ? "happy" : "idle";
 }
 
 function motionFor(reaction: Reaction | null, now: number): Motion {
-  if (!reaction || now - reaction.at > 1_500) return "none";
-  if (reaction.kind === "spin") return "spin";
-  if (reaction.kind === "shake" || reaction.kind === "nope") return reaction.kind;
-  if (reaction.kind === "eat") return "eat";
-  return "none";
+  if (!reactionLive(reaction, now)) return "none";
+  switch (reaction.kind) {
+    case "spin":
+    case "shake":
+    case "nope":
+    case "eat":
+    case "dance":
+    case "flip":
+      return reaction.kind;
+    default:
+      return "none";
+  }
 }
 
 const minutes = (ms: number) => Math.max(1, Math.ceil(ms / 60_000));
 
-export default function PetLayer({ onHide, routeKey }: { onHide: () => void; routeKey: string }) {
-  const { snapshot, reaction } = usePet();
+// Counting the visit must happen once per page load, even though React may
+// run effects twice in development. Timers are rescheduled per effect run.
+let arrival: ReturnType<typeof petStore.visit> | null = null;
+const arrive = () => (arrival ??= petStore.visit());
+
+type Props = { onHide: () => void; routeKey: string; routeKind: string };
+
+export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
+  const { snapshot, bond, reaction, speech } = usePet();
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const narrow = useMedia("(max-width: 600px)");
   const sheet = useMedia("(max-width: 600px), (max-height: 520px)");
   const webgl = useMemo(hasWebGL, []);
   const size = narrow ? 96 : 140;
-  const { position, hold, release, pause, resume, settle } = useRoamer({ size, roam: !reducedMotion && !narrow });
+  const [pin, setPinState] = useState<Pin | null>(readPin);
+  const setPin = (next: Pin | null) => {
+    writePin(next);
+    setPinState(next);
+  };
+  const { position, hold, release, pause, resume, settle } = useRoamer({ size, roam: !reducedMotion && !narrow, pin });
+  // While he comments on a section, he looks at its heading instead of the cursor.
+  const [gaze, setGaze] = useState<{ x: number; y: number; until: number } | null>(null);
   const [open, setOpen] = useState(false);
-  const [said, setSaid] = useState<{ text: string; at: number } | null>(null);
+  const [view, setView] = useState<PanelView>("main");
+  const [booting, setBooting] = useState(false);
+  const [tossing, setTossing] = useState(false);
+  const [coin, setCoin] = useState<{ x: number; y: number } | null>(null);
   const [look, setLook] = useState({ x: 0, y: 0 });
   const [clock, setClock] = useState(() => Date.now());
   const body = useRef<HTMLButtonElement>(null);
   const satOnSheet = useRef(false);
+  const missedCall = useRef(false);
   const drag = useRef<{ startX: number; startY: number; dx: number; dy: number; moved: boolean } | null>(null);
+  // React flushes the pointerup state change before the click event fires, so
+  // "was that a drag?" has to live in a ref, not in render state.
+  const dragged = useRef(false);
 
-  // Re-render shortly after a reaction so the face settles back.
+  // Play that happens to you (bugs, calls, the tour) lives on the landing page
+  // only. The dashboard and public receipts are for reading money, not play.
+  const playful = routeKind === "landing";
+  const now = clock;
+  const mood = moodOf(snapshot, now);
+  const asleep = mood === "asleep";
+  const busy = open || booting || tossing || coin !== null;
+
+  // Re-render when a reaction or a spoken line should end.
   useEffect(() => {
     setClock(Date.now());
-    if (!reaction) return;
-    const timer = window.setTimeout(() => setClock(Date.now()), 1_600);
-    return () => window.clearTimeout(timer);
-  }, [reaction]);
-
-  // Spoken lines last four seconds, then his mood line comes back.
-  useEffect(() => {
-    if (!said) return;
-    const timer = window.setTimeout(() => setSaid(null), SAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [said]);
+    const ends: number[] = [];
+    if (reaction) ends.push(reaction.at + (REACTION_MS[reaction.kind] ?? 1_500) + 50);
+    if (speech) ends.push(speech.at + speech.ms + 50);
+    if (gaze) ends.push(gaze.until + 50);
+    const timers = ends.map((at) => window.setTimeout(() => setClock(Date.now()), Math.max(0, at - Date.now())));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [reaction, speech, gaze]);
 
   // Cooldown countdowns tick once a minute while the panel is open.
   useEffect(() => {
@@ -158,9 +212,36 @@ export default function PetLayer({ onHide, routeKey }: { onHide: () => void; rou
     };
   }, [position.x, position.y, size, reducedMotion]);
 
+  // ---- Arrival: boot up the first time, welcome back after that. ----------
+  useEffect(() => {
+    const greeting = arrive();
+    const timers: number[] = [];
+    const later = (ms: number, run: () => void) => timers.push(window.setTimeout(run, ms));
+    if (greeting === "first") {
+      setBooting(true);
+      later(1_600, () => {
+        setBooting(false);
+        petStore.react("excited");
+        petStore.say(BOOT_LINE, 2_400);
+      });
+      later(4_200, () => petStore.say(GREETINGS.first, 5_000));
+    } else if (greeting === "streak") {
+      later(1_400, () => petStore.say(GREETINGS.streak(petStore.get().bond.streak), 5_000));
+    } else if (greeting === "back") {
+      later(1_400, () => petStore.say(GREETINGS.back, 4_000));
+    }
+    // Once greeted, hiding and un-hiding him does not replay the hello.
+    later(4_300, () => {
+      arrival = "same-day";
+    });
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, []);
+
+  // ---- Panel ---------------------------------------------------------------
   const close = useCallback(
     (returnFocus: boolean) => {
       setOpen(false);
+      setView("main");
       if (satOnSheet.current) {
         satOnSheet.current = false;
         settle();
@@ -192,31 +273,140 @@ export default function PetLayer({ onHide, routeKey }: { onHide: () => void; rou
     [hold, size],
   );
 
-  const now = clock;
-  const mood = moodOf(snapshot, now);
-  const expression = expressionFor(mood, reaction, now);
-  const motion = motionFor(reaction, now);
-  const line = said && now - said.at < SAY_MS + 100 ? said.text : LINES[mood];
-  const stage = stageFor(snapshot.bornAt, now);
-  const day = Math.floor((now - snapshot.bornAt) / DAY) + 1;
+  const speaking = speech && now - speech.at < speech.ms ? speech.text : null;
+  const line = speaking ?? MOOD_LINES[mood];
 
-  const say = (text: string) => {
-    const at = Date.now();
-    setClock(at);
-    setSaid({ text, at });
+  // ---- Combos and secrets ---------------------------------------------------
+  const secret = (name: string, line: string, kind: ReactionKind) => {
+    petStore.react(kind);
+    petStore.say(petStore.secret(name) ? `${line} (${SECRET_LINES.found})` : line);
   };
+  const onPatCombo = usePatCombo(useCallback(() => secret("dance", SECRET_LINES.dance, "dance"), []));
+  const shake = useShake(
+    useCallback(() => {
+      petStore.note("dizzy");
+      secret("dizzy", SECRET_LINES.dizzy, "dizzy");
+    }, []),
+  );
+  useKeySecrets({
+    enabled: true,
+    onSecret: (name) => secret(name, name === "konami" ? SECRET_LINES.konami : SECRET_LINES.gm, name === "konami" ? "flip" : "happy"),
+  });
 
+  // ---- Care ----------------------------------------------------------------
   const act = (action: PetAction) => {
     const wasAsleep = moodOf(petStore.get().snapshot, Date.now()) === "asleep";
     const result = petStore.act(action);
+    if (action === "pet") onPatCombo();
     if (!result.ok) {
       const cooling = COOLING_LINES[action];
-      if (cooling) say(cooling(minutes(result.retryMs ?? 0)));
+      if (cooling) petStore.say(cooling(minutes(result.retryMs ?? 0)));
       return;
     }
-    say(action === "poke" && wasAsleep ? LINES.grumpy : DONE_LINES[action]);
+    petStore.say(action === "poke" && wasAsleep ? MOOD_LINES.grumpy : DONE_LINES[action]);
   };
 
+  const onGameFinish = (won: boolean) => {
+    // Winning is a full play session; losing still cheers him up a little.
+    petStore.act("play", won ? undefined : { joy: 6, battery: -3 });
+    petStore.note("games");
+    petStore.reward(won ? "game-won" : "game-played", won ? "wins" : null, {}, won ? "dance" : "happy");
+    petStore.say(won ? GAME_COPY.wonLine : GAME_COPY.lostLine);
+  };
+
+  // ---- "!" calls -------------------------------------------------------------
+  const calls = useAttentionCalls({
+    enabled: playful && !busy && !asleep,
+    onMissed: () => {
+      missedCall.current = true;
+      petStore.miss("callsMissed", { joy: -5 });
+    },
+  });
+
+  // ---- Bugs ----------------------------------------------------------------
+  const { bugs, squash, spawnNow } = useBugs({
+    enabled: playful && !booting,
+    clean: snapshot.needs.clean,
+    onSpawn: () => {
+      if (!open && quiet()) petStore.say(BUG_LINES.spawn, 2_500);
+    },
+    onEscape: () => {
+      petStore.miss("bugsMissed", { clean: -3 });
+      if (!open && quiet()) petStore.say(BUG_LINES.escaped, 3_000);
+    },
+  });
+  const onSquash = (bug: Bug) => {
+    squash(bug.id);
+    petStore.reward("bug", "bugs", { clean: 4 }, "happy");
+    petStore.say(pickLine(BUG_LINES.squash), 2_500);
+  };
+
+  // ---- Coin toss -------------------------------------------------------------
+  const startToss = () => {
+    setOpen(false);
+    setView("main");
+    pause();
+    setTossing(true);
+  };
+  const cancelToss = useCallback(() => {
+    setTossing(false);
+    resume(2_000);
+  }, [resume]);
+  const onToss = (x: number, y: number) => {
+    setTossing(false);
+    setCoin({ x, y });
+    // Fly over so the coin lands in his visor's line of sight.
+    hold(x - size / 2, y - size * 0.55, true);
+    window.setTimeout(
+      () => {
+        setCoin(null);
+        petStore.reward("coin", "coins", { joy: 3 }, "eat");
+        petStore.say(pickLine(COIN_LINES), 2_500);
+        resume(6_000);
+      },
+      reducedMotion ? 300 : 1_850,
+    );
+  };
+
+  // ---- Landing tour ----------------------------------------------------------
+  const latestBusy = useRef(busy);
+  latestBusy.current = busy;
+  useLandingTour({
+    enabled: playful,
+    onSection: (text, heading) => {
+      if (latestBusy.current || !quiet(TOUR_GAP_MS)) return false;
+      petStore.say(text, 4_500);
+      if (heading) {
+        const rect = heading.getBoundingClientRect();
+        setGaze({ x: rect.left + Math.min(rect.width, 360) / 2, y: rect.top + rect.height / 2, until: Date.now() + 2_500 });
+      }
+      return true;
+    },
+    onCta: () => {
+      if (latestBusy.current) return false;
+      petStore.react("excited");
+      petStore.say(CTA_LINE, 3_000);
+      return true;
+    },
+  });
+
+  // ---- Debug hooks for browser tests (opt-in via localStorage). -------------
+  useEffect(() => {
+    let debug = false;
+    try {
+      debug = window.localStorage.getItem(DEBUG_KEY) === "1";
+    } catch {
+      // ignore
+    }
+    if (!debug) return;
+    const handle = { spawnBug: spawnNow, call: calls.callNow, say: (text: string) => petStore.say(text), state: () => petStore.get() };
+    (window as unknown as { __chainpayPet?: typeof handle }).__chainpayPet = handle;
+    return () => {
+      delete (window as unknown as { __chainpayPet?: typeof handle }).__chainpayPet;
+    };
+  }, [spawnNow, calls.callNow]);
+
+  // ---- Robot pointer handling --------------------------------------------
   const onPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
     drag.current = {
@@ -226,6 +416,7 @@ export default function PetLayer({ onHide, routeKey }: { onHide: () => void; rou
       dy: event.clientY - position.y,
       moved: false,
     };
+    shake.reset(event.clientX);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -233,34 +424,69 @@ export default function PetLayer({ onHide, routeKey }: { onHide: () => void; rou
     if (!current) return;
     if (!current.moved && Math.hypot(event.clientX - current.startX, event.clientY - current.startY) < 6) return;
     current.moved = true;
+    shake.move(event.clientX);
     hold(event.clientX - current.dx, event.clientY - current.dy);
   };
   const onPointerUp = () => {
     const current = drag.current;
     drag.current = null;
-    if (current?.moved) release();
+    if (current?.moved) {
+      dragged.current = true;
+      if (pin) setPin(pinAt(position.x, position.y));
+      release();
+    }
   };
   const onClick = () => {
     // A drag ends in a click too; only a still press counts as a pat.
-    if (position.mode === "held" && !open) return;
+    if (dragged.current) {
+      dragged.current = false;
+      return;
+    }
+    if (booting) return;
+    const answered = calls.answer();
+    if (answered) {
+      petStore.reward("call", "calls", { joy: 4 }, "excited");
+      petStore.say(pickLine(CALL_LINES.answered));
+    }
     if (open) {
-      petStore.act("pet");
+      act("pet");
       close(false);
       return;
     }
     pause();
     setOpen(true);
-    const result = petStore.act("pet");
-    if (firstMeeting()) say(FIRST_LINE);
-    else if (result.ok) say(DONE_LINES.pet);
+    if (missedCall.current && !answered) {
+      missedCall.current = false;
+      petStore.act("pet");
+      petStore.say(CALL_LINES.missedLater);
+      return;
+    }
+    if (answered) {
+      // He already said something; the pat still counts.
+      petStore.act("pet");
+      onPatCombo();
+    } else {
+      act("pet");
+    }
   };
 
   const flip = position.mode === "peek" && position.side === "left";
+  const gazing = gaze && gaze.until > now;
+  const lookAt = gazing
+    ? {
+        x: Math.max(-1, Math.min(1, (gaze.x - (position.x + size / 2)) / (window.innerWidth / 2))),
+        y: Math.max(-1, Math.min(1, (gaze.y - (position.y + size / 2)) / (window.innerHeight / 2))),
+      }
+    : look;
+  const expression = expressionFor(mood, reaction, now, booting, calls.calling);
+  const motion = motionFor(reaction, now);
+  const stage = stageFor(snapshot.bornAt, now);
+  const day = Math.floor((now - snapshot.bornAt) / DAY) + 1;
 
   return (
     <>
       <div
-        className={`cp-pet${position.glide ? " is-gliding" : ""}${mood === "low" ? " is-low" : ""}${mood === "asleep" ? " is-asleep" : ""}`}
+        className={`cp-pet${position.glide ? " is-gliding" : ""}${mood === "low" ? " is-low" : ""}${asleep ? " is-asleep" : ""}${booting ? " is-booting" : ""}`}
         style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)`, width: size, height: size }}
         data-mode={position.mode}
         data-stage={stage}
@@ -269,7 +495,7 @@ export default function PetLayer({ onHide, routeKey }: { onHide: () => void; rou
           ref={body}
           type="button"
           className="cp-pet-body"
-          aria-label="ChainPay robot"
+          aria-label={calls.calling ? "ChainPay robot is calling you" : "ChainPay robot"}
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-controls={open ? "cp-pet-panel" : undefined}
@@ -281,16 +507,39 @@ export default function PetLayer({ onHide, routeKey }: { onHide: () => void; rou
         >
           {webgl ? (
             <Suspense fallback={<RobotStill expression={expression} />}>
-              <RobotCanvas expression={expression} motion={motion} look={look} animate={!reducedMotion} />
+              <RobotCanvas expression={expression} motion={motion} look={lookAt} animate={!reducedMotion} gear={bond.gearOn} />
             </Suspense>
           ) : (
             <RobotStill expression={expression} />
           )}
-          {mood === "asleep" ? <span className="cp-pet-zzz" aria-hidden="true">z z z</span> : null}
+          {asleep ? <span className="cp-pet-zzz" aria-hidden="true">z z z</span> : null}
         </button>
+        {calls.calling ? <span className="cp-pet-call" aria-hidden="true">!</span> : null}
       </div>
+
+      {speaking && !open && !tossing ? <SpeechBubble text={speaking} anchor={{ x: position.x, y: position.y, size }} /> : null}
+      {tossing ? <CoinToss onToss={onToss} onCancel={cancelToss} /> : null}
+      {coin ? <LandedCoin x={coin.x} y={coin.y} /> : null}
+      <BugLayer bugs={bugs} onSquash={onSquash} />
+
       <PetPanel
         open={open}
+        view={view}
+        onView={setView}
+        bond={bond}
+        onToss={startToss}
+        onGameFinish={onGameFinish}
+        onToggleGear={(item) => petStore.toggleGear(item)}
+        pinned={pin !== null}
+        onTogglePin={() => {
+          if (pin) {
+            setPin(null);
+            petStore.say("free to roam again.", 2_500);
+          } else {
+            setPin(pinAt(position.x, position.y));
+            petStore.say("ok. i'll stay right here.", 2_500);
+          }
+        }}
         sheet={sheet}
         anchor={body.current}
         snapshot={snapshot}

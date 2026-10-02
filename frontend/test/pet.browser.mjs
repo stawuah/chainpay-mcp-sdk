@@ -7,15 +7,21 @@ const BASE = 'http://127.0.0.1:5189';
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const errors = [];
 
-async function open(path, { viewport = { width: 1280, height: 800 }, reducedMotion = 'no-preference', needs } = {}) {
+async function open(path, { viewport = { width: 1280, height: 800 }, reducedMotion = 'no-preference', needs, firstVisit = false, bond } = {}) {
   const context = await browser.newContext({ viewport, reducedMotion });
   const page = await context.newPage();
   page.on('pageerror', (e) => errors.push(e.message));
   await page.route('https://**/*', (r) => r.abort());
-  await page.addInitScript((seed) => {
-    localStorage.setItem('chainpay.pet.met', '1');
+  await page.addInitScript(({ seed, firstVisit, bond }) => {
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    localStorage.setItem('chainpay.pet.debug', '1');
     if (seed) localStorage.setItem('chainpay.pet.v1', JSON.stringify({ needs: seed, at: Date.now(), bornAt: Date.now(), lowPower: false, lastAction: {}, grumpyUntil: 0 }));
-  }, needs ?? null);
+    // Returning visitor today, so he skips the boot-up and greeting.
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    if (!firstVisit) localStorage.setItem('chainpay.pet.bond.v1', JSON.stringify({ lastVisitDay: today, streak: 1, visitDays: 1, xp: 0, ...bond }));
+  }, { seed: needs ?? null, firstVisit, bond: bond ?? {} });
   await page.goto(BASE + path, { waitUntil: 'load' });
   return { page, context };
 }
@@ -108,7 +114,80 @@ async function inViewport(page) {
   await context.close();
 }
 
-// 5. Embeds live inside other people's pages: no robot.
+// 5. First visit: he boots up and says hello, without opening anything.
+{
+  const { page, context } = await open('/', { reducedMotion: 'reduce', firstVisit: true });
+  await page.locator('.cp-pet.is-booting').waitFor({ timeout: 20000 });
+  await page.locator('.cp-pet-speech', { hasText: "oh hi. i'm new here. no name yet." }).waitFor({ timeout: 8000 });
+  assert.equal(await page.locator('.cp-pet-panel').count(), 0);
+  await context.close();
+}
+
+// 6. Play: squash a bug, answer a call, toss a coin, open the game, wear gear.
+{
+  const { page, context } = await open('/', { reducedMotion: 'reduce', bond: { xp: 18 } });
+  const robot = page.getByRole('button', { name: /ChainPay robot/ });
+  await robot.waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => window.__chainpayPet);
+
+  await page.evaluate(() => window.__chainpayPet.spawnBug());
+  await page.getByRole('button', { name: 'Squash the bug' }).click();
+  await page.locator('.cp-pet-speech', { hasText: /got it|squashed|crunchy/ }).waitFor();
+
+  await page.evaluate(() => window.__chainpayPet.call());
+  await page.getByRole('button', { name: 'ChainPay robot is calling you' }).click();
+  assert.match(await page.locator('#cp-pet-line').innerText(), /you came|checking|thanks/);
+
+  await page.getByRole('button', { name: 'Gear' }).click();
+  const antenna = page.getByRole('button', { name: /Antenna/ });
+  assert.equal(await antenna.getAttribute('aria-pressed'), 'true', 'crossing into Regular puts the antenna on automatically');
+  await antenna.click();
+  assert.equal(await antenna.getAttribute('aria-pressed'), 'false');
+  await page.getByRole('button', { name: 'Back' }).click();
+
+  await page.locator('.cp-pet-tile', { hasText: 'Play' }).click();
+  await page.getByRole('button', { name: 'Start' }).waitFor();
+  assert.match(await page.locator('.cp-pet-game').innerText(), /No real USDC/);
+  await page.getByRole('button', { name: 'Back' }).click();
+
+  await page.getByRole('button', { name: 'Toss a coin' }).click();
+  await page.mouse.click(400, 400);
+  await page.locator('.cp-pet-speech', { hasText: /mine|caught|shiny|imaginary/ }).waitFor({ timeout: 5000 });
+  assert.ok(await inViewport(page));
+
+  // Bugs and calls stay off the money pages.
+  await page.goto(BASE + '/verify', { waitUntil: 'load' });
+  await page.waitForFunction(() => window.__chainpayPet);
+  await page.evaluate(() => window.__chainpayPet.spawnBug());
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('.cp-pet-bug').count(), 0, 'no bugs on /verify');
+  await context.close();
+}
+
+// 7. Pin: he stays where he was pinned, across reloads, until unpinned.
+{
+  const { page, context } = await open('/');
+  const robot = page.getByRole('button', { name: /ChainPay robot/ });
+  await robot.waitFor({ timeout: 20000 });
+  await page.waitForTimeout(1200);
+  await robot.click();
+  await page.getByRole('button', { name: 'Pin here' }).click();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(2000);
+  const pinned = await page.locator('.cp-pet').boundingBox();
+  assert.equal(await page.locator('.cp-pet').getAttribute('data-mode'), 'pinned');
+  await page.waitForTimeout(23000); // longer than his longest wander interval
+  const later = await page.locator('.cp-pet').boundingBox();
+  assert.ok(Math.abs(later.x - pinned.x) < 2 && Math.abs(later.y - pinned.y) < 2, 'a pinned robot does not wander');
+  await page.reload({ waitUntil: 'load' });
+  await page.locator('.cp-pet[data-mode="pinned"]').waitFor({ timeout: 20000 });
+  await robot.click();
+  await page.getByRole('button', { name: 'Unpin' }).click();
+  assert.equal(await page.evaluate(() => localStorage.getItem('chainpay.pet.pin')), null);
+  await context.close();
+}
+
+// 8. Embeds live inside other people's pages: no robot.
 {
   const { page, context } = await open('/embed/overview');
   await page.waitForTimeout(3000);

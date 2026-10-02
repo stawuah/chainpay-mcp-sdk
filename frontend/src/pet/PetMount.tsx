@@ -107,6 +107,7 @@ export function PetMount({ routeKind, routeKey }: { routeKind: string; routeKey:
     <Suspense fallback={null}>
       <PetLayer
         routeKey={routeKey}
+        routeKind={routeKind}
         onHide={() => {
           focusRestore.current = true;
           writeHidden(true);

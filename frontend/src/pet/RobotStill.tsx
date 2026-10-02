@@ -3,7 +3,7 @@ import type { Expression } from "./RobotModel";
 // Flat stand-in for devices without WebGL, and the placeholder while the 3D
 // chunk loads. Same silhouette and colours as the 3D robot.
 export function RobotStill({ expression }: { expression: Expression }) {
-  const eyeHeight = { idle: 15, happy: 15, sleep: 3, low: 7, grumpy: 9, surprised: 19 }[expression];
+  const eyeHeight = ({ idle: 15, happy: 15, sleep: 3, low: 7, grumpy: 9, surprised: 19, dizzy: 15, excited: 18, off: 0 } satisfies Record<Expression, number>)[expression];
   return (
     <svg className="cp-pet-still" viewBox="0 0 140 140" aria-hidden="true">
       <defs>

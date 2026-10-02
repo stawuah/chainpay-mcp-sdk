@@ -114,14 +114,20 @@ export type ActionResult =
   | { ok: true; snapshot: PetSnapshot }
   | { ok: false; snapshot: PetSnapshot; retryMs: number };
 
-export function applyAction(snapshot: PetSnapshot, action: PetAction, now: number): ActionResult {
+export function applyAction(
+  snapshot: PetSnapshot,
+  action: PetAction,
+  now: number,
+  /** Override the standard effect, e.g. a lost game still cheers him up a bit. */
+  effect: Partial<Needs> = EFFECTS[action],
+): ActionResult {
   const current = decay(snapshot, now);
   const last = current.lastAction[action];
   if (last !== undefined && now - last < COOLDOWN_MS[action]) {
     return { ok: false, snapshot: current, retryMs: COOLDOWN_MS[action] - (now - last) };
   }
   const needs = { ...current.needs };
-  for (const need of NEEDS) needs[need] = clamp(needs[need] + (EFFECTS[action][need] ?? 0));
+  for (const need of NEEDS) needs[need] = clamp(needs[need] + (effect[need] ?? 0));
   const asleep = isNight(now) && current.grumpyUntil <= now;
   return {
     ok: true,
@@ -151,4 +157,12 @@ export function moodOf(snapshot: PetSnapshot, now: number): Mood {
   if (average >= 70) return "happy";
   if (average >= 40) return "okay";
   return "meh";
+}
+
+/** Small need changes from play (a squashed bug, a caught coin). No cooldown. */
+export function nudge(snapshot: PetSnapshot, delta: Partial<Needs>, now: number): PetSnapshot {
+  const current = decay(snapshot, now);
+  const needs = { ...current.needs };
+  for (const need of NEEDS) needs[need] = clamp(needs[need] + (delta[need] ?? 0));
+  return { ...current, needs, lowPower: nextLowPower(current.lowPower, needs) };
 }

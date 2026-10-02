@@ -1,7 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BatteryCharging, Clock, EyeOff, Gamepad2, HandHeart, Pointer, Sparkles, X } from "lucide-react";
+import { BatteryCharging, BookOpen, Pin, PinOff, ChevronLeft, ChevronRight, Clock, Coins, EyeOff, Gamepad2, HandHeart, Lock, Pointer, Shirt, Sparkles, X } from "lucide-react";
 import { COOLDOWN_MS, NEEDS, type Need, type PetAction, type PetSnapshot } from "./sim/needs";
+import { GEAR, levelOf, todaySoFar, unlockedGear, type Bond, type Gear } from "./sim/bond";
+import { AllowanceGame } from "./play/AllowanceGame";
+
+export type PanelView = "main" | "diary" | "gear" | "game";
 
 // His panel, per the design council ruling of 2026-10-03
 // (_bmad-output/design-council/pet-panel-ruling-2026-10-03.md, P1–P20).
@@ -79,6 +83,14 @@ function place(anchor: DOMRect, panel: { width: number; height: number }): Place
 }
 
 type Props = {
+  view: PanelView;
+  onView: (view: PanelView) => void;
+  bond: Bond;
+  onToss: () => void;
+  onGameFinish: (won: boolean) => void;
+  onToggleGear: (item: Gear) => void;
+  pinned: boolean;
+  onTogglePin: () => void;
   open: boolean;
   sheet: boolean;
   anchor: HTMLElement | null;
@@ -96,6 +108,7 @@ type Props = {
 
 export function PetPanel(props: Props) {
   const { open, sheet, anchor, snapshot, now, stage, asleepUntil, line, onCare, onQuick, onHide, onClose, onSheetRect } = props;
+  const { view, onView, bond, onToss, onGameFinish, onToggleGear, pinned, onTogglePin } = props;
   const panel = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(false);
@@ -135,7 +148,7 @@ export function PetPanel(props: Props) {
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure);
     };
-  }, [open, mounted, sheet, anchor, onSheetRect]);
+  }, [open, mounted, sheet, anchor, onSheetRect, view]);
 
   // P16/P17: focus in on open, Escape, outside press, focus leaving.
   // Focus moves in once the panel is placed and visible; a panel still hidden
@@ -189,11 +202,50 @@ export function PetPanel(props: Props) {
       tabIndex={-1}
       id="cp-pet-panel"
     >
+      {view === "main" ? (
+        <MainView {...props} suggested={suggested} />
+      ) : view === "diary" ? (
+        <DiaryView bond={bond} onBack={() => onView("main")} />
+      ) : view === "gear" ? (
+        <GearView bond={bond} onBack={() => onView("main")} onToggle={onToggleGear} />
+      ) : (
+        <AllowanceGame onBack={() => onView("main")} onFinish={onGameFinish} />
+      )}
+
+      <footer className="cp-pet-panel-foot">
+        <span>Remembers you on this device</span>
+        <span className="cp-pet-foot-actions">
+          <button type="button" className="cp-pet-ghost" aria-pressed={pinned} onClick={onTogglePin}>
+            {pinned ? <PinOff size={14} strokeWidth={1.75} aria-hidden="true" /> : <Pin size={14} strokeWidth={1.75} aria-hidden="true" />}
+            {pinned ? "Unpin" : "Pin here"}
+          </button>
+          <button type="button" className="cp-pet-ghost" onClick={onHide}>
+            <EyeOff size={14} strokeWidth={1.75} aria-hidden="true" /> Hide
+          </button>
+        </span>
+      </footer>
+    </div>,
+    document.body,
+  );
+}
+
+type MainProps = Props & { suggested: Need | null };
+
+function MainView(props: MainProps) {
+  const { snapshot, now, stage, asleepUntil, line, onCare, onQuick, onClose, bond, onView, onToss, suggested } = props;
+  const level = levelOf(bond.xp);
+  const gearCount = unlockedGear(bond.xp).length;
+  return (
+    <>
       <header className="cp-pet-panel-head">
         <div>
-          <h2 id="cp-pet-title" className="cp-pet-title">???</h2>
+          <div className="cp-pet-title-row">
+            <h2 id="cp-pet-title" className="cp-pet-title">???</h2>
+            <span className="cp-pet-chip">{level.label}</span>
+          </div>
           <p className="cp-pet-meta">
             No name yet · {stage}
+            {bond.streak > 1 ? ` · ${bond.streak}-day streak` : ""}
             {asleepUntil ? ` · Asleep until ${asleepUntil}` : ""}
           </p>
         </div>
@@ -219,9 +271,9 @@ export function PetPanel(props: Props) {
               key={need}
               type="button"
               className={classes.join(" ")}
-              aria-disabled={wait > 0 ? "true" : undefined}
+              aria-disabled={wait > 0 && need !== "joy" ? "true" : undefined}
               aria-label={`${care.label}. ${NEED_NAME[need]}: ${wait > 0 ? `ready in ${minutes(wait)} minutes` : word}.`}
-              onClick={() => onCare(care.action)}
+              onClick={() => (need === "joy" ? onView("game") : onCare(care.action))}
             >
               <span className="cp-pet-tile-top">
                 {care.icon}
@@ -259,15 +311,115 @@ export function PetPanel(props: Props) {
         <button type="button" className="cp-pet-pill" onClick={() => onQuick("poke")}>
           <Pointer size={14} strokeWidth={1.75} aria-hidden="true" /> Poke
         </button>
+        <button type="button" className="cp-pet-pill" onClick={onToss}>
+          <Coins size={14} strokeWidth={1.75} aria-hidden="true" /> Toss a coin
+        </button>
       </div>
 
-      <footer className="cp-pet-panel-foot">
-        <span>Remembers you on this device</span>
-        <button type="button" className="cp-pet-ghost" onClick={onHide}>
-          <EyeOff size={14} strokeWidth={1.75} aria-hidden="true" /> Hide
+      <nav className="cp-pet-links" aria-label="More">
+        <button type="button" className="cp-pet-link" onClick={() => onView("diary")}>
+          <BookOpen size={16} strokeWidth={1.75} aria-hidden="true" />
+          <span>Diary</span>
+          <span className="cp-pet-link-meta">{bond.diary.length + (todaySoFar(bond) ? 1 : 0)}</span>
+          <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
         </button>
-      </footer>
-    </div>,
-    document.body,
+        <button type="button" className="cp-pet-link" onClick={() => onView("gear")}>
+          <Shirt size={16} strokeWidth={1.75} aria-hidden="true" />
+          <span>Gear</span>
+          <span className="cp-pet-link-meta">{gearCount} of {GEAR.length}</span>
+          <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      </nav>
+    </>
   );
 }
+
+function ViewHead({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <header className="cp-pet-view-head">
+      <button type="button" className="cp-pet-back" onClick={onBack} aria-label="Back">
+        <ChevronLeft size={16} strokeWidth={1.75} />
+      </button>
+      <h3 id="cp-pet-title">{title}</h3>
+    </header>
+  );
+}
+
+const DIARY_DATE = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+
+function diaryDate(day: string) {
+  const [y, m, d] = day.split("-").map(Number) as [number, number, number];
+  return DIARY_DATE.format(new Date(y, m - 1, d));
+}
+
+function DiaryView({ bond, onBack }: { bond: Bond; onBack: () => void }) {
+  const today = todaySoFar(bond);
+  const entries = [...(today ? [{ ...today, today: true }] : []), ...[...bond.diary].reverse().map((entry) => ({ ...entry, today: false }))];
+  return (
+    <>
+      <ViewHead title="Diary" onBack={onBack} />
+      {entries.length === 0 ? (
+        <p className="cp-pet-empty" id="cp-pet-line">nothing yet. come back tomorrow and there'll be a page.</p>
+      ) : (
+        <ol className="cp-pet-diary" id="cp-pet-line">
+          {entries.map((entry) => (
+            <li key={entry.day}>
+              <span className="cp-pet-diary-day">{entry.today ? "Today so far" : diaryDate(entry.day)}</span>
+              <p>{entry.text}</p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </>
+  );
+}
+
+function GearView({ bond, onBack, onToggle }: { bond: Bond; onBack: () => void; onToggle: (item: Gear) => void }) {
+  const level = levelOf(bond.xp);
+  const unlocked = unlockedGear(bond.xp);
+  const progress = level.next ? (bond.xp - level.fromXp) / (level.next.fromXp - level.fromXp) : 1;
+  return (
+    <>
+      <ViewHead title="Gear" onBack={onBack} />
+      <div className="cp-pet-level" id="cp-pet-line">
+        <div className="cp-pet-level-row">
+          <strong>{level.label}</strong>
+          <span>{level.next ? `${level.toNext} XP to ${level.next.label}` : "Max level"}</span>
+        </div>
+        <span className="cp-pet-meter" aria-hidden="true">
+          <span style={{ width: `${progress * 100}%` }} />
+        </span>
+        <p className="cp-pet-level-hint">Care, pats, squashed bugs and answered calls all count. Up to 40 XP a day.</p>
+      </div>
+      <ul className="cp-pet-gear">
+        {GEAR.map((entry) => {
+          const isUnlocked = unlocked.includes(entry.gear);
+          const on = bond.gearOn.includes(entry.gear);
+          const needs = LEVEL_LABEL[entry.unlock];
+          return (
+            <li key={entry.gear}>
+              <button
+                type="button"
+                className={`cp-pet-gear-item${on ? " is-on" : ""}`}
+                aria-pressed={isUnlocked ? on : undefined}
+                aria-disabled={isUnlocked ? undefined : "true"}
+                onClick={() => isUnlocked && onToggle(entry.gear)}
+              >
+                <span>{entry.label}</span>
+                <span className="cp-pet-gear-state">
+                  {isUnlocked ? (on ? "Wearing" : "Off") : (
+                    <>
+                      <Lock size={12} strokeWidth={1.75} aria-hidden="true" /> {needs}
+                    </>
+                  )}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
+}
+
+const LEVEL_LABEL: Record<string, string> = { regular: "Regular", friend: "Friend", best: "Best friend" };

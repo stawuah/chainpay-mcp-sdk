@@ -10,7 +10,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // `bound()`, which measures the layout viewport without the scrollbar and the
 // visual viewport on phones (pinch zoom, on-screen keyboard).
 
-export type RoamMode = "rest" | "edge" | "peek" | "perch" | "held";
+export type RoamMode = "rest" | "edge" | "peek" | "perch" | "held" | "pinned";
+
+/** Where the visitor pinned him, as fractions of the viewport so it survives resizes. */
+export type Pin = { fx: number; fy: number };
 
 export type RoamPosition = {
   x: number;
@@ -146,8 +149,21 @@ function pick(size: number): { position: RoamPosition; perch?: { element: HTMLEl
   return { position: restSpot(size) };
 }
 
-export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
-  const [position, setPosition] = useState<RoamPosition>(() => restSpot(size));
+export function pinAt(x: number, y: number): Pin {
+  const view = viewport();
+  return { fx: (x - view.left) / view.width, fy: (y - view.top) / view.height };
+}
+
+function pinnedSpot(pin: Pin, size: number): RoamPosition {
+  const view = viewport();
+  const spot = bound(view.left + pin.fx * view.width, view.top + pin.fy * view.height, size, view);
+  return { ...spot, mode: "pinned", side: "right", glide: true };
+}
+
+export function useRoamer({ size, roam, pin }: { size: number; roam: boolean; pin: Pin | null }) {
+  // Pinned: he stays put (and comes back there after a coin or a phone sheet).
+  const home = useCallback(() => (pin ? pinnedSpot(pin, size) : restSpot(size)), [pin, size]);
+  const [position, setPosition] = useState<RoamPosition>(() => (pin ? pinnedSpot(pin, size) : restSpot(size)));
   const perch = useRef<{ element: HTMLElement; offset: number } | null>(null);
   const heldUntil = useRef(0);
   const timer = useRef<number | undefined>(undefined);
@@ -160,20 +176,26 @@ export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
           schedule(4_000);
           return;
         }
+        if (pin) {
+          perch.current = null;
+          setPosition(home());
+          return;
+        }
         const next = roam ? pick(size) : { position: restSpot(size) };
         perch.current = next.perch ?? null;
         setPosition(next.position);
         schedule(8_000 + Math.random() * 12_000);
       }, delay);
     },
-    [roam, size],
+    [roam, size, pin, home],
   );
 
   useEffect(() => {
-    setPosition(restSpot(size));
-    schedule(roam ? 3_000 : 60_000);
+    perch.current = null;
+    setPosition(home());
+    if (!pin) schedule(roam ? 3_000 : 60_000);
     return () => window.clearTimeout(timer.current);
-  }, [roam, size, schedule]);
+  }, [roam, size, pin, home, schedule]);
 
   // Keep a perch glued to its heading while the page scrolls; leave once the
   // heading is gone.
@@ -198,6 +220,7 @@ export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
         // Window resized, zoomed, or moved to a monitor of a different size:
         // keep his current spot if it still fits, otherwise pull him back in.
         setPosition((previous) => {
+          if (previous.mode === "pinned") return { ...home(), glide: false };
           if (previous.mode === "peek") {
             const spot = bound(previous.side === "left" ? -Infinity : Infinity, previous.y, size);
             return { ...previous, ...spot, glide: false };
@@ -211,18 +234,27 @@ export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
       perch.current = null;
       setPosition(restSpot(size));
     };
+    // A pinned robot steps aside while you type, then goes back to his pin.
+    const undodge = () => {
+      if (!pin) return;
+      window.setTimeout(() => {
+        if (!isTypingTarget(document.activeElement)) setPosition(home());
+      }, 0);
+    };
     window.addEventListener("scroll", follow, { passive: true });
     window.addEventListener("resize", follow);
     window.visualViewport?.addEventListener("resize", follow);
     document.addEventListener("focusin", dodge);
+    document.addEventListener("focusout", undodge);
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("scroll", follow);
       window.removeEventListener("resize", follow);
       window.visualViewport?.removeEventListener("resize", follow);
       document.removeEventListener("focusin", dodge);
+      document.removeEventListener("focusout", undodge);
     };
-  }, [size]);
+  }, [size, pin, home]);
 
   const hold = useCallback(
     (x: number, y: number, glide = false) => {
@@ -234,9 +266,9 @@ export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
   );
 
   const release = useCallback(() => {
-    setPosition((previous) => ({ ...previous, mode: "rest", glide: true }));
-    schedule(15_000);
-  }, [schedule]);
+    setPosition((previous) => ({ ...previous, mode: pin ? "pinned" : "rest", glide: true }));
+    if (!pin) schedule(15_000);
+  }, [schedule, pin]);
 
   /** Stay put (perch included) until `resume`; used while his panel is open. */
   const pause = useCallback(() => {
@@ -247,16 +279,21 @@ export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
   const resume = useCallback(
     (delay: number) => {
       heldUntil.current = 0;
+      if (pin) {
+        window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => setPosition(home()), Math.min(delay, 1_500));
+        return;
+      }
       schedule(delay);
     },
-    [schedule],
+    [schedule, pin, home],
   );
 
   /** Put him back somewhere sensible, e.g. after he sat on the phone sheet. */
   const settle = useCallback(() => {
     perch.current = null;
-    setPosition(restSpot(size));
-  }, [size]);
+    setPosition(home());
+  }, [home]);
 
   return { position, hold, release, pause, resume, settle };
 }
