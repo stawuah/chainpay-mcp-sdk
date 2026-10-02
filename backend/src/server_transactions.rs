@@ -710,6 +710,7 @@ pub(super) fn batch_payment_requests(
                 .into(),
             ),
             x402: None,
+            payment_request: None,
         };
         payment_at(tx, &request, program, position)?;
         if requests.iter().any(|prior: &PaymentSubmissionRequest| {
@@ -972,6 +973,7 @@ pub(super) mod tests {
             amount: Some(10),
             token_program: Some("spl-token".into()),
             x402: None,
+            payment_request: None,
         };
         (tx, request, signer)
     }
@@ -2078,7 +2080,8 @@ pub(super) mod tests {
         };
 
         let accept = |tx: VersionedTransaction| owner(&tx, &wallet, DEFAULT_PROGRAM_ID).unwrap();
-        let reject = |tx: VersionedTransaction| assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
+        let reject =
+            |tx: VersionedTransaction| assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
         accept(owner_tx(vec![]));
         accept(owner_tx(vec![1]));
         accept(recipient_tx(vec![]));

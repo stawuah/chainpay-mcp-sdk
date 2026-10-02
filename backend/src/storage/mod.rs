@@ -15,6 +15,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::delivery::{DeliveryAttestationPut, DeliveryAttestationRecord};
+use crate::receipts::{ObservedPolicyRecord, ReceiptPolicyLimits, ReceiptRequestRecord};
 use crate::status::{
     ManagedSignerChallenge, ManagedSignerRecord, ManagedSignerStatus, PaymentRecord, PaymentStatus,
     SigningMode, TransactionRecord, X402PaymentRecord, X402PaymentStatus,
@@ -44,6 +45,8 @@ struct MemoryState {
     managed_signer_challenges: HashMap<String, ManagedSignerChallenge>,
     managed_signers: HashMap<String, ManagedSignerRecord>,
     delivery_attestations: HashMap<String, DeliveryAttestationRecord>,
+    receipt_requests: HashMap<String, ReceiptRequestRecord>,
+    observed_policies: HashMap<String, ObservedPolicyRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -918,6 +921,211 @@ impl StatusStore {
             }
         }
     }
+
+    /// Keep a signed request by receipt PDA. Written once: a later write for
+    /// the same receipt returns the stored row unchanged. The invoice hash is
+    /// a PDA seed, so a second, different request cannot match the receipt.
+    pub async fn put_receipt_request(
+        &self,
+        record: ReceiptRequestRecord,
+    ) -> Result<ReceiptRequestRecord, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                let key = receipt_key(&record.cluster, &record.program_id, &record.receipt_address);
+                Ok(state.receipt_requests.entry(key).or_insert(record).clone())
+            }
+            StorageBackend::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO receipt_requests (
+                        cluster, program_id, receipt_address, mandate, invoice_hash,
+                        merchant, canonical_payload, signature, stored_at_ms
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (cluster, program_id, receipt_address) DO NOTHING
+                    "#,
+                )
+                .bind(&record.cluster)
+                .bind(&record.program_id)
+                .bind(&record.receipt_address)
+                .bind(&record.mandate)
+                .bind(&record.invoice_hash)
+                .bind(&record.merchant)
+                .bind(&record.canonical_payload)
+                .bind(&record.signature)
+                .bind(to_i64(Some(record.stored_at_ms), "stored_at_ms")?)
+                .execute(pool)
+                .await?;
+                self.find_receipt_request(
+                    &record.cluster,
+                    &record.program_id,
+                    &record.receipt_address,
+                )
+                .await?
+                .ok_or_else(|| StorageError::InvalidValue {
+                    field: "receipt_request",
+                    value: record.receipt_address.clone(),
+                })
+            }
+        }
+    }
+
+    pub async fn find_receipt_request(
+        &self,
+        cluster: &str,
+        program_id: &str,
+        receipt_address: &str,
+    ) -> Result<Option<ReceiptRequestRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .receipt_requests
+                .get(&receipt_key(cluster, program_id, receipt_address))
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(
+                    r#"
+                    SELECT cluster, program_id, receipt_address, mandate, invoice_hash,
+                           merchant, canonical_payload, signature, stored_at_ms
+                    FROM receipt_requests
+                    WHERE cluster = $1 AND program_id = $2 AND receipt_address = $3
+                    "#,
+                )
+                .bind(cluster)
+                .bind(program_id)
+                .bind(receipt_address)
+                .fetch_optional(pool)
+                .await?;
+                row.map(|row| {
+                    Ok(ReceiptRequestRecord {
+                        cluster: row.try_get("cluster")?,
+                        program_id: row.try_get("program_id")?,
+                        receipt_address: row.try_get("receipt_address")?,
+                        mandate: row.try_get("mandate")?,
+                        invoice_hash: row.try_get("invoice_hash")?,
+                        merchant: row.try_get("merchant")?,
+                        canonical_payload: row.try_get("canonical_payload")?,
+                        signature: row.try_get("signature")?,
+                        stored_at_ms: from_i64(Some(row.try_get("stored_at_ms")?), "stored_at_ms")?
+                            .unwrap_or_default(),
+                    })
+                })
+                .transpose()
+            }
+        }
+    }
+
+    /// Keep the relay's first post-payment read of a mandate for one receipt.
+    /// Written once, so a later read with more payments counted never replaces
+    /// the observation closest to the payment.
+    pub async fn put_observed_policy(
+        &self,
+        record: ObservedPolicyRecord,
+    ) -> Result<ObservedPolicyRecord, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                let key = receipt_key(&record.cluster, &record.program_id, &record.receipt_address);
+                Ok(state.observed_policies.entry(key).or_insert(record).clone())
+            }
+            StorageBackend::Postgres(pool) => {
+                let limits = serde_json::to_value(&record.limits).map_err(|error| {
+                    StorageError::InvalidValue {
+                        field: "limits",
+                        value: error.to_string(),
+                    }
+                })?;
+                sqlx::query(
+                    r#"
+                    INSERT INTO observed_policies (
+                        cluster, program_id, receipt_address, mandate, limits,
+                        observed_at_slot, includes_later_payments, observed_at_ms
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (cluster, program_id, receipt_address) DO NOTHING
+                    "#,
+                )
+                .bind(&record.cluster)
+                .bind(&record.program_id)
+                .bind(&record.receipt_address)
+                .bind(&record.mandate)
+                .bind(Json(limits))
+                .bind(to_i64(Some(record.observed_at_slot), "observed_at_slot")?)
+                .bind(record.includes_later_payments)
+                .bind(to_i64(Some(record.observed_at_ms), "observed_at_ms")?)
+                .execute(pool)
+                .await?;
+                self.find_observed_policy(
+                    &record.cluster,
+                    &record.program_id,
+                    &record.receipt_address,
+                )
+                .await?
+                .ok_or_else(|| StorageError::InvalidValue {
+                    field: "observed_policy",
+                    value: record.receipt_address.clone(),
+                })
+            }
+        }
+    }
+
+    pub async fn find_observed_policy(
+        &self,
+        cluster: &str,
+        program_id: &str,
+        receipt_address: &str,
+    ) -> Result<Option<ObservedPolicyRecord>, StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .observed_policies
+                .get(&receipt_key(cluster, program_id, receipt_address))
+                .cloned()),
+            StorageBackend::Postgres(pool) => {
+                let row = sqlx::query(
+                    r#"
+                    SELECT cluster, program_id, receipt_address, mandate, limits,
+                           observed_at_slot, includes_later_payments, observed_at_ms
+                    FROM observed_policies
+                    WHERE cluster = $1 AND program_id = $2 AND receipt_address = $3
+                    "#,
+                )
+                .bind(cluster)
+                .bind(program_id)
+                .bind(receipt_address)
+                .fetch_optional(pool)
+                .await?;
+                row.map(|row| {
+                    let limits = row.try_get::<Json<serde_json::Value>, _>("limits")?.0;
+                    let limits: ReceiptPolicyLimits = serde_json::from_value(limits.clone())
+                        .map_err(|_| StorageError::InvalidValue {
+                            field: "limits",
+                            value: limits.to_string(),
+                        })?;
+                    Ok(ObservedPolicyRecord {
+                        cluster: row.try_get("cluster")?,
+                        program_id: row.try_get("program_id")?,
+                        receipt_address: row.try_get("receipt_address")?,
+                        mandate: row.try_get("mandate")?,
+                        limits,
+                        observed_at_slot: from_i64(
+                            Some(row.try_get("observed_at_slot")?),
+                            "observed_at_slot",
+                        )?
+                        .unwrap_or_default(),
+                        includes_later_payments: row.try_get("includes_later_payments")?,
+                        observed_at_ms: from_i64(
+                            Some(row.try_get("observed_at_ms")?),
+                            "observed_at_ms",
+                        )?
+                        .unwrap_or_default(),
+                    })
+                })
+                .transpose()
+            }
+        }
+    }
 }
 
 const PAYMENT_SELECT_BY_ID: &str = r#"
@@ -1224,6 +1432,10 @@ fn parse_u64(field: &'static str, value: String) -> Result<u64, StorageError> {
     value
         .parse()
         .map_err(|_| StorageError::InvalidValue { field, value })
+}
+
+fn receipt_key(cluster: &str, program_id: &str, receipt_address: &str) -> String {
+    format!("{cluster}:{program_id}:{receipt_address}")
 }
 
 fn delivery_key(record: &DeliveryAttestationRecord) -> String {

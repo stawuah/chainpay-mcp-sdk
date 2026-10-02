@@ -24,7 +24,7 @@ cargo test -p chainpay-backend
 ```
 
 Startup applies every bundled migration in `backend/migrations`, currently
-`0001` through `0008`. These change schema and remove obsolete simulation columns;
+`0001` through `0010`. These change schema and remove obsolete simulation columns;
 use a development database for local work. HTTP MCP must use the same database
 and starts after those tables exist. Normal startup requires PostgreSQL;
 in-memory storage is only for local tests.
@@ -71,7 +71,15 @@ Trusted seller identities are public configuration (see
 enters this service. A missing or invalid seller statement does not change Paid.
 The RPC proxy only forwards named read methods, bounds batches/history/body and
 response sizes, and restricts program discovery to ChainPay with owner/mandate
-filters (the asset registry uses its fixed account size).
+filters (the asset registry uses its fixed account size). Receipt discovery
+accepts both receipt sizes: 282 bytes, and 371 bytes for receipts that carry
+a policy snapshot.
+
+A payment whose receipt account already exists is refused before anything is
+reserved or sent, with HTTP 422 and `{"code":"DuplicateInvoice","error":"This
+invoice was already paid. Nothing new was submitted."}`. A simulation that
+reports the receipt account "already in use" is recorded with the same
+sentence.
 
 Private endpoints derive the principal from a verified bearer credential:
 
@@ -81,7 +89,19 @@ Private endpoints derive the principal from a verified bearer credential:
 - `/v1/payments` and `/v1/managed-payments`: owned mandate and explicit
   `execute_payment` permission, or `execute_x402_payment` for x402 submissions.
 - `/v1/payments/:id`, `/v1/receipts/:address`: owned/scoped mandate and
-  `get_payment` or `wait_for_payment` permission.
+  `get_payment` or `wait_for_payment` permission. The receipt response adds
+  `policy`: the limits beside the receipt, with `source` `on-chain` (the
+  receipt's own snapshot), `relay-observed` (read from the mandate by this
+  relay after the receipt finalized, never stored on Solana), or
+  `not-recorded`. A receipt the relay never relayed returns its mandate and
+  `policy` only.
+- `/v1/receipts/:address/request`: **owner wallet session only**; scoped
+  connections and other wallets are refused. Returns the merchant-signed
+  request whose SHA-256 is the receipt's invoice hash, once that receipt is
+  settled on chain. The relay keeps it when `/v1/payments` or
+  `/v1/managed-payments` carries an optional `payment_request` that is signed
+  by its merchant, hashes to `invoice_hash`, and names the payment's mint,
+  recipient and amount.
 - `/v1/x402-payments/proof`: `mandate`, idempotency key and
   `execute_x402_payment` permission are required.
 - `/v1/transactions/submit`: owner-only mandate create+exact delegate approval,
