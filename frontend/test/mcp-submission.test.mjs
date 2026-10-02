@@ -46,7 +46,7 @@ async function fixture(t, respond) {
     if (url.endsWith("/auth/session")) return Response.json({ token: "fixture-token", wallet: "fixture-owner", expires_at_ms: Date.now() + 60_000 });
     return respond(url, init, runtime);
   };
-  runtime.configureSession("https://chainpay-backend.onrender.com", "https://chainpay-mcp.onrender.com/mcp");
+  runtime.configureSession("https://chainpay-relay.vercel.app", "https://chainpay-mcp.vercel.app/mcp");
   runtime.setSessionWallet({ address: "fixture-owner", signMessage: async () => new Uint8Array(64) });
   await runtime.ensureSessionReady();
   return { ...runtime, calls };

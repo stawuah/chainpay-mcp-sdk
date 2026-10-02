@@ -37,15 +37,15 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Local development fallback. Deployed builds use the Render URLs from
+      // Local development fallback. Deployed builds use the configured service URLs from
       // frontend/.env.example or the production defaults in config/public.ts.
       "/api": {
-        target: "https://chainpay-backend.onrender.com",
+        target: "https://chainpay-relay.vercel.app",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
       "/rpc": {
-        target: "https://chainpay-backend.onrender.com",
+        target: "https://chainpay-relay.vercel.app",
         changeOrigin: true,
       },
     },

@@ -3,7 +3,7 @@ import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 
 type ToolDefinition = (typeof TOOL_DEFINITIONS)[number];
 
-const PRODUCT_APP_URL = (process.env.CHAINPAY_APP_URL ?? "https://chainpay-frontend.onrender.com").replace(/\/$/, "");
+const PRODUCT_APP_URL = (process.env.CHAINPAY_APP_URL ?? "https://chainpay-web-kappa.vercel.app").replace(/\/$/, "");
 
 function escapeHtml(value: string): string {
   return value
@@ -156,18 +156,18 @@ export function renderDocsHtml(): string {
     <meta name="theme-color" content="#0052ff" />
     <meta name="description" content="Connect an agent to ChainPay MCP. Inspect spending permissions, prepare payments, and read receipts on Solana Devnet." />
     <link rel="icon" href="/brand/chainpay-icon.svg" type="image/svg+xml" />
-    <link rel="canonical" href="https://chainpay-mcp.onrender.com/docs" />
+    <link rel="canonical" href="https://chainpay-mcp.vercel.app/docs" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="ChainPay" />
-    <meta property="og:url" content="https://chainpay-mcp.onrender.com/docs" />
+    <meta property="og:url" content="https://chainpay-mcp.vercel.app/docs" />
     <meta property="og:title" content="Connect an agent. Keep the limits." />
     <meta property="og:description" content="MCP tools to inspect spending permissions, prepare payments, and read receipts on Solana Devnet." />
-    <meta property="og:image" content="https://chainpay-mcp.onrender.com/og-image.png" />
+    <meta property="og:image" content="https://chainpay-mcp.vercel.app/og-image.png" />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:image" content="https://chainpay-mcp.onrender.com/og-image.png" />
+    <meta name="twitter:image" content="https://chainpay-mcp.vercel.app/og-image.png" />
     <meta name="twitter:title" content="Connect an agent. Keep the limits." />
     <meta name="twitter:description" content="MCP tools to inspect spending permissions, prepare payments, and read receipts on Solana Devnet." />
     <title>ChainPay MCP docs</title>

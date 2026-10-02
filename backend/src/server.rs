@@ -19,17 +19,17 @@ use std::{
 };
 
 use axum::{
-    Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{HeaderName, HeaderValue, Request, StatusCode, header},
+    http::{header, HeaderName, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
+    Json, Router,
 };
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use solana_transaction::versioned::VersionedTransaction;
 use thiserror::Error;
@@ -467,6 +467,18 @@ async fn auth_middleware(
     mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
+    if std::env::var("CHAINPAY_MAINTENANCE").as_deref() == Ok("true")
+        && request.uri().path() != "/healthz"
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "60")],
+            Json(
+                json!({"error":"ChainPay is undergoing maintenance. Retry after service resumes."}),
+            ),
+        )
+            .into_response();
+    }
     // Behind a reverse proxy the socket peer is the proxy for every caller, which
     // collapses per-peer rate limits into one shared bucket. Only consult
     // `X-Forwarded-For` when the deployment declares how many proxies sit in
@@ -476,7 +488,18 @@ async fn auth_middleware(
         .extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
         .map(|value| value.0.ip().to_string());
-    let peer = forwarded_client_ip(request.headers(), state.config.trusted_proxy_hops)
+    let vercel_peer = (std::env::var("VERCEL").as_deref() == Ok("1"))
+        .then(|| {
+            request
+                .headers()
+                .get("x-vercel-forwarded-for")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<IpAddr>().ok())
+                .map(|value| value.to_string())
+        })
+        .flatten();
+    let peer = vercel_peer
+        .or_else(|| forwarded_client_ip(request.headers(), state.config.trusted_proxy_hops))
         .or(socket_peer)
         .unwrap_or_else(|| "unknown-peer".into());
     request.headers_mut().insert(
@@ -2676,13 +2699,11 @@ mod tests {
         let state = BackendState::new(BackendConfig::from_env().unwrap(), StatusStore::in_memory())
             .unwrap();
         for _ in 0..600 {
-            assert!(
-                state
-                    .store
-                    .auth_rate("public-rpc", now_ms(), 600)
-                    .await
-                    .unwrap()
-            );
+            assert!(state
+                .store
+                .auth_rate("public-rpc", now_ms(), 600)
+                .await
+                .unwrap());
         }
         assert!(matches!(
             latest_blockhash(State(state)).await,

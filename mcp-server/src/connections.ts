@@ -1,3 +1,5 @@
+import { ConvexStorage } from "./convex-storage.js";
+import { parse as parseLossless } from "lossless-json";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import pg, { type Pool, type PoolClient } from "pg";
@@ -113,7 +115,9 @@ export class McpConnectionRegistry {
   private readonly inbox = new Map<string, MemoryInboxMessage>();
   private inboxSequence = 0;
 
-  constructor(private readonly pool?: Pool) {}
+  private readonly rates = new Map<string, { startedAt: number; count: number }>();
+
+  constructor(private readonly pool?: Pool, private readonly convex?: ConvexStorage) {}
 
   /** Test-only in-memory storage. HTTP production startup uses fromEnv(). */
   static inMemory(): McpConnectionRegistry {
@@ -121,6 +125,17 @@ export class McpConnectionRegistry {
   }
 
   static async fromEnv(): Promise<McpConnectionRegistry> {
+    if (process.env.CHAINPAY_STORAGE === "convex") {
+      const url = process.env.CHAINPAY_CONVEX_SITE_URL;
+      const secret = process.env.CHAINPAY_CONVEX_MCP_SECRET;
+      if (!url || !secret) throw new Error("Convex URL and MCP service credential are required");
+      const client = new ConvexStorage(url, secret);
+      await client.call("ping", {});
+      return new McpConnectionRegistry(undefined, client);
+    }
+    if ((process.env.CHAINPAY_STORAGE && process.env.CHAINPAY_STORAGE !== "postgres") || process.env.VERCEL === "1") {
+      throw new Error("CHAINPAY_STORAGE=convex is required on Vercel; unknown storage selection refused");
+    }
     const databaseUrl = process.env.DATABASE_URL?.trim();
     if (!databaseUrl) {
       throw new Error("DATABASE_URL is required; MCP persistence cannot fall back to memory");
@@ -162,6 +177,7 @@ export class McpConnectionRegistry {
       revokedAt: null,
     };
 
+    if (this.convex) return { connection: await this.convex.call<PublicMcpConnection>("mcp.register", { record }), token };
     if (this.pool) {
       const result = await this.pool.query<ConnectionRow>(
         `INSERT INTO agent_connections (
@@ -183,6 +199,7 @@ export class McpConnectionRegistry {
     const token = bearerToken(request);
     if (!token) return undefined;
     const hash = tokenHash(token);
+    if (this.convex) return (await this.convex.call<PublicMcpConnection | null>("mcp.identify", { hash })) ?? undefined;
     if (this.pool) {
       const result = await this.pool.query<ConnectionRow>(
         `${CONNECTION_SELECT}
@@ -201,6 +218,7 @@ export class McpConnectionRegistry {
     const hash = tokenHash(token);
     const now = new Date().toISOString();
 
+    if (this.convex) { await this.convex.call("mcp.observe", { hash, name: name ?? null, now }); return; }
     if (this.pool) {
       if (!name) {
         await this.pool.query(
@@ -225,6 +243,7 @@ export class McpConnectionRegistry {
 
   async list(wallet: string): Promise<PublicMcpConnection[]> {
     const normalized = wallet.trim();
+    if (this.convex) return this.convex.call<PublicMcpConnection[]>("mcp.list", { wallet: normalized });
     if (this.pool) {
       const result = await this.pool.query<ConnectionRow>(
         `${CONNECTION_SELECT}
@@ -243,6 +262,7 @@ export class McpConnectionRegistry {
   async revoke(wallet: string, id: string): Promise<boolean> {
     const normalized = wallet.trim();
     const now = new Date().toISOString();
+    if (this.convex) return this.convex.call<boolean>("mcp.revoke", { wallet: normalized, id, now });
     if (this.pool) {
       const result = await this.pool.query(
         `UPDATE agent_connections
@@ -269,6 +289,10 @@ export class McpConnectionRegistry {
       createdAt: new Date().toISOString(),
       sequence: ++this.inboxSequence,
     };
+    if (this.convex) {
+      const stored = await this.convex.call<StoredInboxMessage>("mcp.appendInboxMessage", { record: { id: record.id, wallet: normalized, role, content_json: JSON.stringify(content), createdAt: record.createdAt } });
+      return decodeInbox(stored);
+    }
     if (this.pool) {
       const result = await this.pool.query<InboxRow>(
         `INSERT INTO inbox_messages (message_id, wallet_address, role, content, created_at)
@@ -285,6 +309,7 @@ export class McpConnectionRegistry {
   async listInbox(wallet: string, limit = 30): Promise<PublicInboxMessage[]> {
     const normalized = wallet.trim();
     const boundedLimit = Math.max(1, Math.min(limit, 100));
+    if (this.convex) return (await this.convex.call<StoredInboxMessage[]>("mcp.listInbox", { wallet: normalized, limit: boundedLimit })).map(decodeInbox);
     if (this.pool) {
       const result = await this.pool.query<InboxRow>(
         `SELECT message_id, wallet_address, role, content, created_at
@@ -301,6 +326,18 @@ export class McpConnectionRegistry {
       .sort((left, right) => right.sequence - left.sequence)
       .slice(0, boundedLimit)
       .map((message) => this.publicMemoryInbox(message));
+  }
+
+  async rateLimit(key: string, now: number, limit: number, windowMs: number): Promise<boolean> {
+    if (this.convex) return this.convex.call<boolean>("mcp.rateLimit", { key, now: String(now), limit, windowMs });
+    // Local/test and temporary PostgreSQL rollback mode. Vercel requires Convex.
+    for (const [id, entry] of this.rates) if (now - entry.startedAt >= windowMs) this.rates.delete(id);
+    if (this.rates.size >= 10_000 && !this.rates.has(key)) return false;
+    const current = this.rates.get(key);
+    if (!current) { this.rates.set(key, { startedAt: now, count: 1 }); return true; }
+    if (current.count >= limit) return false;
+    current.count += 1;
+    return true;
   }
 
   private async observePostgres(client: PoolClient, hash: string, name: string, now: string): Promise<void> {
@@ -362,3 +399,14 @@ const CONNECTION_SELECT = `
   SELECT connection_id, wallet_address, agent_name, scope,
          created_at AS connected_at, last_seen_at, total_calls, tools_called
   FROM agent_connections`;
+
+type StoredInboxMessage = Omit<PublicInboxMessage, "content"> & { content_json: string };
+function decodeInbox(record: StoredInboxMessage): PublicInboxMessage {
+  const { content_json, ...rest } = record;
+  return { ...rest, content: parseLossless(content_json, undefined, value => {
+    const number = Number(value);
+    // Imported historical JSON can contain full-width integers. Preserve them
+    // as decimal strings in the public inbox instead of silently rounding.
+    return /^-?\d+$/.test(value) && !Number.isSafeInteger(number) ? value : number;
+  }) };
+}

@@ -653,3 +653,13 @@ ChainPay succeeds if the demo proves this:
 > A user can safely authorize an AI agent to make limited stablecoin payments on Solana Devnet, and the on-chain program enforces every payment rule before settlement.
 
 That is the project.
+
+## Approved hosting/storage delta — 2 October 2026
+
+Deploy the existing frontend, Axum relay, and MCP service on Vercel; replace
+PostgreSQL off-chain persistence with Convex. Preserve wallet authentication,
+exact amounts, on-chain policy, wire validation, receipt semantics, and recovery.
+Migrate existing records during a brief write pause; no realtime UI rewrite.
+This does not authorize payments or a mainnet transition. Existing service
+cutover requires the source records held by the upstream operator. See the
+[Vercel/Convex handoff](guides/vercel-convex-handoff.md).
