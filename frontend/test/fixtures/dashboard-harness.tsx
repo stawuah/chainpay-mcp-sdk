@@ -113,7 +113,12 @@ if (new URLSearchParams(location.search).has("ready")) {
 // Only visible when the dev server runs with VITE_CHAINPAY_CROSSMINT=true.
 const CROSSMINT = new URLSearchParams(location.search).has("crossmint");
 if (CROSSMINT) {
-  localStorage.setItem(`chainpay.ai-inbox.v1:${OWNER}`, JSON.stringify(crossmintInbox));
+  // Keep blocked metadata on an otherwise approvable request: a stage of
+  // "blocked" would hide the approval even if the Crossmint guard regressed.
+  const inbox = new URLSearchParams(location.search).has("crossmint-review")
+    ? crossmintInbox.map((item) => item.stage === "blocked" ? { ...item, stage: "waiting_for_approval" } : item)
+    : crossmintInbox;
+  localStorage.setItem(`chainpay.ai-inbox.v1:${OWNER}`, JSON.stringify(inbox));
 }
 
 if (CROSSMINT || new URLSearchParams(location.search).has("receipts")) {

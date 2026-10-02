@@ -4,6 +4,21 @@ Run commands in this guide from `frontend/`.
 
 Run the ordinary suite with `npm test`, and TypeScript/Vite checks with `npm run build`.
 
+## Crossmint request and receipt browser check
+
+Run `node test/crossmint-inbox.browser.mjs` with Playwright and Google Chrome
+installed. This runner starts and closes its own local Vite servers, testing both
+values of `VITE_CHAINPAY_CROSSMINT`; no separately running dev server is needed.
+It exercises the real dashboard at desktop and 390px widths with keyboard request
+expansion. Matching requests retain their approval control; mismatched, closed,
+and already-paid requests do not, even when their stored stage still requests
+approval. Completed, waiting, and refunded seller reports reach the loaded receipt
+only with the flag enabled, preserving the exact payment and Allowed/Paid stamps.
+
+External requests and local API/RPC proxy routes are blocked. The dashboard
+harness supplies inert account reads and no signing wallet. These checks prove
+rendering and approval gating, not live Crossmint fulfillment or settlement.
+
 ## Payment submission browser check
 
 With the frontend dev server on port 5189, run
