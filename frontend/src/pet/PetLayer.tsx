@@ -1,32 +1,62 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { isNight, moodOf, NEEDS, stageFor, type Mood, type Need, type PetAction } from "./sim/needs";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { isNight, moodOf, NIGHT_END_UTC, stageFor, type Mood, type PetAction } from "./sim/needs";
 import { petStore, usePet, type Reaction } from "./store";
 import { useRoamer } from "./roam/roamer";
 import { RobotStill } from "./RobotStill";
+import { PetPanel } from "./PetPanel";
 import type { Expression, Motion } from "./RobotModel";
 import "./pet.css";
 
 const RobotCanvas = lazy(() => import("./RobotCanvas"));
 
+// Copy per the council ruling, P6/P7: he speaks lowercase, no exclamation marks.
 const LINES: Record<Mood, string> = {
   happy: "life's good. thanks for stopping by.",
   okay: "just floating around. you?",
-  meh: "could use a snack, not gonna lie.",
+  meh: "could use some attention, not gonna lie.",
   low: "low power… someone plug me in?",
-  asleep: "zzz. it's night in UTC.",
+  asleep: "zzz. dreaming in UTC.",
   grumpy: "i was SLEEPING.",
 };
 
-const REACTION_LINES: Partial<Record<Reaction["kind"], string>> = {
-  eat: "nom. battery up.",
-  spin: "wheee",
-  shake: "squeaky clean.",
-  happy: "^^",
-  surprised: "hey!",
-  grumpy: "i was SLEEPING.",
+const DONE_LINES: Record<PetAction, string> = {
+  feed: "nom. battery up.",
+  play: "wheee.",
+  clean: "squeaky clean.",
+  pet: "hehe.",
+  poke: "hey.",
 };
 
-const NEED_LABEL: Record<Need, string> = { battery: "Battery", joy: "Joy", clean: "Clean" };
+const COOLING_LINES: Partial<Record<PetAction, (m: number) => string>> = {
+  feed: (m) => `still full. back in ${m}m.`,
+  play: (m) => `need a breather. ${m}m.`,
+  clean: (m) => `already shiny. ${m}m.`,
+};
+
+const FIRST_LINE = "oh hi. i'm new here. no name yet.";
+const MET_KEY = "chainpay.pet.met";
+const SAY_MS = 4_000;
+const DAY = 86_400_000;
+
+function firstMeeting(): boolean {
+  try {
+    if (window.localStorage.getItem(MET_KEY)) return false;
+    window.localStorage.setItem(MET_KEY, "1");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Next 06:00 UTC, in the visitor's own clock. */
+function wakeTime(now: number) {
+  const wake = new Date(now);
+  wake.setUTCHours(NIGHT_END_UTC, 0, 0, 0);
+  if (wake.getTime() <= now) wake.setUTCDate(wake.getUTCDate() + 1);
+  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(wake);
+}
+
+const capitalize = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 
 function hasWebGL(): boolean {
   try {
@@ -66,21 +96,22 @@ function motionFor(reaction: Reaction | null, now: number): Motion {
   return "none";
 }
 
-function minutes(ms: number) {
-  return Math.max(1, Math.ceil(ms / 60_000));
-}
+const minutes = (ms: number) => Math.max(1, Math.ceil(ms / 60_000));
 
-export default function PetLayer({ onHide }: { onHide: () => void }) {
+export default function PetLayer({ onHide, routeKey }: { onHide: () => void; routeKey: string }) {
   const { snapshot, reaction } = usePet();
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const narrow = useMedia("(max-width: 600px)");
+  const sheet = useMedia("(max-width: 600px), (max-height: 520px)");
   const webgl = useMemo(hasWebGL, []);
   const size = narrow ? 96 : 140;
-  const { position, hold, release } = useRoamer({ size, roam: !reducedMotion && !narrow });
+  const { position, hold, release, pause, resume, settle } = useRoamer({ size, roam: !reducedMotion && !narrow });
   const [open, setOpen] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  const [said, setSaid] = useState<{ text: string; at: number } | null>(null);
   const [look, setLook] = useState({ x: 0, y: 0 });
   const [clock, setClock] = useState(() => Date.now());
+  const body = useRef<HTMLButtonElement>(null);
+  const satOnSheet = useRef(false);
   const drag = useRef<{ startX: number; startY: number; dx: number; dy: number; moved: boolean } | null>(null);
 
   // Re-render shortly after a reaction so the face settles back.
@@ -90,6 +121,20 @@ export default function PetLayer({ onHide }: { onHide: () => void }) {
     const timer = window.setTimeout(() => setClock(Date.now()), 1_600);
     return () => window.clearTimeout(timer);
   }, [reaction]);
+
+  // Spoken lines last four seconds, then his mood line comes back.
+  useEffect(() => {
+    if (!said) return;
+    const timer = window.setTimeout(() => setSaid(null), SAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [said]);
+
+  // Cooldown countdowns tick once a minute while the panel is open.
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [open]);
 
   // Eyes follow the pointer, measured from his own centre.
   useEffect(() => {
@@ -113,17 +158,63 @@ export default function PetLayer({ onHide }: { onHide: () => void }) {
     };
   }, [position.x, position.y, size, reducedMotion]);
 
+  const close = useCallback(
+    (returnFocus: boolean) => {
+      setOpen(false);
+      if (satOnSheet.current) {
+        satOnSheet.current = false;
+        settle();
+      }
+      resume(1_500);
+      if (returnFocus) body.current?.focus({ preventScroll: true });
+    },
+    [resume, settle],
+  );
+
+  // A new page closes the panel.
+  const firstRoute = useRef(routeKey);
+  useEffect(() => {
+    if (firstRoute.current === routeKey) return;
+    firstRoute.current = routeKey;
+    close(false);
+  }, [routeKey, close]);
+
+  // P15: on phones, if he overlaps the sheet he hops up and sits on it.
+  const onSheetRect = useCallback(
+    (rect: DOMRect | null) => {
+      if (!rect || !body.current) return;
+      const me = body.current.getBoundingClientRect();
+      const overlap = me.bottom > rect.top && me.top < rect.bottom && me.right > rect.left && me.left < rect.right;
+      if (!overlap) return;
+      satOnSheet.current = true;
+      hold(rect.right - size - 8, rect.top - size + 20, true);
+    },
+    [hold, size],
+  );
+
   const now = clock;
   const mood = moodOf(snapshot, now);
   const expression = expressionFor(mood, reaction, now);
   const motion = motionFor(reaction, now);
-  const fresh = reaction && now - reaction.at < 1_500 ? REACTION_LINES[reaction.kind] : undefined;
-  const line = note ?? fresh ?? LINES[mood];
+  const line = said && now - said.at < SAY_MS + 100 ? said.text : LINES[mood];
   const stage = stageFor(snapshot.bornAt, now);
+  const day = Math.floor((now - snapshot.bornAt) / DAY) + 1;
+
+  const say = (text: string) => {
+    const at = Date.now();
+    setClock(at);
+    setSaid({ text, at });
+  };
 
   const act = (action: PetAction) => {
+    const wasAsleep = moodOf(petStore.get().snapshot, Date.now()) === "asleep";
     const result = petStore.act(action);
-    setNote(result.ok ? null : `already did that. try again in ${minutes(result.retryMs ?? 0)}m.`);
+    if (!result.ok) {
+      const cooling = COOLING_LINES[action];
+      if (cooling) say(cooling(minutes(result.retryMs ?? 0)));
+      return;
+    }
+    say(action === "poke" && wasAsleep ? LINES.grumpy : DONE_LINES[action]);
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -147,88 +238,75 @@ export default function PetLayer({ onHide }: { onHide: () => void }) {
   const onPointerUp = () => {
     const current = drag.current;
     drag.current = null;
-    if (current?.moved) {
-      release();
-      return;
-    }
+    if (current?.moved) release();
   };
   const onClick = () => {
     // A drag ends in a click too; only a still press counts as a pat.
-    if (position.mode === "held") return;
-    act("pet");
-    setOpen((value) => !value);
+    if (position.mode === "held" && !open) return;
+    if (open) {
+      petStore.act("pet");
+      close(false);
+      return;
+    }
+    pause();
+    setOpen(true);
+    const result = petStore.act("pet");
+    if (firstMeeting()) say(FIRST_LINE);
+    else if (result.ok) say(DONE_LINES.pet);
   };
 
   const flip = position.mode === "peek" && position.side === "left";
-  const bubbleBelow = position.y < 220;
-  const bubbleLeft = position.x > window.innerWidth / 2;
 
   return (
-    <div
-      className={`cp-pet${position.glide ? " is-gliding" : ""}${mood === "low" ? " is-low" : ""}${mood === "asleep" ? " is-asleep" : ""}`}
-      style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)`, width: size, height: size }}
-      data-mode={position.mode}
-      data-stage={stage}
-    >
-      <button
-        type="button"
-        className="cp-pet-body"
-        aria-label="ChainPay robot. Pat him to say hi."
-        aria-expanded={open}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onClick={onClick}
-        style={flip ? { transform: "scaleX(-1)" } : undefined}
-      >
-        {webgl ? (
-          <Suspense fallback={<RobotStill expression={expression} />}>
-            <RobotCanvas expression={expression} motion={motion} look={look} animate={!reducedMotion} />
-          </Suspense>
-        ) : (
-          <RobotStill expression={expression} />
-        )}
-        {mood === "asleep" ? <span className="cp-pet-zzz" aria-hidden="true">z z z</span> : null}
-      </button>
-
+    <>
       <div
-        className={`cp-pet-bubble${open ? " is-open" : ""}${bubbleBelow ? " is-below" : ""}${bubbleLeft ? " is-left" : ""}`}
-        role="group"
-        aria-label="ChainPay robot"
-        hidden={!open}
+        className={`cp-pet${position.glide ? " is-gliding" : ""}${mood === "low" ? " is-low" : ""}${mood === "asleep" ? " is-asleep" : ""}`}
+        style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)`, width: size, height: size }}
+        data-mode={position.mode}
+        data-stage={stage}
       >
-        <p className="cp-pet-name">
-          <strong>???</strong> <span>no name yet · {stage}</span>
-        </p>
-        <p className="cp-pet-line" aria-live="polite">{line}</p>
-        <ul className="cp-pet-needs">
-          {NEEDS.map((need) => (
-            <li key={need}>
-              <span>{NEED_LABEL[need]}</span>
-              <span
-                className={`cp-pet-bar${snapshot.needs[need] < 25 ? " is-low" : ""}`}
-                role="meter"
-                aria-label={NEED_LABEL[need]}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(snapshot.needs[need])}
-              >
-                <span style={{ width: `${snapshot.needs[need]}%` }} />
-              </span>
-            </li>
-          ))}
-        </ul>
-        <div className="cp-pet-actions">
-          <button type="button" onClick={() => act("feed")}>Charge</button>
-          <button type="button" onClick={() => act("play")}>Play</button>
-          <button type="button" onClick={() => act("clean")}>Polish</button>
-          <button type="button" onClick={() => act("poke")}>Poke</button>
-        </div>
-        <p className="cp-pet-foot">
-          <span>{isNight(now) ? "night mode · " : ""}he remembers you on this device</span>
-          <button type="button" className="cp-pet-hide" onClick={onHide}>Hide</button>
-        </p>
+        <button
+          ref={body}
+          type="button"
+          className="cp-pet-body"
+          aria-label="ChainPay robot"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={open ? "cp-pet-panel" : undefined}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onClick={onClick}
+          style={flip ? { transform: "scaleX(-1)" } : undefined}
+        >
+          {webgl ? (
+            <Suspense fallback={<RobotStill expression={expression} />}>
+              <RobotCanvas expression={expression} motion={motion} look={look} animate={!reducedMotion} />
+            </Suspense>
+          ) : (
+            <RobotStill expression={expression} />
+          )}
+          {mood === "asleep" ? <span className="cp-pet-zzz" aria-hidden="true">z z z</span> : null}
+        </button>
       </div>
-    </div>
+      <PetPanel
+        open={open}
+        sheet={sheet}
+        anchor={body.current}
+        snapshot={snapshot}
+        now={now}
+        stage={`${capitalize(stage)} · day ${day}`}
+        asleepUntil={isNight(now) && mood !== "grumpy" ? wakeTime(now) : null}
+        line={line}
+        onCare={act}
+        onQuick={act}
+        onHide={() => {
+          close(false);
+          onHide();
+        }}
+        onClose={close}
+        onSheetRect={onSheetRect}
+      />
+    </>
   );
 }

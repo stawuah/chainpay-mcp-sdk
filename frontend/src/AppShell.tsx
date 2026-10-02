@@ -107,7 +107,7 @@ function Shell() {
 
 function Pet() {
   const { currentRoute } = useRoute();
-  return <PetMount routeKind={currentRoute.kind} />;
+  return <PetMount routeKind={currentRoute.kind} routeKey={JSON.stringify(currentRoute)} />;
 }
 
 export default function AppShell() {

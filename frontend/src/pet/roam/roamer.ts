@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // Where the robot hangs out. He picks a new spot every 8 to 20 seconds: perched
-// on a heading marked `data-pet-perch`, peeking in from a side edge, wandering
+// on a heading marked `data-pet-perch`, leaning in from a side edge, wandering
 // along the bottom, or resting in the corner. He gets out of the way of
 // anything you are typing into and of open dialogs.
+//
+// He always stays whole and inside the visible part of the browser window,
+// whatever monitor it is on or however it is resized: every spot passes through
+// `bound()`, which measures the layout viewport without the scrollbar and the
+// visual viewport on phones (pinch zoom, on-screen keyboard).
 
 export type RoamMode = "rest" | "edge" | "peek" | "perch" | "held";
 
@@ -11,7 +16,7 @@ export type RoamPosition = {
   x: number;
   y: number;
   mode: RoamMode;
-  /** Peeking from the left edge mirrors him. */
+  /** At the left edge he faces right, into the page. */
   side: "left" | "right";
   /** Whether the move should animate (false while tracking scroll or a drag). */
   glide: boolean;
@@ -19,6 +24,43 @@ export type RoamPosition = {
 
 const NAV_CLEARANCE = 88;
 const MARGIN = 16;
+
+type Viewport = { left: number; top: number; width: number; height: number };
+
+/** The area he may occupy, in the fixed-position coordinate space. */
+export function viewport(): Viewport {
+  const root = document.documentElement;
+  // clientWidth excludes a classic scrollbar; innerWidth would put him under it.
+  let width = root.clientWidth || window.innerWidth;
+  let height = root.clientHeight || window.innerHeight;
+  let left = 0;
+  let top = 0;
+  const visual = window.visualViewport;
+  if (visual) {
+    left = visual.offsetLeft;
+    top = visual.offsetTop;
+    width = Math.min(width, visual.width);
+    height = Math.min(height, visual.height);
+  }
+  return { left, top, width, height };
+}
+
+/** Clamp a top-left position so the whole robot is on screen with a margin. */
+export function bound(x: number, y: number, size: number, view: Viewport = viewport()) {
+  const maxX = view.left + view.width - size - MARGIN;
+  const maxY = view.top + view.height - size - MARGIN;
+  const minX = view.left + MARGIN;
+  const minY = view.top + MARGIN;
+  return {
+    // If the window is narrower than the robot plus margins, centre him.
+    x: maxX < minX ? view.left + (view.width - size) / 2 : Math.min(Math.max(x, minX), maxX),
+    y: maxY < minY ? view.top + (view.height - size) / 2 : Math.min(Math.max(y, minY), maxY),
+  };
+}
+
+function within(position: RoamPosition, size: number): RoamPosition {
+  return { ...position, ...bound(position.x, position.y, size) };
+}
 
 function isTypingTarget(element: Element | null): boolean {
   if (!element) return false;
@@ -39,12 +81,12 @@ function overlaps(a: DOMRect, x: number, y: number, size: number) {
 }
 
 function restSpot(size: number): RoamPosition {
-  const x = window.innerWidth - size - MARGIN;
-  const y = window.innerHeight - size - MARGIN;
+  const view = viewport();
+  const { x, y } = bound(Infinity, Infinity, size, view);
   const focused = document.activeElement;
   if (isTypingTarget(focused) && focused) {
     const rect = focused.getBoundingClientRect();
-    if (overlaps(rect, x, y, size)) return { x: MARGIN, y, mode: "rest", side: "right", glide: true };
+    if (overlaps(rect, x, y, size)) return { ...bound(-Infinity, y, size, view), mode: "rest", side: "right", glide: true };
   }
   return { x, y, mode: "rest", side: "right", glide: true };
 }
@@ -52,7 +94,7 @@ function restSpot(size: number): RoamPosition {
 function perchTargets(size: number): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>("[data-pet-perch]")].filter((element) => {
     const rect = perchRect(element);
-    return rect.width > size && rect.top > NAV_CLEARANCE + size && rect.top < window.innerHeight - MARGIN;
+    return rect.width > size && rect.top > NAV_CLEARANCE + size && rect.top < viewport().height - MARGIN;
   });
 }
 
@@ -74,15 +116,10 @@ function perchRect(element: HTMLElement): DOMRect {
 
 function perchSpot(element: HTMLElement, size: number, offset: number): RoamPosition {
   const rect = perchRect(element);
-  const span = Math.max(0, Math.min(rect.width, window.innerWidth - rect.left - MARGIN) - size);
-  return {
-    x: rect.left + span * offset,
-    // Sit on the line: his body overlaps the top of the heading a little.
-    y: rect.top - size * 0.86,
-    mode: "perch",
-    side: "right",
-    glide: true,
-  };
+  const span = Math.max(0, rect.width - size);
+  // Sit on the line: his body overlaps the top of the heading a little.
+  const { x, y } = bound(rect.left + span * offset, rect.top - size * 0.86, size);
+  return { x, y, mode: "perch", side: "right", glide: true };
 }
 
 function pick(size: number): { position: RoamPosition; perch?: { element: HTMLElement; offset: number } } {
@@ -94,16 +131,17 @@ function pick(size: number): { position: RoamPosition; perch?: { element: HTMLEl
     const offset = Math.random();
     return { position: perchSpot(element, size, offset), perch: { element, offset } };
   }
+  const view = viewport();
   if (roll < 0.65) {
+    // Lean in against a side edge, fully on screen, facing into the page.
     const side = Math.random() < 0.5 ? "left" : "right";
-    const y = NAV_CLEARANCE + Math.random() * Math.max(0, window.innerHeight - NAV_CLEARANCE - size * 1.5);
-    // Half of him stays off-screen.
-    const x = side === "left" ? -size * 0.45 : window.innerWidth - size * 0.55;
-    return { position: { x, y, mode: "peek", side, glide: true } };
+    const y = NAV_CLEARANCE + Math.random() * Math.max(0, view.height - NAV_CLEARANCE - size);
+    const spot = bound(side === "left" ? -Infinity : Infinity, y, size, view);
+    return { position: { ...spot, mode: "peek", side, glide: true } };
   }
   if (roll < 0.9) {
-    const x = MARGIN + Math.random() * Math.max(0, window.innerWidth - size - MARGIN * 2);
-    return { position: { x, y: window.innerHeight - size - MARGIN, mode: "edge", side: "right", glide: true } };
+    const spot = bound(view.left + Math.random() * view.width, Infinity, size, view);
+    return { position: { ...spot, mode: "edge", side: "right", glide: true } };
   }
   return { position: restSpot(size) };
 }
@@ -149,7 +187,7 @@ export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
         const current = perch.current;
         if (current) {
           const rect = perchRect(current.element);
-          if (rect.top < NAV_CLEARANCE + size || rect.top > window.innerHeight) {
+          if (rect.top < NAV_CLEARANCE + size || rect.top > viewport().height) {
             perch.current = null;
             setPosition(restSpot(size));
             return;
@@ -157,7 +195,15 @@ export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
           setPosition({ ...perchSpot(current.element, size, current.offset), glide: false });
           return;
         }
-        setPosition((previous) => (previous.mode === "held" ? previous : clampToViewport(previous, size)));
+        // Window resized, zoomed, or moved to a monitor of a different size:
+        // keep his current spot if it still fits, otherwise pull him back in.
+        setPosition((previous) => {
+          if (previous.mode === "peek") {
+            const spot = bound(previous.side === "left" ? -Infinity : Infinity, previous.y, size);
+            return { ...previous, ...spot, glide: false };
+          }
+          return { ...within(previous, size), glide: false };
+        });
       });
     };
     const dodge = () => {
@@ -167,20 +213,22 @@ export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
     };
     window.addEventListener("scroll", follow, { passive: true });
     window.addEventListener("resize", follow);
+    window.visualViewport?.addEventListener("resize", follow);
     document.addEventListener("focusin", dodge);
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("scroll", follow);
       window.removeEventListener("resize", follow);
+      window.visualViewport?.removeEventListener("resize", follow);
       document.removeEventListener("focusin", dodge);
     };
   }, [size]);
 
   const hold = useCallback(
-    (x: number, y: number) => {
+    (x: number, y: number, glide = false) => {
       perch.current = null;
-      heldUntil.current = Date.now() + 15_000;
-      setPosition(clampToViewport({ x, y, mode: "held", side: "right", glide: false }, size));
+      heldUntil.current = Math.max(heldUntil.current, Date.now() + 15_000);
+      setPosition(within({ x, y, mode: "held", side: "right", glide }, size));
     },
     [size],
   );
@@ -190,18 +238,25 @@ export function useRoamer({ size, roam }: { size: number; roam: boolean }) {
     schedule(15_000);
   }, [schedule]);
 
-  return { position, hold, release };
-}
+  /** Stay put (perch included) until `resume`; used while his panel is open. */
+  const pause = useCallback(() => {
+    heldUntil.current = Infinity;
+    window.clearTimeout(timer.current);
+  }, []);
 
-function clampToViewport(position: RoamPosition, size: number): RoamPosition {
-  if (position.mode === "peek") {
-    const x = position.side === "left" ? -size * 0.45 : window.innerWidth - size * 0.55;
-    return { ...position, x, glide: false };
-  }
-  return {
-    ...position,
-    x: Math.min(Math.max(position.x, 0), window.innerWidth - size),
-    y: Math.min(Math.max(position.y, 0), window.innerHeight - size),
-    glide: false,
-  };
+  const resume = useCallback(
+    (delay: number) => {
+      heldUntil.current = 0;
+      schedule(delay);
+    },
+    [schedule],
+  );
+
+  /** Put him back somewhere sensible, e.g. after he sat on the phone sheet. */
+  const settle = useCallback(() => {
+    perch.current = null;
+    setPosition(restSpot(size));
+  }, [size]);
+
+  return { position, hold, release, pause, resume, settle };
 }

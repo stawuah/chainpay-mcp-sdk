@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Bot } from "lucide-react";
 
 // The only pet module on the every-route path. It stays tiny: it waits for the
 // page to finish loading and go idle, then pulls in the pet chunk (and three.js
@@ -45,9 +46,18 @@ function whenIdle(callback: () => void): () => void {
   };
 }
 
-export function PetMount({ routeKind }: { routeKind: string }) {
+export function PetMount({ routeKind, routeKey }: { routeKind: string; routeKey: string }) {
   const [ready, setReady] = useState(false);
   const [hidden, setHidden] = useState(readHidden);
+  // Hiding him from his panel moves focus to the button that brings him back,
+  // so keyboard users are not dropped onto <body>.
+  const focusRestore = useRef(false);
+  const restore = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!hidden || !focusRestore.current) return;
+    focusRestore.current = false;
+    restore.current?.focus();
+  }, [hidden]);
 
   useEffect(() => {
     if (DISABLED) return;
@@ -60,30 +70,35 @@ export function PetMount({ routeKind }: { routeKind: string }) {
   if (hidden) {
     return (
       <button
+        ref={restore}
         type="button"
         className="cp-pet-return"
         onClick={() => {
           writeHidden(false);
           setHidden(false);
         }}
-        aria-label="Bring the ChainPay robot back"
+        aria-label="Bring the robot back"
+        title="Bring the robot back"
         style={{
           position: "fixed",
           right: 16,
-          bottom: 16,
-          zIndex: 60,
-          width: 36,
-          height: 36,
-          border: "1px solid #dbe5ff",
-          borderRadius: 18,
+          bottom: "calc(16px + env(safe-area-inset-bottom))",
+          // pet.css may not be loaded yet when he starts hidden, hence the fallback.
+          zIndex: "var(--z-pet, 50)",
+          display: "grid",
+          placeItems: "center",
+          width: 40,
+          height: 40,
+          padding: 0,
+          border: 0,
+          borderRadius: 100,
           background: "#fff",
-          color: "#0052ff",
-          font: "700 13px/1 system-ui, sans-serif",
-          boxShadow: "0 8px 20px -12px rgb(20 33 61 / 0.5)",
+          color: "#0a0b0d",
+          boxShadow: "0 0 0 1px rgba(10,11,13,.06), 0 2px 4px rgba(10,11,13,.04), 0 18px 48px -16px rgba(20,33,61,.28)",
           cursor: "pointer",
         }}
       >
-        ••
+        <Bot size={18} strokeWidth={1.75} aria-hidden="true" />
       </button>
     );
   }
@@ -91,7 +106,9 @@ export function PetMount({ routeKind }: { routeKind: string }) {
   return (
     <Suspense fallback={null}>
       <PetLayer
+        routeKey={routeKey}
         onHide={() => {
+          focusRestore.current = true;
           writeHidden(true);
           setHidden(true);
         }}
