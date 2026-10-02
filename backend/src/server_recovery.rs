@@ -127,6 +127,10 @@ pub(super) async fn reserve_payment(
         Some(r) => r,
         None => serde_json::from_value(initial).map_err(|_| conflict())?,
     };
+    // Bind the immutable payment intent first. Otherwise simultaneous requests
+    // reusing one key for different orders could reserve both order IDs before
+    // one loses the payment claim, permanently stranding an unpaid order.
+    reserve_crossmint_order(state, principal, request).await?;
     Ok((won, existing))
 }
 fn deterministic_failure(error: &RpcError) -> bool {
@@ -623,6 +627,7 @@ pub(super) async fn recover_payment(
         )
         .await?;
         validate_live_payment(&state, &request).await?;
+        reserve_crossmint_order(&state, &principal, &request).await?;
         if can_resubmit(&state, &signature, &tx).await? {
             if state
                 .rpc
@@ -823,41 +828,357 @@ mod tests {
         (state, principal, request)
     }
 
-    #[tokio::test]
-    async fn a_crossmint_order_is_not_paid_twice_across_mandates() {
-        let (state, principal, mut first) = fixture();
-        let order = CrossmintPaymentMetadata {
+    fn crossmint_metadata() -> CrossmintPaymentMetadata {
+        CrossmintPaymentMetadata {
             order_id: "order_once".into(),
             order_url: None,
-            terms: json!({"amount":"10","mint":"fixture"}),
+            terms: json!({"amount":"10","mint":"fixture","phase":"payment"}),
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_crossmint_operations_reserve_exactly_one_order() {
+        let (state, principal, mut first) = fixture();
+        first.crossmint = Some(crossmint_metadata());
+        let mut second = first.clone();
+        second.idempotency_key = format!("{}:second", principal.wallet);
+        second.mandate = random_hex_32().unwrap();
+        let (one, two) = tokio::join!(
+            reserve_crossmint_order(&state, &principal, &first),
+            reserve_crossmint_order(&state, &principal, &second),
+        );
+        assert_ne!(one.is_ok(), two.is_ok());
+        let (winner, loser) = if one.is_ok() {
+            (&first, &second)
+        } else {
+            (&second, &first)
         };
-        first.crossmint = Some(order.clone());
-        refuse_paid_crossmint_order(&state, &first).await.unwrap();
-        let mut record = initial(&first, SigningMode::Human).unwrap();
-        record.status = PaymentStatus::Submitted;
-        persist_payment(&state, &record, connector_metadata(&first))
+        // Reservation itself protects the order, even before any payment row exists.
+        reserve_crossmint_order(&state, &principal, winner)
             .await
             .unwrap();
-
-        // Retrying the same operation is a resume, not a second payment.
-        refuse_paid_crossmint_order(&state, &first).await.unwrap();
-
-        // A new operation for the same order, say from another mandate, is refused.
-        let mut second = first.clone();
-        second.idempotency_key = format!("{}:{}", principal.wallet, random_hex_32().unwrap());
         assert!(matches!(
-            refuse_paid_crossmint_order(&state, &second).await,
+            reserve_crossmint_order(&state, &principal, loser).await,
             Err(ApiError::Conflict(_))
         ));
-
-        // A failed attempt leaves the order owing, so it may be paid again.
+        let mut record = initial(winner, SigningMode::Human).unwrap();
         record.status = PaymentStatus::Failed;
-        record.updated_at_ms += 10;
+        persist_payment(&state, &record, connector_metadata(winner))
+            .await
+            .unwrap();
+        // A failure label never releases a claim into a new payment operation.
+        assert!(matches!(
+            reserve_crossmint_order(&state, &principal, loser).await,
+            Err(ApiError::Conflict(_))
+        ));
+    }
+
+    async fn assert_conflicting_payment_intents_leave_other_order_available(state: &BackendState) {
+        let (_, principal, mut first) = fixture();
+        first.crossmint = Some(crossmint_metadata());
+        let mut second = first.clone();
+        second.crossmint.as_mut().unwrap().order_id = "different_order".into();
+        let (one, two) = tokio::join!(
+            reserve_payment(&state, &principal, &first, SigningMode::Human),
+            reserve_payment(&state, &principal, &second, SigningMode::Human),
+        );
+        assert_ne!(one.is_ok(), two.is_ok());
+        let mut unreserved_order = if one.is_ok() { second } else { first };
+        unreserved_order.idempotency_key = format!("{}:fresh-key", principal.wallet);
+        // The losing intent never owned an order claim, so the different order
+        // can still be paid by a genuinely distinct payment operation.
+        reserve_payment(&state, &principal, &unreserved_order, SigningMode::Human)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn conflicting_payment_intents_do_not_strand_a_second_crossmint_order() {
+        let (state, _, _) = fixture();
+        assert_conflicting_payment_intents_leave_other_order_available(&state).await;
+    }
+
+    #[tokio::test]
+    async fn crossmint_reservations_are_isolated_by_authenticated_owner() {
+        let (state, principal, mut request) = fixture();
+        request.crossmint = Some(crossmint_metadata());
+        reserve_crossmint_order(&state, &principal, &request)
+            .await
+            .unwrap();
+        let mut record = initial(&request, SigningMode::Human).unwrap();
+        record.status = PaymentStatus::Confirmed;
+        persist_payment(&state, &record, connector_metadata(&request))
+            .await
+            .unwrap();
+        let (_, other, mut other_request) = fixture();
+        other_request.crossmint = request.crossmint.clone();
+        assert_ne!(other.wallet, principal.wallet);
+        reserve_crossmint_order(&state, &other, &other_request)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn historical_failed_crossmint_job_still_blocks_a_new_operation() {
+        let (state, principal, mut first) = fixture();
+        first.crossmint = Some(crossmint_metadata());
+        // Upgrade case: a historical row exists without an order reservation.
+        let mut record = initial(&first, SigningMode::Human).unwrap();
+        record.status = PaymentStatus::Failed;
         persist_payment(&state, &record, connector_metadata(&first))
             .await
             .unwrap();
-        refuse_paid_crossmint_order(&state, &second).await.unwrap();
+        let mut second = first.clone();
+        second.idempotency_key = format!("{}:replacement", principal.wallet);
+        assert!(matches!(
+            reserve_crossmint_order(&state, &principal, &second).await,
+            Err(ApiError::Conflict(_))
+        ));
+        reserve_crossmint_order(&state, &principal, &first)
+            .await
+            .unwrap();
     }
+
+    #[tokio::test]
+    async fn crossmint_proofs_advance_without_changing_settlement_evidence() {
+        let (state, principal, mut request) = fixture();
+        request.crossmint = Some(crossmint_metadata());
+        let (_, mut record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
+            .await
+            .unwrap();
+        record.status = PaymentStatus::Confirmed;
+        persist_payment(&state, &record, connector_metadata(&request))
+            .await
+            .unwrap();
+        let user_key = request
+            .idempotency_key
+            .strip_prefix(&format!("{}:", principal.wallet))
+            .unwrap();
+        for (phase, expected_status) in [
+            ("payment", X402PaymentStatus::Confirmed),
+            ("delivery", X402PaymentStatus::Verified),
+            ("completed", X402PaymentStatus::Verified),
+        ] {
+            let Json(updated) = record_crossmint_order_proof(
+                State(state.clone()),
+                Extension(principal.clone()),
+                Json(CrossmintOrderProofRequest {
+                    mandate: request.mandate.clone(),
+                    idempotency_key: user_key.into(),
+                    proof: json!({"orderId":"order_once"}),
+                    order_phase: phase.into(),
+                    response_status: 200,
+                    error: None,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.status, expected_status);
+            assert_eq!(updated.proof.as_ref().unwrap()["orderPhase"], phase);
+            assert_eq!(updated.transaction_signature, record.signature);
+            assert_eq!(updated.receipt_address, record.receipt_address);
+            assert_eq!(
+                updated.payment_id.as_deref(),
+                Some(record.payment_id.as_str())
+            );
+        }
+        // An x402-only endpoint may not overwrite this Crossmint evidence.
+        let rejected = record_x402_proof(
+            State(state.clone()),
+            Extension(principal),
+            Json(X402ProofRequest {
+                mandate: request.mandate,
+                idempotency_key: user_key.into(),
+                proof: json!({"wrongConnector":true}),
+                response_status: 200,
+                error: None,
+            }),
+        )
+        .await;
+        assert!(matches!(rejected, Err(ApiError::BadRequest(_))));
+        let saved = state
+            .store
+            .find_x402_by_idempotency(&request.idempotency_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.proof.unwrap()["orderPhase"], "completed");
+    }
+
+    #[tokio::test]
+    async fn verified_x402_proofs_remain_immutable() {
+        let (state, principal, mut request) = fixture();
+        request.x402 = Some(X402PaymentMetadata {
+            resource: "https://merchant.example".into(),
+            challenge: json!({}),
+        });
+        let (_, mut record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
+            .await
+            .unwrap();
+        record.status = PaymentStatus::Confirmed;
+        persist_payment(&state, &record, connector_metadata(&request))
+            .await
+            .unwrap();
+        let user_key = request
+            .idempotency_key
+            .strip_prefix(&format!("{}:", principal.wallet))
+            .unwrap();
+        for proof in [json!({"original":true}), json!({"replacement":true})] {
+            let Json(updated) = record_x402_proof(
+                State(state.clone()),
+                Extension(principal.clone()),
+                Json(X402ProofRequest {
+                    mandate: request.mandate.clone(),
+                    idempotency_key: user_key.into(),
+                    proof,
+                    response_status: 200,
+                    error: None,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.status, X402PaymentStatus::Verified);
+            assert_eq!(updated.proof, Some(json!({"original":true})));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires explicitly isolated TEST_DATABASE_URL"]
+    async fn postgres_crossmint_claims_and_phase_updates_survive_reconnect() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("isolated fixture URL required");
+        assert!(
+            url.starts_with("postgresql://chainpay_test@127.0.0.1:55439/"),
+            "Only the explicitly provisioned local fixture is allowed"
+        );
+        let (mut state, principal, mut first) = fixture();
+        state.store = StatusStore::connect(&url).await.unwrap();
+        let mut another_instance = state.clone();
+        another_instance.store = StatusStore::connect(&url).await.unwrap();
+        first.crossmint = Some(crossmint_metadata());
+        let mut second = first.clone();
+        second.idempotency_key = format!("{}:second", principal.wallet);
+        let (one, two) = tokio::join!(
+            reserve_crossmint_order(&state, &principal, &first),
+            reserve_crossmint_order(&another_instance, &principal, &second),
+        );
+        assert_ne!(one.is_ok(), two.is_ok());
+        let (winner, loser) = if one.is_ok() {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let (_, mut payment) = reserve_payment(&state, &principal, &winner, SigningMode::Human)
+            .await
+            .unwrap();
+        payment.status = PaymentStatus::Confirmed;
+        persist_payment(&state, &payment, connector_metadata(&winner))
+            .await
+            .unwrap();
+
+        let (_, other, mut other_request) = fixture();
+        other_request.crossmint = winner.crossmint.clone();
+        // Executes the owner-filtered reference SQL against another owner's row.
+        reserve_crossmint_order(&another_instance, &other, &other_request)
+            .await
+            .unwrap();
+        assert!(matches!(
+            reserve_crossmint_order(&another_instance, &principal, &loser).await,
+            Err(ApiError::Conflict(_))
+        ));
+        let listed = state
+            .store
+            .list_connector_jobs(
+                &principal.wallet,
+                ConnectorKind::Crossmint,
+                Some(&winner.mandate),
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(
+            state
+                .store
+                .list_connector_jobs(&principal.wallet, ConnectorKind::X402, None, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let user_key = winner
+            .idempotency_key
+            .strip_prefix(&format!("{}:", principal.wallet))
+            .unwrap();
+        for (phase, status) in [
+            ("payment", X402PaymentStatus::Confirmed),
+            ("delivery", X402PaymentStatus::Verified),
+            ("completed", X402PaymentStatus::Verified),
+        ] {
+            let Json(updated) = record_crossmint_order_proof(
+                State(another_instance.clone()),
+                Extension(principal.clone()),
+                Json(CrossmintOrderProofRequest {
+                    mandate: winner.mandate.clone(),
+                    idempotency_key: user_key.into(),
+                    proof: json!({"orderId":"order_once"}),
+                    order_phase: phase.into(),
+                    response_status: 200,
+                    error: None,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.status, status);
+            assert_eq!(updated.proof.as_ref().unwrap()["orderPhase"], phase);
+            assert_eq!(updated.transaction_signature, payment.signature);
+            assert_eq!(updated.receipt_address, payment.receipt_address);
+        }
+        let rejected = record_x402_proof(
+            State(state.clone()),
+            Extension(principal.clone()),
+            Json(X402ProofRequest {
+                mandate: winner.mandate.clone(),
+                idempotency_key: user_key.into(),
+                proof: json!({}),
+                response_status: 200,
+                error: None,
+            }),
+        )
+        .await;
+        assert!(matches!(rejected, Err(ApiError::BadRequest(_))));
+        drop(another_instance);
+        state.store = StatusStore::connect(&url).await.unwrap();
+        reserve_crossmint_order(&state, &principal, &winner)
+            .await
+            .unwrap();
+        assert!(matches!(
+            reserve_crossmint_order(&state, &principal, &loser).await,
+            Err(ApiError::Conflict(_))
+        ));
+        let saved = state
+            .store
+            .find_x402_by_idempotency(&winner.idempotency_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.proof.unwrap()["orderPhase"], "completed");
+
+        // A historical failed row without a claim also blocks replacement keys.
+        let (_, historical_owner, mut historical) = fixture();
+        historical.crossmint = Some(crossmint_metadata());
+        let mut failed = initial(&historical, SigningMode::Human).unwrap();
+        failed.status = PaymentStatus::Failed;
+        persist_payment(&state, &failed, connector_metadata(&historical))
+            .await
+            .unwrap();
+        historical.idempotency_key = format!("{}:replacement", historical_owner.wallet);
+        assert!(matches!(
+            reserve_crossmint_order(&state, &historical_owner, &historical).await,
+            Err(ApiError::Conflict(_))
+        ));
+        assert_conflicting_payment_intents_leave_other_order_available(&state).await;
+    }
+
     #[tokio::test]
     async fn rpc_backpressure_returns_the_reservation_to_prepared() {
         // `RpcError::Busy` is raised by `try_acquire` before the HTTP request is

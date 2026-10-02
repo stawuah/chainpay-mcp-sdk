@@ -24,7 +24,7 @@ cargo test -p chainpay-backend
 ```
 
 Startup applies every bundled migration in `backend/migrations`, currently
-`0001` through `0008`. These change schema and remove obsolete simulation columns;
+`0001` through `0009`. These change schema and remove obsolete simulation columns;
 use a development database for local work. HTTP MCP must use the same database
 and starts after those tables exist. Normal startup requires PostgreSQL;
 in-memory storage is only for local tests.
@@ -79,11 +79,16 @@ Private endpoints derive the principal from a verified bearer credential:
   mandate-bound enrollment signature; `mint` and `mandate_nonce` bind the future
   PDA to the owner before provisioning, and existing mandates must belong to owner.
 - `/v1/payments` and `/v1/managed-payments`: owned mandate and explicit
-  `execute_payment` permission, or `execute_x402_payment` for x402 submissions.
+  `execute_payment` permission, `execute_x402_payment` for x402 submissions,
+  or `execute_crossmint_payment` for Crossmint submissions.
 - `/v1/payments/:id`, `/v1/receipts/:address`: owned/scoped mandate and
   `get_payment` or `wait_for_payment` permission.
 - `/v1/x402-payments/proof`: `mandate`, idempotency key and
   `execute_x402_payment` permission are required.
+- `/v1/crossmint-orders/proof`: confirmed settlement and
+  `execute_crossmint_payment` permission are required. HTTP 2xx only verifies an
+  order after its phase reaches `delivery` or `completed`; later phase reads
+  update order evidence without replacing the settled signature or receipt.
 - `/v1/transactions/submit`: owner-only mandate create+exact delegate approval,
   update, pause or revoke, homogeneous owner-signed payment batches (up to four),
   and revoke-all (up to 32; wire-size bound still applies). Every instruction
@@ -129,3 +134,30 @@ restart drill.
 Codec availability was checked on 2026-09-15 with `cargo info solana-transaction@4.2.0`
 and `npm view @solana/transactions version`. See the [official Rust codec](https://docs.rs/solana-transaction/4.2.0/solana_transaction/versioned/struct.VersionedTransaction.html)
 and [Solana v1 examples](https://github.com/solana-foundation/transaction-v1-examples).
+
+## Crossmint order reservations
+
+Before signing or broadcasting, the relay atomically binds an order ID within
+the authenticated owner's namespace to one payment idempotency key. This uses
+the durable `operation_claims` table, so concurrent requests and separate relay
+instances cannot reserve the same owner's order under different mandates.
+The immutable payment intent is reserved before its order claim. If two fresh
+payment keys compete for one order, the losing payment reservation may remain
+prepared, but it cannot sign or broadcast while the winning order claim exists.
+Caller-provided order IDs cannot block another owner's orders. This is local
+ChainPay deduplication, not proof of ownership or settlement at Crossmint.
+
+Claims remain reserved after errors and failed status records. Recover the
+original operation; do not submit a fresh key after an uncertain outcome.
+Historical connector rows also block replacement operations during upgrade.
+There is deliberately no automatic release or force-retry endpoint, even for a
+failed operation. If the original operation cannot be recovered, resolving the
+reservation requires operator investigation of authoritative settlement evidence;
+this release process is not implemented by the connector.
+Verified x402 proofs remain immutable; Crossmint order observations can advance
+from payment through delivery to completed without changing settlement proof.
+
+The ignored `postgres_crossmint_claims_and_phase_updates_survive_reconnect` test
+uses the same isolated `TEST_DATABASE_URL` fixture as the auth persistence test.
+It checks claims across independent pools, owner isolation, connector listing
+SQL, phase updates, legacy-route rejection, and persistence across reconnects.

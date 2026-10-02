@@ -1025,7 +1025,6 @@ async fn submit_managed_payment(
     )
     .await?;
     validate_live_payment(&state, &payment).await?;
-    refuse_paid_crossmint_order(&state, &payment).await?;
     let (won, record) =
         recovery::reserve_payment(&state, &principal, &payment, SigningMode::Delegated).await?;
     if !won {
@@ -1056,6 +1055,7 @@ async fn resume_managed_payment(
     )
     .await?;
     validate_live_payment(state, &payment).await?;
+    reserve_crossmint_order(state, principal, &payment).await?;
     persist_payment(state, &existing, connector_metadata(&payment)).await?;
     sign_and_settle_managed(state, provider, request, payment, existing).await
 }
@@ -1128,6 +1128,7 @@ async fn submit_payment(
             )
             .await?;
             validate_live_payment(&state, &request).await?;
+            reserve_crossmint_order(&state, &principal, &request).await?;
             return settle_payment(&state, request, existing).await;
         }
         return Ok(Json(existing));
@@ -1140,7 +1141,6 @@ async fn submit_payment(
     )
     .await?;
     validate_live_payment(&state, &request).await?;
-    refuse_paid_crossmint_order(&state, &request).await?;
     let (won, record) =
         recovery::reserve_payment(&state, &principal, &request, SigningMode::Human).await?;
     if !won {
@@ -1198,32 +1198,50 @@ fn connector_metadata(request: &PaymentSubmissionRequest) -> Option<ConnectorMet
     request.crossmint.as_ref().map(ConnectorMetadata::Crossmint)
 }
 
-/// Refuse a new settlement for a Crossmint order that already has one in flight
-/// or settled. The receipt PDA only blocks a repeat under the same mandate, so
-/// without this an order could be paid once from each of two mandates. A failed
-/// attempt does not count: the order still owes money and may be retried.
-async fn refuse_paid_crossmint_order(
+/// Atomically bind this owner's order to one payment operation, before signing
+/// or broadcast. Failed or uncertain operations retain their claim: a fresh key
+/// must never turn missing settlement evidence into permission to pay again.
+async fn reserve_crossmint_order(
     state: &BackendState,
+    principal: &Principal,
     request: &PaymentSubmissionRequest,
 ) -> Result<(), ApiError> {
     let Some(crossmint) = &request.crossmint else {
         return Ok(());
     };
-    let Some(existing) = state
-        .store
-        .find_connector_job_by_reference(ConnectorKind::Crossmint, &crossmint.order_id)
-        .await?
-    else {
-        return Ok(());
+    let conflict = || {
+        ApiError::Conflict(
+        "this Crossmint order already has a payment operation; recover that operation instead of paying again".to_owned(),
+    )
     };
-    if existing.idempotency_key == request.idempotency_key
-        || existing.status == X402PaymentStatus::Failed
+    // Preserve pre-claim jobs when upgrading. Caller-supplied order identifiers
+    // only reserve within the authenticated owner's namespace.
+    if state
+        .store
+        .find_other_connector_job_for_owner(
+            &principal.wallet,
+            ConnectorKind::Crossmint,
+            &crossmint.order_id,
+            &request.idempotency_key,
+        )
+        .await?
+        .is_some()
     {
-        return Ok(());
+        return Err(conflict());
     }
-    Err(ApiError::Conflict(
-        "this Crossmint order already has a payment; it will not be paid twice".to_owned(),
-    ))
+    let claim_id = deterministic_id(
+        "crossmint-order",
+        &json!([principal.wallet, crossmint.order_id]).to_string(),
+    );
+    let desired = json!({"payment_idempotency_key": request.idempotency_key});
+    let (_, owner, bound, _) = state
+        .store
+        .claim_operation(&claim_id, &principal.wallet, desired.clone(), Value::Null)
+        .await?;
+    if owner != principal.wallet || bound != desired {
+        return Err(conflict());
+    }
+    Ok(())
 }
 
 /// The scoped operation a connector settlement authorizes against. An agent
@@ -1548,6 +1566,7 @@ async fn record_crossmint_order_proof(
         return Err(recovery::conflict());
     }
     recovery::authorize_payment(&state, &principal, &payment, "execute_crossmint_payment").await?;
+    let order_advanced = matches!(request.order_phase.as_str(), "delivery" | "completed");
     let mut proof = request.proof;
     if let Some(object) = proof.as_object_mut() {
         object.insert("orderPhase".to_owned(), Value::String(request.order_phase));
@@ -1555,13 +1574,13 @@ async fn record_crossmint_order_proof(
     record.proof = Some(proof);
     record.response_status = Some(request.response_status);
     record.error = request.error;
-    record.status = if (200..300).contains(&request.response_status) {
+    record.status = if (200..300).contains(&request.response_status) && order_advanced {
         X402PaymentStatus::Verified
     } else {
         X402PaymentStatus::Confirmed
     };
     record.updated_at_ms = now_ms();
-    state.store.put_x402(record.clone()).await?;
+    state.store.put_crossmint_proof(&record).await?;
     Ok(Json(
         state
             .store
@@ -1618,6 +1637,11 @@ async fn record_x402_proof(
         .find_x402_by_idempotency(&format!("{}:{}", principal.wallet, request.idempotency_key))
         .await?
         .ok_or(ApiError::NotFound)?;
+    if record.connector != ConnectorKind::X402 {
+        return Err(ApiError::BadRequest(
+            "that settlement is not an x402 payment".to_owned(),
+        ));
+    }
     if !matches!(
         record.status,
         X402PaymentStatus::Confirmed | X402PaymentStatus::Verified

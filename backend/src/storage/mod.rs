@@ -564,14 +564,14 @@ impl StatusStore {
         }
     }
 
-    /// The most recently updated job for one connector reference, such as a
-    /// Crossmint order id. Used to refuse a second payment for an obligation
-    /// that already has one, which the receipt PDA alone cannot prevent across
-    /// two different mandates.
-    pub async fn find_connector_job_by_reference(
+    /// Find any other operation for the same owner's connector obligation.
+    /// Failed jobs count too; their status is not permission to charge again.
+    pub async fn find_other_connector_job_for_owner(
         &self,
+        owner: &str,
         connector: ConnectorKind,
         reference: &str,
+        current_key: &str,
     ) -> Result<Option<X402PaymentRecord>, StorageError> {
         match &self.backend {
             StorageBackend::Memory(state) => {
@@ -582,6 +582,8 @@ impl StatusStore {
                     .filter(|record| {
                         record.connector == connector
                             && record.connector_reference.as_deref() == Some(reference)
+                            && record.idempotency_key.starts_with(&format!("{owner}:"))
+                            && record.idempotency_key != current_key
                     })
                     .cloned()
                     .collect();
@@ -592,6 +594,8 @@ impl StatusStore {
                 let row = sqlx::query(X402_SELECT_BY_CONNECTOR_REFERENCE)
                     .bind(connector.as_str())
                     .bind(reference)
+                    .bind(owner)
+                    .bind(current_key)
                     .fetch_optional(pool)
                     .await?;
                 row.map(x402_from_row).transpose()
@@ -685,6 +689,62 @@ impl StatusStore {
                 Ok(())
             }
         }
+    }
+
+    /// Refresh off-chain order evidence without rewriting settlement fields.
+    /// Unlike x402 delivery proofs, Crossmint order phases can advance after
+    /// verification (delivery -> completed). Generic payment reconciliation
+    /// still cannot overwrite a verified job.
+    pub async fn put_crossmint_proof(
+        &self,
+        record: &X402PaymentRecord,
+    ) -> Result<(), StorageError> {
+        match &self.backend {
+            StorageBackend::Memory(state) => {
+                let mut state = state.write().await;
+                if let Some(old) = state.x402_payments.get_mut(&record.x402_payment_id) {
+                    if old.connector == ConnectorKind::Crossmint
+                        && matches!(
+                            old.status,
+                            X402PaymentStatus::Confirmed | X402PaymentStatus::Verified
+                        )
+                        && old.updated_at_ms <= record.updated_at_ms
+                    {
+                        old.proof = record.proof.clone();
+                        old.response_status = record.response_status;
+                        old.error = record.error.clone();
+                        // Verification that the order advanced is monotonic,
+                        // even if a later poll fails or returns an older phase.
+                        if old.status != X402PaymentStatus::Verified {
+                            old.status = record.status;
+                        }
+                        old.updated_at_ms = record.updated_at_ms;
+                    }
+                }
+            }
+            StorageBackend::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    UPDATE x402_payments SET
+                        proof = $2, response_status = $3, error = $4,
+                        status = CASE WHEN status = 'verified' THEN status ELSE $5 END,
+                        updated_at = TO_TIMESTAMP($6::DOUBLE PRECISION / 1000.0)
+                    WHERE x402_payment_id = $1 AND connector = 'crossmint'
+                      AND status IN ('confirmed', 'verified')
+                      AND updated_at <= TO_TIMESTAMP($6::DOUBLE PRECISION / 1000.0)
+                "#,
+                )
+                .bind(&record.x402_payment_id)
+                .bind(record.proof.clone().map(Json))
+                .bind(record.response_status.map(i32::from))
+                .bind(&record.error)
+                .bind(x402_status_name(record.status))
+                .bind(to_i64(Some(record.updated_at_ms), "updated_at_ms")?)
+                .execute(pool)
+                .await?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn put_managed_signer_challenge(
@@ -1018,6 +1078,8 @@ const X402_SELECT_BY_CONNECTOR_REFERENCE: &str = r#"
            (EXTRACT(EPOCH FROM updated_at) * 1000)::BIGINT AS updated_at_ms
     FROM x402_payments
     WHERE connector = $1 AND connector_reference = $2
+      AND split_part(idempotency_key, ':', 1) = $3
+      AND idempotency_key <> $4
     ORDER BY updated_at DESC
     LIMIT 1
 "#;
@@ -1372,7 +1434,7 @@ mod tests {
         assert_eq!(highest_placeholder(X402_LIST_FOR_OWNER_WITH_MANDATE), 4);
         assert!(X402_LIST_FOR_OWNER.contains("x.connector = $2"));
         assert!(X402_LIST_FOR_OWNER_WITH_MANDATE.contains("x.connector = $2"));
-        assert_eq!(highest_placeholder(X402_SELECT_BY_CONNECTOR_REFERENCE), 2);
+        assert_eq!(highest_placeholder(X402_SELECT_BY_CONNECTOR_REFERENCE), 4);
     }
 
     fn payment() -> PaymentRecord {
