@@ -3,7 +3,7 @@ import { TokenIcon } from "../ui/TokenIcon";
 import { WalletBrandMark } from "../ui/WalletBrandMark";
 import payshLogo from "../assets/brands/paysh.svg";
 import x402Logo from "../assets/brands/x402-official.png";
-import { ArrowLeft, ArrowRight, ArrowUpRight, Bot, Check, ChevronDown, Copy, Inbox, Menu, Plus, RefreshCw, Search, ReceiptText, Share2, ExternalLink, LogOut, CircleAlert, Settings2, ShieldCheck, Wallet, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, Bot, Check, ChevronDown, Copy, Download, Inbox, Menu, Plus, RefreshCw, Search, ReceiptText, Share2, ExternalLink, LogOut, CircleAlert, Settings2, ShieldCheck, Wallet, X } from "lucide-react";
 import { OwnerOverview } from "./OwnerOverview";
 import { TokenAddresses } from "./TokenAddresses";
 import { PendingSettlements } from "../settlement";
@@ -23,6 +23,8 @@ import { InboxReceipt, LoadedReceiptCard } from "../receipts/InboxReceipt";
 import { SampleReceiptOutline } from "../receipts/SampleReceiptOutline";
 import { receiptViewFromSettledPayment, tokenLabelForMint } from "../receipts/load";
 import { amountLabel, publicReceiptPath } from "../receipts/model";
+import { buildReceiptsCsv, downloadTextFile, receiptsCsvFilename } from "../receipts/export";
+import { ownerReceiptRelay } from "../receipts/owner";
 import { sharePublicReceipt, shareStatusCopy } from "../receipts/share";
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
@@ -2427,6 +2429,9 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
   const [receiptLoadVersion, setReceiptLoadVersion] = useState(0);
   const [shareMessage, setShareMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [ledgerSource, setLedgerSource] = useState<{ receipts: PaymentReceipt[]; decimalsByMint: Map<string, number> }>({ receipts: [], decimalsByMint: new Map() });
+  const [exportStatus, setExportStatus] = useState<"idle" | "exporting" | "error">("idle");
+  const [exportMessage, setExportMessage] = useState("");
   const mandateKey = mandates.map((item) => item.address).sort().join("|");
   const stablecoinKey = stablecoinOptions.map((item) => `${item.mint}:${item.label}`).join("|");
   const detailReceiptAddress = receiptDetail?.trim() ?? "";
@@ -2447,6 +2452,7 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
       if (mandates.length === 0) {
         if (active) {
           setOnChainReceipts([]);
+          setLedgerSource({ receipts: [], decimalsByMint: new Map() });
           setSelectedReceiptAddress("");
           setReceiptLoadStatus("ready");
         }
@@ -2490,6 +2496,7 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
       });
       if (!active) return;
       setOnChainReceipts(details);
+      setLedgerSource({ receipts, decimalsByMint });
       setSelectedReceiptAddress((current) => (
         details.some((receipt) => receipt.address === current) ? current : ""
       ));
@@ -2505,6 +2512,29 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
     void loadOnChainReceipts();
     return () => { active = false; };
   }, [mandateKey, stablecoinKey, receiptLoadVersion]);
+
+  async function exportReceiptsCsv() {
+    if (exportStatus === "exporting" || ledgerSource.receipts.length === 0) return;
+    setExportStatus("exporting");
+    setExportMessage("");
+    try {
+      const csv = await buildReceiptsCsv({
+        receipts: ledgerSource.receipts,
+        decimalsByMint: ledgerSource.decimalsByMint,
+        tokenLabel: (mint) => stablecoinOptions.find((option) => option.mint === mint)?.label ?? tokenLabelForMint(mint),
+        origin: window.location.origin,
+        blockTime: (slot) => chainpayClient.connection.getBlockTime(Number(slot)),
+        relayPolicy: (address) => ownerReceiptRelay.policy(address),
+      });
+      const filename = receiptsCsvFilename();
+      downloadTextFile(csv, filename);
+      setExportStatus("idle");
+      setExportMessage(`Saved ${filename} · ${ledgerSource.receipts.length} ${ledgerSource.receipts.length === 1 ? "receipt" : "receipts"}.`);
+    } catch {
+      setExportStatus("error");
+      setExportMessage("The CSV could not be created. Your receipts are unchanged. Try again.");
+    }
+  }
 
   async function sendReceipt(receipt: LedgerReceiptRow) {
     setShareMessage("");
@@ -2555,7 +2585,7 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
       </div>
     )}
     <div className="dashboard-card onchain-receipts-card" hidden={Boolean(detailReceiptAddress)}>
-      <div className="dashboard-card-heading"><div><span className="section-kicker">ON-CHAIN RECEIPTS</span><h2>Payment history</h2></div><div className="receipt-ledger-heading-actions"><span className="chip chip-muted">{settledCount} settled</span><Button type="button" variant="secondary" className="refresh-button" label="Refresh" icon={<RefreshCw size={16} />} isDisabled={receiptLoadStatus === "loading"} onClick={() => setReceiptLoadVersion((value) => value + 1)} /></div></div>
+      <div className="dashboard-card-heading"><div><span className="section-kicker">ON-CHAIN RECEIPTS</span><h2>Payment history</h2></div><div className="receipt-ledger-heading-actions"><span className="chip chip-muted">{settledCount} settled</span><Button type="button" variant="secondary" className="receipt-export-button" label={exportStatus === "exporting" ? "Exporting…" : "Export CSV"} icon={<Download size={16} />} isDisabled={receiptLoadStatus === "loading" || exportStatus === "exporting" || ledgerSource.receipts.length === 0} onClick={() => void exportReceiptsCsv()} /><Button type="button" variant="secondary" className="refresh-button" label="Refresh" icon={<RefreshCw size={16} />} isDisabled={receiptLoadStatus === "loading"} onClick={() => setReceiptLoadVersion((value) => value + 1)} /></div></div>
       <p className="builder-intro">Select a payment to view or share its receipt.</p>
       {receiptLoadStatus === "loading" ? <div className="receipt-ledger-empty" aria-busy="true"><Skeleton width="100%" height={72} /><p>Reading Devnet receipts…</p></div> : receiptLoadStatus === "error" && onChainReceipts.length === 0 ? <div className="receipt-ledger-empty"><CircleAlert size={28} /><h3>Payment history is unavailable</h3><p>Refresh to try again. Your recorded payments are unchanged.</p></div> : onChainReceipts.length === 0 ? <div className="receipt-ledger-empty"><p>No receipts yet — one is written on chain for every settled payment.</p><SampleReceiptOutline /></div> : <Table className="receipt-ledger-table" density="compact" dividers="rows" hasHover>
         <TableHeader>
@@ -2589,6 +2619,7 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
         </TableBody>
       </Table>}
       {receiptLoadError && <small className={receiptLoadStatus === "error" ? "receipt-ledger-error" : "receipt-ledger-warning"}>{receiptLoadError}</small>}
+      {exportMessage && <small className={exportStatus === "error" ? "receipt-ledger-error" : "receipt-ledger-warning"} role="status">{exportMessage}</small>}
     </div>
     {selectedReceipt && <div className="dashboard-card receipt-preview-card"><div className="dashboard-card-heading"><div><span className="section-kicker">{detailReceiptAddress ? "RECEIPT DETAIL" : "RECEIPT PREVIEW"}</span><h2 className="owner-token-heading"><TokenIcon mint={selectedReceipt.mint} />Payment receipt</h2></div>{!detailReceiptAddress && <Button type="button" variant="ghost" href={buildPath({ kind: "app", tab: "receipts", receiptDetail: selectedReceipt.address })} label="Open full page" isDisabled={false} />}</div><LoadedReceiptCard receiptPda={selectedReceipt.address} shareMode="dashboard" preparedInRequests={preparedReceiptAddresses?.has(selectedReceipt.address) ?? false} onShare={() => void sendReceipt(selectedReceipt)} /></div>}
     {shareMessage && <div className="receipt-share-message" role="status">{shareMessage}</div>}

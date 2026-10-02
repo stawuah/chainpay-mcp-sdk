@@ -59,3 +59,18 @@ It mounts the actual owner controller and routes with a deliberately fake wallet
 blocks external services, and checks wallet discovery, connection without login,
 explicit message-signing retries, and navigation to mandate review. It rejects
 financial signing. Screenshots are fixture rendering evidence only.
+
+## Receipt limits, Order match and export browser checks
+
+With the frontend dev server on port 5189, `npm run test:verify-public-browser`
+also covers limits at payment from an on-chain snapshot and from a relay
+observation that already counts later payments, and an audit link
+(`/verify/<pda>#purchase=…`) that verifies or is rejected without showing any
+of its content. `npm run test:receipts-owner-browser` mounts the dashboard
+harness with `?tab=receipts&receipts`: one original receipt and one 371-byte
+receipt with a policy snapshot, plus a stand-in for the owner's relay session
+that returns the fixture's seller-signed invoice
+(`fixtures/receipt-purchase.json`). It checks the owner Order match, Share with
+details, Export CSV (a real browser download), 44px controls and no horizontal
+scroll at 390 and 320px. External requests are blocked; these are fixtures, not
+payment evidence.

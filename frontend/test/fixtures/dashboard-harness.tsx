@@ -20,6 +20,8 @@ import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
+import { ownerReceiptRelay } from "../../src/receipts/owner";
+import purchase from "./receipt-purchase.json";
 
 const OWNER = "7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q";
 const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -109,17 +111,38 @@ if (new URLSearchParams(location.search).has("ready")) {
 }
 
 if (new URLSearchParams(location.search).has("receipts")) {
+  // An original 282-byte receipt: no limits recorded at payment.
   const receipt: PaymentReceipt = {
     address:"2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1", mandate:MANDATES[0].address,
     invoiceHash:new Uint8Array(32).fill(1), paymentId:new Uint8Array(32).fill(2), mint:USDC,
     recipient:OWNER,sourceTokenAccount:OWNER,recipientTokenAccount:OWNER,amount:4500001n,
     agent:OWNER,executedAtSlot:399999000n,signatureReference:new Uint8Array(32),status:"confirmed",onChainStatus:1,bump:255,
+    policySnapshot:null,
   };
-  chainpayClient.getPaymentsByMandate = async () => [receipt];
+  // A 371-byte receipt with the program's policy snapshot, paying the
+  // fixture's seller-signed invoice (its hash is the invoice hash).
+  const v2: PaymentReceipt = {
+    address:"3Rcpt2v2SnapshotFixture111111111111111111", mandate:MANDATES[0].address,
+    invoiceHash:Uint8Array.from(purchase.invoiceHash.match(/../g)!.map((byte) => parseInt(byte, 16))), paymentId:new Uint8Array(32).fill(4), mint:USDC,
+    recipient:purchase.request.payload.recipient,sourceTokenAccount:OWNER,recipientTokenAccount:purchase.request.payload.recipient,amount:4500000n,
+    agent:"AgEnT111111111111111111111111111111111111111",executedAtSlot:399999200n,signatureReference:new Uint8Array(32).fill(5),status:"confirmed",onChainStatus:1,bump:254,
+    policySnapshot:{ version:1, maxPerPayment:5_000_000n, totalLimit:50_000_000n, amountSpentAfter:12_000_000n, paymentCountAfter:3n, maxPaymentCount:10n, expiresAtSlot:405_000_000n, cooldownSlots:0n },
+  };
+  const byAddress = new Map([receipt, v2].map((item) => [item.address, item]));
+  chainpayClient.getPaymentsByMandate = async (address) => (address === MANDATES[0].address ? [v2, receipt] : []);
   chainpayClient.getMintDecimals = async () => 6;
-  publicReceiptClient.readPublicReceipt = async () => ({
-    receipt:{valid:true,receipt}, amount:{baseUnits:"4500001",decimals:6,display:"4.500001",displayKind:"ui-amount"}, currentMandate:{status:"absent"},
-  }) as never;
+  publicReceiptClient.getCurrentSlot = async () => 399_999_500n;
+  publicReceiptClient.readPublicReceipt = async (address) => {
+    const found = byAddress.get(address) ?? receipt;
+    return {
+      receipt:{valid:true,receipt:found},
+      amount:{baseUnits:found.amount.toString(),decimals:6,display:found.amount === 4500000n ? "4.500000" : "4.500001",displayKind:"ui-amount"},
+      currentMandate:{status:"present",mandate:MANDATES[0]},
+    } as never;
+  };
+  // Stand-in for the owner's relay session: the signed invoice for the v2 receipt only.
+  ownerReceiptRelay.request = async (address) => (address === v2.address ? purchase.request : null);
+  ownerReceiptRelay.policy = async () => null;
 }
 
 const EMPTY = new URLSearchParams(location.search).has("empty");
