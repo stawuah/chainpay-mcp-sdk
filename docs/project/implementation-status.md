@@ -49,21 +49,23 @@ Stack: `dre/pr-20-owner-onboarding` → `dre/journey-close-j1` (#22) →
 | J4b object CRUD + delegate repair + ATA review + revoke chunking | Closed | PR #22 + #23; separate recipient ATA sign step; revoke-all tx chunking |
 | J5 SDK honesty | Closed | PR #22 |
 | J6a human send re-reads pause/revoke | Closed | PR #22 |
-| J6b public policy observation | **Blocked** | Kwasi-owned Axum worker; public card shows **current** mandate limits with honest labeling |
+| J6b limits at payment | Addressed, pending deploy | Program writes a policy snapshot into each new receipt (upstream PR #23, open, not deployed). Until it deploys, the relay keeps a post-payment observation for receipts it sees settle (PR #25, labeled "Seen by the ChainPay relay after payment, not stored on Solana", owner session only). Receipt card section **Spending permission at payment** names its source; older receipts read "Not recorded" and show today's limits. Fixture and unit evidence only; no snapshot receipt exists on Devnet yet |
 | J6c owner webhooks / email | **Blocked** | Settings → Notifications is read-only: “There is no webhook or email delivery in this build.” Future delivery is an Axum worker, not a missing Save button |
 | J7 program asks | **Blocked** | Written asks only — listed below |
 | J8 demo evidence | Partial | Readonly baseline USDC receipt PDA `7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q` loads on `/verify`; MCP/SDK control-layer shipped (x402 parsers in SDK, mandate quote on v2, MPP detect, agent skill, acceptance checklist in [acceptance-x402-mcp.md](../guides/acceptance-x402-mcp.md)); live signed MCP 402 → receipt still requires Dre authorization |
-| DG1–DG3 data gaps | **Blocked** | No invented purchase description, no historical snapshot backfill, agent shown as address unless program adds a name |
+| DG1 purchase description | Addressed (off-chain) | Optional seller-signed `description` and `lineItems` in the payment request (PR #25). Shown to the owner, and on `/verify` only from an owner-shared audit link after it verifies against the invoice hash. Never invented; absent when the seller signed none |
+| DG2 historical snapshot | Partial | New receipts carry a snapshot once PR #23 deploys; the relay observes receipts it settles after PR #25. No backfill for earlier receipts: they read "Not recorded" |
+| DG3 agent name | **Blocked** | Agent shown as address unless the program adds a name |
 
 ### Open program asks (Kwasi)
 
 Do not implement until agreed:
 
-1. **DuplicateInvoice** custom error for reused invoice hashes
-2. **PaymentCountExceeded** instead of overflow panic on count increment
-3. Optional on-chain receipt policy snapshot (alternative: J6b off-chain observation — pick one)
-4. Optional merchant-signed purchase memo/hash
-5. Optional on-chain delivery attestation field
+1. **DuplicateInvoice**: handled off-chain. The SDK and relay refuse a payment whose receipt already exists with a typed `DuplicateInvoice` before anything is built or sent (PR #25). An on-chain error would need manual account creation in place of Anchor `init`; not planned for this build
+2. **PaymentCountExceeded**: in upstream PR #23 (count overflow returns `PaymentCountExceeded`); open, not deployed
+3. **On-chain receipt policy snapshot**: agreed; upstream PR #23, open, not deployed. The J6b relay observation is the fallback until then
+4. Optional merchant-signed purchase memo/hash: covered off-chain by the signed request's optional description and line items, bound by the existing invoice hash (PR #25); no program change
+5. Optional on-chain delivery attestation field: 32 reserved bytes in the PR #23 receipt layout; no field yet
 
 Seller-facing copy remains **“Seller attests response served.”** until an approved on-chain field exists.
 

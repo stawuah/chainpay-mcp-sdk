@@ -33,9 +33,9 @@ If mint metadata cannot be verified, show base units instead of assuming six
 decimals. If transaction history is unavailable, explain that limit without
 manufacturing a signature or downgrading a valid settled receipt.
 
-The public reader may also show **current** mandate state. A mandate can change
-or be revoked after payment. Its current limits are not a historical snapshot
-of the policy that applied when the receipt was created.
+The public reader also reads the mandate's **current** state. A mandate can
+change or be revoked after payment, so current limits are only ever shown as
+today's limits, never as the limits at payment.
 
 ## Limits at payment
 
@@ -54,6 +54,35 @@ Each limits display names its source:
 | `relay-observed` | Read from the mandate by the ChainPay relay after the receipt finalized, at or after the payment slot. Not stored on Solana. If the mandate had already paid again, the spent amount is left out |
 | `not-recorded` | Neither exists; any limits shown are today's |
 
+On-chain snapshots exist only once the program upgrade in upstream PR #23 is
+deployed. Until then, and for every receipt written before it, the receipt
+reads `relay-observed` (when the relay saw the payment settle) or
+`not-recorded`.
+
+The receipt card shows this as **Spending permission at payment**, in token
+units: "4.50 USDC ≤ 5 USDC per payment", "12 of 50 USDC used after this
+payment", "Payment 3 of 10" (only with a payment-count cap) and "Paid before
+expiry (≈ date)", where the date is estimated from slots. Exact base units and
+slots are under Technical details. A caption names the source:
+
+| Source | Caption |
+| --- | --- |
+| `on-chain` | Recorded on Solana at payment |
+| `relay-observed` | Seen by the ChainPay relay after payment, not stored on Solana |
+| `not-recorded` | Not recorded for this receipt. Showing today's limits. |
+
+A relay observation that already counts later payments shows neither the spent
+amount nor the payment count. Public `/verify` reads only the receipt account:
+the relay endpoint needs the owner's session, so a public reader sees
+`on-chain` or `not-recorded`. The Allowed stamp refers to this section; it is
+still the only policy stamp.
+
+Under it, one line compares the receipt's amount with the mandate as it is
+now: "If paid today: within limits", or "If paid today: blocked — {reason}"
+for a revoked, paused or expired permission, an amount over today's
+per-payment limit, a used-up payment count, or too little allowance left.
+Cooldown is not checked. When the mandate cannot be read it says "not checked".
+
 ## What was bought
 
 A merchant request can carry an optional `description` (up to 280 characters)
@@ -68,6 +97,21 @@ can read it back, from `/v1/receipts/<receipt-address>/request`.
 receipt's invoice hash, checks the merchant signature (not the request's
 expiry, since the payment already happened), and reports any amount, mint, or
 recipient the receipt paid differently.
+
+On the receipt card this is **Order match** (order · invoice · payment). It is
+shown only when a signed request verifies: "✓ Invoice signed by seller" and
+"✓ Paid on Solana", with the seller's invoice reference, description and line
+items for the owner. A mismatch is a failed line, and a request that does not
+verify shows nothing from it. There is no purchase order yet, so the pill
+reads "No order", or "Payee differs" when the receipt paid another account
+than the invoice named.
+
+Public `/verify` never fetches request content. The owner can choose
+**Share with details**, which builds `/verify/<receipt>#purchase=<base64url
+signed request>`. The fragment is not sent to any server. `/verify` decodes it,
+runs `verifyReceiptPurchase` against the on-chain invoice hash, and only then
+shows the details. Without such a link, `/verify` shows no purchase content and
+no Order match.
 
 ## Duplicate invoices
 
@@ -86,7 +130,10 @@ decimals from base units, and amounts whose mint decimals are unknown stay
 labeled base units. Dates come from the executed slot's block time and are
 left empty when unknown. Cells that a spreadsheet would run as a formula are
 prefixed with an apostrophe. The MCP `export_receipts` tool returns this CSV
-for the connected wallet.
+for the connected wallet. In the dashboard, **Export CSV** on the Receipts tab
+downloads `chainpay-receipts-YYYY-MM-DD.csv`; from a terminal,
+`chainpay export --owner <wallet> [--out file]` writes the same file (limits
+from the on-chain snapshot only, since the CLI has no relay session).
 
 ## Optional seller statement
 
