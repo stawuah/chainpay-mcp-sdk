@@ -37,6 +37,57 @@ The public reader may also show **current** mandate state. A mandate can change
 or be revoked after payment. Its current limits are not a historical snapshot
 of the policy that applied when the receipt was created.
 
+## Limits at payment
+
+Receipts written after the policy-snapshot program upgrade are 371 bytes
+instead of 282. Every original field keeps its offset; the extra bytes hold the
+mandate's limits immediately after the payment (per-payment limit, total limit,
+amount spent, payment count, payment-count cap, expiry slot, cooldown). Readers
+accept both sizes, and `decodePaymentReceipt` returns `policySnapshot: null` for
+an original receipt.
+
+Each limits display names its source:
+
+| Source | Meaning |
+| --- | --- |
+| `on-chain` | Written by the program into the receipt account at payment |
+| `relay-observed` | Read from the mandate by the ChainPay relay after the receipt finalized, at or after the payment slot. Not stored on Solana. If the mandate had already paid again, the spent amount is left out |
+| `not-recorded` | Neither exists; any limits shown are today's |
+
+## What was bought
+
+A merchant request can carry an optional `description` (up to 280 characters)
+and up to 20 `lineItems` (`label`, optional `amount` in base units, optional
+`quantity`). They are signed with the rest of the request, so they are part of
+the invoice hash when present; a request without them hashes exactly as before.
+
+When a payment settles a merchant-signed request through the relay, the relay
+keeps the request by receipt address. Only the mandate owner's wallet session
+can read it back, from `/v1/receipts/<receipt-address>/request`.
+`verifyReceiptPurchase(receipt, request)` recomputes the hash against the
+receipt's invoice hash, checks the merchant signature (not the request's
+expiry, since the payment already happened), and reports any amount, mint, or
+recipient the receipt paid differently.
+
+## Duplicate invoices
+
+The receipt address is derived from mandate and invoice hash, so an invoice can
+be paid once per mandate. The SDK and relay check for the receipt before
+building or relaying a payment and stop with a typed `DuplicateInvoice` error:
+"This invoice was already paid. Nothing new was submitted."
+
+## Export
+
+`receiptsToCsv(rows)` writes one CSV. The first columns suit accounting imports
+(Date, Description, Amount, Payee, Reference); the rest are ChainPay columns
+(Token, Agent, Spending permission, Per-payment limit, Total limit, Spent
+after, Limits source, Receipt, Verify URL, Explorer URL). Amounts are exact
+decimals from base units, and amounts whose mint decimals are unknown stay
+labeled base units. Dates come from the executed slot's block time and are
+left empty when unknown. Cells that a spreadsheet would run as a formula are
+prefixed with an apostrophe. The MCP `export_receipts` tool returns this CSV
+for the connected wallet.
+
 ## Optional seller statement
 
 A seller can sign a statement that a response was served. The backend accepts

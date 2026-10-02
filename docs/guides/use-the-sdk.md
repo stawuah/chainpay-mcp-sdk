@@ -63,7 +63,9 @@ read; verify the selected cluster and program before continuing.
 | Read a decoded payment receipt | `getPayment(receiptAddress)` |
 | Verify a settled receipt for public display | `readPublicReceipt(receiptAddress)` |
 | Prepare owner permission | `buildCreateMandate(input, owner)` |
-| Prepare a payment and inspect policy | `preparePayment(input, approvedAgent)` |
+| Check a merchant request against a receipt | `verifyReceiptPurchase(receipt, signedRequest)` |
+| Export receipts as one CSV | `receiptsToCsv(rows)` |
+| Prepare a payment and inspect policy | `preparePayment(input, approvedAgent)`; throws `DuplicateInvoiceError` when the invoice is already paid |
 | Terminal without the dashboard | `npx --prefix sdk chainpay status --owner <wallet>` |
 
 A PDA is a program-derived account address. A receipt PDA records a settlement;
