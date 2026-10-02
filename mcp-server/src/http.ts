@@ -27,7 +27,6 @@ const MAX_BODY_BYTES = 4_194_304;
 const CHAINPAY_OG_IMAGE = createChainPayOgImage();
 const AGENT_RATE_WINDOW_MS = 60_000;
 const AGENT_RATE_LIMIT = 20;
-const agentRateRecords = new Map<string, { startedAt: number; count: number }>();
 
 type HttpOptions = {
   host?: string;
@@ -114,19 +113,6 @@ function corsHeaders(origin: string | undefined, allowedOrigins: string[]): Reco
   };
 }
 
-function agentRequestAllowed(address: string): boolean {
-  const now = Date.now();
-  for (const [key, entry] of agentRateRecords) if (now - entry.startedAt >= AGENT_RATE_WINDOW_MS) agentRateRecords.delete(key);
-  if (agentRateRecords.size >= 10_000 && !agentRateRecords.has(address)) return false;
-  const current = agentRateRecords.get(address);
-  if (!current || now - current.startedAt >= AGENT_RATE_WINDOW_MS) {
-    agentRateRecords.set(address, { startedAt: now, count: 1 });
-    return true;
-  }
-  if (current.count >= AGENT_RATE_LIMIT) return false;
-  current.count += 1;
-  return true;
-}
 
 async function readJsonValue(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -223,10 +209,11 @@ function openEventStream(req: IncomingMessage, res: ServerResponse, headers: Rec
   });
   res.write(": chainpay-mcp stream\n\n");
   const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 20_000);
-  req.on("close", () => clearInterval(heartbeat));
+  const expiry = setTimeout(() => { clearInterval(heartbeat); res.end(); }, 240_000);
+  res.on("close", () => { clearInterval(heartbeat); clearTimeout(expiry); });
 }
 
-export function createHttpServer(
+export function createHttpHandler(
   context: ChainPayMcpContext,
   options: HttpOptions = {},
   registry: McpConnectionRegistry = McpConnectionRegistry.inMemory(),
@@ -244,7 +231,11 @@ export function createHttpServer(
   }
 
   const mcpServer = createMcpServer(context);
-  const server = createServer(async (req, res) => {
+  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    if (process.env.CHAINPAY_MAINTENANCE === "true" && req.url !== "/healthz") {
+      writeJson(res, 503, { error: "ChainPay is undergoing maintenance. Retry after service resumes." }, { "Retry-After": "60" });
+      return;
+    }
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const cors = corsHeaders(req.headers.origin, resolved.allowedOrigins);
     if (cors === null) {
@@ -373,7 +364,7 @@ export function createHttpServer(
     }
 
     if (url.pathname === "/agent/chat" && req.method === "POST") {
-      if (!agentRequestAllowed(principal.wallet)) {
+      if (!await registry.rateLimit(principal.wallet, Date.now(), AGENT_RATE_LIMIT, AGENT_RATE_WINDOW_MS)) {
         writeJson(res, 429, { error: "Too many assistant requests. Try again in a minute." }, headers);
         return;
       }
@@ -453,13 +444,23 @@ export function createHttpServer(
     }
 
     writeJson(res, 405, { error: "Method not allowed" }, { ...headers, Allow: "GET, POST, OPTIONS" });
-  });
+  };
+  return { handler, options: resolved, mcpServer, registry, tools: TOOL_DEFINITIONS };
+}
 
+export function createHttpServer(context: ChainPayMcpContext, options: HttpOptions = {}, registry: McpConnectionRegistry = McpConnectionRegistry.inMemory()) {
+  const result = createHttpHandler(context, options, registry);
+  const server = createServer((req, res) => {
+    void result.handler(req, res).catch(() => {
+      if (!res.headersSent) writeJson(res, 503, { error: "Service temporarily unavailable; reconcile pending operations before retrying." });
+      else res.end();
+    });
+  });
   server.on("close", () => {
     void registry.close();
   });
 
-  return { server, options: resolved, mcpServer, registry, tools: TOOL_DEFINITIONS };
+  return { server, ...result };
 }
 
 export async function runHttpServer(context: ChainPayMcpContext = createDefaultContext()): Promise<void> {

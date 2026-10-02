@@ -1,15 +1,18 @@
 //! Public payment metadata and transaction lifecycle persistence.
 //!
-//! Production uses PostgreSQL. The in-memory implementation exists only for
+//! Production uses explicitly selected Convex or PostgreSQL storage. The in-memory implementation exists only for
 //! deterministic unit tests; the backend process refuses to start without a
 //! `DATABASE_URL`.
 
+mod convex;
+use convex::{decode, encode, ConvexStore};
+use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
 
 use sqlx::{
-    PgPool, Row,
     postgres::{PgPoolOptions, PgRow},
     types::Json,
+    PgPool, Row,
 };
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -22,6 +25,8 @@ use crate::status::{
 
 #[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("Convex storage error: {0}")]
+    Remote(String),
     #[error("DATABASE_URL is required; production storage cannot fall back to memory")]
     MissingDatabaseUrl,
     #[error("database error: {0}")]
@@ -50,6 +55,7 @@ struct MemoryState {
 enum StorageBackend {
     Memory(Arc<RwLock<MemoryState>>),
     Postgres(PgPool),
+    Convex(ConvexStore),
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +78,26 @@ impl StatusStore {
     }
 
     pub async fn from_env() -> Result<Self, StorageError> {
+        if std::env::var("CHAINPAY_STORAGE").as_deref() == Ok("convex") {
+            let url = std::env::var("CHAINPAY_CONVEX_SITE_URL")
+                .map_err(|_| StorageError::Remote("CHAINPAY_CONVEX_SITE_URL is required".into()))?;
+            let secret = std::env::var("CHAINPAY_CONVEX_BACKEND_SECRET").map_err(|_| {
+                StorageError::Remote("CHAINPAY_CONVEX_BACKEND_SECRET is required".into())
+            })?;
+            let client = ConvexStore::new(&url, secret)?;
+            let _: serde_json::Value = client.call("ping", json!({})).await?;
+            return Ok(Self {
+                backend: StorageBackend::Convex(client),
+            });
+        }
+        if std::env::var("CHAINPAY_STORAGE").is_ok_and(|s| s != "postgres")
+            || std::env::var("VERCEL").as_deref() == Ok("1")
+        {
+            return Err(StorageError::Remote(
+                "CHAINPAY_STORAGE=convex is required on Vercel; unknown storage selection refused"
+                    .into(),
+            ));
+        }
         let database_url = std::env::var("DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -99,6 +125,10 @@ impl StatusStore {
         initial: serde_json::Value,
     ) -> Result<(bool, String, serde_json::Value, serde_json::Value), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let (won, owner, intent, initial): (bool, String, String, String) = client.call("claim_operation", json!({"id":id,"owner":owner,"intent_json":encode(&intent)?,"initial_json":encode(&initial)?})).await?;
+                Ok((won, owner, decode(&intent)?, decode(&initial)?))
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 let won = !state.operations.contains_key(id);
@@ -128,6 +158,8 @@ impl StatusStore {
         id: &str,
     ) -> Result<Option<(String, serde_json::Value, serde_json::Value)>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => { let row: Option<(String,String,String)> = client.call("operation_record", json!({"id":id})).await?;
+                row.map(|(owner,intent,initial)| Ok((owner,decode(&intent)?,decode(&initial)?))).transpose() },
             StorageBackend::Memory(state) => Ok(state.read().await.operations.get(id).cloned()),
             StorageBackend::Postgres(pool) => Ok(sqlx::query("SELECT owner_wallet,intent,initial_record FROM operation_claims WHERE operation_id=$1").bind(id).fetch_optional(pool).await?.map(|r| (r.get("owner_wallet"),r.get::<Json<serde_json::Value>,_>("intent").0,r.get::<Json<serde_json::Value>,_>("initial_record").0))),
         }
@@ -135,6 +167,9 @@ impl StatusStore {
 
     pub async fn operation_owner(&self, id: &str) -> Result<Option<String>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client.call("operation_owner", json!({"id":id})).await
+            }
             StorageBackend::Memory(state) => {
                 Ok(state.read().await.operations.get(id).map(|r| r.0.clone()))
             }
@@ -156,6 +191,14 @@ impl StatusStore {
     ) -> Result<bool, StorageError> {
         let key = format!("rate:{bucket}:{}", now / 60_000);
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call(
+                        "auth_rate",
+                        json!({"bucket":bucket,"now":now.to_string(),"limit":limit.to_string()}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 state.auth.retain(|_, (_, expires)| *expires > now);
@@ -192,6 +235,12 @@ impl StatusStore {
         expires: u64,
     ) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => client
+                .call(
+                    "put_auth",
+                    json!({"key":key,"value_json":encode(&value)?,"expires":expires.to_string()}),
+                )
+                .await?,
             StorageBackend::Memory(state) => {
                 state
                     .write()
@@ -214,6 +263,14 @@ impl StatusStore {
         consume: bool,
     ) -> Result<Option<serde_json::Value>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "get_auth",
+                        json!({"key":key,"now":now.to_string(),"consume":consume}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 state.auth.retain(|_, (_, expires)| *expires > now);
@@ -245,6 +302,9 @@ impl StatusStore {
         hash: &str,
     ) -> Result<Option<serde_json::Value>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client.call("auth_connection", json!({"hash":hash})).await
+            }
             StorageBackend::Memory(_) => Ok(None),
             StorageBackend::Postgres(pool) => {
                 let row = sqlx::query("SELECT wallet_address, scope FROM agent_connections WHERE token_hash=$1 AND revoked_at IS NULL")
@@ -259,6 +319,11 @@ impl StatusStore {
         payment_id: &str,
     ) -> Result<Option<PaymentRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("get_payment", json!({"payment_id":payment_id}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 Ok(state.read().await.payments.get(payment_id).cloned())
             }
@@ -277,6 +342,11 @@ impl StatusStore {
         key: &str,
     ) -> Result<Option<PaymentRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("find_payment_by_idempotency", json!({"key":key}))
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -299,6 +369,14 @@ impl StatusStore {
         receipt_address: &str,
     ) -> Result<Option<PaymentRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "find_payment_by_receipt",
+                        json!({"receipt_address":receipt_address}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -318,6 +396,11 @@ impl StatusStore {
 
     pub async fn put_payment(&self, record: PaymentRecord) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call("put_payment", json!({"record_json":encode(&record)?}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 if state.payments.get(&record.payment_id).is_some_and(|old| {
@@ -390,6 +473,11 @@ impl StatusStore {
         transaction_id: &str,
     ) -> Result<Option<TransactionRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("get_transaction", json!({"transaction_id":transaction_id}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 Ok(state.read().await.transactions.get(transaction_id).cloned())
             }
@@ -408,6 +496,11 @@ impl StatusStore {
         key: &str,
     ) -> Result<Option<TransactionRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("find_transaction_by_idempotency", json!({"key":key}))
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -427,6 +520,11 @@ impl StatusStore {
 
     pub async fn put_transaction(&self, record: TransactionRecord) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call("put_transaction", json!({"record_json":encode(&record)?}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 if state
@@ -486,6 +584,17 @@ impl StatusStore {
         let prefix = format!("{owner_wallet}:");
         let limit = limit.clamp(1, 100) as usize;
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let rows: Vec<(String, Option<String>)> = client
+                    .call(
+                        "list_x402_for_owner",
+                        json!({"owner_wallet":owner_wallet,"mandate":mandate,"limit":limit}),
+                    )
+                    .await?;
+                rows.into_iter()
+                    .map(|(record, mandate)| Ok((decode(&record)?, mandate)))
+                    .collect()
+            }
             StorageBackend::Memory(state) => {
                 let state = state.read().await;
                 let mut rows: Vec<(X402PaymentRecord, Option<String>)> = state
@@ -541,6 +650,11 @@ impl StatusStore {
         key: &str,
     ) -> Result<Option<X402PaymentRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record("find_x402_by_idempotency", json!({"key":key}))
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -560,6 +674,11 @@ impl StatusStore {
 
     pub async fn put_x402(&self, mut record: X402PaymentRecord) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call("put_x402", json!({"record_json":encode(&record)?}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 if state
@@ -645,6 +764,14 @@ impl StatusStore {
         challenge: ManagedSignerChallenge,
     ) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .call(
+                        "put_managed_signer_challenge",
+                        json!({"challenge_json":encode(&challenge)?}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 state
                     .write()
@@ -681,6 +808,14 @@ impl StatusStore {
         challenge_id: &str,
     ) -> Result<Option<ManagedSignerChallenge>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "get_managed_signer_challenge",
+                        json!({"challenge_id":challenge_id}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -703,6 +838,7 @@ impl StatusStore {
         consumed_at_ms: u64,
     ) -> Result<bool, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => { client.call("consume_managed_signer_challenge", json!({"challenge_id":challenge_id,"consumed_at_ms":consumed_at_ms.to_string()})).await },
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 let Some(challenge) = state.managed_signer_challenges.get_mut(challenge_id) else {
@@ -739,6 +875,15 @@ impl StatusStore {
         signer: ManagedSignerRecord,
     ) -> Result<(), StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let mut value = serde_json::to_value(&signer)
+                    .map_err(|_| StorageError::Remote("invalid signer record".into()))?;
+                value["provider_wallet_id"] = json!(signer.provider_wallet_id);
+                value["provider_policy_id"] = json!(signer.provider_policy_id);
+                client
+                    .call("put_managed_signer", json!({"signer_json":encode(&value)?}))
+                    .await
+            }
             StorageBackend::Memory(state) => {
                 state
                     .write()
@@ -795,6 +940,14 @@ impl StatusStore {
         public_key: &str,
     ) -> Result<Option<ManagedSignerRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "find_managed_signer_by_public_key",
+                        json!({"public_key":public_key}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -817,6 +970,14 @@ impl StatusStore {
         mandate_pda: &str,
     ) -> Result<Option<ManagedSignerRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                client
+                    .record(
+                        "find_managed_signer_by_mandate",
+                        json!({"mandate_pda":mandate_pda}),
+                    )
+                    .await
+            }
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -839,6 +1000,24 @@ impl StatusStore {
         record: DeliveryAttestationRecord,
     ) -> Result<DeliveryAttestationPut, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => {
+                let result: serde_json::Value = client
+                    .call(
+                        "put_delivery_attestation",
+                        json!({"record_json":encode(&record)?}),
+                    )
+                    .await?;
+                let stored =
+                    decode(result["record_json"].as_str().ok_or_else(|| {
+                        StorageError::Remote("invalid attestation response".into())
+                    })?)?;
+                match result["kind"].as_str() {
+                    Some("created") => Ok(DeliveryAttestationPut::Created(stored)),
+                    Some("unchanged") => Ok(DeliveryAttestationPut::Unchanged(stored)),
+                    Some("conflict") => Ok(DeliveryAttestationPut::Conflict(stored)),
+                    _ => Err(StorageError::Remote("invalid attestation result".into())),
+                }
+            }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
                 let key = delivery_key(&record);
@@ -895,6 +1074,7 @@ impl StatusStore {
         receipt_address: &str,
     ) -> Result<Option<DeliveryAttestationRecord>, StorageError> {
         match &self.backend {
+            StorageBackend::Convex(client) => { client.record("find_delivery_attestation", json!({"cluster":cluster,"program_id":program_id,"receipt_address":receipt_address})).await },
             StorageBackend::Memory(state) => Ok(state
                 .read()
                 .await
@@ -1438,18 +1618,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(
-            store
-                .consume_managed_signer_challenge("challenge-1", 150)
-                .await
-                .unwrap()
-        );
-        assert!(
-            !store
-                .consume_managed_signer_challenge("challenge-1", 151)
-                .await
-                .unwrap()
-        );
+        assert!(store
+            .consume_managed_signer_challenge("challenge-1", 150)
+            .await
+            .unwrap());
+        assert!(!store
+            .consume_managed_signer_challenge("challenge-1", 151)
+            .await
+            .unwrap());
         assert_eq!(
             store
                 .get_managed_signer_challenge("challenge-1")
@@ -1472,12 +1648,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(
-            !store
-                .consume_managed_signer_challenge("expired-challenge", 101)
-                .await
-                .unwrap()
-        );
+        assert!(!store
+            .consume_managed_signer_challenge("expired-challenge", 101)
+            .await
+            .unwrap());
     }
 
     #[test]

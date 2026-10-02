@@ -58,8 +58,9 @@ stack needs a dedicated PostgreSQL database; Axum applies migrations at startup.
 
 ## Invariants
 
-- The Anchor program is the final payment authority. Preserve Axum, PostgreSQL,
-  the SDK, and wallet authentication; no replacement backend, lending, or escrow.
+- The Anchor program is the final payment authority. Preserve Axum, the SDK, wallet authentication, and on-chain payment checks.
+  The approved Vercel/Convex migration replaces PostgreSQL persistence; PostgreSQL
+  remains available for migration/rollback. No lending or escrow.
 - Derive private-route identity from verified wallet sessions or scoped
   connections. A supplied address or shared service token is not caller authorization.
 - Preserve exact amounts as strings or integers. Do not turn amounts into

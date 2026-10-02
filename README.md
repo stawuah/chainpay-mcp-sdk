@@ -10,14 +10,14 @@ ChainPay lets you give an AI agent permission to make stablecoin payments on
 Solana within limits you approve. The on-chain program checks each payment
 and creates a receipt you can inspect and share.
 
-**[Try ChainPay](https://chainpay-frontend.onrender.com/)** ·
+**[Try ChainPay](https://chainpay-web-kappa.vercel.app/)** ·
 [First payment walkthrough](docs/getting-started/try-chainpay.md) ·
 [Connect an agent](docs/guides/connect-an-agent.md) ·
 [Documentation](docs/README.md)
 
 **Devnet demo.** This is a test-network project, not a mainnet payment service.
-These docs describe this fork's PR stack. The hosted app currently shows an
-earlier interface. [Run this fork locally](docs/getting-started/local-development.md)
+The Vercel deployment uses a separate development database. Existing Render/Neon
+history has not been imported; see the [operator handoff](docs/guides/vercel-convex-handoff.md). [Run this fork locally](docs/getting-started/local-development.md)
 for the onboarding shown below.
 
 ![ChainPay owner setup: a Devnet dashboard with Wallet, Limits, and Agent steps, starting with wallet connection.](docs/assets/owner-setup.png)
@@ -80,7 +80,7 @@ not give the model your wallet keys. You can also use the SDK directly.
 ## Under the hood
 
 The React dashboard, TypeScript SDK, and MCP server connect to an Axum relay
-and the Anchor program on Solana. PostgreSQL stores operational records;
+and the Anchor program on Solana. Convex stores operational records in the new Vercel deployment;
 the program enforces spending rules and creates the on-chain receipt.
 
 [Architecture](docs/reference/architecture.md) ·

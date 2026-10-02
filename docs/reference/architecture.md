@@ -14,7 +14,7 @@ flowchart TD
     Relay -->|Submit and verify| Program[Anchor program on Solana Devnet]
     Program -->|Transfer| Recipient[Recipient token account]
     Program --> Receipt[On-chain receipt]
-    Relay --> DB[PostgreSQL operational records]
+    Relay --> DB[Convex operational records]
     Receipt --> Verify[Public verification page]
 ```
 
@@ -30,7 +30,7 @@ the returned signed transaction before submission. See the
 | [Anchor program](../../programs/chainpay/README.md) | Mandates, supported-asset registry, policy enforcement, token transfers, replay prevention, receipts |
 | [SDK](../../sdk/README.md) | Account derivation/decoding, instructions, preflight, token inspection, receipt verification |
 | [MCP server](../../mcp-server/README.md) | Tool discovery, scoped agent requests, payment preparation, chat/inbox, signed transaction relay |
-| [Axum backend](../../backend/README.md) | Wallet sessions, wire validation, direct RPC submission, finality, recovery, PostgreSQL state |
+| [Axum backend](../../backend/README.md) | Wallet sessions, wire validation, direct RPC submission, finality, recovery, Convex operational state |
 | Frontend and [demo merchant](../../demo-merchant/README.md) | Owner-facing UI and public receipts; independent payment verification before resource delivery |
 
 The runnable browser app is in `frontend/`. `app/` is an earlier lightweight
@@ -54,7 +54,7 @@ for a program account. ChainPay uses PDAs for mandates and payment receipts.
 Receipt seeds include the mandate and invoice hash; they also prevent the
 same invoice from being paid twice under that mandate.
 
-PostgreSQL stores operational records, connection tokens as hashes, payment
+Convex stores operational records, connection tokens as hashes, payment
 status, and provider metadata. It is not the source of payment authority.
 Seller delivery statements are off-chain and never alter the receipt's Paid
 state. See [receipts](receipts.md).
@@ -70,3 +70,10 @@ Use [configuration](configuration.md) to connect services and
 [implementation status](../project/implementation-status.md) to distinguish
 implemented code from accepted live behavior. Older architecture proposals
 are in the archive; [scope](../scope.md) remains the product authority.
+
+## Hosting migration
+
+Vercel hosts the Vite frontend, Axum adapter, and Node MCP service. Both services
+use an authenticated Convex storage interface; payment authority and wallet
+authentication remain in their existing layers. PostgreSQL support is retained
+for migration and rollback. See the [handoff and cutover guide](../guides/vercel-convex-handoff.md).

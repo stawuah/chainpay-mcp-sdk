@@ -71,7 +71,7 @@ pub struct TrustedSellerMapping {
     pub recipient_token_account: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeliveryAttestationRecord {
     pub cluster: String,
     pub program_id: String,

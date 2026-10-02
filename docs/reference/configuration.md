@@ -10,11 +10,15 @@ provides complete commands; this page explains ownership of the settings.
 | `CHAINPAY_RPC_URL` | SDK, MCP, backend, merchant | Solana Devnet RPC endpoint |
 | `CHAINPAY_PROGRAM_ID` | SDK, MCP, backend, merchant | Deployed ChainPay program; must match the chosen network |
 | `CHAINPAY_BACKEND_URL` | MCP and integrations | Axum relay and authentication endpoint |
-| `DATABASE_URL` | Axum and HTTP MCP | PostgreSQL database; Axum applies the migrations at startup |
+| `CHAINPAY_STORAGE` | Axum and HTTP MCP | `convex` on Vercel; `postgres` for local/rollback compatibility |
+| `CHAINPAY_CONVEX_SITE_URL` | Axum and HTTP MCP | Authenticated Convex HTTP storage origin |
+| `DATABASE_URL` | PostgreSQL mode only | Axum applies migrations at startup |
 | `CHAINPAY_ALLOWED_ORIGINS` | Axum and HTTP MCP | Explicit browser origins, including scheme and port |
 
-Stdio tool discovery needs no database. The HTTP service uses PostgreSQL for
-connections and inbox data. Keep the database URL in the server environment.
+Stdio tool discovery needs no database. The HTTP service uses the selected
+durable store for connections and inbox data. Keep service secrets server-side.
+See the [Vercel/Convex handoff](../guides/vercel-convex-handoff.md) for separate
+backend/MCP credentials, deployment selection, and data-preserving cutover.
 
 ## Browser configuration
 
@@ -57,5 +61,6 @@ private routes public. Server processes read their environment; copying the
 - **Seller statements:** public identity mappings in [trusted sellers](../guides/trusted-sellers.md).
   Statement signing stays on the merchant host.
 
-The deployment template is [render.yaml](../../render.yaml). Deployment and
-shared-database migration are operational actions, not README verification.
+The current deployment workflow is the [Vercel/Convex handoff](../guides/vercel-convex-handoff.md).
+[render.yaml](../../render.yaml) remains as a legacy rollback reference; the existing
+Render services have not been retired by this code change.
