@@ -61,6 +61,21 @@ async function sha256Hex(text: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/** Check the request against the active Devnet app before any wallet approval. */
+function assertRequestContext(payload: MandateRequestPayload, currentSlot?: bigint | null): void {
+  if (payload.cluster !== "devnet") throw new Error("This request is for a different Solana cluster. ChainPay uses Devnet.");
+  if (currentSlot == null) throw new Error("Request expiry could not be checked. Reopen the link when the network is available.");
+  if (payload.validUntilSlot !== undefined && BigInt(payload.validUntilSlot) <= currentSlot) throw new Error("This request link has expired");
+  if (payload.suggestedExpirySlot !== undefined && BigInt(payload.suggestedExpirySlot) <= currentSlot) throw new Error("The requested permission expiry has passed");
+}
+
+/** Recheck persisted requests with a fresh slot immediately before approval. */
+export async function validatePermissionRequestForApproval(signed: SignedMandateRequest, currentSlot?: bigint | null): Promise<void> {
+  const verification = await verifyMandateRequest(signed);
+  if (!verification.valid) throw new Error(verification.reason ?? "This request did not verify");
+  assertRequestContext(verification.payload, currentSlot);
+}
+
 /**
  * Decode and verify a request link. With a current slot, an expired link is
  * refused. A link that cannot be read still gets a stable id (the hash of the
@@ -85,6 +100,11 @@ export async function checkPermissionRequestLink(
   const requestHash = verification.requestHash || `link-${await sha256Hex(fragment)}`;
   if (!verification.valid) {
     return { status: "invalid", reason: verification.reason ?? "This request did not verify", requestHash };
+  }
+  try {
+    assertRequestContext(verification.payload, currentSlot);
+  } catch (error) {
+    return { status: "invalid", requestHash, reason: error instanceof Error ? error.message : "This request could not be checked" };
   }
   return {
     status: "valid",

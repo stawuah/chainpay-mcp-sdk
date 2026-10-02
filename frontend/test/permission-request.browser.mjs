@@ -129,6 +129,42 @@ try {
     await shoot("builder-review", width);
   }
 
+  // Real post-wallet continuation with invalid fixture wire bytes intercepted
+  // entirely in memory: one approval, one submission, retry only the link.
+  for (const failFirst of [false, true]) {
+    await page.goto(harness(`tab=assistant&permission=vendor&ready&fixture-approval${failFirst ? "&link=fail" : ""}`));
+    await page.getByRole("button", { name: "Review permission", exact: true }).click();
+    await page.getByRole("button", { name: "Set spending limits" }).click();
+    await page.getByRole("button", { name: "Review permission", exact: true }).click();
+    await page.getByRole("button", { name: "Approve spending permission", exact: true }).click();
+    if (failFirst) {
+      await page.locator(".mandate-link-status").filter({ hasText: "Linking it to PO-1042 failed" }).waitFor();
+      await page.getByRole("button", { name: "Retry link", exact: true }).click();
+    }
+    await page.locator(".mandate-created-heading").filter({ hasText: "Permission created · linked to PO-1042" }).waitFor();
+    const evidence = await page.evaluate(() => window.permissionApprovalEvidence);
+    assert.equal(evidence.signatures, 1);
+    assert.equal(evidence.submissions, 1);
+    assert.equal(evidence.links, failFirst ? 2 : 1);
+    const inbox = await page.evaluate(() => JSON.parse(localStorage.getItem("chainpay.ai-inbox.v1:7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q") || "[]"));
+    const item = inbox.find((entry) => entry.permissionRequest?.requestHash === fixture.vendor.requestHash);
+    assert.equal(item.permissionRequest.link, "linked");
+    assert.ok(item.permissionRequest.mandateAddress);
+    // Clear this fixture's accepted request so the next scenario reviews anew.
+    await page.evaluate(() => { localStorage.clear(); });
+  }
+
+  // Expiry between preview and approval never reaches the fixture wallet.
+  await page.goto(harness("tab=assistant&permission=vendor&ready&fixture-approval"));
+  await page.getByRole("button", { name: "Review permission", exact: true }).click();
+  await page.getByRole("button", { name: "Set spending limits" }).click();
+  await page.getByRole("button", { name: "Review permission", exact: true }).click();
+  await page.evaluate((slot) => { window.permissionApprovalEvidence.slot = slot; }, fixture.vendor.request.payload.validUntilSlot);
+  await page.getByRole("button", { name: "Approve spending permission", exact: true }).click();
+  await page.locator(".builder-error").filter({ hasText: "This request link has expired" }).waitFor();
+  assert.equal(await page.evaluate(() => window.permissionApprovalEvidence.signatures), 0);
+  assert.equal(await page.evaluate(() => window.permissionApprovalEvidence.submissions), 0);
+
   // 4. Receipt with the Matched pill, owner view.
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });

@@ -102,4 +102,13 @@ request card, blocked links, Decline, the builder prefill (budget request:
 expected payee, the **Matched** receipt, Share with details carrying the
 order, the CSV PO number and Order match columns, and the permission
 Statement, at 1440 and 390. Screenshots go to `CHAINPAY_SHOTS_DIR` (default
-`/tmp`) as `pr4-*.png`. The harness has no signer; nothing is signed or sent.
+`/tmp`) as `pr4-*.png`. The `fixture-approval` mode exercises the real
+post-wallet continuation using invalid fixture bytes and intercepts every
+service request in memory, with no network fallback. It verifies successful
+linking, failed-link retry without a second signature/submission, and expiry
+between preview and approval. No real transaction is signed or submitted.
+
+The unit suite also checks unavailable-slot refusal, network mismatch,
+acceptance deadlines, public proposals displaying **Acceptance unverified**,
+and invoice amount/token mismatches displaying **Invoice differs** in the
+receipt model and CSV.

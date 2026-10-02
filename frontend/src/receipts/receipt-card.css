@@ -169,6 +169,7 @@
   background: var(--soft);
   font: 500 12px var(--sans);
 }
+.receipt-pill[data-pill="Invoice differs"],
 .receipt-pill[data-pill="Payee differs"] { border-color: #e7b4bb; color: #6b1320; background: #fdf1f2; }
 .receipt-pill[data-pill="Matched"] { border-color: #b8e3cd; color: #0a3d2a; background: #eef9f3; }
 .receipt-policy-today-limits,
