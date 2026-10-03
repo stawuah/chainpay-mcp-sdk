@@ -14,7 +14,7 @@ concurrency:
   group: deploy-vercel-production
   cancel-in-progress: false
 env:
-  VERCEL_ORG_ID: team_RwOruG2VOGq9HUg5nK5jV5wb
+  VERCEL_ORG_ID: team_vwRqJmtnaVAEUcpBlU4S2bfA # ChainPay team
 jobs:
   services:
     # Only a green, same-repo push to master deploys; fork PRs never reach this.
