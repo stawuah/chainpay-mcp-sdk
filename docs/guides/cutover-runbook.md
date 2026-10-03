@@ -43,11 +43,11 @@ Nothing here sends a Solana transaction, upgrades the program, or enables Crossm
 | 1 | Kwasi | On Render, **suspend** `chainpay-backend`, `chainpay-mcp` and the keep-alive job. A maintenance banner is not enough. | — |
 | 2 | Dre | `scripts/cutover-vercel-convex.sh preflight` | Render still answers, or prod Convex isn't empty or isn't in maintenance |
 | 3 | Dre | `scripts/cutover-vercel-convex.sh migrate`: final Neon export, import, round-trip compare | Any table differs |
-| 4 | Dre | `scripts/cutover-vercel-convex.sh switch`: Vercel production → prod Convex, exact web origin only | A setting can't be written |
+| 4 | Dre | `scripts/cutover-vercel-convex.sh switch`: Vercel production → prod Convex; CORS allows only the website's own origins (`www.chainpayai.app`, `chainpayai.app`, `chainpay-web-kappa.vercel.app`) | A setting can't be written |
 | 5 | Dre | Merge this PR. Release checks run, then Convex → relay + MCP → website deploy (about 10 min) | The release guard rejects a setting, or a build fails |
 | 6 | Dre | `scripts/cutover-vercel-convex.sh open`: production Convex accepts writes | — |
 | 7 | Dre | `scripts/cutover-vercel-convex.sh smoke`: wallet-message login, CORS, owner isolation (no transaction) | Any check fails |
-| 8 | Kwasi | Point users at `https://chainpay-web-kappa.vercel.app` (redirect or replace the Render static site). Update MCP clients to `https://chainpay-mcp.vercel.app/mcp`. | — |
+| 8 | Kwasi | Point users at `https://www.chainpayai.app` (redirect or replace the Render static site). Update MCP clients to `https://chainpay-mcp.vercel.app/mcp`. | — |
 
 If **any step up to and including 5** fails: run `scripts/cutover-vercel-convex.sh abort`,
 and Kwasi resumes the Render services. Neon was never written to, so nothing is lost.

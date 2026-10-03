@@ -23,7 +23,9 @@ step="${1:-}"
 OUT="${CHAINPAY_CUTOVER_DIR:-.migration/cutover-$(date -u +%Y%m%d)}"
 ENV_FILE="${CONVEX_PROD_ENV_FILE:-$HOME/.config/chainpay/convex-prod.env}"
 SCOPE="${VERCEL_SCOPE:-chainpay}"
-WEB_ORIGIN="${CHAINPAY_WEB_ORIGIN:-https://chainpay-web-kappa.vercel.app}"
+WEB_ORIGIN="${CHAINPAY_WEB_ORIGIN:-https://www.chainpayai.app}"
+# Every origin the website is served from; the relay and MCP reject the rest.
+WEB_ORIGINS="${CHAINPAY_WEB_ORIGINS:-$WEB_ORIGIN,https://chainpayai.app,https://chainpay-web-kappa.vercel.app}"
 RELEASE_GROUP="${CHAINPAY_RELEASE_GROUP:-release-$(date -u +%Y%m%d)}"
 RENDER_HEALTH=(https://chainpay-backend.onrender.com/healthz https://chainpay-mcp.onrender.com/healthz)
 
@@ -95,10 +97,11 @@ case "$step" in
     done
     for project in chainpay-relay chainpay-mcp; do
       vercel_set "$project" CHAINPAY_CONVEX_SITE_URL "$CHAINPAY_CONVEX_SITE_URL"
-      vercel_set "$project" CHAINPAY_ALLOWED_ORIGINS "$WEB_ORIGIN"
+      vercel_set "$project" CHAINPAY_ALLOWED_ORIGINS "$WEB_ORIGINS"
     done
     vercel_set chainpay-relay CHAINPAY_CONVEX_BACKEND_SECRET "$CHAINPAY_CONVEX_BACKEND_SECRET"
     vercel_set chainpay-mcp CHAINPAY_CONVEX_MCP_SECRET "$CHAINPAY_CONVEX_MCP_SECRET"
+    vercel_set chainpay-mcp CHAINPAY_APP_URL "$WEB_ORIGIN"
     echo "OK: Vercel production now targets prod Convex. Merge the cutover PR (or run"
     echo "    'gh workflow run deploy-vercel.yml --ref master') and wait for the deploy."
     ;;
