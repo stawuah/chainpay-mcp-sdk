@@ -36,7 +36,7 @@ export default function UseCasesPage() {
           ))}
         </div>
 
-        <div className="uc-grid">
+        <div className={`uc-grid${filter === "all" && visible.some((item) => item.featured) ? " uc-grid-featured" : ""}`}>
           {visible.map((item, index) => (
             <UseCaseCard key={item.slug} item={item} featured={filter === "all" && Boolean(item.featured)} eager={index < 3} />
           ))}
