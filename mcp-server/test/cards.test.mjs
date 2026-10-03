@@ -125,7 +125,9 @@ test("prepare_agent_card is a stateless draft: no network, no signing, exact max
     assert.equal(out.maxObligationCents, maxObligationCents(50_000n, 50).toString());
     assert.equal(out.maxObligationCents, "50250");
     assert.equal(out.display.maxObligation, "$502.50");
-    assert.match(out.reviewUrl, /\/app\/cards\/new#draft=/);
+    assert.match(out.reviewUrl, /\/app\/cards\/new#draft=[A-Za-z0-9_-]+&digest=[0-9a-f]{64}$/);
+    assert.ok(out.reviewUrl.endsWith(`&digest=${out.draftDigest}`));
+    assert.match(result.content[0].text, new RegExp(`Check code: ${out.draftDigest.slice(0, 8)}`));
     assert.match(out.draftDigest, /^[0-9a-f]{64}$/);
     assert.ok(!("transaction" in out) && !("unsignedTransaction" in out) && !("cardId" in out));
     assert.match(result.content[0].text, /Nothing is live yet/);

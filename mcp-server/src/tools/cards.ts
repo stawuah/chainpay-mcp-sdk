@@ -5,7 +5,7 @@ import {
   DECLINE_COPY,
   cardDraftDigest,
   cardDraftMaxObligationCents,
-  encodeCardDraftLink,
+  encodeCardDraftReviewLink,
   findCardNumberLike,
   formatFeeBps,
   formatUsdCents,
@@ -109,6 +109,7 @@ export async function prepareAgentCard(_context: ChainPayMcpContext, args: Recor
   const draft = normalizeCardDraft(args as Parameters<typeof normalizeCardDraft>[0]);
   const appUrl = (process.env.CHAINPAY_APP_URL ?? "https://chainpay-web-kappa.vercel.app").trim();
   const maxObligationCents = cardDraftMaxObligationCents(draft);
+  const draftDigest = await cardDraftDigest(draft);
   const display = {
     budget: formatUsdCents(draft.budgetCents),
     maxPurchase: formatUsdCents(draft.maxPurchaseCents),
@@ -119,8 +120,8 @@ export async function prepareAgentCard(_context: ChainPayMcpContext, args: Recor
     action: "card_draft_prepared",
     status: "draft",
     live: false,
-    reviewUrl: encodeCardDraftLink(draft, appUrl),
-    draftDigest: await cardDraftDigest(draft),
+    reviewUrl: await encodeCardDraftReviewLink(draft, appUrl),
+    draftDigest,
     maxObligationCents,
     draft,
     display,
@@ -132,6 +133,7 @@ export async function prepareAgentCard(_context: ChainPayMcpContext, args: Recor
     `- Max per purchase: ${display.maxPurchase}`,
     `- Platform fee: ${display.fee}, so the most the owner could owe per period is ${display.maxObligation} (simulated credit)`,
     `- Shops: ${draft.merchants.length ? draft.merchants.join(", ") : "any shop in the listed categories"}${draft.mccs.length ? `; categories ${draft.mccs.join(", ")}` : ""}`,
+    `- Check code: ${draftDigest.slice(0, 8)} (the owner sees the same code on the review page)`,
     "",
     "**Next step:** Send the owner the review link. Only their wallet can create the card and set these limits.",
   ].join("\n");

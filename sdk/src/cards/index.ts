@@ -10,3 +10,5 @@ export * from "./evidence.js";
 export * from "./api.js";
 export * from "./tee.js";
 export * from "./draft.js";
+export * from "./commitment.js";
+export * from "./merchants.js";

@@ -82,6 +82,10 @@ export type CardActivityRow = {
   kind: CardActivityKind;
   lifecycle?: CardReservationLifecycle | "late_capture" | "refunded" | "forced_capture";
   amountCents?: string;
+  /** Approved hold for capture rows, when it differs from amountCents (partial charges). */
+  reservedCents?: string;
+  /** opaque event id hash (hex) the owner passes to resolve_exception. */
+  eventIdHash?: string;
   merchant?: CardMerchantView;
   intentId?: string;
   agent?: string;

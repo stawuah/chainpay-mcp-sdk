@@ -119,3 +119,33 @@ export function decodeCardDraftFragment(fragment: string, now = Date.now()): Car
   if (raw.v !== 1) throw new Error("Unsupported card draft version");
   return normalizeCardDraft(raw as CardDraftInput, now);
 }
+
+/** Review link with the draft digest alongside: `…/app/cards/new#draft=…&digest=<hex>`. */
+export async function encodeCardDraftReviewLink(draft: CardDraft, appBaseUrl: string): Promise<string> {
+  return `${encodeCardDraftLink(draft, appBaseUrl)}&digest=${await cardDraftDigest(draft)}`;
+}
+
+export type CardDraftIntake =
+  | { status: "matched"; draft: CardDraft; digest: string }
+  | { status: "mismatch"; digest: string; expected: string }
+  | { status: "missing_digest"; digest: string }
+  | { status: "invalid"; reason: string };
+
+/**
+ * Dashboard intake for an agent's review link. The draft is only usable when
+ * the digest in the link equals the digest recomputed here; otherwise the
+ * caller must leave the form empty.
+ */
+export async function verifyCardDraftFragment(fragment: string, now = Date.now()): Promise<CardDraftIntake> {
+  let draft: CardDraft;
+  try {
+    draft = decodeCardDraftFragment(fragment, now);
+  } catch (error) {
+    return { status: "invalid", reason: error instanceof Error ? error.message : "This link can't be read" };
+  }
+  const digest = await cardDraftDigest(draft);
+  const claimed = fragment.match(/(?:^#?|&)digest=([0-9a-f]{64})(?:&|$)/)?.[1];
+  if (!claimed) return { status: "missing_digest", digest };
+  if (claimed !== digest) return { status: "mismatch", digest, expected: claimed };
+  return { status: "matched", draft, digest };
+}
