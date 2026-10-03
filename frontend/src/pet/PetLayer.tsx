@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type
 import { isNight, moodOf, NIGHT_END_UTC, stageFor, type Mood, type PetAction } from "./sim/needs";
 import { petStore, usePet, type Reaction, type ReactionKind } from "./store";
 import { pinAt, useRoamer, type Pin } from "./roam/roamer";
+import { CanvasBoundary } from "./CanvasBoundary";
 import { RobotStill } from "./RobotStill";
 import { PetPanel, type PanelView } from "./PetPanel";
 import { SpeechBubble } from "./play/SpeechBubble";
@@ -574,9 +575,9 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
           style={flip ? { transform: "scaleX(-1)" } : undefined}
         >
           {webgl ? (
-            <Suspense fallback={<RobotStill expression={expression} />}>
+            <CanvasBoundary fallback={<RobotStill expression={expression} />}><Suspense fallback={<RobotStill expression={expression} />}>
               <RobotCanvas expression={expression} motion={motion} look={lookAt} animate={!reducedMotion} gear={bond.gearOn} />
-            </Suspense>
+            </Suspense></CanvasBoundary>
           ) : (
             <RobotStill expression={expression} />
           )}

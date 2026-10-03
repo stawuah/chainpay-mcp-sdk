@@ -22,9 +22,9 @@ export default function CommunityCompanion({ routeKind, routeKey, onHide }: { ro
     if (!open) { resume(1_500); return; }
     pause(); panel.current?.focus();
     const close = (event: KeyboardEvent) => { if (event.key === "Escape") { setOpen(false); body.current?.focus(); } };
-    const outside = (event: PointerEvent) => { if (!panel.current?.contains(event.target as Node) && !body.current?.contains(event.target as Node)) setOpen(false); };
-    window.addEventListener("keydown", close); window.addEventListener("pointerdown", outside);
-    return () => { window.removeEventListener("keydown", close); window.removeEventListener("pointerdown", outside); };
+    const outside = (event: PointerEvent | FocusEvent) => { if (!panel.current?.contains(event.target as Node) && !body.current?.contains(event.target as Node)) setOpen(false); };
+    window.addEventListener("keydown", close); window.addEventListener("pointerdown", outside); window.addEventListener("focusin", outside);
+    return () => { window.removeEventListener("keydown", close); window.removeEventListener("pointerdown", outside); window.removeEventListener("focusin", outside); };
   }, [open, pause, resume]);
   const act = (next: PetAction) => { setAction(next); setReactionId(id => id + 1); void communityPet.act(next); };
   return <>

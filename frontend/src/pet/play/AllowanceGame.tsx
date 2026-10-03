@@ -157,6 +157,7 @@ export function AllowanceGame({
           else return;
           event.preventDefault();
         }}
+        onBlur={() => { game.current.keys = 0; }}
         onKeyUp={(event) => {
           if (event.key === "ArrowLeft" || event.key === "ArrowRight") game.current.keys = 0;
         }}

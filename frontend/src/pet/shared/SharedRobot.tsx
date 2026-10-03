@@ -1,15 +1,11 @@
-import { Component, lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import type { PetAction, PetState } from "../../../../shared/pet";
 import type { Expression, Motion } from "../RobotModel";
 import { RobotStill } from "../RobotStill";
 
 const RobotCanvas = lazy(() => import("../RobotCanvas"));
 const RoomCanvas = lazy(() => import("./RoomCanvas"));
-class CanvasBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  render() { return this.state.failed ? this.props.fallback : this.props.children; }
-}
+import { CanvasBoundary } from "../CanvasBoundary";
 export function useReducedMotion() {
   const [reduced, setReduced] = useState(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
   useEffect(() => { const media = matchMedia("(prefers-reduced-motion: reduce)"); const update = () => setReduced(media.matches); media.addEventListener("change", update); return () => media.removeEventListener("change", update); }, []);

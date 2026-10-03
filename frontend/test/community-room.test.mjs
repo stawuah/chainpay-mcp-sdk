@@ -33,3 +33,16 @@ test('photo draws the current source with its aspect ratio and centered letterbo
   drawPhotoScene({drawImage:(...args)=>calls.push(args)},source,800,400);
   assert.deepEqual(calls,[[source,0,50,1200,600]]);
 });
+test('refresh exposes every intervening memory after more than a page arrives',async()=>{
+  let entries=Array.from({length:24},(_,i)=>m(String(24-i),24-i));
+  const book=createScrapbook(async path=>{
+    const before=Number(new URL(path,'http://test/').searchParams.get('before')??Infinity);
+    const remaining=entries.filter(entry=>entry.at<before), page=remaining.slice(0,12);
+    return {memories:page,nextBefore:remaining.length>12?page.at(-1).at:null,aggregates:[]};
+  });
+  await book.refresh();await book.more();assert.equal(book.get().nextBefore,null);
+  entries=Array.from({length:37},(_,i)=>m(String(37-i),37-i));
+  await book.refresh();assert.notEqual(book.get().nextBefore,null);
+  while(book.get().nextBefore!==null)await book.more();
+  assert.deepEqual(book.get().memories.map(x=>x.id),entries.map(x=>x.id));
+});

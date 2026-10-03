@@ -13,8 +13,11 @@ export function createScrapbook(request: (path: string) => Promise<PetMemoriesRe
     try {
       const result = await request('memories?limit=12');
       if (current !== generation) return;
+      // A long absence may add more than one page. Keep the refreshed cursor
+      // until pagination bridges that gap, even if older pages are retained.
+      const overlaps = result.memories.some(memory => state.memories.some(old => old.id === memory.id));
       update({ memories: mergeMemories(state.memories, result.memories), aggregates: result.aggregates,
-        nextBefore: expanded ? state.nextBefore : result.nextBefore, error: false });
+        nextBefore: expanded && overlaps ? state.nextBefore : result.nextBefore, error: false });
     } catch { if (current === generation) update({ error: true }); }
   }
   async function more() {

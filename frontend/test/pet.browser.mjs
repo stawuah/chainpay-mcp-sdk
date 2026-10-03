@@ -234,6 +234,24 @@ async function inViewport(page) {
   await context.close();
 }
 
+// A renderer can fail after the WebGL capability probe succeeds. The
+// decorative component's boundary must preserve the rest of the interface.
+{
+  const context = await browser.newContext({ reducedMotion: 'reduce' });
+  const page = await context.newPage();
+  await page.route('https://**/*', route => route.abort());
+  await page.route('**/src/pet/RobotCanvas.tsx*', route => route.fulfill({
+    contentType: 'application/javascript',
+    body: 'export default function BrokenCanvas(){throw new Error("fixture renderer failure");}',
+  }));
+  await page.goto(BASE + '/');
+  await page.locator('.cp-pet-body svg').waitFor({ timeout: 20000 });
+  assert.ok(await page.locator('main').count(), 'renderer failure must preserve the page');
+  await page.getByRole('button', { name: 'ChainPay robot' }).click();
+  await page.getByRole('dialog', { name: '???' }).waitFor();
+  await context.close();
+}
+
 assert.deepEqual(errors, []);
 await browser.close();
 console.log('pet browser checks passed');
