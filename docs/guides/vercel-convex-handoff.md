@@ -46,53 +46,37 @@ implementations.
   name/type, three service origins, and who performs cutover/rollback. Keep
   automatic production domain assignment paused until data acceptance passes.
 
-### Git-linked Vercel settings
+### Deployment ownership and ordering
 
-Connect **all three** projects to `stawuah/chainpay-mcp-sdk`, production branch
-`master`, in Dre's Vercel team. Enable **Include source files outside of the Root
-Directory** for every project. Node must be **24.x**. Clear old dashboard build
-command overrides so the checked-in `vercel.json` files are authoritative.
+Production uses `.github/workflows/deploy-vercel.yml` after successful Release
+checks on the exact current `master` revision. Manual workflow dispatch has the
+same gate. Convex schema/functions deploy first, relay and MCP next, frontend
+last. Disable competing Vercel native Git production deployments so a push cannot
+bypass that order. Keep schema/functions compatible with the services still
+running during the rollout.
 
-| Vercel project | Root Directory | Framework/config |
-| --- | --- | --- |
-| `chainpay-web` | `frontend` | Vite; `frontend/vercel.json` |
-| `chainpay-relay` | `deploy/relay` | Other; isolated Cargo package and Rust adapter |
-| `chainpay-mcp` | `mcp-server` | Other; Node handler at `api/mcp.js` |
+The workflow stages minimal upload roots with `scripts/stage-vercel.mjs` and
+uses Vercel CLI 54.14.0. A successful production deployment is not migration
+acceptance. Before cutover, existing Render traffic remains authoritative.
 
-These roots include shared SDK/backend source from outside their directories;
-without the include-source setting native Git builds cannot work. The Rust
-wrapper builds the relay only, never deploys the Anchor program. The old
-`stage-vercel.mjs` workflow remains available for an explicit CLI release.
+Native project roots (`frontend`, `deploy/relay`, `mcp-server`) may be used for
+explicitly configured previews with source outside the root included. Every
+preview requires an isolated development/preview database, matching relay and
+MCP, and exact-origin CORS. Never use production credentials in previews.
 
-Git-linked pushes build previews automatically once repository access and
-branch-specific settings exist. For each tested preview branch, provision one
-isolated Convex dev/preview deployment, deploy its schema **before** starting
-the three service builds, and configure matching branch-specific Vercel variables.
-Use stable branch preview aliases for frontend/relay/MCP so later commits do not
-change their cross-service URLs. Authorize only that exact frontend origin in
-CORS. A preview without its own configured services/database must fail build,
-not use production or the historic review stack. Fork PR builds may require an
-authorized Vercel member's approval; never expose deployment keys to untrusted PR
-workflows. CI in this repository uses no cloud secrets.
+PR #34 adds the coordinated cutover script and a checked production manifest.
+Merge #31, #33, #30 and #35 first; reserve #34 for the maintenance window. Kwasi
+owns every merge; Dre operates the provider settings and data verification.
+Until #34 lands, follow the migration safeguards below and do not claim the
+new cutover gates are active. Once present, its `docs/guides/cutover-runbook.md`
+is the step-by-step execution guide.
 
-Set these nonsecret build guards in **each** project/environment:
-
-- `CHAINPAY_RELEASE_ENVIRONMENT=preview` or `production`, matching `VERCEL_ENV`.
-- `CHAINPAY_CONVEX_DEPLOYMENT_TYPE=dev`/`preview` for previews, `prod` for production.
-- `CHAINPAY_RELEASE_GROUP`: one shared identifier for the selected database and
-  three origins, such as `pr-24-review` or `release-20261002`.
-
-The guard checks required variables and paired RPC/agent URLs. It cannot verify
-provider account ownership or infer a deployment's type from its hostname.
-Before promotion, compare actual deployment settings across all projects and
-run the smoke test with those exact origins. Do not point previews at production
-credentials, provider signers, or source operational data.
-
-Deploy Convex schema once per release, then relay/MCP, then frontend. Keep schema
-changes backward compatible during rolling service deployment. Production native
-builds require production environment variables; redeploy against that environment
-rather than promoting a build containing preview URLs. Until first cutover is
-accepted, builds may complete but must not replace the existing live domains.
+All projects require `CHAINPAY_RELEASE_ENVIRONMENT`,
+`CHAINPAY_CONVEX_DEPLOYMENT_TYPE` and `CHAINPAY_RELEASE_GROUP`. Production must
+match the reviewed target/origins in #34's manifest; previews use independent
+settings. Provider ownership, source-writer suspension, and current data must
+still be verified by the operators. Keep shared pet mode off during cutover:
+community data is Convex-only and outside the financial 13-table rollback.
 
 ### Combined database layout
 
@@ -140,11 +124,13 @@ The public Vercel deployment remains a **Solana Devnet** application.
 - Relay: https://chainpay-relay.vercel.app
 - MCP: https://chainpay-mcp.vercel.app/mcp
 
-Existing Render/Neon credentials belong to Kwasi and were not available for
-this implementation. Therefore old records have **not** been imported, the
-Render services have **not** been stopped, and the existing service has **not**
-been cut over. Do not use this empty database to retry an unresolved operation
-from the old service. Reconcile and migrate its original records first.
+PR #33 records a 3 October rehearsal of 47 source rows and preparation of the
+`notable-bee-447` production deployment. Treat those as dated operator reports,
+not current-state guarantees. This review uses isolated fixtures and does not
+read current private source data, suspend Render, or execute the cutover. Confirm
+access, current source history, provider settings, and the maintenance window
+privately before proceeding. Do not retry an old unresolved operation against
+an empty replacement database; migrate its original records first.
 
 ## Kwasi's checklist before replacing the existing service
 
@@ -234,7 +220,7 @@ CHAINPAY_RELEASE_ID=release-001 node scripts/stage-vercel.mjs frontend
 
 Link each generated directory under `.vercel-staging/release-001/` to its
 corresponding Vercel project, then deploy that directory with
-`npx --yes vercel@60.1.3 deploy`. Promote only after checking health, wallet
+`npx --yes vercel@54.14.0 deploy`. Promote only after checking health, wallet
 login, public verification, authenticated MCP, and exact CORS behavior.
 The staging script excludes credentials, build artifacts, and the parent
 workspace. The Rust adapter uses Vercel's beta Rust runtime; keep its runtime
@@ -326,8 +312,8 @@ available, and transfer them privately. The exporter creates files with mode
   this pin. Existing dependency audit findings remain outside this migration.
 
 AI chat and delegated signing still need the original provider configuration.
-The current stack is a review deployment, not acceptance of an existing-data
-cutover or a new settlement.
+The historical stack evidence does not establish acceptance of an existing-data
+cutover or a new settlement. Verify the current provider state during the window.
 
 For current combined-release results and limits, see the [release review](../project/release-review-2026-10-02.md).
 
