@@ -1,4 +1,4 @@
-.PHONY: check fmt cargo-check test build start-backend sdk-typecheck mcp-typecheck app-typecheck frontend-typecheck frontend-build app-dev frontend-dev contract-check contract-build contract-idl contract-smoke
+.PHONY: check fmt cargo-check test build start-backend sdk-typecheck mcp-typecheck app-typecheck frontend-typecheck frontend-build app-dev frontend-dev contract-check contract-build contract-idl contract-smoke card-policy-build card-policy-test
 
 ANCHOR ?= anchor
 
@@ -51,3 +51,10 @@ contract-idl:
 
 contract-smoke: contract-build
 	cargo test -p chainpay --features settlement-tests --test settlement -- --nocapture
+
+# programs/card_policy is its own Cargo + Anchor workspace (MagicBlock PER).
+card-policy-build:
+	cd programs/card_policy && cargo build-sbf
+
+card-policy-test:
+	cd programs/card_policy && cargo build-sbf --features litesvm-mock --sbf-out-dir target/mock && cargo test --locked
