@@ -4,14 +4,16 @@ import { useRoute } from "./routing/useRoute";
 import { LandingPage } from "./landing/LandingPage";
 import { AppNotFoundPage, PublicNotFoundPage } from "./routing/NotFoundPages";
 import { usePublicWallet } from "./wallet/public-session";
+import { PetMount } from "./pet/PetMount";
 
 const WalletController = lazy(() => import("./wallet/WalletController"));
 const AppWorkspace = lazy(() => import("./dashboard/AppWorkspace"));
 const VerifyPage = lazy(() => import("./verify/VerifyPage"));
+const CommunityRoom = lazy(() => import("./pet/shared/CommunityRoom"));
 const EmbedOverview = lazy(() => import("./embed/EmbedOverview"));
 
 function isWalletlessRoute(kind: string) {
-  return kind === "verify" || kind === "embed-overview";
+  return kind === "pet" || kind === "verify" || kind === "embed-overview";
 }
 
 function RouteFallback() {
@@ -25,6 +27,10 @@ function RouteFallback() {
 function Routes() {
   const { currentRoute, navigate } = useRoute();
   const { wallet, connecting, requestWalletConnection } = usePublicWallet();
+
+  if (currentRoute.kind === "pet") {
+    return import.meta.env.VITE_CHAINPAY_SHARED_PET === "on" ? <Suspense fallback={<RouteFallback />}><CommunityRoom /></Suspense> : <PublicNotFoundPage path="/pet" />;
+  }
 
   if (currentRoute.kind === "verify") {
     return (
@@ -104,10 +110,16 @@ function Shell() {
   );
 }
 
+function Pet() {
+  const { currentRoute } = useRoute();
+  return <PetMount routeKind={currentRoute.kind} routeKey={JSON.stringify(currentRoute)} />;
+}
+
 export default function AppShell() {
   return (
     <Router>
       <Shell />
+      <Pet />
     </Router>
   );
 }

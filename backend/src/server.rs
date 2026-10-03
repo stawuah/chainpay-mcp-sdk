@@ -2,6 +2,8 @@
 mod delivery_routes;
 #[path = "server_mandate_requests.rs"]
 mod mandate_request_routes;
+#[path = "server_pet.rs"]
+mod pet_routes;
 #[path = "server_receipts.rs"]
 mod receipt_routes;
 #[path = "server_recovery.rs"]
@@ -313,9 +315,20 @@ struct BlockhashResponse {
 }
 
 pub fn build_router(state: BackendState) -> Router {
+    build_router_with_pet(
+        state,
+        std::env::var("CHAINPAY_SHARED_PET").as_deref() == Ok("on"),
+    )
+}
+
+fn build_router_with_pet(state: BackendState, pet_enabled: bool) -> Router {
     let origins = state.config.allowed_origins.clone();
     let auth_state = state.clone();
     Router::new()
+        .route("/v1/pet/state", get(pet_routes::state))
+        .route("/v1/pet/visitors", post(pet_routes::visitor))
+        .route("/v1/pet/act", post(pet_routes::act))
+        .route("/v1/pet/memories", get(pet_routes::memories))
         .route("/v1/auth/principal", get(auth::principal))
         .route(
             "/v1/auth/challenge",
@@ -395,6 +408,7 @@ pub fn build_router(state: BackendState) -> Router {
         .route("/v1/transactions/{transaction_id}", get(get_transaction))
         .route("/rpc", post(proxy_rpc))
         .with_state(state)
+        .layer(Extension(pet_routes::PetEnabled(pet_enabled)))
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .layer(cors_layer(&origins))
         .layer(DefaultBodyLimit::max(MAX_TRANSACTION_BYTES * 2 + 16_384))
@@ -518,6 +532,7 @@ async fn auth_middleware(
                 | "/v1/auth/session"
         )
         || delivery_routes::is_public_delivery_path(request.method(), path)
+        || pet_routes::is_public_pet_path(request.method(), path)
     {
         let mut response = next.run(request).await;
         response
@@ -573,6 +588,9 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
             header::CONTENT_TYPE,
             HeaderName::from_static("solana-client"),
         ])
+        // Retry-After is not a CORS-safelisted response header. The pet client
+        // uses the actual bucket reset to explain rate rejection.
+        .expose_headers([header::RETRY_AFTER])
         // Both headers above make the browser preflight every request the SDK
         // and the dashboard send. Without a lifetime the preflight is repeated
         // for each one, doubling the round trips a page makes for its whole

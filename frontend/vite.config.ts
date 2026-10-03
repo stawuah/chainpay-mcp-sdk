@@ -29,6 +29,11 @@ export default defineConfig({
           if (id.includes("/src/dashboard/") || id.includes("/src/owner/") || id.includes("/src/receipts/") || id.includes("/src/config/client") || id.includes("/sdk/") || id.includes("/src/settlement")) return "dashboard";
           if (id.includes("/src/verify/")) return "verify";
           if (id.includes("/src/embed/")) return "embed";
+          // three.js only loads after the page is idle, through PetMount's lazy
+          // import. PetMount itself sits on the every-route path, so it stays out
+          // of the pet chunk.
+          if (id.includes("/node_modules/three/") || id.includes("/node_modules/@react-three/")) return "pet-3d";
+          if (id.includes("/src/pet/") && !id.includes("/src/pet/PetMount")) return "pet";
           return undefined;
         },
       },

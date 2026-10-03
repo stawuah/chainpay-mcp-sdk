@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as pet from "../pet.js";
 import type * as cleanup from "../cleanup.js";
 import type * as crons from "../crons.js";
 import type * as http from "../http.js";
@@ -23,6 +24,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  pet: typeof pet;
   cleanup: typeof cleanup;
   crons: typeof crons;
   http: typeof http;

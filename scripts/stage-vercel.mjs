@@ -39,6 +39,7 @@ if (service === "backend") {
   for (const name of ["package.json", "package-lock.json", "sdk", "mcp-server", "demo-merchant", "app"]) await copy(name);
   if (service === "frontend") {
     await copy("frontend");
+    await copy("shared");
     config = { framework: "vite", installCommand: "npm ci --include=dev --ignore-scripts && npm --prefix frontend ci --include=dev --ignore-scripts", buildCommand: "npm --prefix sdk run build && npm --prefix frontend run build", outputDirectory: "frontend/dist", rewrites: [{ source: "/((?!.*\\.[^/]+$).*)", destination: "/index.html" }] };
   } else {
     await mkdir(path.join(target, "api"), { recursive: true });
