@@ -11,6 +11,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: deploy-vercel-production
   cancel-in-progress: false
@@ -31,15 +32,6 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
-      - name: Only deploy the current master tip
-        # A re-run of an older Release checks run must not roll prod back,
-        # least of all Convex functions, which a Vercel rollback cannot undo.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-        run: |
-          tip=$(gh api "repos/${{ github.repository }}/commits/master" --jq .sha)
-          test "$tip" = "$SHA" || { echo "::error::$SHA is not the master tip ($tip); refusing to deploy it"; exit 1; }
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -47,12 +39,21 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Require green checks for the current master revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: node scripts/check-deploy-revision.mjs
       - run: npm ci --ignore-scripts
       - name: Deploy Convex production
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
         run: |
           test -n "$CONVEX_DEPLOY_KEY" || { echo "::error::Add the CONVEX_DEPLOY_KEY repository secret"; exit 1; }
+          case "$CONVEX_DEPLOY_KEY" in
+            'prod:notable-bee-447|'?*) ;;
+            *) echo "::error::Expected a production deploy key for notable-bee-447"; exit 1 ;;
+          esac
           npx convex deploy -y
   services:
     needs: convex
