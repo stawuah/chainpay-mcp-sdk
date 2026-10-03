@@ -61,7 +61,13 @@ export async function runMigrationIntegration(convexFetch) {
     const env = { ...process.env, NODE_EXTRA_CA_CERTS: cert, CHAINPAY_SOURCE_DATABASE_URL: databaseUrl("postgres"), CHAINPAY_TARGET_DATABASE_URL: databaseUrl("restored"), CHAINPAY_MIGRATION_TARGET_WRITE_PAUSED: "true", CHAINPAY_CONVEX_SITE_URL: `https://127.0.0.1:${server.address().port}`, CHAINPAY_CONVEX_MIGRATION_SECRET: "integration-only-".repeat(3) };
     const cli = async (args, changes = {}) => JSON.parse((await exec(process.execPath, [join(root, "scripts/migrate-storage.mjs"), ...args], { cwd: root, env: { ...env, ...changes }, timeout: 30_000 })).stdout);
     const original = join(dir, "source.ndjson"), imported = join(dir, "convex.ndjson"), restored = join(dir, "restored.ndjson");
+    // Export identical timestamps from deliberately different session defaults.
+    await admin.query("ALTER ROLE chainpay_fixture SET timezone TO 'Pacific/Honolulu'");
     const exported = await cli(["export-postgres", original]);
+    await admin.query("ALTER ROLE chainpay_fixture SET timezone TO 'Asia/Tokyo'");
+    const otherZone = join(dir, "other-zone.ndjson");
+    await cli(["export-postgres", otherZone]);
+    assert.equal((await cli(["compare", original, otherZone])).equal, true);
     assert.equal(Object.keys(exported).length, 13);
     for (const table of Object.keys(TABLES)) assert.ok(exported[table].count > 0, `${table} must have representative records`);
     assert.equal(exported.payments.count, 105, "exercises multiple import batches and export pages");

@@ -1,0 +1,8 @@
+{
+  "group": "chainpay-production-v1",
+  "convexSite": "https://notable-bee-447.convex.site",
+  "webOrigin": "https://www.chainpayai.app",
+  "webOrigins": ["https://www.chainpayai.app", "https://chainpayai.app", "https://chainpay-web-kappa.vercel.app"],
+  "relayOrigin": "https://chainpay-relay.vercel.app",
+  "mcpOrigin": "https://chainpay-mcp.vercel.app"
+}

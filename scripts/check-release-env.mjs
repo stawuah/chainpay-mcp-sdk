@@ -1,4 +1,6 @@
 // Fail a hosted build before it silently falls back to the review stack.
+import { readFileSync } from "node:fs";
+const production = JSON.parse(readFileSync(new URL("./production-release.json", import.meta.url), "utf8"));
 import { pathToFileURL } from "node:url";
 export function checkReleaseEnvironment(service, env) {
   if (!["frontend", "backend", "mcp"].includes(service)) throw new Error("Unknown service");
@@ -32,6 +34,25 @@ export function checkReleaseEnvironment(service, env) {
       const backend = origin("CHAINPAY_BACKEND_URL"), app = origin("CHAINPAY_APP_URL");
       if (backend.pathname !== "/" || app.pathname !== "/" || origin("CHAINPAY_RPC_URL").href !== new URL("/rpc", backend).href) throw new Error("MCP must use its paired relay RPC and application origin");
       if (!env.CHAINPAY_ALLOWED_ORIGINS.split(",").map(x => x.trim()).includes(app.origin)) throw new Error("Application origin must be allowed by MCP CORS");
+    }
+  }
+  if (context === "production") {
+    const exact = (name, value) => { if (required(name) !== value) throw new Error(`${name} does not match the reviewed production release`); };
+    exact("CHAINPAY_RELEASE_GROUP", production.group);
+    if (service === "frontend") {
+      exact("VITE_CHAINPAY_BACKEND_URL", production.relayOrigin);
+      exact("VITE_CHAINPAY_RPC_URL", `${production.relayOrigin}/rpc`);
+      exact("VITE_CHAINPAY_MCP_URL", `${production.mcpOrigin}/mcp`);
+      exact("VITE_CHAINPAY_AGENT_URL", `${production.mcpOrigin}/agent/chat`);
+    } else {
+      exact("CHAINPAY_CONVEX_SITE_URL", production.convexSite);
+      const origins = required("CHAINPAY_ALLOWED_ORIGINS").split(",").map(value => value.trim()).sort();
+      if (JSON.stringify(origins) !== JSON.stringify([...production.webOrigins].sort())) throw new Error("CORS does not match the reviewed production release");
+      if (service === "mcp") {
+        exact("CHAINPAY_BACKEND_URL", production.relayOrigin);
+        exact("CHAINPAY_RPC_URL", `${production.relayOrigin}/rpc`);
+        exact("CHAINPAY_APP_URL", production.webOrigin);
+      }
     }
   }
   return { service, environment: context, storageType: type, group: env.CHAINPAY_RELEASE_GROUP };

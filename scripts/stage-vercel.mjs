@@ -59,6 +59,7 @@ if (service === "backend") {
 // Fail the hosted build before it silently pairs the wrong database or origins.
 await mkdir(path.join(target, "scripts"), { recursive: true });
 await cp(path.join(root, "scripts/check-release-env.mjs"), path.join(target, "scripts/check-release-env.mjs"));
+await cp(path.join(root, "scripts/production-release.json"), path.join(target, "scripts/production-release.json"));
 const guard = `node scripts/check-release-env.mjs ${service}`;
 config.buildCommand = config.buildCommand ? `${guard} && ${config.buildCommand}` : guard;
 await writeFile(path.join(target, "vercel.json"), JSON.stringify(config, null, 2) + "\n");

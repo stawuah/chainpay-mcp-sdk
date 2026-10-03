@@ -1,66 +1,86 @@
 # Cutover runbook: Render + Neon → Vercel + Convex
 
-This is the 30-minute window that moves ChainPay's off-chain data into
-production Convex and puts real users on the Vercel stack. Background,
-settings and rollback rules: [Vercel + Convex handoff](vercel-convex-handoff.md).
+Kwasi owns merges and Render. Dre operates Vercel/Convex. This procedure moves
+operational records; it never signs a payment or upgrades the Solana program.
+The [handoff](vercel-convex-handoff.md) documents schema and recovery semantics.
 
-## Who does what
+## Release prerequisites
 
-- **Kwasi (Render owner):** suspends the Render services and, afterwards, points
-  the old Render website at the new one.
-- **Dre (Vercel + Convex owner):** runs `scripts/cutover-vercel-convex.sh` and
-  merges this PR at the step below.
+1. Merge #31, #33, #30 and #35 after their checks pass. Keep shared-pet mode off
+   through cutover. Its Convex-only community history is outside the 13-table
+   PostgreSQL snapshot and must not acquire production writes during this window.
+2. Reserve a maintenance window with both operators present. Keep #34 a draft
+   until ready for the coordinated switch. Kwasi merges #34 only at step 5 below.
+3. Use Node 24, `npm ci --ignore-scripts`, authenticated `gh`, and Vercel CLI
+   54.14.0 with access to the `chainpay` team. Production deployments must use
+   the checked GitHub Actions workflow; disable competing native Git production
+   deployments. Previews remain separate.
+4. Put `CONVEX_DEPLOY_KEY`, `CHAINPAY_CONVEX_SITE_URL`, and the three distinct
+   service secrets in `~/.config/chainpay/convex-prod.env` (mode 0600). The key
+   must be a `prod:notable-bee-447|…` key. Never share the values in logs or PRs.
+5. Export `CHAINPAY_SOURCE_DATABASE_URL` privately and set a unique
+   `CHAINPAY_CUTOVER_DIR=.migration/cutover-<window-id>`. Reuse that directory for
+   retries in the same window. Do not modify the script during an active attempt.
+6. Verify current provider settings and required secrets privately. Prior reports
+   describe a 47-row rehearsal on 3 October; that is historical evidence, not a
+   fresh source export or proof that today's production target is still empty.
 
-Nothing here sends a Solana transaction, upgrades the program, or enables Crossmint.
+The reviewed production target and service origins live in
+`scripts/production-release.json`. Production build guards pin those values;
+changing an environment label alone cannot bless a development database.
+Convex deployment keys are also checked against that production target.
+Provider ownership and source-writer suspension still require operator checks.
 
-## Already done before the window
+## Coordinated window
 
-- The rehearsal passed on 3 October 2026. A read-only Neon export (47 rows) was
-  imported into a throwaway Convex deployment, exported back, and restored into an
-  empty Postgres. All 13 tables matched by count and hash at each step.
-- Production Convex is `notable-bee-447`. Its schema is deployed and its 3
-  service secrets are set. It is empty, with `CHAINPAY_MAINTENANCE=true`.
-- Vercel's production settings carry the Render provider settings (Privy,
-  OpenRouter, the auth token). The Convex settings are split, so production
-  switches while preview stays on the dev database.
-- The release guard (`scripts/check-release-env.mjs`) now runs in every hosted
-  build. After this PR merges, a production build fails unless all 3 services
-  point at the **prod** Convex deployment and exact HTTPS origins.
+| Step | Owner | Action |
+| --- | --- | --- |
+| 1 | Kwasi | Suspend both Render writer services and keep-alive. Drain in-flight requests and record/reconcile uncertain operations without issuing replacement payments. Confirm this to Dre. |
+| 2 | Dre | Run `scripts/cutover-vercel-convex.sh preflight`. Confirm `PAUSED` only after step 1. It checks maintenance, matching secrets, absence of any writes-opened marker, and an empty validated target snapshot. |
+| 3 | Dre | Run `scripts/cutover-vercel-convex.sh migrate`. It freezes one source snapshot, imports it resumably, and requires all 13 table counts/hashes to match. |
+| 4 | Dre | Run `scripts/cutover-vercel-convex.sh switch`. It writes the reviewed production settings to all three Vercel projects, preserving preview settings. A partial failure can repeat this step. |
+| 5 | Kwasi | Merge #34. Wait for Release checks and the complete Convex → relay/MCP → frontend deployment to succeed. Do not manually bypass a failed check. |
+| 6 | Dre | Set `CHAINPAY_RELEASE_SHA` to the full merged master revision and run `scripts/cutover-vercel-convex.sh verify`. This checks the successful deployment workflow and current production aliases for that exact revision. |
+| 7 | Dre | Run `scripts/cutover-vercel-convex.sh open`. It rechecks snapshots and deployments, records a durable remote writes-opened marker **before** reopening writes, then saves the local checkpoint. |
+| 8 | Dre | Run `scripts/cutover-vercel-convex.sh smoke`. Login and isolation checks create/revoke an ephemeral session; no transaction is sent. Any failure now requires the post-open recovery path. |
+| 9 | Kwasi | Redirect the Render website to `https://www.chainpayai.app` and update external MCP clients to `https://chainpay-mcp.vercel.app/mcp`. |
 
-## Before the window
+Each step stops on failure. A file merely existing is never migration acceptance.
+Inspect checkpoints and private provider status before retrying. An interrupted
+export stays `.partial`; import retries reuse the original validated source.
+Do not re-export a changing source into an already partially imported target.
+The `.lock` directory prevents concurrent steps; after a hard process kill,
+confirm that no step is running before removing that lock manually.
 
-1. Merge the auto-deploy PR (#33) first.
-2. Dre: `~/.config/chainpay/convex-prod.env` exists (mode 600). It holds the
-   production deploy key, site URL and service secrets. Never commit it.
-3. Dre: export `CHAINPAY_SOURCE_DATABASE_URL` as Neon's primary connection
-   string in the shell that runs the script.
-4. Check out this branch and run `npm ci --ignore-scripts`.
+## Abort and rollback
 
-## The window (about 30 minutes)
+Run `scripts/cutover-vercel-convex.sh abort` to pause Convex and disable migration
+mode. It remains available when the local checkpoint is corrupt or the script
+changed. Resolve any concurrent step before aborting.
 
-| # | Who | Do | Stops if |
-|---|---|---|---|
-| 1 | Kwasi | On Render, **suspend** `chainpay-backend`, `chainpay-mcp` and the keep-alive job. A maintenance banner is not enough. | — |
-| 2 | Dre | `scripts/cutover-vercel-convex.sh preflight` | Render still answers, or prod Convex isn't empty or isn't in maintenance |
-| 3 | Dre | `scripts/cutover-vercel-convex.sh migrate`: final Neon export, import, round-trip compare | Any table differs |
-| 4 | Dre | `scripts/cutover-vercel-convex.sh switch`: Vercel production → prod Convex; CORS allows only the website's own origins (`www.chainpayai.app`, `chainpayai.app`, `chainpay-web-kappa.vercel.app`) | A setting can't be written |
-| 5 | Dre | Merge this PR. Release checks run, then Convex → relay + MCP → website deploy (about 10 min) | The release guard rejects a setting, or a build fails |
-| 6 | Dre | `scripts/cutover-vercel-convex.sh open`: production Convex accepts writes | — |
-| 7 | Dre | `scripts/cutover-vercel-convex.sh smoke`: wallet-message login, CORS, owner isolation (no transaction) | Any check fails |
-| 8 | Kwasi | Point users at `https://www.chainpayai.app` (redirect or replace the Render static site). Update MCP clients to `https://chainpay-mcp.vercel.app/mcp`. | — |
+**Before opening:** after the script confirms safe pre-open abort, cancel or wait
+for pending deployments, keep Vercel traffic closed, then Kwasi may resume Render
+on unchanged Neon. A partially imported Convex target is not empty: inspect and
+reset it through a separately reviewed operator procedure before starting a new
+attempt in a new directory. The script never deletes imported records automatically.
 
-If **any step up to and including 5** fails: run `scripts/cutover-vercel-convex.sh abort`,
-and Kwasi resumes the Render services. Neon was never written to, so nothing is lost.
+**After opening, or an uncertain opening:** keep Render suspended. Pause writers,
+export fresh Convex records, restore them into an empty PostgreSQL database with
+all canonical migrations, re-export and compare all 13 tables, then change Render
+to that verified database. Never resume the stale Neon database. The remote
+`CHAINPAY_CUTOVER_WRITES_OPENED` marker intentionally survives abort and lost local
+files; do not clear it to bypass recovery. A lost response while opening can be
+reconciled by retrying `open` with the same checkpoint and matching deployment.
 
-After step 6, Convex holds the newest writes. Rollback then needs another write pause, a
-**fresh** `export-convex`, and `restore-postgres` into an empty Postgres. Never
-point Render back at the old Neon data.
+## Acceptance and retention
 
-## After the window
+Record the source manifest, release revision, deployment IDs, verification results,
+and owners. Observe auth failures, unknown settlements, latency and storage errors.
+Keep shared pet writes disabled until this financial-data cutover is accepted;
+a later rollback after pet activation also needs a separate native Convex backup
+and restoration plan for the community tables.
 
-- Keep the Render services suspended (not deleted) and the snapshot in
-  `.migration/cutover-<date>/` for 7 days, then delete both.
-- Rotate the Neon password and the OpenRouter key. Both were shared over chat.
-- Fix the typo in Render's backend `CHAINPAY_ALLOWED_ORIGINS` (`localhost:517`)
-  if Render is kept for anything.
-- In a later PR, after a quiet week, remove `render.yaml` and the keep-alive job.
+Retain suspended Render services and protected snapshots for at least seven days
+and until acceptance/rollback needs are resolved; deletion is a later explicit
+operator task. Rotate credentials previously shared outside the secret manager.
+A passing rehearsal or login smoke test is not evidence of a new settled payment.
