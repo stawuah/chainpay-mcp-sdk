@@ -34,8 +34,13 @@ function spawnPoint(near: DOMRect | null): { x: number; y: number } {
     }
   }
   if (near) {
-    const x = near.left > view.width / 2 ? near.left - SIZE - 8 : near.right + 8;
-    return { x: Math.min(Math.max(x, view.left + 8), view.left + view.width - SIZE - 8), y: Math.min(near.bottom - SIZE - 8, view.top + view.height - SIZE - 12) };
+    // No margin (phones): settle on his own box, at his feet, never on text.
+    const x = near.left + 4;
+    const y = near.bottom - SIZE - 4;
+    return {
+      x: Math.min(Math.max(x, view.left + 8), view.left + view.width - SIZE - 8),
+      y: Math.min(Math.max(y, view.top + 8), view.top + view.height - SIZE - 8),
+    };
   }
   return { x: view.left + view.width - SIZE - 24, y: view.top + view.height - SIZE - 160 };
 }

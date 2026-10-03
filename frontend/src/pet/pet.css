@@ -476,7 +476,12 @@
   background: var(--ink);
   color: #fff;
   font: 500 13px/1.2 Inter, sans-serif;
-  white-space: nowrap;
+  /* Wraps on narrow phones instead of running off both edges. */
+  white-space: normal;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  text-align: center;
+  text-wrap: balance;
 }
 
 .cp-pet-coin {

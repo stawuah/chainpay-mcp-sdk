@@ -95,6 +95,17 @@ async function inViewport(page) {
   await page.waitForTimeout(400);
   assert.equal(await page.locator('.cp-pet-panel.is-sheet').count(), 1);
   assert.ok(await inViewport(page));
+  // No side margin on a phone: a dust speck settles on his own box, not on text.
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(2000); // he hops off the sheet and settles first
+  await page.waitForFunction(() => window.__chainpayPet);
+  await page.evaluate(() => window.__chainpayPet.spawnDust());
+  await page.waitForTimeout(1500);
+  const speck = await page.locator('.cp-pet-speck').boundingBox();
+  const me = await page.locator('.cp-pet').boundingBox();
+  const cx = speck.x + speck.width / 2;
+  const cy = speck.y + speck.height / 2;
+  assert.ok(cx >= me.x && cx <= me.x + me.width && cy >= me.y && cy <= me.y + me.height, 'speck sits on the robot on phones');
   await context.close();
 }
 

@@ -382,7 +382,7 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
     onSpawn: () => {
       // The spawn line only for the first speck of the session.
       const budget = readBudget();
-      if (budget.dustLine || open) return;
+      if (budget.dustLine || open || asleep) return;
       writeBudget({ ...budget, dustLine: true });
       if (canVolunteer("line")) petStore.say(DUST_LINES.spawn, 2_500, "volunteer");
     },
@@ -427,10 +427,13 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
 
   // ---- Landing tour ----------------------------------------------------------
   latestBusy.current = busy;
+  const callingRef = useRef(false);
+  callingRef.current = calls.calling;
   useLandingTour({
     enabled: playful,
     onSection: (id, text, heading) => {
-      if (latestBusy.current) return false;
+      // One thing at a time: no tour bubble on top of a "!" call.
+      if (latestBusy.current || callingRef.current) return false;
       // Don't talk over a direct answer to something you just did.
       const current = petStore.get().speech;
       if (current?.source === "reply" && Date.now() - current.at < 1_500) return false;
