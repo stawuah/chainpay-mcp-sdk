@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { analyticsBeforeSend } from "./analytics/privacy";
 import { Analytics } from "@vercel/analytics/react";
 import "../skill/assets/design-token.css";
 import "./theme/astryx.css";
@@ -20,7 +21,7 @@ void import("./AppShell")
         <ChainPayTheme>
           <AppShell />
         </ChainPayTheme>
-        <Analytics />
+        <Analytics beforeSend={analyticsBeforeSend} />
       </StrictMode>,
     );
   })
