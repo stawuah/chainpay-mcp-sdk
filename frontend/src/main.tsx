@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { Analytics } from "@vercel/analytics/react";
 import "../skill/assets/design-token.css";
 import "./theme/astryx.css";
 import "./styles.css";
@@ -19,6 +20,7 @@ void import("./AppShell")
         <ChainPayTheme>
           <AppShell />
         </ChainPayTheme>
+        <Analytics />
       </StrictMode>,
     );
   })
