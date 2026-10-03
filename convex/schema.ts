@@ -5,7 +5,18 @@ import { world as petWorld, actionResult as petResult } from "./petValidators";
 // Record JSON is deliberately opaque: JavaScript must never round u64 values,
 // nested x402 proof numbers, or signed statements while persisting them.
 export const kind = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"), v.literal("receipt_requests"), v.literal("observed_policies"), v.literal("mandate_requests"));
+const statusComponent = v.union(v.literal("web"), v.literal("relay"), v.literal("mcp"), v.literal("solana"), v.literal("program"));
 export default defineSchema({
+  // Public status page: raw checks kept 7 days, daily rollups ~95 days, incidents written by hand.
+  status_checks: defineTable({ component: statusComponent, state: v.union(v.literal("up"), v.literal("degraded"), v.literal("down")), latencyMs: v.number(), detail: v.optional(v.string()), at: v.number() })
+    .index("by_component_at", ["component", "at"]).index("by_at", ["at"]),
+  status_days: defineTable({ component: statusComponent, day: v.string(), total: v.number(), up: v.number(), degraded: v.number(), down: v.number() })
+    .index("by_component_day", ["component", "day"]).index("by_day", ["day"]),
+  status_incidents: defineTable({
+    title: v.string(), impact: v.union(v.literal("minor"), v.literal("major")), components: v.array(statusComponent),
+    updates: v.array(v.object({ at: v.number(), state: v.union(v.literal("investigating"), v.literal("identified"), v.literal("monitoring"), v.literal("resolved")), message: v.string() })),
+    startedAt: v.number(), resolvedAt: v.union(v.number(), v.null()),
+  }).index("by_started", ["startedAt"]),
   pet_world: defineTable({ key: v.string(), world: petWorld }).index("by_key", ["key"]),
   pet_sessions: defineTable({tokenHash:v.string(),peerHash:v.string(),expiresAt:v.number(),cooldowns:v.record(v.string(),v.number())}).index("by_token",["tokenHash"]).index("by_expires",["expiresAt"]),
   pet_commands: defineTable({tokenHash:v.string(),commandId:v.string(),action:v.string(),result:petResult,expiresAt:v.number()}).index("by_token_command",["tokenHash","commandId"]).index("by_expires",["expiresAt"]),

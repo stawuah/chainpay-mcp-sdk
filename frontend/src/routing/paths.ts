@@ -16,6 +16,7 @@ export type DashboardTab = (typeof DASHBOARD_TABS)[number];
 export type AppRoute =
   | { kind: "landing" }
   | { kind: "pet" }
+  | { kind: "status" }
   | {
       kind: "app";
       tab: DashboardTab;
@@ -38,6 +39,7 @@ export function parsePathname(pathname: string): AppRoute {
   const normalized = pathname.replace(/\/+$/, "") || "/";
   if (normalized === "/pet") return { kind: "pet" };
   if (normalized === "/") return { kind: "landing" };
+  if (normalized === "/status") return { kind: "status" };
 
   if (normalized === "/app") return { kind: "app", tab: "overview" };
 
@@ -99,6 +101,7 @@ export function parsePathname(pathname: string): AppRoute {
 export function buildPath(route: AppRoute): string {
   if (route.kind === "pet") return "/pet";
   if (route.kind === "landing") return "/";
+  if (route.kind === "status") return "/status";
   if (route.kind === "verify") {
     return route.receiptPda ? `/verify/${encodeURIComponent(route.receiptPda)}` : "/verify";
   }
