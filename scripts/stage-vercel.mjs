@@ -34,6 +34,9 @@ if (service === "backend") {
   await mkdir(path.join(target, "api"), { recursive: true });
   await cp(path.join(root, "backend/api/relay.rs"), path.join(target, "api/relay.rs"));
   await writeFile(path.join(target, "Cargo.toml"), manifest.replace('path = "backend/api/relay.rs"', 'path = "api/relay.rs"'));
+  // The release guard is a build step, and Vercel then expects static output.
+  await mkdir(path.join(target, "public"), { recursive: true });
+  await writeFile(path.join(target, "public/robots.txt"), "User-agent: *\nDisallow: /\n");
   config = { framework: null, rewrites: [{ source: "/(.*)", destination: "/api/relay" }], functions: { "api/relay.rs": { maxDuration: 300 } } };
 } else {
   for (const name of ["package.json", "package-lock.json", "sdk", "mcp-server", "demo-merchant", "app"]) await copy(name);
@@ -54,5 +57,11 @@ if (service === "backend") {
     config = { framework: null, installCommand: "npm ci --include=dev --ignore-scripts", buildCommand: "npm --prefix sdk run build && npm --prefix mcp-server run build", functions: { "api/mcp.js": { maxDuration: 300, includeFiles: "mcp-server/assets/**" } }, rewrites: [{ source: "/(.*)", destination: "/api/mcp" }] };
   }
 }
+// Fail the hosted build before it silently pairs the wrong database or origins.
+await mkdir(path.join(target, "scripts"), { recursive: true });
+await cp(path.join(root, "scripts/check-release-env.mjs"), path.join(target, "scripts/check-release-env.mjs"));
+await cp(path.join(root, "scripts/production-release.json"), path.join(target, "scripts/production-release.json"));
+const guard = `node scripts/check-release-env.mjs ${service}`;
+config.buildCommand = config.buildCommand ? `${guard} && ${config.buildCommand}` : guard;
 await writeFile(path.join(target, "vercel.json"), JSON.stringify(config, null, 2) + "\n");
 console.log(target);

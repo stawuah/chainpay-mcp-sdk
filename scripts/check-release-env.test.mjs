@@ -13,3 +13,11 @@ test("frontend cannot build using implicit review-stack defaults", () => {
   assert.throws(() => checkReleaseEnvironment("frontend",{...frontend,VITE_CHAINPAY_RPC_URL:"https://wrong.example.com/rpc"}), /one relay/);
   assert.throws(() => checkReleaseEnvironment("frontend",{...frontend,VITE_CHAINPAY_AGENT_URL:"https://wrong.example.com/agent/chat"}), /one relay/);
 });
+test("production cannot relabel a dev database or use unpaired service origins", () => {
+  const production = {...env, VERCEL_ENV:"production", CHAINPAY_RELEASE_ENVIRONMENT:"production", CHAINPAY_CONVEX_DEPLOYMENT_TYPE:"prod", CHAINPAY_RELEASE_GROUP:"chainpay-production-v1", CHAINPAY_CONVEX_SITE_URL:"https://notable-bee-447.convex.site", CHAINPAY_ALLOWED_ORIGINS:"https://www.chainpayai.app,https://chainpayai.app,https://chainpay-web-kappa.vercel.app"};
+  assert.equal(checkReleaseEnvironment("backend",production).environment,"production");
+  for (const changes of [{CHAINPAY_CONVEX_SITE_URL:"https://dev-db.convex.site"},{CHAINPAY_RELEASE_GROUP:"different"},{CHAINPAY_ALLOWED_ORIGINS:"https://other.example.com"}]) assert.throws(()=>checkReleaseEnvironment("backend",{...production,...changes}), /reviewed production/);
+  const mcp={...production, CHAINPAY_CONVEX_MCP_SECRET:"m".repeat(32),CHAINPAY_BACKEND_URL:"https://chainpay-relay.vercel.app",CHAINPAY_RPC_URL:"https://chainpay-relay.vercel.app/rpc",CHAINPAY_APP_URL:"https://www.chainpayai.app"};
+  assert.equal(checkReleaseEnvironment("mcp",mcp).service,"mcp");
+  assert.throws(()=>checkReleaseEnvironment("mcp",{...mcp,CHAINPAY_BACKEND_URL:"https://wrong.example.com",CHAINPAY_RPC_URL:"https://wrong.example.com/rpc"}),/reviewed production/);
+});
