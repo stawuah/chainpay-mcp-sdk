@@ -1,4 +1,4 @@
-.PHONY: check fmt cargo-check test build start-backend sdk-typecheck mcp-typecheck app-typecheck frontend-typecheck frontend-build app-dev frontend-dev contract-check contract-build contract-idl contract-smoke
+.PHONY: check fmt cargo-check test build start-backend sdk-typecheck mcp-typecheck app-typecheck frontend-typecheck frontend-build app-dev frontend-dev contract-check contract-build contract-idl contract-smoke splitter-test
 
 ANCHOR ?= anchor
 
@@ -51,3 +51,9 @@ contract-idl:
 
 contract-smoke: contract-build
 	cargo test -p chainpay --features settlement-tests --test settlement -- --nocapture
+
+# Builds the splitter with throwaway test keys, then runs the adversarial suite.
+# The .so this leaves in target/deploy is a TEST build: never deploy it.
+splitter-test:
+	cargo build-sbf --manifest-path programs/support-splitter/Cargo.toml --features test-config
+	cargo test -p support-splitter --features splitter-tests
