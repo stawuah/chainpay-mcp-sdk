@@ -247,6 +247,7 @@ async function inViewport(page) {
   await page.goto(BASE + '/');
   await page.locator('.cp-pet-body svg').waitFor({ timeout: 20000 });
   assert.ok(await page.locator('main').count(), 'renderer failure must preserve the page');
+  await page.waitForFunction(() => !document.querySelector('.cp-pet')?.classList.contains('is-booting'));
   await page.getByRole('button', { name: 'ChainPay robot' }).click();
   await page.getByRole('dialog', { name: '???' }).waitFor();
   await context.close();
