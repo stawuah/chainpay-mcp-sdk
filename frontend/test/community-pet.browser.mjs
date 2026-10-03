@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+const artifacts = await mkdtemp(join(tmpdir(), 'chainpay-community-browser-'));
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const BASE = process.env.PET_BROWSER_BASE || 'http://127.0.0.1:5191';
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -40,7 +44,7 @@ for (const [width, noWebGL, reducedMotion] of [[390,true,'reduce'],[768,false,'r
   await page.locator('#community-caption').fill('Our little moment');
   const downloadPromise=page.waitForEvent('download'); await page.getByRole('button',{name:'Save a photo'}).click();
   const download=await downloadPromise; assert.equal(download.suggestedFilename(),'chainpay-community-moment.png');
-  await download.saveAs(`/private/tmp/community-pet-${width}.png`);
+  await download.saveAs(join(artifacts, `community-pet-${width}.png`));
   drop=true; await page.getByRole('button',{name:'Toss a coin',exact:true}).click();
   const retry=page.getByRole('button',{name:'Retry unconfirmed action'}); await retry.waitFor();
   const uncertain=actions.at(-1); await retry.click(); await page.waitForFunction(()=>!document.querySelector('.community-sync')?.textContent?.includes('unconfirmed'));
@@ -51,7 +55,7 @@ for (const [width, noWebGL, reducedMotion] of [[390,true,'reduce'],[768,false,'r
   await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:false});window.dispatchEvent(new Event('focus'));});
   await page.waitForTimeout(200); assert.ok(stateReads>before);
   if(width===1440) { await page.evaluate(()=>document.documentElement.style.zoom='2'); assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'200% zoom overflows'); }
-  await page.screenshot({path:`/private/tmp/community-room-${width}.png`,fullPage:true});
+  await page.screenshot({path:join(artifacts, `community-room-${width}.png`),fullPage:true});
   await context.close();
 }
 // Companion stays quiet on financial routes; keyboard panel, Hide and Pin persist.

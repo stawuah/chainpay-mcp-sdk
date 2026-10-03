@@ -101,7 +101,7 @@ For shared browser regression, start Vite with the shared flag on at port 5191,
 then run `npm --prefix frontend run test:community-pet-browser`. The suite mocks
 only the narrow pet API and checks 390/768/1440px, 200% zoom, keyboard care,
 non-WebGL and reduced-motion rendering, photo export, uncertain retries, hidden
-polling, focus refresh, concurrent tabs, and scrapbook pagination races. It saves screenshots/PNG photos under `/private/tmp`.
+polling, focus refresh, concurrent tabs, and scrapbook pagination races. It saves screenshots/PNG photos in a unique directory under the operating system temporary directory.
 Use `PET_BROWSER_BASE` for a different preview port. Existing legacy browser
 checks use the default flag-off server on port 5189. Legacy cross-tab writes use
 Web Locks where available; browsers without Web Locks reread before writes but
