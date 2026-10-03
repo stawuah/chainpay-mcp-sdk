@@ -76,3 +76,13 @@ test("owner destinations canonicalize legacy and advanced routes", () => {
    assert.deepEqual(paths.parsePathname(canonical), route);
  }
 });
+
+test("parses and builds use case paths", () => {
+  assert.deepEqual(paths.parsePathname("/use-cases"), { kind: "use-cases" });
+  assert.deepEqual(paths.parsePathname("/use-cases/"), { kind: "use-cases" });
+  assert.deepEqual(paths.parsePathname("/use-cases/sponsor-funds-your-agent"), { kind: "use-case", slug: "sponsor-funds-your-agent" });
+  assert.deepEqual(paths.parsePathname("/use-cases/a/b"), { kind: "public-not-found", path: "/use-cases/a/b" });
+  assert.deepEqual(paths.parsePathname("/use-cases/Upper"), { kind: "public-not-found", path: "/use-cases/Upper" });
+  assert.equal(paths.buildPath({ kind: "use-cases" }), "/use-cases");
+  assert.equal(paths.buildPath({ kind: "use-case", slug: "one-tap-stop" }), "/use-cases/one-tap-stop");
+});
