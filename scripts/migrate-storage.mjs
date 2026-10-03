@@ -109,6 +109,9 @@ async function exportPostgres(file) {
   await client.connect(); const output = await writer(file, "postgres");
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    // row_to_json renders timestamptz in the session zone; pin it so the same
+    // instants hash identically whatever the server's default zone is.
+    await client.query("SET LOCAL TIME ZONE 'UTC'");
     const versions = await validateSchema(client);
     for (const [table, keys] of Object.entries(TABLES)) {
       if (FEATURE_MIGRATIONS[table] && !versions.has(FEATURE_MIGRATIONS[table])) continue;
