@@ -1,0 +1,64 @@
+name: Deploy to Vercel
+# Deploys the three Vercel projects after Release checks pass on master.
+# Vercel's Git integration cannot see a personal-account repo from another
+# account's team, so Actions uploads the same staged roots as stage-vercel.mjs.
+on:
+  workflow_run:
+    workflows: [Release checks]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deploy-vercel-production
+  cancel-in-progress: false
+env:
+  VERCEL_ORG_ID: team_RwOruG2VOGq9HUg5nK5jV5wb
+jobs:
+  services:
+    # Only a green, same-repo push to master deploys; fork PRs never reach this.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - service: backend
+            project: prj_IkQCAoCokR21UJ6BsfvBoQhnSL0p # chainpay-relay
+          - service: mcp
+            project: prj_Dx2WJT5AjTrOxaOe2cj1KMeIBCEc # chainpay-mcp
+    steps: &deploy
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Stage ${{ matrix.service }}
+        id: stage
+        env:
+          CHAINPAY_RELEASE_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+        run: echo "dir=$(node scripts/stage-vercel.mjs ${{ matrix.service }})" >> "$GITHUB_OUTPUT"
+      - name: Deploy ${{ matrix.service }}
+        env:
+          VERCEL_PROJECT_ID: ${{ matrix.project }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          test -n "$VERCEL_TOKEN" || { echo "::error::Add the VERCEL_TOKEN repository secret"; exit 1; }
+          npx --yes vercel@54 deploy "${{ steps.stage.outputs.dir }}" --prod --yes --token "$VERCEL_TOKEN" \
+            --meta githubCommitSha=${{ github.event.workflow_run.head_sha || github.sha }}
+  frontend:
+    # The website deploys last so it never points at a relay or MCP that failed.
+    needs: services
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: frontend
+            project: prj_Dj8Zwe3XCNYWkBkkMYA8uyaeVumF # chainpay-web
+    steps: *deploy
