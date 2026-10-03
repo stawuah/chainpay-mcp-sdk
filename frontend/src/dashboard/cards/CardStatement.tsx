@@ -4,7 +4,7 @@ import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { Selector } from "@astryxdesign/core/Selector";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { Check, FileText, TriangleAlert } from "lucide-react";
+import { Check, FileText, Receipt, TriangleAlert } from "lucide-react";
 import { centsToTokenBaseUnits, formatUsdCents, parseSignedCents, type CardView, type StatementView } from "@chainpay/sdk";
 import { CardEvidenceCard } from "../../receipts/CardEvidenceCard";
 import { statementEvidence } from "./evidence";
@@ -69,6 +69,7 @@ export function CardStatement({ source, card, statements, mandates, wallet, onCh
           <div>
             <span className="owner-caption">Period {statement.periodIndex}{statement.closedAt ? ` · closed ${formatDay(statement.closedAt)}` : ""}</span>
             <h2>{formatUsdCents(statement.totalCents)} <small>{statement.state === "discharged" ? "paid off" : statement.dueAt ? `due ${formatDay(statement.dueAt)}` : ""}</small></h2>
+            {statement.state === "discharged" && <span className="cp-paid-stamp" aria-hidden="true">Paid off</span>}
           </div>
           {statements.length > 1 && (
             <Selector label="Statement" isLabelHidden value={String(selected)} onChange={(value) => setSelected(Number(value))} options={statements.map((item, index) => ({ value: String(index), label: `Period ${item.periodIndex}` }))} />
@@ -120,7 +121,7 @@ export function CardStatement({ source, card, statements, mandates, wallet, onCh
 
         <div className="cp-statement-actions">
           {payable(statement) && totals.matches && <Button type="button" variant="primary" label={`Pay ${formatUsdCents(statement.totalCents)}`} onClick={() => setPaying(true)} />}
-          {evidence && <Button type="button" variant="secondary" label="Repayment record" onClick={() => setReceiptOpen(true)} />}
+          {evidence && <Button type="button" variant="secondary" label="Repayment receipt" icon={<Receipt size={16} />} onClick={() => setReceiptOpen(true)} />}
           {statement.partner?.ref && <small className="owner-muted">Simulated partner reference {statement.partner.ref}</small>}
         </div>
         <details className="technical-details">
@@ -135,7 +136,7 @@ export function CardStatement({ source, card, statements, mandates, wallet, onCh
 
       {paying && <RepaymentDialog source={source} card={card} statement={statement} mandates={mandates} wallet={wallet} onClose={() => setPaying(false)} onDone={() => { setPaying(false); onChanged(); }} />}
       <Dialog isOpen={receiptOpen} onOpenChange={(next) => { if (!next) setReceiptOpen(false); }} purpose="info" width={560}>
-        <Layout height="auto" header={<DialogHeader title="Repayment record" onOpenChange={(next) => { if (!next) setReceiptOpen(false); }} />} content={<LayoutContent>{evidence && <CardEvidenceCard evidence={evidence} />}</LayoutContent>} />
+        <Layout height="auto" header={<DialogHeader title="Repayment receipt" onOpenChange={(next) => { if (!next) setReceiptOpen(false); }} />} content={<LayoutContent>{evidence && <CardEvidenceCard evidence={evidence} />}</LayoutContent>} />
       </Dialog>
     </section>
   );

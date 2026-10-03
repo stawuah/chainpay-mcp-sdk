@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent } from "@astryxdesign/core/Layout";
-import { Receipt } from "lucide-react";
+import { FileText, Lock, Receipt, Snowflake, Sun } from "lucide-react";
 import type { CardActivityRow, CardEvidence, CardView } from "@chainpay/sdk";
 import { ReceiptEvidenceCard } from "../../receipts/ReceiptCard";
 import { activityEvidence } from "./evidence";
@@ -45,16 +45,17 @@ export function CardActivity({ source, card, rows, onChanged }: { source: CardsS
           const review = rowNeedsReview(row);
           return (
             <li key={row.rowId} data-lifecycle={row.lifecycle ?? row.kind} data-review={review ? "yes" : "no"}>
+              <Monogram row={row} />
               <div className="cp-activity-main">
-                <b>{ACTIVITY_TITLES[row.kind]}{row.merchant ? ` · ${row.merchant.displayName}` : ""}</b>
-                <small>{formatWhen(row.at)}{row.agent ? ` · agent ${shortKey(row.agent)}` : ""}</small>
+                <b>{row.merchant ? row.merchant.displayName : ACTIVITY_TITLES[row.kind]}</b>
+                <small>{row.merchant && <span className="cp-activity-kind">{ACTIVITY_TITLES[row.kind]} · </span>}{formatWhen(row.at)}{row.agent ? ` · agent ${shortKey(row.agent)}` : ""}</small>
                 {pills.map((pill) => pill.detail && (pill.tone === "warning" || pill.tone === "danger") ? <small key={`${pill.key}-d`} className="cp-activity-detail">{pill.detail}</small> : null)}
               </div>
               <div className="cp-activity-pills">{pills.map((pill) => <Pill key={pill.key} pill={pill} />)}</div>
               <div className="cp-activity-amount">{row.amountCents ? <Money cents={row.amountCents} className={row.lifecycle === "declined" || row.lifecycle === "reversed" || row.lifecycle === "expired" ? "is-struck" : row.lifecycle === "refunded" ? "is-credit" : ""} /> : null}</div>
               <div className="cp-activity-actions">
                 {review && <Button type="button" variant="secondary" label={resolving === row.rowId ? "Waiting for wallet…" : "Mark reviewed"} isDisabled={Boolean(resolving)} onClick={() => void resolve(row)} />}
-                {evidence && <Button type="button" variant="ghost" label="Receipt" onClick={() => setOpen({ row, evidence })} />}
+                {evidence && <Button type="button" variant="ghost" label="Receipt" icon={<Receipt size={16} />} onClick={() => setOpen({ row, evidence })} />}
               </div>
             </li>
           );
@@ -63,11 +64,25 @@ export function CardActivity({ source, card, rows, onChanged }: { source: CardsS
       <Dialog isOpen={Boolean(open)} onOpenChange={(next) => { if (!next) setOpen(null); }} purpose="info" width={560}>
         <Layout
           height="auto"
-          header={<DialogHeader title="Card record" onOpenChange={(next) => { if (!next) setOpen(null); }} />}
+          header={<DialogHeader title="Card receipt" onOpenChange={(next) => { if (!next) setOpen(null); }} />}
           content={<LayoutContent>{open && <ReceiptEvidenceCard evidence={open.evidence} onShare={() => { setOpen(null); setSharing(true); }} />}</LayoutContent>}
         />
       </Dialog>
       <CardSharePicker source={source} card={card} open={sharing} onClose={() => setSharing(false)} />
     </>
   );
+}
+
+const SYSTEM_ICONS: Partial<Record<CardActivityRow["kind"], typeof Snowflake>> = { freeze: Snowflake, unfreeze: Sun, policy_change: Lock, repayment: FileText };
+
+/** Shop initials, so rows are recognizable at a glance (ruling P7). Muted when nothing was spent. */
+function Monogram({ row }: { row: CardActivityRow }) {
+  if (!row.merchant) {
+    const Icon = SYSTEM_ICONS[row.kind] ?? Receipt;
+    return <span className="cp-monogram" data-tone="system" aria-hidden="true"><Icon size={16} /></span>;
+  }
+  const words = row.merchant.displayName.replace(/[^\p{L}\p{N} ]/gu, " ").split(/\s+/).filter(Boolean);
+  const initials = (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 2)).toUpperCase();
+  const muted = row.lifecycle === "declined" || row.lifecycle === "reversed" || row.lifecycle === "expired";
+  return <span className="cp-monogram" data-tone={muted ? "muted" : "shop"} aria-hidden="true">{initials}</span>;
 }

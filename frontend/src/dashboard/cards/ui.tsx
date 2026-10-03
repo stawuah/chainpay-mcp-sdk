@@ -20,16 +20,6 @@ export function Pill({ pill, withDetail = false }: { pill: StatePill; withDetail
   );
 }
 
-/** Flat blue mini card with the last four digits. The full number never renders here. */
-export function MiniCard({ lastFour, frozen = false }: { lastFour: string; frozen?: boolean }) {
-  return (
-    <span className={`cp-mini-card${frozen ? " is-frozen" : ""}`} aria-hidden="true">
-      <span className="cp-mini-card-chip" />
-      <span className="cp-mini-card-digits">•••• {lastFour}</span>
-    </span>
-  );
-}
-
 export function Money({ cents, className }: { cents: string | bigint; className?: string }) {
   return <span className={`cp-money${className ? ` ${className}` : ""}`}>{formatUsdCents(cents)}</span>;
 }

@@ -7,7 +7,8 @@ import { cardStatus } from "./lifecycle";
 import { CardsNotEnabledError, type CardPrivateRead } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { UnlockStrip } from "./Unlock";
-import { MiniCard, Money, Pill, PrivateValue } from "./ui";
+import { Money, Pill, PrivateValue } from "./ui";
+import { AgentCard, frostFor } from "./AgentCard";
 
 export const CARDS_LIST_COPY = { kicker: "AGENT CARDS", title: "Cards", subtitle: "Give an agent a card. Only you see its limits." };
 
@@ -51,11 +52,16 @@ export function CardList({ source, unlocked, onUnlocked, onNavigate, notice }: C
         </div>
       )}
       {state.kind === "ready" && state.cards.length === 0 && (
-        <div className="owner-small-empty cp-cards-empty" data-testid="cards-empty">
-          <CreditCard />
-          <h3>No cards yet</h3>
-          <p>Give your agent a card with limits only you can read. It pays at regular checkouts, and you can freeze it in one tap.</p>
-          {newCard}
+        <div className="dashboard-card cp-cards-empty-hero" data-testid="cards-empty">
+          <div className="cp-ghost-card" aria-hidden="true">
+            <span className="cp-ghost-card-plus" aria-hidden="true"><Plus size={22} strokeWidth={2} /></span>
+            <span className="cp-ghost-card-lines" aria-hidden="true"><i /><i /></span>
+          </div>
+          <div className="cp-cards-empty-copy">
+            <h3>No cards yet</h3>
+            <p>Give your agent a card with limits only you can read. It pays at regular checkouts, and you can freeze it in one tap.</p>
+            {newCard}
+          </div>
         </div>
       )}
       {state.kind === "ready" && state.cards.length > 0 && (
@@ -77,7 +83,7 @@ export function CardList({ source, unlocked, onUnlocked, onNavigate, notice }: C
                     <tr key={card.cardId} data-card={card.cardId}>
                       <td data-label="Card">
                         <button type="button" className="cp-card-name" onClick={() => onNavigate({ cardId: card.cardId })}>
-                          <MiniCard lastFour={card.lastFour} frozen={card.freeze.onChain} />
+                          <AgentCard size="mini" label={card.label} lastFour={card.lastFour} frost={frostFor(card)} />
                           <span><b>{card.label}</b><small>•••• {card.lastFour}</small></span>
                         </button>
                       </td>

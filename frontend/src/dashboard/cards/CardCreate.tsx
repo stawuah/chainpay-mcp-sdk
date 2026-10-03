@@ -3,7 +3,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { Selector } from "@astryxdesign/core/Selector";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { ArrowLeft, ArrowRight, Check, CircleCheck, CircleX, CreditCard, Loader, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CircleCheck, CircleX, Loader, TriangleAlert } from "lucide-react";
 import {
   CARD_MCC_NAMES,
   CARD_SANDBOX_MERCHANTS,
@@ -20,6 +20,7 @@ import { PageHeader } from "../PageHeader";
 import type { CreateCardInput, CreateStepId, CreateStepState } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { centsToDollarInput, dollarsToCents } from "./amounts";
+import { AgentCard } from "./AgentCard";
 
 export const CREATE_STEPS: { id: CreateStepId; label: string; detail: string }[] = [
   { id: "prepare", label: "Get a card number ready", detail: "ChainPay asks the card network for a paused card." },
@@ -296,10 +297,9 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
               </section>
             )}
           </div>
-          <aside className="owner-wizard-aside">
-            <CreditCard size={32} />
-            <h2>A card,<br />on your terms.</h2>
-            <p>Your agent pays at regular checkouts. Your limits stay yours, and nobody else can read them.</p>
+          <aside className="owner-wizard-aside cp-preview-aside" aria-label="Card preview">
+            <AgentCard label={form.label.trim()} pendingNote={step === 2 ? (running ? "Approving" : "Waiting for you") : "Private"} />
+            <p className="cp-preview-caption">{step === 2 ? "This is the card your agent gets once you approve." : "Your card, as you set it up."} The last four arrive from the card network when it's issued.</p>
             <ul><li>Only you see the limits</li><li>Freeze it in one tap</li><li>Every purchase lands as a receipt</li></ul>
           </aside>
         </div>
