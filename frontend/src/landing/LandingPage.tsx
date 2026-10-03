@@ -17,6 +17,7 @@ const NAV_LINKS = [
   { href: "#spend-limits", label: "Spend limits" },
   { href: "#receipts", label: "Receipts" },
   { href: "#developers", label: "Developers" },
+  { href: "/use-cases", label: "Use cases" },
 ] as const;
 
 const FAQ_ITEMS = [
@@ -185,6 +186,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
         </a>
         <p className="t-body-sm">Policy-controlled agent payments on Solana Devnet. The owner wallet holds the funds.</p>
         <div className="landing-footer-links">
+          <a href="/use-cases">Use cases</a>
           <a href={PROGRAM_EXPLORER_URL} target="_blank" rel="noreferrer">Program on Explorer</a>
           <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">GitHub</a>
           <a href={MCP_DOCS_URL} target="_blank" rel="noreferrer">MCP docs</a>
