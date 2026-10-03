@@ -390,7 +390,7 @@ function GearView({ bond, onBack, onToggle }: { bond: Bond; onBack: () => void; 
         <span className="cp-pet-meter" aria-hidden="true">
           <span style={{ width: `${progress * 100}%` }} />
         </span>
-        <p className="cp-pet-level-hint">Care, pats, squashed bugs and answered calls all count. Up to 40 XP a day.</p>
+        <p className="cp-pet-level-hint">Care, pats, swept dust and answered calls all count. Up to 40 XP a day.</p>
       </div>
       <ul className="cp-pet-gear">
         {GEAR.map((entry) => {

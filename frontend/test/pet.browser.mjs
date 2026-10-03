@@ -123,16 +123,16 @@ async function inViewport(page) {
   await context.close();
 }
 
-// 6. Play: squash a bug, answer a call, toss a coin, open the game, wear gear.
+// 6. Play: sweep a dust speck, answer a call, toss a coin, open the game, wear gear.
 {
   const { page, context } = await open('/', { reducedMotion: 'reduce', bond: { xp: 18 } });
   const robot = page.getByRole('button', { name: /ChainPay robot/ });
   await robot.waitFor({ timeout: 20000 });
   await page.waitForFunction(() => window.__chainpayPet);
 
-  await page.evaluate(() => window.__chainpayPet.spawnBug());
-  await page.getByRole('button', { name: 'Squash the bug' }).click();
-  await page.locator('.cp-pet-speech', { hasText: /got it|squashed|crunchy/ }).waitFor();
+  await page.evaluate(() => window.__chainpayPet.spawnDust());
+  await page.getByRole('button', { name: 'Sweep up the dust speck' }).click();
+  await page.locator('.cp-pet-speech', { hasText: /got it|swept|visor/ }).waitFor();
 
   await page.evaluate(() => window.__chainpayPet.call());
   await page.getByRole('button', { name: 'ChainPay robot is calling you' }).click();
@@ -155,12 +155,12 @@ async function inViewport(page) {
   await page.locator('.cp-pet-speech', { hasText: /mine|caught|shiny|imaginary/ }).waitFor({ timeout: 5000 });
   assert.ok(await inViewport(page));
 
-  // Bugs and calls stay off the money pages.
+  // Dust and calls stay off the money pages.
   await page.goto(BASE + '/verify', { waitUntil: 'load' });
   await page.waitForFunction(() => window.__chainpayPet);
-  await page.evaluate(() => window.__chainpayPet.spawnBug());
+  await page.evaluate(() => window.__chainpayPet.spawnDust());
   await page.waitForTimeout(300);
-  assert.equal(await page.locator('.cp-pet-bug').count(), 0, 'no bugs on /verify');
+  assert.equal(await page.locator('.cp-pet-speck').count(), 0, 'no specks on /verify');
   await context.close();
 }
 

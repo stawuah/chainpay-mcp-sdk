@@ -416,7 +416,7 @@
   white-space: nowrap;
 }
 
-/* ---- Around him: speech, calls, coins, bugs ------------------------------------ */
+/* ---- Around him: speech, calls, coins, specks ------------------------------------ */
 
 .cp-pet-speech {
   position: fixed;
@@ -498,7 +498,7 @@
   100% { transform: none; }
 }
 
-.cp-pet-bug {
+.cp-pet-speck {
   position: fixed;
   left: 0;
   top: 0;
@@ -516,10 +516,10 @@
   /* One crawl into place when it appears, then it holds still. */
   transition: transform 1.2s cubic-bezier(0.23, 1, 0.32, 1);
 }
-.cp-pet-bug.is-squashed { transition: none; }
-.cp-pet-bug.is-squashed svg { animation: cp-pet-bug-squash 500ms forwards; }
-@keyframes cp-pet-bug-squash { to { scale: 1.4 0.2; opacity: 0; } }
-.cp-pet-bug:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+.cp-pet-speck.is-swept { transition: none; }
+.cp-pet-speck.is-swept svg { animation: cp-pet-speck-sweep 500ms forwards; }
+@keyframes cp-pet-speck-sweep { to { scale: 1.4 0.2; opacity: 0; } }
+.cp-pet-speck:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
 
 .cp-pet.is-booting .cp-pet-canvas { filter: drop-shadow(0 14px 14px rgb(20 33 61 / 0.18)) brightness(0.96); }
 
@@ -550,6 +550,6 @@
   .cp-pet-pill:active { transform: none; }
   .cp-pet-speech { transform: none; transition: opacity 120ms linear; }
   .cp-pet-call, .cp-pet-coin.is-landed { animation: none; }
-  .cp-pet-bug { transition: none; }
+  .cp-pet-speck { transition: none; }
   .cp-pet-zzz { animation: none; }
 }

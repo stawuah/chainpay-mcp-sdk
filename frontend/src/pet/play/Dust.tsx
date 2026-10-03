@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { viewport } from "../roam/roamer";
 
-// Little glitch bugs: the Tamagotchi mess you clean up. They wander along the
-// edges of the window (never across the middle of what you're reading), and a
-// click squashes one. Ignore one long enough and it gets away.
+// Dust specks: the Tamagotchi mess you clean up. One drifts into a side margin
+// now and then (never onto what you're reading), and a click sweeps it up.
+// Ignore it and it drifts off after a minute, at no cost.
 
-export type Bug = { id: number; x: number; y: number; fromX: number; fromY: number; born: number; squashed: boolean; settled: boolean };
+export type Speck = { id: number; x: number; y: number; fromX: number; fromY: number; born: number; swept: boolean; settled: boolean };
 
 const SIZE = 28;
 const GUTTER_MIN = 72;
@@ -14,7 +14,7 @@ const LIFETIME_MS = 60_000;
 const FIRST_MS = 60_000;
 
 /**
- * Bugs never land on text. They use a side gutter outside the page column
+ * Dust never land on text. They use a side gutter outside the page column
  * when it is wide enough, otherwise a spot right beside the robot.
  */
 function spawnPoint(near: DOMRect | null): { x: number; y: number } {
@@ -47,37 +47,37 @@ type Options = {
   /** The robot's box, for when there is no gutter. */
   near: () => DOMRect | null;
   reducedMotion: boolean;
-  onSpawn: (bug: Bug) => void;
+  onSpawn: (speck: Speck) => void;
   onEscape: () => void;
 };
 
-/** One bug at a time; the first after a minute, then every two to three. */
-export function useBugs({ enabled, allow, near, reducedMotion, onSpawn, onEscape }: Options) {
+/** One speck at a time; the first after a minute, then every two to three. */
+export function useDust({ enabled, allow, near, reducedMotion, onSpawn, onEscape }: Options) {
   // The ref is the source of truth so side effects (spawn/escape callbacks)
   // run once, outside React's state updaters.
-  const list = useRef<Bug[]>([]);
-  const [bugs, setBugs] = useState<Bug[]>([]);
+  const list = useRef<Speck[]>([]);
+  const [specks, setSpecks] = useState<Speck[]>([]);
   const nextId = useRef(1);
   const latest = useRef({ enabled, allow, near, reducedMotion, onSpawn, onEscape });
   latest.current = { enabled, allow, near, reducedMotion, onSpawn, onEscape };
-  const commit = (next: Bug[]) => {
+  const commit = (next: Speck[]) => {
     list.current = next;
-    setBugs(next);
+    setSpecks(next);
   };
 
-  const make = (): Bug => {
+  const make = (): Speck => {
     const to = spawnPoint(latest.current.near());
     // Crawl in once from a little way off, then hold still.
     const from = latest.current.reducedMotion ? to : { x: to.x + (Math.random() < 0.5 ? -60 : 60), y: to.y + 40 };
-    return { id: nextId.current++, x: to.x, y: to.y, fromX: from.x, fromY: from.y, born: Date.now(), squashed: false, settled: latest.current.reducedMotion };
+    return { id: nextId.current++, x: to.x, y: to.y, fromX: from.x, fromY: from.y, born: Date.now(), swept: false, settled: latest.current.reducedMotion };
   };
 
   const add = () => {
-    const bug = make();
-    commit([...list.current, bug]);
-    latest.current.onSpawn(bug);
+    const speck = make();
+    commit([...list.current, speck]);
+    latest.current.onSpawn(speck);
     // Next frame: move to the resting spot so the crawl transition runs once.
-    window.setTimeout(() => commit(list.current.map((item) => (item.id === bug.id ? { ...item, settled: true } : item))), 30);
+    window.setTimeout(() => commit(list.current.map((item) => (item.id === speck.id ? { ...item, settled: true } : item))), 30);
   };
 
   useEffect(() => {
@@ -88,7 +88,7 @@ export function useBugs({ enabled, allow, near, reducedMotion, onSpawn, onEscape
     let timer: number;
     const plan = (delay: number) => {
       timer = window.setTimeout(() => {
-        const live = list.current.some((bug) => !bug.squashed);
+        const live = list.current.some((speck) => !speck.swept);
         if (!document.hidden && !live && Math.random() < 0.6 && latest.current.allow()) add();
         plan(120_000 + Math.random() * 60_000);
       }, delay);
@@ -97,57 +97,62 @@ export function useBugs({ enabled, allow, near, reducedMotion, onSpawn, onEscape
     return () => window.clearTimeout(timer);
   }, [enabled]);
 
-  // Old bugs leave quietly.
+  // Old specks leave quietly.
   useEffect(() => {
     if (!enabled) return;
     const timer = window.setInterval(() => {
       const now = Date.now();
-      const escaped = list.current.filter((bug) => !bug.squashed && now - bug.born > LIFETIME_MS);
+      const escaped = list.current.filter((speck) => !speck.swept && now - speck.born > LIFETIME_MS);
       if (escaped.length === 0) return;
-      commit(list.current.filter((bug) => !escaped.includes(bug)));
+      commit(list.current.filter((speck) => !escaped.includes(speck)));
       escaped.forEach(() => latest.current.onEscape());
     }, 5_000);
     return () => window.clearInterval(timer);
   }, [enabled]);
 
-  const squash = useCallback((id: number) => {
-    commit(list.current.map((bug) => (bug.id === id ? { ...bug, squashed: true } : bug)));
-    window.setTimeout(() => commit(list.current.filter((bug) => bug.id !== id)), 600);
+  const sweep = useCallback((id: number) => {
+    commit(list.current.map((speck) => (speck.id === id ? { ...speck, swept: true } : speck)));
+    window.setTimeout(() => commit(list.current.filter((speck) => speck.id !== id)), 600);
   }, []);
 
-  /** For tests: drop a bug right now (still only on pages with bugs). */
+  /** For tests: drop a speck right now (still only on pages with specks). */
   const spawnNow = useCallback(() => {
     if (!latest.current.enabled) return;
     add();
   }, []);
 
-  return { bugs, squash, spawnNow };
+  return { specks, sweep, spawnNow };
 }
 
-export function BugLayer({ bugs, onSquash }: { bugs: Bug[]; onSquash: (bug: Bug) => void }) {
-  if (bugs.length === 0) return null;
+export function DustLayer({ specks, onSweep }: { specks: Speck[]; onSweep: (speck: Speck) => void }) {
+  if (specks.length === 0) return null;
   return createPortal(
     <>
-      {bugs.map((bug) => (
+      {specks.map((speck) => (
         <button
-          key={bug.id}
+          key={speck.id}
           type="button"
-          className={`cp-pet-bug${bug.squashed ? " is-squashed" : ""}`}
-          style={{ transform: `translate3d(${bug.settled ? bug.x : bug.fromX}px, ${bug.settled ? bug.y : bug.fromY}px, 0)` }}
+          className={`cp-pet-speck${speck.swept ? " is-swept" : ""}`}
+          style={{ transform: `translate3d(${speck.settled ? speck.x : speck.fromX}px, ${speck.settled ? speck.y : speck.fromY}px, 0)` }}
           tabIndex={-1}
-          aria-label="Squash the bug"
-          disabled={bug.squashed}
-          onClick={() => onSquash(bug)}
+          aria-label="Sweep up the dust speck"
+          disabled={speck.swept}
+          onClick={() => onSweep(speck)}
         >
           <svg viewBox="0 0 28 28" width="28" height="28" aria-hidden="true">
-            <g stroke="#0a0b0d" strokeWidth="1.6" strokeLinecap="round">
-              <path d="M8 11 4 8M8 15H3M8 19l-4 3M20 11l4-3M20 15h5M20 19l4 3M12 7 10 4M16 7l2-3" />
+            {/* A dust bunny: a soft grey puff with two dot eyes. */}
+            <g fill="#a8acb3">
+              <circle cx="14" cy="15" r="8" />
+              <circle cx="8.5" cy="12" r="4" />
+              <circle cx="19.5" cy="11.5" r="4.5" />
+              <circle cx="11" cy="20" r="4" />
+              <circle cx="18" cy="20" r="4.2" />
             </g>
-            <ellipse cx="14" cy="16" rx="6.5" ry="8" fill="#0a0b0d" />
-            <circle cx="14" cy="9" r="3.6" fill="#0a0b0d" />
-            <path d="M14 9.5v13.5" stroke="#0052ff" strokeWidth="1.4" />
-            <circle cx="12.6" cy="8.4" r="0.9" fill="#fff" />
-            <circle cx="15.4" cy="8.4" r="0.9" fill="#fff" />
+            <g stroke="#a8acb3" strokeWidth="1.2" strokeLinecap="round">
+              <path d="M5 9 3 7M23 8l2-2M4 17H2M24 16h2" />
+            </g>
+            <circle cx="11.5" cy="14.5" r="1.3" fill="#0a0b0d" />
+            <circle cx="16.5" cy="14.5" r="1.3" fill="#0a0b0d" />
           </svg>
         </button>
       ))}

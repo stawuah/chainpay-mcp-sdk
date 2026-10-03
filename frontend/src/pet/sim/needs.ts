@@ -159,7 +159,7 @@ export function moodOf(snapshot: PetSnapshot, now: number): Mood {
   return "meh";
 }
 
-/** Small need changes from play (a squashed bug, a caught coin). No cooldown. */
+/** Small need changes from play (a swept speck, a caught coin). No cooldown. */
 export function nudge(snapshot: PetSnapshot, delta: Partial<Needs>, now: number): PetSnapshot {
   const current = decay(snapshot, now);
   const needs = { ...current.needs };

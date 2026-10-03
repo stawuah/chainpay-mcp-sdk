@@ -20,7 +20,7 @@ export type Gain =
   | "visit"
   | "pat"
   | "care"
-  | "bug"
+  | "speck"
   | "call"
   | "coin"
   | "game-won"
@@ -31,7 +31,7 @@ const XP: Record<Gain, number> = {
   visit: 2,
   pat: 1,
   care: 3,
-  bug: 1,
+  speck: 1,
   call: 5,
   coin: 1,
   "game-won": 5,
@@ -40,7 +40,7 @@ const XP: Record<Gain, number> = {
 };
 
 /** Pats and coins are cheap to spam, so they stop paying after a few a day. */
-const DAILY_CAP: Partial<Record<Gain, number>> = { pat: 5, coin: 5, bug: 10 };
+const DAILY_CAP: Partial<Record<Gain, number>> = { pat: 5, coin: 5, speck: 10 };
 export const DAILY_XP_CAP = 40;
 
 /** What happened today, for the diary. */
@@ -51,8 +51,8 @@ export type DayLog = {
   polished: number;
   pats: number;
   pokes: number;
-  bugs: number;
-  bugsMissed: number;
+  specks: number;
+  specksMissed: number;
   calls: number;
   callsMissed: number;
   coins: number;
@@ -105,8 +105,8 @@ export function emptyDay(day: string): DayLog {
     polished: 0,
     pats: 0,
     pokes: 0,
-    bugs: 0,
-    bugsMissed: 0,
+    specks: 0,
+    specksMissed: 0,
     calls: 0,
     callsMissed: 0,
     coins: 0,
@@ -163,15 +163,15 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
 export function diaryText(log: DayLog): string {
   const lines: string[] = [];
   const care = log.fed + log.played + log.polished;
-  if (care === 0 && log.pats === 0 && log.bugs === 0 && log.calls === 0) {
+  if (care === 0 && log.pats === 0 && log.specks === 0 && log.calls === 0) {
     return pick(log.day, 1, ["quiet day. i floated a lot.", "nobody came by. i counted pixels.", "slow one. i practised blinking."]);
   }
   if (log.fed > 0) lines.push(pick(log.day, 2, [`got charged ${plural(log.fed, "time", "times")}.`, `battery top-ups: ${log.fed}.`]));
   if (log.polished > 0) lines.push(pick(log.day, 3, ["someone polished me. felt fancy.", "got shined up. visor gleaming."]));
   if (log.wins > 0) lines.push(`won ${plural(log.wins, "round", "rounds")} of allowance. the limit held.`);
   else if (log.games > 0) lines.push("played allowance. close one.");
-  if (log.bugs > 0) lines.push(`${plural(log.bugs, "bug", "bugs")} squashed. not by me.`);
-  if (log.bugsMissed > 0) lines.push(`${plural(log.bugsMissed, "bug", "bugs")} got away.`);
+  if (log.specks > 0) lines.push(`${plural(log.specks, "dust speck", "dust specks")} swept up. not by me.`);
+  if (log.specksMissed > 0) lines.push(`${plural(log.specksMissed, "speck", "specks")} drifted off.`);
   if (log.calls > 0) lines.push(log.calls === 1 ? "i called. someone came." : `called ${log.calls} times. people came.`);
   if (log.callsMissed > 0) lines.push(log.callsMissed === 1 ? "called once. you were busy." : "called a couple of times. you were busy.");
   if (log.coins > 0) lines.push(`caught ${plural(log.coins, "coin", "coins")}. all imaginary, all mine.`);

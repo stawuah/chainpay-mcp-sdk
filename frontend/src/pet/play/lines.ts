@@ -42,9 +42,9 @@ export const COIN_HINT = {
   keyboard: " · Enter tosses to the middle",
 } as const;
 
-export const BUG_LINES = {
-  spawn: "ew. a bug.",
-  squash: ["got it.", "bug squashed.", "thanks. that one was crunchy."],
+export const DUST_LINES = {
+  spawn: "a speck. hold on.",
+  sweep: ["got it.", "swept.", "thanks. visor's clear."],
 } as const;
 
 export const CALL_LINES = {
@@ -69,7 +69,7 @@ export const TOUR_LINES: Record<string, string> = {
   faq: "good questions. read these before you approve anything.",
 };
 
-export const CTA_LINE = "ooh. that's where the fun is.";
+export const CTA_LINE = "that's where your agents live.";
 
 export const GAME_COPY = {
   title: "Allowance",

@@ -154,7 +154,7 @@ function createStore() {
       return { ok: true };
     },
 
-    /** Play rewards outside the care cooldowns: bugs, coins, calls, games. */
+    /** Play rewards outside the care cooldowns: specks, coins, calls, games. */
     reward(kind: Gain, event: DayEvent | null, delta: Partial<Needs> = {}, reaction?: ReactionKind) {
       const now = Date.now();
       let bond = gain(state.bond, kind, now);
@@ -167,7 +167,7 @@ function createStore() {
       });
     },
 
-    /** Something went wrong for him: a missed call, a bug that got away. */
+    /** Something went wrong for him: a missed call, a speck that got away. */
     miss(event: DayEvent, delta: Partial<Needs> = {}) {
       const now = Date.now();
       set({ snapshot: nudge(state.snapshot, delta, now), bond: mistake(note(state.bond, event, now)), now });

@@ -6,11 +6,11 @@ import { RobotStill } from "./RobotStill";
 import { PetPanel, type PanelView } from "./PetPanel";
 import { SpeechBubble } from "./play/SpeechBubble";
 import { CoinToss, LandedCoin } from "./play/CoinToss";
-import { BugLayer, useBugs, type Bug } from "./play/Bugs";
+import { DustLayer, useDust, type Speck } from "./play/Dust";
 import { useAttentionCalls, useKeySecrets, useLandingTour, usePatCombo, useShake } from "./play/hooks";
 import {
   BOOT_LINE,
-  BUG_LINES,
+  DUST_LINES,
   CALL_LINES,
   COIN_LINES,
   COOLING_LINES,
@@ -57,13 +57,13 @@ const VOLUNTEER_GAP_MS = 20_000;
 const VOLUNTEER_MAX = 6;
 const CALLS_MAX = 2;
 
-type Budget = { lines: number; lastAt: number; calls: number; bugLine: boolean };
+type Budget = { lines: number; lastAt: number; calls: number; dustLine: boolean };
 
 function readBudget(): Budget {
   try {
-    return { lines: 0, lastAt: 0, calls: 0, bugLine: false, ...JSON.parse(window.sessionStorage.getItem(BUDGET_KEY) ?? "{}") };
+    return { lines: 0, lastAt: 0, calls: 0, dustLine: false, ...JSON.parse(window.sessionStorage.getItem(BUDGET_KEY) ?? "{}") };
   } catch {
-    return { lines: 0, lastAt: 0, calls: 0, bugLine: false };
+    return { lines: 0, lastAt: 0, calls: 0, dustLine: false };
   }
 }
 
@@ -193,13 +193,13 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   // "was that a drag?" has to live in a ref, not in render state.
   const dragged = useRef(false);
 
-  // Play that happens to you (bugs, calls, the tour) lives on the landing page
+  // Play that happens to you (specks, calls, the tour) lives on the landing page
   // only. The dashboard and public receipts are for reading money, not play.
   const playful = routeKind === "landing";
   const latestBusy = useRef(false);
 
-  /** One gate for bugs, calls and lines he volunteers. Counts what it allows. */
-  const canVolunteer = useCallback((kind: "line" | "bug" | "call") => {
+  /** One gate for specks, calls and lines he volunteers. Counts what it allows. */
+  const canVolunteer = useCallback((kind: "line" | "speck" | "call") => {
     if (latestBusy.current || readerIsBusy()) return false;
     const budget = readBudget();
     const at = Date.now();
@@ -208,7 +208,7 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
       writeBudget({ ...budget, calls: budget.calls + 1 });
       return true;
     }
-    if (kind === "bug") return true;
+    if (kind === "speck") return true;
     if (budget.lines >= VOLUNTEER_MAX || at - budget.lastAt < VOLUNTEER_GAP_MS) return false;
     writeBudget({ ...budget, lines: budget.lines + 1, lastAt: at });
     return true;
@@ -373,25 +373,25 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
     onMissed: () => petStore.miss("callsMissed"),
   });
 
-  // ---- Bugs ----------------------------------------------------------------
-  const { bugs, squash, spawnNow } = useBugs({
+  // ---- Dust ----------------------------------------------------------------
+  const { specks, sweep, spawnNow } = useDust({
     enabled: playful && !booting,
-    allow: () => canVolunteer("bug"),
+    allow: () => canVolunteer("speck"),
     near: () => body.current?.getBoundingClientRect() ?? null,
     reducedMotion,
     onSpawn: () => {
-      // "ew. a bug." only for the first bug of the session.
+      // The spawn line only for the first speck of the session.
       const budget = readBudget();
-      if (budget.bugLine || open) return;
-      writeBudget({ ...budget, bugLine: true });
-      if (canVolunteer("line")) petStore.say(BUG_LINES.spawn, 2_500, "volunteer");
+      if (budget.dustLine || open) return;
+      writeBudget({ ...budget, dustLine: true });
+      if (canVolunteer("line")) petStore.say(DUST_LINES.spawn, 2_500, "volunteer");
     },
-    onEscape: () => petStore.miss("bugsMissed"),
+    onEscape: () => petStore.miss("specksMissed"),
   });
-  const onSquash = (bug: Bug) => {
-    squash(bug.id);
-    petStore.reward("bug", "bugs", { clean: 4 }, "happy");
-    petStore.say(pickLine(BUG_LINES.squash), 2_500);
+  const onSweep = (speck: Speck) => {
+    sweep(speck.id);
+    petStore.reward("speck", "specks", { clean: 4 }, "happy");
+    petStore.say(pickLine(DUST_LINES.sweep), 2_500);
   };
 
   // ---- Coin toss -------------------------------------------------------------
@@ -465,7 +465,7 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
       // ignore
     }
     if (!debug) return;
-    const handle = { spawnBug: spawnNow, call: calls.callNow, say: (text: string) => petStore.say(text), state: () => petStore.get() };
+    const handle = { spawnDust: spawnNow, call: calls.callNow, say: (text: string) => petStore.say(text), state: () => petStore.get() };
     (window as unknown as { __chainpayPet?: typeof handle }).__chainpayPet = handle;
     return () => {
       delete (window as unknown as { __chainpayPet?: typeof handle }).__chainpayPet;
@@ -580,7 +580,7 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
       {speaking && !open && !tossing ? <SpeechBubble key={speech!.at} text={speaking} anchor={{ x: position.x, y: position.y, size }} /> : null}
       {tossing ? <CoinToss onToss={onToss} onCancel={cancelToss} viaKeyboard={tossByKeyboard} /> : null}
       {coin ? <LandedCoin x={coin.x} y={coin.y} /> : null}
-      <BugLayer bugs={bugs} onSquash={onSquash} />
+      <DustLayer specks={specks} onSweep={onSweep} />
 
       <PetPanel
         open={open}

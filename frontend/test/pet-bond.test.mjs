@@ -56,12 +56,12 @@ test("daily xp cap and per-kind caps stop grinding; a new day resets them", () =
 test("the diary closes yesterday's page from what actually happened", () => {
   let b = bond.newBond(day(1));
   b = bond.note(b, "fed", day(1), 2);
-  b = bond.note(b, "bugs", day(1), 3);
+  b = bond.note(b, "specks", day(1), 3);
   assert.match(bond.todaySoFar(b).text, /charged 2 times|battery top-ups: 2/);
   b = bond.rollDay(b, day(2));
   assert.equal(b.diary.length, 1);
   assert.equal(b.diary[0].day, bond.dayKey(day(1)));
-  assert.match(b.diary[0].text, /3 bugs squashed/);
+  assert.match(b.diary[0].text, /3 dust specks swept up/);
   assert.equal(bond.todaySoFar(b), null, "a new day starts empty");
   // A day with nothing in it leaves no page.
   assert.equal(bond.rollDay(b, day(4)).diary.length, 1);
