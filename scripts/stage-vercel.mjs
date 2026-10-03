@@ -37,7 +37,8 @@ if (service === "backend") {
   // The release guard is a build step, and Vercel then expects static output.
   await mkdir(path.join(target, "public"), { recursive: true });
   await writeFile(path.join(target, "public/robots.txt"), "User-agent: *\nDisallow: /\n");
-  config = { framework: null, rewrites: [{ source: "/(.*)", destination: "/api/relay" }], functions: { "api/relay.rs": { maxDuration: 300 } } };
+  // Card reconciliation (contracts.md §3.4). Answers 404 unless CARDS_CONNECTOR_ENABLED=true.
+  config = { framework: null, rewrites: [{ source: "/(.*)", destination: "/api/relay" }], functions: { "api/relay.rs": { maxDuration: 300 } }, crons: [{ path: "/internal/cron/cards/reconcile", schedule: "*/5 * * * *" }] };
 } else {
   for (const name of ["package.json", "package-lock.json", "sdk", "mcp-server", "demo-merchant", "app"]) await copy(name);
   if (service === "frontend") {

@@ -37,6 +37,8 @@ export function recordKey(kind: RecordKind, r: JsonRecord): string {
   if (kind === "receipt_requests" || kind === "observed_policies") return receiptKey(r);
   if (kind === "mandate_requests") return string(r.mandate_pda);
   if (kind === "delivery_attestations") return encode([r.cluster, r.program_id, r.receipt_address, r.seller]);
+  // Card kinds are written only through convex/cards.ts with explicit keys.
+  if (kind === "cards" || kind === "card_events" || kind === "card_statements" || kind === "card_recovery") return fail("invalid_argument", "Card records use the card record operations");
   return string(r[{ payments: "payment_id", transactions: "transaction_id", x402_payments: "x402_payment_id", managed_signer_challenges: "challenge_id", managed_signers: "signer_id" }[kind]]);
 }
 export async function getRecord(ctx: QueryCtx | MutationCtx, kind: RecordKind, key: string) { return ctx.db.query("records").withIndex("by_kind_key", q => q.eq("kind", kind).eq("key", key)).unique(); }

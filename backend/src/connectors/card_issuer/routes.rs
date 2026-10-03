@@ -1,0 +1,1462 @@
+//! Owner and agent card routes (contracts.md §3.4). Axum glue lives in
+//! `server_cards.rs`; these functions take the authenticated caller and
+//! return contract JSON or the contract error envelope
+//! `{code, message, operationId?, retryable, evidenceState}`.
+//!
+//! No route returns a policy value (the browser reads those from PER with the
+//! owner's own token), a PAN, CVV, TEE token or Lithic card token.
+
+use super::program::{self, CardAccounts};
+use super::tee::{TeeRead, TxOutcome};
+use super::{
+    CARD_LIST_REFERENCE, CONNECTOR, CardIssuerSecret, CardsConnector, card_key, cents, is_card_id,
+    log_id, merchant_by_acceptor, merchant_by_hash, now_ms, parse_cents, rfc3339, updated_now,
+};
+use crate::storage::{CardIndex, CardKind, CardPut, StorageError, StoredCardRecord};
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use solana_address::Address;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+// ------------------------------------------------------------------ caller
+
+/// Authenticated identity, derived server-side from the owner session or MCP
+/// connection. `connection` is the connection token hash (never the token).
+#[derive(Debug, Clone)]
+pub struct Caller {
+    pub wallet: String,
+    pub scope: Option<Value>,
+    pub connection: Option<String>,
+}
+
+impl Caller {
+    pub fn is_owner_session(&self) -> bool {
+        self.scope.is_none()
+    }
+
+    /// Stable 32-byte agent identity bound into `CheckoutIntent.agent` for a
+    /// scoped connection. Owner sessions have none (contracts.md §10).
+    pub fn agent_id(&self) -> Option<[u8; 32]> {
+        if self.scope.is_none() {
+            return None;
+        }
+        let connection = self.connection.as_deref()?;
+        Some(Sha256::digest(format!("chainpay-card-agent:v1\n{connection}").as_bytes()).into())
+    }
+
+    fn scope_allows(&self, card_id: &str, tool: &str) -> bool {
+        let Some(scope) = &self.scope else {
+            return false;
+        };
+        scope["cards"]
+            .as_array()
+            .is_some_and(|cards| cards.iter().any(|c| c.as_str() == Some(card_id)))
+            && scope["tools"]
+                .as_array()
+                .is_some_and(|tools| tools.iter().any(|t| t.as_str() == Some(tool)))
+    }
+}
+
+// ------------------------------------------------------------------- errors
+
+#[derive(Debug, Clone)]
+pub struct CardsError {
+    pub status: StatusCode,
+    pub code: &'static str,
+    pub message: String,
+    pub retryable: bool,
+    pub evidence_state: &'static str,
+    pub operation_id: Option<String>,
+    pub detail: Option<String>,
+}
+
+impl CardsError {
+    fn new(
+        status: StatusCode,
+        code: &'static str,
+        message: impl Into<String>,
+        retryable: bool,
+        evidence_state: &'static str,
+    ) -> Self {
+        Self {
+            status,
+            code,
+            message: message.into(),
+            retryable,
+            evidence_state,
+            operation_id: None,
+            detail: None,
+        }
+    }
+    pub fn bad(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, code, message, false, "none")
+    }
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, "forbidden", message, false, "none")
+    }
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::NOT_FOUND, "not_found", message, false, "none")
+    }
+    pub fn conflict(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, code, message, false, "none")
+    }
+    pub fn unknown(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "outcome_unknown",
+            message,
+            true,
+            "unknown",
+        )
+    }
+    pub fn unavailable(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, code, message, true, "none")
+    }
+    pub fn internal() -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "Card service error",
+            true,
+            "unknown",
+        )
+    }
+    pub fn not_implemented(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "not_implemented",
+            message,
+            false,
+            "none",
+        )
+    }
+    pub fn with_detail(mut self, detail: &str) -> Self {
+        self.detail = Some(detail.to_owned());
+        self
+    }
+    pub fn with_operation(mut self, id: &str) -> Self {
+        self.operation_id = Some(id.to_owned());
+        self
+    }
+}
+
+impl From<StorageError> for CardsError {
+    fn from(error: StorageError) -> Self {
+        // Storage errors carry status codes only, never record contents.
+        super::card_log!("storage error: {error}");
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "storage_unavailable",
+            "Card storage is unavailable; retry with the same clientOperationId",
+            true,
+            "unknown",
+        )
+    }
+}
+
+impl IntoResponse for CardsError {
+    fn into_response(self) -> Response {
+        super::card_log!("{} {}", self.status.as_u16(), self.code);
+        let mut body = json!({"code": self.code, "message": self.message, "retryable": self.retryable, "evidenceState": self.evidence_state});
+        if let Some(id) = &self.operation_id {
+            body["operationId"] = json!(id);
+        }
+        if let Some(detail) = &self.detail {
+            body["detail"] = json!(detail);
+        }
+        (self.status, Json(body)).into_response()
+    }
+}
+
+pub fn operation_id(value: &str) -> Result<(), CardsError> {
+    if (8..=128).contains(&value.len())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
+    {
+        Ok(())
+    } else {
+        Err(CardsError::bad(
+            "client_operation_id",
+            "clientOperationId must be 8-128 letters, digits or _.:-",
+        ))
+    }
+}
+
+pub fn card_pdas(card: &StoredCardRecord) -> Result<(Address, Address), CardsError> {
+    let policy = card.record["policyPda"]
+        .as_str()
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(CardsError::internal)?;
+    let period = card.record["periodPda"]
+        .as_str()
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(CardsError::internal)?;
+    Ok((policy, period))
+}
+
+// ------------------------------------------------------------ authorization
+
+/// The owner's own card, from an owner session (never a scoped connection).
+pub async fn owned_card(
+    cards: &CardsConnector,
+    caller: &Caller,
+    card_id: &str,
+) -> Result<StoredCardRecord, CardsError> {
+    if !caller.is_owner_session() {
+        return Err(CardsError::forbidden("Owner session required"));
+    }
+    card_for(cards, &caller.wallet, card_id).await
+}
+
+async fn card_for(
+    cards: &CardsConnector,
+    wallet: &str,
+    card_id: &str,
+) -> Result<StoredCardRecord, CardsError> {
+    if !is_card_id(card_id) {
+        return Err(CardsError::not_found("Card not found"));
+    }
+    let card = cards
+        .card(card_id)
+        .await?
+        .ok_or_else(|| CardsError::not_found("Card not found"))?;
+    // Another owner's card is indistinguishable from a missing one.
+    if card.index.owner.as_deref() != Some(wallet) {
+        return Err(CardsError::not_found("Card not found"));
+    }
+    Ok(card)
+}
+
+/// Owner session, or a connection whose scope names this card and tool.
+pub async fn readable_card(
+    cards: &CardsConnector,
+    caller: &Caller,
+    card_id: &str,
+    tool: &str,
+) -> Result<StoredCardRecord, CardsError> {
+    if !caller.is_owner_session() && !caller.scope_allows(card_id, tool) {
+        return Err(CardsError::forbidden(
+            "Connection does not permit this card or tool",
+        ));
+    }
+    card_for(cards, &caller.wallet, card_id).await
+}
+
+/// Agent connection scoped to this card for checkout.
+pub async fn agent_card(
+    cards: &CardsConnector,
+    caller: &Caller,
+    card_id: &str,
+) -> Result<StoredCardRecord, CardsError> {
+    if caller.is_owner_session() {
+        return Err(CardsError::forbidden(
+            "Card checkout needs an agent connection scoped to this card",
+        ));
+    }
+    if !caller.scope_allows(card_id, "request_card_checkout") {
+        return Err(CardsError::forbidden(
+            "Connection does not permit checkout on this card",
+        ));
+    }
+    card_for(cards, &caller.wallet, card_id).await
+}
+
+// -------------------------------------------------------------------- views
+
+pub fn card_view(
+    cards: &CardsConnector,
+    card: &StoredCardRecord,
+    commitment: Option<Value>,
+) -> Value {
+    let issuer = cards.card_issuer(card);
+    let r = &card.record;
+    let mut mirror = json!({"state": r["mirror"]["state"].as_str().unwrap_or("pending")});
+    if let Some(at) = r["mirror"]["ackAt"].as_str() {
+        mirror["acknowledgedAt"] = json!(at);
+    }
+    if let Some(version) = r["mirror"]["policyVersion"].as_u64() {
+        mirror["policyVersionMirrored"] = json!(version);
+    }
+    let mut view = json!({
+        "cardId": r["cardId"],
+        "label": cards.card_label(card),
+        "lastFour": issuer.map(|i| i.last_four).unwrap_or_default(),
+        "issuerState": r["issuerState"].as_str().unwrap_or("PAUSED"),
+        "mirror": mirror,
+        "freeze": {
+            "onChain": r["freeze"]["onChain"].as_bool().unwrap_or(false),
+            "issuer": r["freeze"]["issuer"].as_str().unwrap_or("confirmed"),
+        },
+        "accounts": {"binding": r["bindingPda"], "policy": r["policyPda"], "period": r["periodPda"], "commitment": r["commitmentPda"], "escrow": r["escrowPda"]},
+        "simulatedCredit": true,
+    });
+    if let Some(commitment) = commitment {
+        view["commitment"] = commitment;
+    }
+    if let Some(state) = r["recovery"]["state"].as_str() {
+        view["recovery"] = json!({"state": state});
+    }
+    view
+}
+
+// ------------------------------------------------------------------ prepare
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PrepareRequest {
+    pub client_operation_id: String,
+    pub label: String,
+}
+
+fn accounts_json(accounts: &CardAccounts) -> Value {
+    json!({
+        "binding": accounts.binding.to_string(),
+        "policy": accounts.policy.to_string(),
+        "period": accounts.period.to_string(),
+        "commitment": accounts.commitment.to_string(),
+        "escrow": accounts.escrow.to_string(),
+    })
+}
+
+fn prepared(
+    cards: &CardsConnector,
+    owner: &Address,
+    card_id: &[u8; 32],
+    card_ref_hash: &[u8; 32],
+    blockhash: [u8; 32],
+) -> Value {
+    use base64::Engine;
+    let accounts = CardAccounts::derive(owner, card_id);
+    let encode = |ixs: Vec<solana_message::Instruction>| {
+        base64::engine::general_purpose::STANDARD.encode(program::serialize_transaction(
+            &program::unsigned_transaction(owner, &ixs, blockhash),
+        ))
+    };
+    json!({
+        "cardId": program::hex(card_id),
+        "accounts": accounts_json(&accounts),
+        "initTx": encode(vec![program::init_card(owner, card_id, cards.config.issuer_code, card_ref_hash, program::PREFUND_LAMPORTS)]),
+        "delegateTx": encode(vec![program::delegate_card(owner, card_id)]),
+        "escrowTopUpTx": encode(vec![program::top_up_escrow(owner, &accounts.policy, program::ESCROW_TOP_UP_LAMPORTS)]),
+        "authorizer": cards.authorizer().to_string(),
+        "teeValidator": program::TEE_VALIDATOR,
+        "prefundLamports": program::PREFUND_LAMPORTS.to_string(),
+    })
+}
+
+/// `POST /v1/cards/prepare`: create the Lithic card `PAUSED` + `VIRTUAL`,
+/// store the encrypted registry row, and return unsigned base-layer
+/// transactions for the owner's wallet.
+pub async fn prepare(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    body: PrepareRequest,
+    blockhash: [u8; 32],
+) -> Result<Value, CardsError> {
+    if !caller.is_owner_session() {
+        return Err(CardsError::forbidden("Owner session required"));
+    }
+    operation_id(&body.client_operation_id)?;
+    let label = body.label.trim().to_owned();
+    if label.is_empty() || label.chars().count() > 40 {
+        return Err(CardsError::bad("label", "label must be 1-40 characters"));
+    }
+    let owner: Address = caller
+        .wallet
+        .parse()
+        .map_err(|_| CardsError::forbidden("Owner wallet is not a Solana address"))?;
+    let mut card_id = [0u8; 32];
+    getrandom::fill(&mut card_id).expect("randomness");
+    let claim_id = format!(
+        "card-prepare:v1:{}:{}",
+        caller.wallet, body.client_operation_id
+    );
+    let label_digest = program::hex(&Sha256::digest(label.as_bytes()));
+    let (won, _, stored, initial) = cards
+        .store
+        .claim_operation(
+            &claim_id,
+            &caller.wallet,
+            json!({"label": label_digest}),
+            json!({"cardId": program::hex(&card_id)}),
+        )
+        .await?;
+    if !won {
+        if stored["label"] != label_digest {
+            return Err(CardsError::conflict(
+                "operation_reused",
+                "clientOperationId was already used for a different card",
+            ));
+        }
+        card_id = initial["cardId"]
+            .as_str()
+            .and_then(program::unhex::<32>)
+            .ok_or_else(CardsError::internal)?;
+        if let Some(card) = cards.card(&program::hex(&card_id)).await? {
+            let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
+            let salt = program::unhex::<32>(&issuer.ref_salt).ok_or_else(CardsError::internal)?;
+            return Ok(prepared(
+                cards,
+                &owner,
+                &card_id,
+                &program::issuer_card_ref_hash(&issuer.card_token, &salt),
+                blockhash,
+            ));
+        }
+    }
+    let issued = cards.lithic.create_card("ChainPay agent card").await.map_err(|error| match error {
+        super::lithic::LithicError::WritesDisabled => CardsError::unavailable("issuer_writes_disabled", "Issuer writes are disabled on this deployment"),
+        _ => CardsError::unavailable("issuer_unavailable", "The issuer sandbox could not create the card; retry with the same clientOperationId"),
+    })?;
+    let mut salt = [0u8; 32];
+    getrandom::fill(&mut salt).expect("randomness");
+    let card_ref_hash = program::issuer_card_ref_hash(&issued.token, &salt);
+    let card_hex = program::hex(&card_id);
+    let key = card_key(&card_hex);
+    let accounts = CardAccounts::derive(&owner, &card_id);
+    let secret = CardIssuerSecret {
+        card_token: issued.token.clone(),
+        last_four: issued.last_four.clone(),
+        ref_salt: program::hex(&salt),
+    };
+    let record = json!({
+        "v": 1,
+        "type": "card",
+        "cardId": card_hex,
+        "bindingPda": accounts.binding.to_string(),
+        "policyPda": accounts.policy.to_string(),
+        "periodPda": accounts.period.to_string(),
+        "commitmentPda": accounts.commitment.to_string(),
+        "escrowPda": accounts.escrow.to_string(),
+        "programId": program::CARD_POLICY_PROGRAM_ID,
+        "cluster": "devnet",
+        "issuerKind": "lithic_sandbox",
+        "createdAt": rfc3339(now_ms()),
+        "issuerState": issued.state,
+        "mirror": {"state": "pending"},
+        "freeze": {"onChain": false, "issuer": "confirmed"},
+        "issuer": cards.crypto.seal_json(CardKind::Cards.as_str(), &key, &secret),
+        "label": cards.crypto.seal_json(CardKind::Cards.as_str(), &key, &label),
+    });
+    let index = CardIndex {
+        owner: Some(caller.wallet.clone()),
+        connector: Some(CONNECTOR.into()),
+        reference: Some(CARD_LIST_REFERENCE.into()),
+        idempotency: Some(program::card_reference(&issued.token)),
+    };
+    if let CardPut::Conflict(existing) = cards
+        .store
+        .put_card_record(CardKind::Cards, &key, index, record, None, updated_now())
+        .await?
+    {
+        // A concurrent retry stored this card first. Answer from the stored
+        // row so the binding commits the card ChainPay actually keeps; the
+        // extra Lithic card stays PAUSED and unbound.
+        super::card_log!(
+            "prepare raced for card {}; orphan issuer card left paused",
+            log_id(&card_hex)
+        );
+        let existing = existing.ok_or_else(CardsError::internal)?;
+        let issuer = cards
+            .card_issuer(&existing)
+            .ok_or_else(CardsError::internal)?;
+        let salt = program::unhex::<32>(&issuer.ref_salt).ok_or_else(CardsError::internal)?;
+        return Ok(prepared(
+            cards,
+            &owner,
+            &card_id,
+            &program::issuer_card_ref_hash(&issuer.card_token, &salt),
+            blockhash,
+        ));
+    }
+    super::card_log!("prepared card {}", log_id(&card_hex));
+    Ok(prepared(cards, &owner, &card_id, &card_ref_hash, blockhash))
+}
+
+// ----------------------------------------------------------------- activate
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct VersionedRequest {
+    pub client_operation_id: String,
+    pub expected_policy_version: u32,
+}
+
+async fn read_policy(
+    cards: &CardsConnector,
+    card: &StoredCardRecord,
+) -> Result<program::CardPolicyAccount, CardsError> {
+    let (policy, _) = card_pdas(card)?;
+    match cards.per.read(&policy, Duration::from_secs(5)).await {
+        TeeRead::Visible { data, .. } => {
+            let decoded = program::decode_policy(&data).map_err(|_| CardsError::internal())?;
+            if decoded.binding.to_string() != card.record["bindingPda"].as_str().unwrap_or("") {
+                return Err(CardsError::internal());
+            }
+            Ok(decoded)
+        }
+        TeeRead::NotVisible { .. } => Err(CardsError::conflict(
+            "policy_not_visible",
+            "The card's private policy is not readable by ChainPay's authorizer yet. Sign init_permission and set_policy first.",
+        )),
+        TeeRead::RpcError(_) => Err(CardsError::unavailable(
+            "per_unavailable",
+            "The private rollup is unreachable; retry",
+        )),
+    }
+}
+
+/// Mirror the hard limits to Lithic card controls (defence in depth) and
+/// return the acknowledgements. Never sends a zero spend limit.
+async fn mirror_limits(
+    cards: &CardsConnector,
+    issuer: &CardIssuerSecret,
+    policy: &program::CardPolicyAccount,
+    previous_rules: &[String],
+) -> Result<Value, String> {
+    let mut acks = Vec::new();
+    cards
+        .lithic
+        .set_spend_limit(&issuer.card_token, policy.max_purchase_cents)
+        .await
+        .map_err(|e| format!("spend limit: {e}"))?;
+    acks.push(json!({"control": "spend_limit", "duration": "TRANSACTION"}));
+    // New rules first; old ones are retired only after every replacement
+    // exists, so a failure never leaves an open card without controls.
+    let mut rules = Vec::new();
+    let merchants: Vec<Value> = policy
+        .merchant_id_hashes
+        .iter()
+        .filter_map(merchant_by_hash)
+        .map(|m| json!({"merchant_id": m.acceptor_id, "comment": m.reference}))
+        .collect();
+    let unmirrored = policy.merchant_id_hashes.len() - merchants.len();
+    if !merchants.is_empty() {
+        let token = cards
+            .lithic
+            .create_card_rule(
+                &issuer.card_token,
+                "chainpay merchant allowlist",
+                "MERCHANT_LOCK",
+                json!({"merchants": merchants}),
+            )
+            .await
+            .map_err(|e| format!("merchant lock: {e}"))?;
+        acks.push(json!({"control": "merchant_lock", "merchants": merchants.len()}));
+        rules.push(token);
+    }
+    if !policy.mccs.is_empty() {
+        let values: Vec<String> = policy.mccs.iter().map(|m| format!("{m:04}")).collect();
+        let token = cards
+            .lithic
+            .create_card_rule(
+                &issuer.card_token,
+                "chainpay mcc allowlist",
+                "CONDITIONAL_ACTION",
+                json!({"action": {"type": "DECLINE", "code": "UNAUTHORIZED_MERCHANT"}, "conditions": [{"attribute": "MCC", "operation": "IS_NOT_ONE_OF", "value": values}]}),
+            )
+            .await
+            .map_err(|e| format!("mcc rule: {e}"))?;
+        acks.push(json!({"control": "mcc_allowlist", "mccs": policy.mccs.len()}));
+        rules.push(token);
+    }
+    for rule in previous_rules.iter().filter(|r| !rules.contains(r)) {
+        let _ = cards
+            .lithic
+            .admin(
+                reqwest::Method::PATCH,
+                &format!("/v2/auth_rules/{rule}"),
+                Some(json!({"state": "INACTIVE"})),
+            )
+            .await;
+    }
+    Ok(json!({"acks": acks, "rules": rules, "unmirroredMerchants": unmirrored}))
+}
+
+/// `POST /v1/cards/{cardId}/activate`: after the owner signed
+/// `init_permission` + `set_policy` on PER. Mirrors, then opens at the issuer
+/// only after every mirror call was acknowledged.
+pub async fn activate(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    card_id: &str,
+    body: VersionedRequest,
+) -> Result<Value, CardsError> {
+    operation_id(&body.client_operation_id)?;
+    let card = owned_card(cards, caller, card_id).await?;
+    let policy = read_policy(cards, &card).await?;
+    if policy.authorizer != cards.authorizer() {
+        return Err(CardsError::conflict(
+            "authorizer_mismatch",
+            "The card's policy names a different authorizer",
+        ));
+    }
+    if policy.policy_version != body.expected_policy_version {
+        return Err(CardsError::conflict(
+            "policy_version",
+            "The card's policy version changed; review it again",
+        )
+        .with_detail(&policy.policy_version.to_string()));
+    }
+    let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
+    let previous: Vec<String> = card.record["mirror"]["rules"]
+        .as_array()
+        .map(|r| {
+            r.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mirrored = mirror_limits(cards, &issuer, &policy, &previous).await;
+    let at = rfc3339(now_ms());
+    let (mirror_state, rules, detail) = match &mirrored {
+        Ok(result) => ("acknowledged", result["rules"].clone(), result.clone()),
+        Err(reason) => ("failed", json!(previous), json!({"error": reason})),
+    };
+    let mut issuer_state = card.record["issuerState"]
+        .as_str()
+        .unwrap_or("PAUSED")
+        .to_owned();
+    if mirror_state == "acknowledged" && !policy.frozen && policy.recovery_state == 0 {
+        match cards.lithic.set_state(&issuer.card_token, "OPEN").await {
+            Ok(issued) => issuer_state = issued.state,
+            Err(_) => {
+                return Err(CardsError::unavailable(
+                    "issuer_unavailable",
+                    "Limits were mirrored but the issuer did not open the card; retry",
+                ));
+            }
+        }
+    }
+    let version = policy.policy_version;
+    let updated = cards
+        .update_card(card_id, |record| {
+            record["mirror"] = json!({"state": mirror_state, "ackAt": at, "policyVersion": version, "rules": rules, "detail": detail});
+            record["issuerState"] = json!(issuer_state);
+            record["activatedAt"] = json!(at);
+        })
+        .await?
+        .ok_or_else(CardsError::internal)?;
+    record_activity(
+        cards,
+        &card,
+        "policy_change",
+        json!({"policyVersion": version, "mirror": mirror_state}),
+    )
+    .await;
+    if let Err(reason) = mirrored {
+        // Never leave a card open on a stale issuer mirror.
+        if updated.record["issuerState"] == "OPEN"
+            && cards
+                .lithic
+                .set_state(&issuer.card_token, "PAUSED")
+                .await
+                .is_ok()
+        {
+            let _ = cards
+                .update_card(card_id, |record| record["issuerState"] = json!("PAUSED"))
+                .await;
+        }
+        return Err(CardsError::unavailable(
+            "mirror_failed",
+            "Issuer controls could not be mirrored; the card stays paused",
+        )
+        .with_detail(&reason));
+    }
+    let _ = checkpoint(cards, &updated).await;
+    let _ = super::reconcile::snapshot(cards, &updated).await;
+    Ok(card_view(cards, &updated, None))
+}
+
+/// Schedule a `CardCommitment` checkpoint. The master salt is stored only
+/// encrypted (contracts.md §1.6) so the owner can disclose single leaves.
+pub async fn checkpoint(
+    cards: &CardsConnector,
+    card: &StoredCardRecord,
+) -> Result<u64, CardsError> {
+    let policy = read_policy(cards, card).await?;
+    let owner: Address = card
+        .index
+        .owner
+        .as_deref()
+        .and_then(|o| o.parse().ok())
+        .ok_or_else(CardsError::internal)?;
+    let card_id = program::unhex::<32>(card.record["cardId"].as_str().unwrap_or(""))
+        .ok_or_else(CardsError::internal)?;
+    let accounts = CardAccounts::derive(&owner, &card_id);
+    let seq = policy.commit_seq + 1;
+    let mut salt = [0u8; 32];
+    getrandom::fill(&mut salt).expect("randomness");
+    let card_hex = program::hex(&card_id);
+    let key = format!("salt:{card_hex}:{seq:020}");
+    let record = json!({"v": 1, "type": "checkpoint_salt", "cardId": card_hex, "commitSeq": seq, "masterSalt": cards.crypto.seal_json(CardKind::CardRecovery.as_str(), &key, &program::hex(&salt))});
+    let index = CardIndex {
+        owner: card.index.owner.clone(),
+        connector: Some(CONNECTOR.into()),
+        reference: Some(card_hex.clone()),
+        idempotency: None,
+    };
+    if let CardPut::Conflict(Some(existing)) = cards
+        .store
+        .put_card_record(
+            CardKind::CardRecovery,
+            &key,
+            index,
+            record,
+            None,
+            updated_now(),
+        )
+        .await?
+    {
+        // A previous attempt at this seq stored its salt: reuse it so the
+        // stored salt always matches whatever lands on-chain.
+        let stored: String = cards
+            .crypto
+            .open_json(
+                CardKind::CardRecovery.as_str(),
+                &key,
+                &existing.record["masterSalt"],
+            )
+            .map_err(|_| CardsError::internal())?;
+        salt = program::unhex::<32>(&stored).ok_or_else(CardsError::internal)?;
+    }
+    let outcome = cards
+        .per
+        .submit(
+            vec![program::checkpoint(
+                &cards.authorizer(),
+                &accounts,
+                &salt,
+                seq,
+            )],
+            Instant::now() + Duration::from_secs(8),
+        )
+        .await;
+    let state = match outcome {
+        TxOutcome::Confirmed { .. } => "scheduled",
+        _ => "failed",
+    };
+    let _ = cards
+        .update_card(&card_hex, |record| {
+            record["commitment"] = json!({"seq": seq.to_string(), "state": state});
+        })
+        .await;
+    Ok(seq)
+}
+
+// ------------------------------------------------------------------- freeze
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FreezeRequest {
+    pub client_operation_id: String,
+    pub reason: String,
+}
+
+/// `POST /v1/cards/{cardId}/freeze`: authorizer `freeze` on PER **and**
+/// Lithic `PAUSED`; the issuer acknowledgement is recorded as `freeze_ack`.
+pub async fn freeze(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    card_id: &str,
+    body: FreezeRequest,
+) -> Result<Value, CardsError> {
+    operation_id(&body.client_operation_id)?;
+    if body.reason.trim().is_empty() || body.reason.chars().count() > 200 {
+        return Err(CardsError::bad("reason", "reason must be 1-200 characters"));
+    }
+    let card = owned_card(cards, caller, card_id).await?;
+    let op = format!("card-freeze:v1:{card_id}:{}", body.client_operation_id);
+    let (won, _, _, _) = cards
+        .store
+        .claim_operation(
+            &op,
+            &caller.wallet,
+            json!({"cardId": card_id}),
+            json!({"state": "submitted"}),
+        )
+        .await?;
+    let op_id = program::hex(&Sha256::digest(op.as_bytes())[..16]);
+    let result = json!({"freezeOperationId": op_id, "onChain": "submitted", "issuer": "pending_issuer_confirmation"});
+    // The claim only names the operation. A retry with the same id redoes
+    // any half of the freeze that is not confirmed yet (PER `freeze` and
+    // Lithic PAUSED are both idempotent), so an early failure never leaves
+    // the card open while the client is told "submitted".
+    if !won
+        && card.record["freeze"]["opId"] == op_id.as_str()
+        && card.record["freeze"]["onChainState"] == "confirmed"
+        && card.record["freeze"]["issuer"] == "confirmed"
+    {
+        return Ok(result);
+    }
+    let (policy, period) = card_pdas(&card)?;
+    let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
+    let at = rfc3339(now_ms());
+    let _ = cards
+        .update_card(card_id, |record| {
+            record["freeze"] = json!({"onChain": true, "issuer": "pending_issuer_confirmation", "wantedIssuerState": "PAUSED", "opId": op_id, "at": at});
+        })
+        .await?;
+    let (per, lithic) = tokio::join!(
+        cards.per.submit(
+            vec![program::freeze(
+                &cards.authorizer(),
+                &policy,
+                &period,
+                program::FREEZE_AUTHORIZER_SAFETY
+            )],
+            Instant::now() + Duration::from_secs(8)
+        ),
+        cards.lithic.set_state(&issuer.card_token, "PAUSED"),
+    );
+    let on_chain = match &per {
+        TxOutcome::Confirmed { .. } => "confirmed",
+        TxOutcome::Unknown { .. } => "unknown",
+        _ => "failed",
+    };
+    let issuer_state = match &lithic {
+        Ok(card) if card.state == "PAUSED" => "confirmed",
+        Ok(_) | Err(_) => "pending_issuer_confirmation",
+    };
+    let ack_at = rfc3339(now_ms());
+    let _ = cards
+        .update_card(card_id, |record| {
+            record["freeze"]["onChainState"] = json!(on_chain);
+            record["freeze"]["perTx"] = json!(per.signature());
+            if issuer_state == "confirmed" {
+                record["freeze"]["issuer"] = json!("confirmed");
+                record["freeze"]["ackAt"] = json!(ack_at);
+                record["freeze"]["ackSource"] = json!("patch_200");
+                record["issuerState"] = json!("PAUSED");
+            }
+        })
+        .await;
+    record_activity(
+        cards,
+        &card,
+        "freeze",
+        json!({"onChain": on_chain, "issuer": issuer_state, "opId": op_id}),
+    )
+    .await;
+    super::card_log!(
+        "freeze {} per={on_chain} issuer={issuer_state}",
+        log_id(card_id)
+    );
+    Ok(result)
+}
+
+/// `POST /v1/cards/{cardId}/unfreeze-mirror`: only after the **owner**
+/// signed `unfreeze` on PER. Verifies `frozen == false`, then reopens Lithic.
+pub async fn unfreeze_mirror(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    card_id: &str,
+    body: VersionedRequest,
+) -> Result<Value, CardsError> {
+    operation_id(&body.client_operation_id)?;
+    let card = owned_card(cards, caller, card_id).await?;
+    let policy = read_policy(cards, &card).await?;
+    if policy.frozen || policy.recovery_state != 0 {
+        return Err(CardsError::conflict(
+            "still_frozen",
+            "The card is still frozen on the private rollup; sign unfreeze first",
+        ));
+    }
+    if policy.policy_version != body.expected_policy_version {
+        return Err(CardsError::conflict(
+            "policy_version",
+            "The card's policy version changed; review it again",
+        ));
+    }
+    if card.record["mirror"]["state"] != "acknowledged"
+        || card.record["mirror"]["policyVersion"].as_u64() != Some(policy.policy_version as u64)
+    {
+        return Err(CardsError::conflict(
+            "mirror_stale",
+            "Activate the current policy before reopening the card",
+        ));
+    }
+    let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
+    let opened = cards.lithic.set_state(&issuer.card_token, "OPEN").await;
+    let at = rfc3339(now_ms());
+    let confirmed = matches!(&opened, Ok(c) if c.state == "OPEN");
+    let updated = cards
+        .update_card(card_id, |record| {
+            record["freeze"] = json!({"onChain": false, "issuer": if confirmed { "confirmed" } else { "pending_issuer_confirmation" }, "wantedIssuerState": "OPEN", "at": at, "ackAt": if confirmed { json!(at) } else { Value::Null }});
+            if confirmed {
+                record["issuerState"] = json!("OPEN");
+            }
+        })
+        .await?
+        .ok_or_else(CardsError::internal)?;
+    record_activity(
+        cards,
+        &card,
+        "unfreeze",
+        json!({"issuer": if confirmed { "confirmed" } else { "pending" }}),
+    )
+    .await;
+    Ok(card_view(cards, &updated, None))
+}
+
+async fn record_activity(
+    cards: &CardsConnector,
+    card: &StoredCardRecord,
+    kind: &str,
+    detail: Value,
+) {
+    let mut id = [0u8; 12];
+    getrandom::fill(&mut id).expect("randomness");
+    let card_id = card.record["cardId"].as_str().unwrap_or_default();
+    let key = format!("mirror:{}", program::hex(&id));
+    let record = json!({"v": 1, "type": "mirror", "kind": kind, "cardId": card_id, "detail": detail, "at": rfc3339(now_ms())});
+    let _ = cards
+        .store
+        .put_card_record(
+            CardKind::CardEvents,
+            &key,
+            CardsConnector::txn_index(card.index.owner.as_deref().unwrap_or(""), card_id),
+            record,
+            None,
+            updated_now(),
+        )
+        .await;
+}
+
+// ------------------------------------------------------------------- embed
+
+/// `POST /v1/cards/{cardId}/embed-session`: Lithic's hosted iframe is the only
+/// human display of the card number. Owner session only.
+pub async fn embed_session(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    card_id: &str,
+) -> Result<Value, CardsError> {
+    let card = owned_card(cards, caller, card_id).await?;
+    let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
+    let session = cards
+        .lithic
+        .embed_session(&issuer.card_token, cards.config.embed_origin.as_deref())
+        .await
+        .map_err(|_| {
+            CardsError::unavailable(
+                "issuer_unavailable",
+                "The issuer could not open a card display session",
+            )
+        })?;
+    let mut url = reqwest::Url::parse(&format!("{}/v1/embed", cards.lithic.base()))
+        .map_err(|_| CardsError::internal())?;
+    url.query_pairs_mut()
+        .append_pair("session", &session)
+        .append_pair("type", "PAN");
+    Ok(json!({"embedUrl": url.to_string(), "expiresAt": rfc3339(now_ms() + 600_000)}))
+}
+
+// ---------------------------------------------------------------- activity
+
+fn lifecycle_row(
+    cards: &CardsConnector,
+    row: &StoredCardRecord,
+    agent_view: bool,
+) -> Option<Value> {
+    let r = &row.record;
+    let at = r["updatedAt"]
+        .as_str()
+        .or(r["receivedAt"].as_str())
+        .or(r["at"].as_str())
+        .unwrap_or("");
+    match r["type"].as_str()? {
+        "transaction" => {
+            let provider = cards.open_provider(row);
+            let acceptor = provider["merchant"]["acceptorId"].as_str().unwrap_or("");
+            let display = merchant_by_acceptor(acceptor)
+                .map(|m| m.display_name.to_owned())
+                .unwrap_or_else(|| {
+                    provider["merchant"]["descriptor"]
+                        .as_str()
+                        .unwrap_or("Merchant")
+                        .to_owned()
+                });
+            let mcc = provider["merchant"]["mcc"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned();
+            let state = r["state"].as_str().unwrap_or("pending");
+            let flags = &r["flags"];
+            let (kind, lifecycle) = match state {
+                "forced_capture" => ("exception", "forced_capture"),
+                "refunded" => ("refund", "refunded"),
+                "captured" | "partially_captured" if flags["refunded"] == true => {
+                    ("refund", "refunded")
+                }
+                "captured" | "partially_captured" if flags["lateCapture"] == true => {
+                    ("capture", "late_capture")
+                }
+                "captured" => ("capture", "captured"),
+                "partially_captured" => ("capture", "partially_captured"),
+                "reversed" if flags["lateCapture"] == true => ("capture", "late_capture"),
+                "reversed" => ("reversal", "reversed"),
+                "expired" => ("reversal", "expired"),
+                "declined" | "declined_internal" => ("authorization", "declined"),
+                "ambiguous" => ("authorization", "ambiguous"),
+                "account_verification" => ("authorization", "reserved"),
+                "unsolicited" => ("exception", "pending"),
+                _ => (
+                    "authorization",
+                    if state == "reserved" {
+                        "reserved"
+                    } else {
+                        "pending"
+                    },
+                ),
+            };
+            let amount = match kind {
+                "capture" | "exception" => r["capturedCents"].as_str(),
+                "refund" => r["refundedCents"].as_str(),
+                "reversal" => r["reversedCents"].as_str(),
+                _ => r["amountCents"].as_str(),
+            }
+            .filter(|a| *a != "0")
+            .or(r["amountCents"].as_str())
+            .unwrap_or("0");
+            let mut out = json!({
+                "rowId": row.key,
+                "cardId": r["cardId"],
+                "at": at,
+                "kind": kind,
+                "lifecycle": lifecycle,
+                "amountCents": amount,
+                "merchant": {"displayName": display, "mcc": mcc},
+                "needsReview": r["needsReview"].as_bool().unwrap_or(false) || r["exception"].is_string(),
+            });
+            if let Some(intent) = r["intentId"].as_str() {
+                out["intentId"] = json!(intent);
+            }
+            if let Some(reason) = r["decision"]["reason"]
+                .as_str()
+                .filter(|_| matches!(state, "declined" | "declined_internal" | "ambiguous"))
+            {
+                out["declineReason"] = json!(reason);
+            }
+            if let Some(exception) = r["exception"].as_str() {
+                out["exception"] = json!(exception);
+            }
+            if !agent_view {
+                out["reservedCents"] = r["reservedCents"].clone();
+                out["capturedCents"] = r["capturedCents"].clone();
+                out["refundedCents"] = r["refundedCents"].clone();
+                out["disputeState"] = r["disputeState"].clone();
+            }
+            Some(out)
+        }
+        "mirror" => {
+            let kind = match r["kind"].as_str()? {
+                "freeze" => "freeze",
+                "unfreeze" => "unfreeze",
+                _ => "policy_change",
+            };
+            Some(
+                json!({"rowId": row.key, "cardId": r["cardId"], "at": at, "kind": kind, "needsReview": false}),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// `GET /v1/cards/{cardId}/activity`: decrypted projection of the card's
+/// transaction lifecycle rows, newest first, cursor = `updated` column.
+pub async fn activity(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    card_id: &str,
+    cursor: Option<&str>,
+    limit: Option<u32>,
+) -> Result<Value, CardsError> {
+    let card = readable_card(cards, caller, card_id, "get_card_activity").await?;
+    let limit = limit.unwrap_or(50);
+    if !(1..=100).contains(&limit) {
+        return Err(CardsError::bad("limit", "limit must be 1-100"));
+    }
+    if cursor.is_some_and(|c| c.len() != 20 || !c.bytes().all(|b| b.is_ascii_digit())) {
+        return Err(CardsError::bad("cursor", "Invalid cursor"));
+    }
+    let owner = card.index.owner.clone().unwrap_or_default();
+    let rows = cards
+        .store
+        .list_card_records_for_owner(
+            CardKind::CardEvents,
+            &owner,
+            CONNECTOR,
+            card_id,
+            cursor,
+            limit,
+        )
+        .await?;
+    let next = (rows.len() as u32 == limit)
+        .then(|| rows.last().map(|r| r.updated.clone()))
+        .flatten();
+    let agent_view = !caller.is_owner_session();
+    let projected: Vec<Value> = rows
+        .iter()
+        .filter_map(|row| lifecycle_row(cards, row, agent_view))
+        .collect();
+    Ok(json!({"rows": projected, "nextCursor": next}))
+}
+
+// --------------------------------------------------------------- statements
+
+fn statement_view(cards: &CardsConnector, row: &StoredCardRecord) -> Value {
+    let r = &row.record;
+    let lines = cards
+        .crypto
+        .open_json::<Value>(CardKind::CardStatements.as_str(), &row.key, &r["lines"])
+        .unwrap_or(json!([]));
+    json!({
+        "statementId": row.key.strip_prefix("stmt:").unwrap_or(&row.key),
+        "cardId": r["cardId"],
+        "periodIndex": r["periodIndex"],
+        "state": r["state"],
+        "closedAt": r["closedAt"],
+        "dueAt": r["dueAt"],
+        "totalCents": r["totalCents"],
+        "feeCents": r["feeCents"],
+        "digest": r["digest"],
+        "lines": lines,
+        "repayment": r["repayment"],
+        "partner": r["partner"],
+        "simulatedCredit": true,
+    })
+}
+
+pub async fn statements(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    card_id: &str,
+) -> Result<Value, CardsError> {
+    let card = readable_card(cards, caller, card_id, "get_statement").await?;
+    let owner = card.index.owner.clone().unwrap_or_default();
+    let rows = cards
+        .store
+        .list_card_records_for_owner(
+            CardKind::CardStatements,
+            &owner,
+            CONNECTOR,
+            card_id,
+            None,
+            50,
+        )
+        .await?;
+    Ok(json!({"statements": rows.iter().map(|row| statement_view(cards, row)).collect::<Vec<_>>()}))
+}
+
+pub async fn statement(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    card_id: &str,
+    statement_id: &str,
+) -> Result<Value, CardsError> {
+    readable_card(cards, caller, card_id, "get_statement").await?;
+    if !statement_id.starts_with(&format!("{card_id}:")) || statement_id.len() > 100 {
+        return Err(CardsError::not_found("Statement not found"));
+    }
+    let row = cards
+        .store
+        .get_card_record(CardKind::CardStatements, &format!("stmt:{statement_id}"))
+        .await?
+        .ok_or_else(|| CardsError::not_found("Statement not found"))?;
+    Ok(statement_view(cards, &row))
+}
+
+// ------------------------------------------------------------------ restore
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RestoreRequest {
+    pub client_operation_id: String,
+    #[serde(default)]
+    pub recon_report_digest: Option<String>,
+}
+
+/// Canonical JSON (sorted keys, integers and strings only) for report digests.
+pub fn canonical_digest(value: &Value) -> String {
+    let text = serde_json::to_string(value).expect("json");
+    program::hex(&Sha256::digest(
+        format!("chainpay-card-recon:v1\n{text}").as_bytes(),
+    ))
+}
+
+/// `POST /v1/cards/{cardId}/recovery/restore` (contracts.md §8). Without a
+/// matching digest it returns the reconciliation report for review; with the
+/// reviewed digest it returns the `restore` transaction co-signed by the
+/// authorizer, for the owner to sign and send over their own PER session.
+pub async fn restore(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    card_id: &str,
+    body: RestoreRequest,
+) -> Result<Value, CardsError> {
+    use base64::Engine;
+    operation_id(&body.client_operation_id)?;
+    let card = owned_card(cards, caller, card_id).await?;
+    let (policy_pda, period_pda) = card_pdas(&card)?;
+    // Fail closed: restore only a card PER shows as recovery-frozen, or one
+    // whose private state is lost (not visible) and that ChainPay already
+    // put in recovery.
+    match cards.per.read(&policy_pda, Duration::from_secs(5)).await {
+        TeeRead::Visible { data, .. } => {
+            let policy = program::decode_policy(&data).map_err(|_| CardsError::internal())?;
+            if policy.recovery_state != 1 {
+                return Err(CardsError::conflict(
+                    "not_in_recovery",
+                    "This card is not recovery-frozen",
+                ));
+            }
+        }
+        TeeRead::NotVisible { .. } => {
+            if !matches!(
+                card.record["recovery"]["state"].as_str(),
+                Some("recovery_frozen" | "restore_prepared")
+            ) {
+                return Err(CardsError::conflict(
+                    "not_in_recovery",
+                    "This card is not recovery-frozen",
+                ));
+            }
+        }
+        TeeRead::RpcError(_) => {
+            return Err(CardsError::unavailable(
+                "per_unavailable",
+                "The private rollup is unreachable; retry",
+            ));
+        }
+    }
+    let owner = card.index.owner.clone().unwrap_or_default();
+    let snapshots = cards
+        .store
+        .list_card_records_for_owner(CardKind::CardRecovery, &owner, CONNECTOR, card_id, None, 50)
+        .await?;
+    let latest = snapshots
+        .iter()
+        .filter(|row| row.record["type"] == "snapshot")
+        .max_by_key(|row| row.record["ledgerSeq"].as_u64().unwrap_or(0))
+        .ok_or_else(|| {
+            CardsError::conflict("no_snapshot", "No recovery snapshot exists for this card")
+        })?;
+    let snapshot: Value = cards
+        .crypto
+        .open_json(
+            CardKind::CardRecovery.as_str(),
+            &latest.key,
+            &latest.record["snapshot"],
+        )
+        .map_err(|_| CardsError::internal())?;
+    let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
+    let since = snapshot["takenAt"].as_str().map(str::to_owned);
+    let truths = cards
+        .lithic
+        .list_transactions(&issuer.card_token, since.as_deref())
+        .await
+        .map_err(|_| {
+            CardsError::unavailable("issuer_unavailable", "Issuer history is unavailable; retry")
+        })?;
+    if !truths.complete {
+        // A partial history would make the reviewed report wrong.
+        return Err(CardsError::unavailable(
+            "issuer_history_incomplete",
+            "Issuer history is longer than one review page; retry after reconciliation",
+        ));
+    }
+    let issuer_events: Vec<Value> = truths
+        .transactions
+        .iter()
+        .map(|t| {
+            json!({
+                "transaction": t["token"],
+                "status": t["status"],
+                "events": t["events"].as_array().map(|events| events.iter().map(|e| json!({"type": e["type"], "result": e["result"], "amountCents": cents(e["amount"].as_i64().unwrap_or(0).unsigned_abs())})).collect::<Vec<_>>()).unwrap_or_default(),
+            })
+        })
+        .collect();
+    let report = json!({"v": 1, "cardId": card_id, "snapshotLedgerSeq": latest.record["ledgerSeq"], "snapshot": snapshot, "issuerSinceSnapshot": issuer_events});
+    let digest = canonical_digest(&report);
+    if body.recon_report_digest.as_deref() != Some(digest.as_str()) {
+        return Ok(
+            json!({"state": "review_required", "reconReport": report, "reconReportDigest": digest}),
+        );
+    }
+    let p = &snapshot["policy"];
+    let q = &snapshot["period"];
+    let cents_of =
+        |v: &Value| parse_cents(v.as_str().unwrap_or("")).ok_or_else(CardsError::internal);
+    let args = program::RestoreArgs {
+        policy: program::PolicyArgs {
+            budget_cents: cents_of(&p["budgetCents"])?,
+            max_purchase_cents: cents_of(&p["maxPurchaseCents"])?,
+            max_purchases_per_period: p["maxPurchasesPerPeriod"].as_u64().unwrap_or(0) as u16,
+            period_seconds: p["periodSeconds"].as_u64().unwrap_or(86_400) as u32,
+            merchant_id_hashes: p["merchantIdHashes"]
+                .as_array()
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|h| h.as_str().and_then(program::unhex::<32>))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            mccs: p["mccs"]
+                .as_array()
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|m| m.as_u64().map(|m| m as u16))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            expires_at: p["expiresAt"].as_i64().unwrap_or(0),
+            recurring_allowed: p["recurringAllowed"].as_bool().unwrap_or(false),
+            fee_bps: p["feeBps"].as_u64().unwrap_or(0) as u16,
+            authorizer: cards.authorizer().to_bytes(),
+        },
+        period_index: q["periodIndex"].as_u64().unwrap_or(0) as u32,
+        captured_cents: cents_of(&q["capturedCents"])?,
+        reserved_cents: cents_of(&q["reservedCents"])?,
+        refunded_cents: cents_of(&q["refundedCents"])?,
+        purchases_count: q["purchasesCount"].as_u64().unwrap_or(0) as u16,
+        exception_cents: cents_of(&q["exceptionCents"])?,
+        statement_outstanding_cents: cents_of(&p["statementOutstandingCents"])?,
+        ledger_head: p["ledgerHead"]
+            .as_str()
+            .and_then(program::unhex::<32>)
+            .ok_or_else(CardsError::internal)?,
+        ledger_seq: p["ledgerSeq"].as_u64().unwrap_or(0),
+        recon_digest: program::unhex::<32>(&digest).ok_or_else(CardsError::internal)?,
+    };
+    let owner_key: Address = owner.parse().map_err(|_| CardsError::internal())?;
+    let blockhash = cards.per.blockhash().await.ok_or_else(|| {
+        CardsError::unavailable(
+            "per_unavailable",
+            "The private rollup is unreachable; retry",
+        )
+    })?;
+    let instruction = program::restore(
+        &owner_key,
+        &cards.authorizer(),
+        &policy_pda,
+        &period_pda,
+        &args,
+    );
+    let mut tx = program::unsigned_transaction(&owner_key, &[instruction], blockhash);
+    program::sign_transaction(&mut tx, &[cards.per.signing_key()])
+        .map_err(|_| CardsError::internal())?;
+    let _ = cards
+        .update_card(card_id, |record| {
+            record["recovery"] = json!({"state": "restore_prepared", "reconDigest": digest})
+        })
+        .await;
+    Ok(json!({
+        "state": "ready_to_sign",
+        "reconReportDigest": digest,
+        "restoreTx": base64::engine::general_purpose::STANDARD.encode(program::serialize_transaction(&tx)),
+        "restoreArgs": {
+            "periodIndex": args.period_index,
+            "capturedCents": cents(args.captured_cents),
+            "reservedCents": cents(args.reserved_cents),
+            "refundedCents": cents(args.refunded_cents),
+            "purchasesCount": args.purchases_count,
+            "exceptionCents": cents(args.exception_cents),
+            "statementOutstandingCents": cents(args.statement_outstanding_cents),
+            "ledgerSeq": args.ledger_seq.to_string(),
+        },
+    }))
+}
+
+// ------------------------------------------------------------------ misc
+
+pub fn merchants() -> Value {
+    json!({"merchants": super::MERCHANTS.iter().map(|m| json!({
+        "merchantRef": m.reference,
+        "displayName": m.display_name,
+        "merchantIdHash": program::hex(&program::merchant_id_hash(m.acceptor_id)),
+        "mcc": m.mcc,
+    })).collect::<Vec<_>>()})
+}
+
+pub async fn list_cards(cards: &Arc<CardsConnector>, caller: &Caller) -> Result<Value, CardsError> {
+    if !caller.is_owner_session() {
+        return Err(CardsError::forbidden("Owner session required"));
+    }
+    let rows = cards
+        .store
+        .list_card_records_for_owner(
+            CardKind::Cards,
+            &caller.wallet,
+            CONNECTOR,
+            CARD_LIST_REFERENCE,
+            None,
+            50,
+        )
+        .await?;
+    Ok(json!({"cards": rows.iter().map(|row| card_view(cards, row, None)).collect::<Vec<_>>()}))
+}
+
+/// Constant-time bearer check for service routes (cron, checkout runner).
+pub fn bearer_matches(header: Option<&str>, secret: Option<&str>) -> bool {
+    let (Some(header), Some(secret)) = (header, secret) else {
+        return false;
+    };
+    let Some(token) = header.strip_prefix("Bearer ") else {
+        return false;
+    };
+    let a = Sha256::digest(token.as_bytes());
+    let b = Sha256::digest(secret.as_bytes());
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+#[cfg(test)]
+mod unit {
+    use super::*;
+
+    #[test]
+    fn bearer_checks_are_exact() {
+        assert!(bearer_matches(
+            Some("Bearer s3cret-value-123456"),
+            Some("s3cret-value-123456")
+        ));
+        assert!(!bearer_matches(
+            Some("Bearer s3cret-value-12345"),
+            Some("s3cret-value-123456")
+        ));
+        assert!(!bearer_matches(
+            Some("s3cret-value-123456"),
+            Some("s3cret-value-123456")
+        ));
+        assert!(!bearer_matches(None, Some("x")));
+        assert!(!bearer_matches(Some("Bearer x"), None));
+    }
+
+    #[test]
+    fn agent_identity_exists_only_for_scoped_connections() {
+        let owner = Caller {
+            wallet: "w".into(),
+            scope: None,
+            connection: Some("h".into()),
+        };
+        assert!(owner.agent_id().is_none());
+        let agent = Caller {
+            wallet: "w".into(),
+            scope: Some(json!({"cards":["c"],"tools":["get_card_activity"]})),
+            connection: Some("h".into()),
+        };
+        assert!(agent.agent_id().is_some());
+        assert!(agent.scope_allows("c", "get_card_activity"));
+        assert!(!agent.scope_allows("c", "request_card_checkout"));
+        assert!(!agent.scope_allows("d", "get_card_activity"));
+    }
+}

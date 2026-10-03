@@ -4,7 +4,7 @@ import { world as petWorld, actionResult as petResult } from "./petValidators";
 
 // Record JSON is deliberately opaque: JavaScript must never round u64 values,
 // nested x402 proof numbers, or signed statements while persisting them.
-export const kind = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"), v.literal("receipt_requests"), v.literal("observed_policies"), v.literal("mandate_requests"));
+export const kind = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"), v.literal("receipt_requests"), v.literal("observed_policies"), v.literal("mandate_requests"), v.literal("cards"), v.literal("card_events"), v.literal("card_statements"), v.literal("card_recovery"));
 export default defineSchema({
   pet_world: defineTable({ key: v.string(), world: petWorld }).index("by_key", ["key"]),
   pet_sessions: defineTable({tokenHash:v.string(),peerHash:v.string(),expiresAt:v.number(),cooldowns:v.record(v.string(),v.number())}).index("by_token",["tokenHash"]).index("by_expires",["expiresAt"]),

@@ -1,0 +1,661 @@
+//! Live end-to-end check of the card connector: Solana Devnet + MagicBlock
+//! Devnet TEE + Lithic **sandbox**. Operator tooling, never run in CI.
+//!
+//! ```text
+//! cargo run -p chainpay-backend --example cards_live_sandbox -- setup <public relay url> <secrets out file>
+//! cargo run -p chainpay-backend --example cards_live_sandbox -- run <results json>
+//! cargo run -p chainpay-backend --example cards_live_sandbox -- teardown
+//! ```
+//!
+//! Env: LITHIC_SANDBOX_API_KEY, RELAY_URL (local relay), OWNER_KEYPAIR,
+//! STRANGER_KEYPAIR, CONVEX_SITE + CHAINPAY_CONVEX_MCP_SECRET (to register a
+//! test agent connection, as the MCP server would), CARDS_CHECKOUT_RUNNER_SECRET,
+//! CRON_SECRET, LITHIC_ASA_SECRET. Secrets are written only to the file given
+//! to `setup` (mode 0600) and are never printed. No PAN is ever printed,
+//! stored or returned: the checkout runner and `simulate/return` hold it in
+//! memory for one call.
+
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
+use chainpay_backend::connectors::card_issuer::{
+    lithic::{LithicClient, SANDBOX_URL},
+    program::{self, PolicyArgs},
+    tee::{DEVNET_TEE_URL, TeeClient, TeeRead, TxOutcome},
+};
+use ed25519_dalek::{Signer, SigningKey};
+use serde_json::{Value, json};
+use solana_address::Address;
+use std::time::{Duration, Instant};
+
+fn env(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| panic!("{name} is required"))
+}
+
+fn keypair(path: &str) -> SigningKey {
+    let bytes: Vec<u8> =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("keypair file"))
+            .expect("keypair json");
+    SigningKey::from_bytes(bytes[..32].try_into().unwrap())
+}
+
+fn lithic() -> LithicClient {
+    LithicClient::new(SANDBOX_URL, env("LITHIC_SANDBOX_API_KEY"), true).unwrap()
+}
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("setup") => setup(&args[2], &args[3]).await,
+        Some("run") => run(&args[2]).await,
+        Some("teardown") => teardown().await,
+        _ => eprintln!("usage: setup <public url> <secrets file> | run <results.json> | teardown"),
+    }
+}
+
+async fn setup(public_url: &str, secrets_path: &str) {
+    let l = lithic();
+    let base = public_url.trim_end_matches('/');
+    let enroll = l
+        .admin(
+            reqwest::Method::POST,
+            "/v1/responder_endpoints",
+            Some(json!({"type":"AUTH_STREAM_ACCESS","url":format!("{base}/v1/cards/lithic/asa")})),
+        )
+        .await;
+    println!(
+        "enroll ASA responder: {}",
+        if enroll.is_ok() { "ok" } else { "failed" }
+    );
+    let asa = l
+        .admin(reqwest::Method::GET, "/v1/auth_stream/secret", None)
+        .await
+        .expect("asa secret");
+    let subscription = l
+        .admin(
+            reqwest::Method::POST,
+            "/v1/event_subscriptions",
+            Some(json!({
+                "url": format!("{base}/v1/cards/lithic/events"),
+                "description": "chainpay cards connector (sandbox tunnel)",
+                "disabled": false,
+                "event_types": ["card_transaction.updated", "card.updated", "card.created", "dispute.updated", "dispute_transaction.created", "dispute_transaction.updated"],
+            })),
+        )
+        .await
+        .expect("event subscription");
+    let token = subscription["token"]
+        .as_str()
+        .expect("subscription token")
+        .to_owned();
+    let events = l
+        .admin(
+            reqwest::Method::GET,
+            &format!("/v1/event_subscriptions/{token}/secret"),
+            None,
+        )
+        .await
+        .expect("events secret");
+    let body = format!(
+        "LITHIC_ASA_SECRET='{}'\nLITHIC_EVENTS_SECRET='{}'\nLITHIC_EVENT_SUBSCRIPTION='{}'\n",
+        asa["secret"].as_str().unwrap_or(""),
+        events["secret"].as_str().unwrap_or(""),
+        token
+    );
+    std::fs::write(secrets_path, body).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(secrets_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    println!("event subscription created; secrets written to the given file (not printed)");
+}
+
+async fn teardown() {
+    let l = lithic();
+    let unenroll = l
+        .admin(
+            reqwest::Method::DELETE,
+            "/v1/responder_endpoints?type=AUTH_STREAM_ACCESS",
+            None,
+        )
+        .await;
+    println!(
+        "unenroll ASA responder: {}",
+        if unenroll.is_ok() { "ok" } else { "failed" }
+    );
+    if let Ok(token) = std::env::var("LITHIC_EVENT_SUBSCRIPTION") {
+        let disable = l
+            .admin(
+                reqwest::Method::PATCH,
+                &format!("/v1/event_subscriptions/{token}"),
+                Some(json!({"disabled": true, "url": "https://example.invalid/disabled"})),
+            )
+            .await;
+        println!(
+            "disable event subscription: {}",
+            if disable.is_ok() { "ok" } else { "failed" }
+        );
+    }
+}
+
+struct Relay {
+    http: reqwest::Client,
+    url: String,
+    session: String,
+    agent: String,
+}
+
+impl Relay {
+    async fn call(
+        &self,
+        method: &str,
+        path: &str,
+        token: &str,
+        body: Option<Value>,
+    ) -> (u16, Value) {
+        let mut request = self
+            .http
+            .request(method.parse().unwrap(), format!("{}{path}", self.url))
+            .bearer_auth(token);
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap_or(Value::Null))
+    }
+    async fn owner(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
+        self.call(method, path, &self.session.clone(), body).await
+    }
+}
+
+async fn login(http: &reqwest::Client, url: &str, owner: &SigningKey) -> String {
+    let wallet = bs58::encode(owner.verifying_key().to_bytes()).into_string();
+    let origin = "http://localhost:5173";
+    let challenge: Value = http
+        .get(format!("{url}/v1/auth/challenge?wallet={wallet}"))
+        .header("Origin", origin)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let signature = B64.encode(
+        owner
+            .sign(challenge["message"].as_str().unwrap().as_bytes())
+            .to_bytes(),
+    );
+    let session: Value = http
+        .post(format!("{url}/v1/auth/session"))
+        .header("Origin", origin)
+        .json(&json!({"challenge_id": challenge["challenge_id"], "signature": signature}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    session["token"].as_str().expect("session token").to_owned()
+}
+
+async fn register_agent(owner: &str, card_id: &str) -> String {
+    let mut raw = [0u8; 32];
+    getrandom::fill(&mut raw).unwrap();
+    let token = program::hex(&raw);
+    use sha2::Digest;
+    let hash = program::hex(&sha2::Sha256::digest(token.as_bytes()));
+    let scope = json!({"version":1,"mandates":[],"tools":["request_card_checkout","get_card_activity","get_statement"],"agents":{},"cards":[card_id]});
+    let record = json!({"id": format!("conn-{}", &hash[..12]), "tokenHash": hash, "wallet": owner, "agentName": "live sandbox agent", "scope": scope.to_string(), "connectedAt": "2026-10-04T00:00:00Z", "lastSeenAt": null, "totalCalls": 0, "toolsCalled": [], "revokedAt": null});
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/internal/storage/v1",
+            env("CONVEX_SITE").trim_end_matches('/')
+        ))
+        .bearer_auth(env("CHAINPAY_CONVEX_MCP_SECRET"))
+        .json(&json!({"operation":"mcp.register","args":{"record":record}}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "agent registration failed");
+    token
+}
+
+async fn devnet_send(http: &reqwest::Client, tx_b64: &str, owner: &SigningKey) -> String {
+    let mut tx: solana_transaction::versioned::VersionedTransaction =
+        wincode::deserialize(&B64.decode(tx_b64).unwrap()).unwrap();
+    program::sign_transaction(&mut tx, &[owner]).unwrap();
+    let wire = B64.encode(program::serialize_transaction(&tx));
+    let rpc = "https://api.devnet.solana.com";
+    let sent: Value = http
+        .post(rpc)
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":[wire,{"encoding":"base64","preflightCommitment":"confirmed"}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let signature = sent["result"]
+        .as_str()
+        .unwrap_or_else(|| panic!("send failed: {}", sent["error"]))
+        .to_owned();
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let status: Value = http
+            .post(rpc)
+            .json(&json!({"jsonrpc":"2.0","id":1,"method":"getSignatureStatuses","params":[[signature]]}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let s = &status["result"]["value"][0];
+        if !s.is_null()
+            && matches!(
+                s["confirmationStatus"].as_str(),
+                Some("confirmed" | "finalized")
+            )
+        {
+            assert!(s["err"].is_null(), "base tx failed: {}", s["err"]);
+            return signature;
+        }
+    }
+    panic!("base tx not confirmed");
+}
+
+fn outcome(o: &TxOutcome) -> Value {
+    match o {
+        TxOutcome::Confirmed { signature } => json!({"ok": true, "sig": signature}),
+        TxOutcome::ProgramError { signature, code } => {
+            json!({"ok": false, "error": program::error_name(*code), "sig": signature})
+        }
+        TxOutcome::Failed { reason, .. } => json!({"ok": false, "error": reason}),
+        TxOutcome::Unknown { .. } => json!({"ok": false, "error": "unknown"}),
+    }
+}
+
+async fn activity_row(relay: &Relay, card_id: &str, token: &str) -> Value {
+    let (_, page) = relay
+        .owner(
+            "GET",
+            &format!("/v1/cards/{card_id}/activity?limit=100"),
+            None,
+        )
+        .await;
+    page["rows"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|r| r["rowId"] == format!("asa:{token}"))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
+async fn wait_row(
+    relay: &Relay,
+    card_id: &str,
+    token: &str,
+    pred: impl Fn(&Value) -> bool,
+    secs: u64,
+) -> Value {
+    let started = Instant::now();
+    loop {
+        let row = activity_row(relay, card_id, token).await;
+        if pred(&row) || started.elapsed() > Duration::from_secs(secs) {
+            return row;
+        }
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+    }
+}
+
+fn summary(row: &Value) -> Value {
+    json!({"kind": row["kind"], "lifecycle": row["lifecycle"], "amountCents": row["amountCents"], "capturedCents": row["capturedCents"], "reservedCents": row["reservedCents"], "refundedCents": row["refundedCents"], "declineReason": row["declineReason"], "exception": row["exception"], "needsReview": row["needsReview"]})
+}
+
+/// Sandbox simulate calls can be refused right after an authorization lands;
+/// retry a few times.
+async fn simulate(l: &LithicClient, path: &str, body: Value) -> bool {
+    for _ in 0..4 {
+        if l.simulate(path, body.clone()).await.is_ok() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    false
+}
+
+async fn issuer(l: &LithicClient, token: &str) -> Value {
+    let mut t = Value::Null;
+    for _ in 0..6 {
+        if let Ok(found) = l.get_transaction(token).await {
+            t = found;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+    }
+    json!({"status": t["status"], "result": t["result"], "events": t["events"].as_array().map(|e| e.iter().map(|e| json!({"type": e["type"], "result": e["result"], "amount": e["amount"]})).collect::<Vec<_>>())})
+}
+
+async fn checkout(
+    relay: &Relay,
+    card_id: &str,
+    op: &str,
+    merchant: &str,
+    cents: &str,
+) -> (u16, Value) {
+    relay
+        .call("POST", &format!("/v1/cards/{card_id}/checkout-intents"), &relay.agent.clone(), Some(json!({"clientOperationId": op, "merchantRef": merchant, "amountCents": cents, "currency": "USD"})))
+        .await
+}
+
+async fn redeem(relay: &Relay, capability: &str) -> (u16, Value, u128) {
+    let started = Instant::now();
+    let (status, body) = relay
+        .call(
+            "POST",
+            "/v1/cards/checkout/redeem",
+            &env("CARDS_CHECKOUT_RUNNER_SECRET"),
+            Some(json!({"capability": capability})),
+        )
+        .await;
+    (status, body, started.elapsed().as_millis())
+}
+
+async fn run(out_path: &str) {
+    let http = reqwest::Client::new();
+    let url = env("RELAY_URL");
+    let owner = keypair(&env("OWNER_KEYPAIR"));
+    let owner_pk = Address::from(owner.verifying_key().to_bytes());
+    let l = lithic();
+    let mut out = json!({"ranAt": chainpay_backend::connectors::card_issuer::rfc3339(chainpay_backend::connectors::card_issuer::now_ms()), "network": "solana-devnet + magicblock-devnet-tee + lithic-sandbox"});
+    let session = login(&http, &url, &owner).await;
+    let mut relay = Relay {
+        http: http.clone(),
+        url: url.clone(),
+        session,
+        agent: String::new(),
+    };
+    let op = |name: &str| {
+        format!(
+            "live-{name}-{}",
+            chainpay_backend::connectors::card_issuer::now_ms()
+        )
+    };
+
+    // 1. prepare: Lithic VIRTUAL card created PAUSED + unsigned base txs.
+    let (status, prepared) = relay
+        .owner(
+            "POST",
+            "/v1/cards/prepare",
+            Some(json!({"clientOperationId": op("prepare"), "label": "Live sandbox card"})),
+        )
+        .await;
+    assert_eq!(status, 200, "prepare: {prepared}");
+    let card_id = prepared["cardId"].as_str().unwrap().to_owned();
+    let authorizer: Address = prepared["authorizer"].as_str().unwrap().parse().unwrap();
+    let policy: Address = prepared["accounts"]["policy"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let period: Address = prepared["accounts"]["period"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    out["card"] = json!({"cardId": card_id, "accounts": prepared["accounts"], "authorizer": authorizer.to_string()});
+    let init = devnet_send(&http, prepared["initTx"].as_str().unwrap(), &owner).await;
+    let topup = devnet_send(&http, prepared["escrowTopUpTx"].as_str().unwrap(), &owner).await;
+    let delegate = devnet_send(&http, prepared["delegateTx"].as_str().unwrap(), &owner).await;
+    out["base"] = json!({"initCard": init, "escrowTopUp": topup, "delegateCard": delegate});
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    // 2. owner signs init_permission + set_policy on PER with their own token.
+    let owner_tee = TeeClient::new(DEVNET_TEE_URL, owner.clone()).unwrap();
+    let deadline = || Instant::now() + Duration::from_secs(25);
+    let perm = owner_tee
+        .submit(
+            vec![program::init_permission(
+                &owner_pk,
+                &policy,
+                &period,
+                &authorizer,
+            )],
+            deadline(),
+        )
+        .await;
+    let args = PolicyArgs {
+        budget_cents: 5_000,
+        max_purchase_cents: 4_000,
+        max_purchases_per_period: 0,
+        period_seconds: 30 * 86_400,
+        merchant_id_hashes: vec![program::merchant_id_hash("DEMO-DATAAPI")],
+        mccs: vec![],
+        expires_at: 0,
+        recurring_allowed: false,
+        fee_bps: 50,
+        authorizer: authorizer.to_bytes(),
+    };
+    let set = owner_tee
+        .submit(
+            vec![program::set_policy(&owner_pk, &policy, &period, &args)],
+            deadline(),
+        )
+        .await;
+    out["per"] = json!({"initPermission": outcome(&perm), "setPolicy": outcome(&set), "policy": {"budgetCents": "5000", "maxPurchaseCents": "4000", "merchants": ["demo-approved"], "feeBps": 50}});
+
+    // 3. activate: mirror limits to Lithic, then OPEN.
+    let (status, view) = relay
+        .owner(
+            "POST",
+            &format!("/v1/cards/{card_id}/activate"),
+            Some(json!({"clientOperationId": op("activate"), "expectedPolicyVersion": 1})),
+        )
+        .await;
+    out["activate"] = json!({"status": status, "issuerState": view["issuerState"], "mirror": view["mirror"], "error": view["code"], "detail": view["detail"]});
+    assert_eq!(status, 200, "activate: {view}");
+    let owner_wallet = owner_pk.to_string();
+    relay.agent = register_agent(&owner_wallet, &card_id).await;
+
+    // 4. checkouts: open $20 and $40 intents first, plus a $10 one for the void.
+    let (s20, c20) = checkout(&relay, &card_id, &op("c20"), "demo-approved", "2000").await;
+    let (s40, c40) = checkout(&relay, &card_id, &op("c40"), "demo-approved", "4000").await;
+    let (s_off, c_off) = checkout(&relay, &card_id, &op("coff"), "demo-unapproved", "1000").await;
+    out["intents"] = json!({"20": s20, "40": s40, "unapprovedMerchant": {"status": s_off, "code": c_off["code"], "detail": c_off["detail"]}});
+
+    // 5. authorize $20 → approved; $40 → declined over budget.
+    let (_, r20, ms20) = redeem(&relay, c20["capability"].as_str().unwrap()).await;
+    let t20 = r20["lithicToken"].as_str().unwrap().to_owned();
+    let row20 = wait_row(&relay, &card_id, &t20, |r| r["lifecycle"] == "reserved", 10).await;
+    out["authorize20"] =
+        json!({"redeemMs": ms20, "chainpay": summary(&row20), "issuer": issuer(&l, &t20).await});
+    let (_, r40, ms40) = redeem(&relay, c40["capability"].as_str().unwrap()).await;
+    let t40 = r40["lithicToken"].as_str().unwrap().to_owned();
+    let row40 = wait_row(&relay, &card_id, &t40, |r| !r.is_null(), 10).await;
+    out["authorize40"] =
+        json!({"redeemMs": ms40, "chainpay": summary(&row40), "issuer": issuer(&l, &t40).await});
+    let (again, _, _) = redeem(&relay, c20["capability"].as_str().unwrap()).await;
+    out["capabilityReuse"] = json!({"status": again});
+
+    // 6. duplicate ASA delivery for the approved token (Lithic retry shape).
+    let dup = duplicate_asa(&http, &url, &t20, &l, 2_000).await;
+    out["duplicateAsa"] = dup;
+
+    // 7. authorization advice ($20 → $25), partial clearing $15, final clearing $10.
+    let advice = simulate(
+        &l,
+        "/v1/simulate/authorization_advice",
+        json!({"token": t20, "amount": 2_500}),
+    )
+    .await;
+    let row = wait_row(&relay, &card_id, &t20, |r| r["reservedCents"] == "2500", 30).await;
+    out["advice"] = json!({"simulated": advice, "chainpay": summary(&row)});
+    let partial = simulate(
+        &l,
+        "/v1/simulate/clearing",
+        json!({"token": t20, "amount": 1_500}),
+    )
+    .await;
+    let row = wait_row(
+        &relay,
+        &card_id,
+        &t20,
+        |r| r["lifecycle"] == "partially_captured",
+        30,
+    )
+    .await;
+    out["partialClearing"] = json!({"simulated": partial, "chainpay": summary(&row)});
+    let rest = simulate(
+        &l,
+        "/v1/simulate/clearing",
+        json!({"token": t20, "amount": 1_000}),
+    )
+    .await;
+    let row = wait_row(&relay, &card_id, &t20, |r| r["lifecycle"] == "captured", 30).await;
+    out["clearing"] =
+        json!({"simulated": rest, "chainpay": summary(&row), "issuer": issuer(&l, &t20).await});
+
+    // 8. void: a fresh $10 authorization, reversed in full.
+    let (_, c10) = checkout(&relay, &card_id, &op("c10"), "demo-approved", "1000").await;
+    let (_, r10, _) = redeem(&relay, c10["capability"].as_str().unwrap_or("")).await;
+    let t10 = r10["lithicToken"].as_str().unwrap_or("").to_owned();
+    wait_row(&relay, &card_id, &t10, |r| r["lifecycle"] == "reserved", 10).await;
+    let void = simulate(
+        &l,
+        "/v1/simulate/void",
+        json!({"token": t10, "amount": 1_000, "type": "AUTHORIZATION_REVERSAL"}),
+    )
+    .await;
+    let row = wait_row(&relay, &card_id, &t10, |r| r["lifecycle"] == "reversed", 30).await;
+    out["void"] =
+        json!({"simulated": void, "chainpay": summary(&row), "issuer": issuer(&l, &t10).await});
+
+    // 9. return: $5 credit (PAN held in memory for this one call only).
+    let card_token = issuer_card_token(&l, &t20).await;
+    let ret = l
+        .with_pan(&card_token, |pan| {
+            let l2 = l.clone();
+            async move { l2.simulate_return(&pan, 500, "DATA API CREDITS").await }
+        })
+        .await;
+    let tret = ret.as_ref().map(|t| t.clone()).unwrap_or_default();
+    let row = wait_row(&relay, &card_id, &tret, |r| r["kind"] == "refund", 30).await;
+    out["return"] = json!({"simulated": ret.is_ok(), "chainpay": summary(&row), "issuer": issuer(&l, &tret).await});
+
+    // 10. freeze → Lithic PAUSED → issuer declines before ASA.
+    let (_, c_frozen) = checkout(&relay, &card_id, &op("cfz"), "demo-approved", "500").await;
+    let (fs, freeze) = relay
+        .owner(
+            "POST",
+            &format!("/v1/cards/{card_id}/freeze"),
+            Some(json!({"clientOperationId": op("freeze"), "reason": "live sandbox freeze test"})),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (_, view) = relay
+        .owner("GET", &format!("/v1/cards/{card_id}"), None)
+        .await;
+    let issued = l
+        .get_card(&card_token)
+        .await
+        .map(|c| c.state)
+        .unwrap_or_default();
+    let (rs, rf, _) = redeem(&relay, c_frozen["capability"].as_str().unwrap_or("")).await;
+    let tf = rf["lithicToken"].as_str().unwrap_or("").to_owned();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (after_freeze, refused) =
+        checkout(&relay, &card_id, &op("cfz2"), "demo-approved", "500").await;
+    out["freeze"] = json!({
+        "status": fs, "response": freeze, "cardView": {"freeze": view["freeze"], "issuerState": view["issuerState"]},
+        "lithicCardState": issued,
+        "authorizeWhileFrozen": {"redeemStatus": rs, "issuer": issuer(&l, &tf).await, "chainpay": summary(&activity_row(&relay, &card_id, &tf).await)},
+        "newCheckoutWhileFrozen": {"status": after_freeze, "detail": refused["detail"]},
+    });
+
+    // 11. reconciliation pass and privacy reads.
+    let (cs, cron) = relay
+        .call(
+            "POST",
+            "/internal/cron/cards/reconcile",
+            &env("CRON_SECRET"),
+            None,
+        )
+        .await;
+    out["reconcile"] = json!({"status": cs, "report": cron});
+    let stranger = TeeClient::new(DEVNET_TEE_URL, keypair(&env("STRANGER_KEYPAIR"))).unwrap();
+    let read = |r: TeeRead| match r {
+        TeeRead::Visible { .. } => "visible",
+        TeeRead::NotVisible { .. } => "null",
+        TeeRead::RpcError(_) => "rpc_error",
+    };
+    out["privacy"] = json!({
+        "policyAsOwner": read(owner_tee.read_account(&policy, Duration::from_secs(10)).await),
+        "policyAsStranger": read(stranger.read_account(&policy, Duration::from_secs(10)).await),
+    });
+    let (_, activity) = relay
+        .owner(
+            "GET",
+            &format!("/v1/cards/{card_id}/activity?limit=50"),
+            None,
+        )
+        .await;
+    out["activityKinds"] = json!(activity["rows"].as_array().map(|rows| {
+        rows.iter()
+            .map(|r| json!([r["kind"], r["lifecycle"]]))
+            .collect::<Vec<_>>()
+    }));
+    std::fs::write(out_path, serde_json::to_string_pretty(&out).unwrap()).unwrap();
+    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+}
+
+async fn issuer_card_token(l: &LithicClient, txn: &str) -> String {
+    l.get_transaction(txn).await.unwrap()["card_token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// Re-send an ASA request for an already-decided token, signed with the
+/// enrolled ASA secret, exactly as Lithic does on a connection retry.
+async fn duplicate_asa(
+    http: &reqwest::Client,
+    url: &str,
+    token: &str,
+    l: &LithicClient,
+    amount: u64,
+) -> Value {
+    use hmac::{Hmac, Mac};
+    let card_token = issuer_card_token(l, token).await;
+    let body = json!({
+        "token": token, "status": "AUTHORIZATION",
+        "amounts": {"cardholder": {"amount": amount, "currency": "USD", "conversion_rate": "1.0"}, "merchant": {"amount": amount, "currency": "USD"}, "hold": null, "settlement": null},
+        "acquirer_fee": 0, "cash_amount": 0,
+        "merchant": {"acceptor_id": "DEMO-DATAAPI", "mcc": "5734", "descriptor": "DATA API CREDITS", "city": "", "state": "", "country": "USA"},
+        "card": {"token": card_token}, "transaction_initiator": "CARDHOLDER",
+    });
+    let raw = serde_json::to_vec(&body).unwrap();
+    let ts = (chainpay_backend::connectors::card_issuer::now_ms() / 1000).to_string();
+    let id = format!("dup_{token}");
+    let secret = env("LITHIC_ASA_SECRET");
+    let key = B64.decode(secret.trim_start_matches("whsec_")).unwrap();
+    let mut mac = Hmac::<sha2_010::Sha256>::new_from_slice(&key).unwrap();
+    mac.update(format!("{id}.{ts}.").as_bytes());
+    mac.update(&raw);
+    let sig = B64.encode(mac.finalize().into_bytes());
+    let started = Instant::now();
+    let response = http
+        .post(format!("{url}/v1/cards/lithic/asa"))
+        .header("webhook-id", id)
+        .header("webhook-timestamp", ts)
+        .header("webhook-signature", format!("v1,{sig}"))
+        .body(raw)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let result: Value = response.json().await.unwrap_or(Value::Null);
+    json!({"status": status, "result": result["result"], "ms": started.elapsed().as_millis()})
+}

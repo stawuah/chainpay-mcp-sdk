@@ -1,0 +1,18 @@
+{
+  "name": "void_expiry_late",
+  "description": "Partial void, then expiry, then a late clearing: the late capture is counted and flagged, never re-reserved.",
+  "steps": [
+    {"intent": {"as": "i", "merchant": "demo-approved", "amountCents": "2000"}},
+    {"asa": {"txn": "t1", "amountCents": 2000, "merchant": "demo-approved"}, "expect": "APPROVED"},
+    {"event": {"txn": "t1", "id": "v1", "type": "AUTHORIZATION_REVERSAL", "amountCents": 500}},
+    {"deliver": {"txn": "t1", "webhookId": "w1"}},
+    {"expect": {"txn": "t1", "state": "reserved", "reservedCents": "1500", "reversedCents": "500"}},
+    {"event": {"txn": "t1", "id": "x1", "type": "AUTHORIZATION_EXPIRY", "amountCents": 1500}},
+    {"deliver": {"txn": "t1", "webhookId": "w2"}},
+    {"expect": {"txn": "t1", "state": "expired", "reservedCents": "0"}},
+    {"event": {"txn": "t1", "id": "c1", "type": "CLEARING", "amountCents": 2000}},
+    {"deliver": {"txn": "t1", "webhookId": "w3"}},
+    {"expect": {"txn": "t1", "capturedCents": "2000", "flags": {"lateCapture": true}}},
+    {"expectProgram": {"reverse": 2, "capture": 1}}
+  ]
+}

@@ -1,3 +1,5 @@
+#[path = "server_cards.rs"]
+mod card_routes;
 #[path = "server_delivery.rs"]
 mod delivery_routes;
 #[path = "server_mandate_requests.rs"]
@@ -201,6 +203,8 @@ pub struct BackendState {
     pub rpc: RpcClient,
     pub store: StatusStore,
     pub signer_provider: Option<PrivySignerProvider>,
+    /// Private agent card connector; `None` unless `CARDS_CONNECTOR_ENABLED=true`.
+    pub cards: Option<std::sync::Arc<crate::connectors::card_issuer::CardsConnector>>,
 }
 
 #[derive(Debug, Error)]
@@ -211,6 +215,8 @@ pub enum BackendStateError {
     Signer(#[from] SignerConfigError),
     #[error("CHAINPAY_HTTP_AUTH_TOKEN is required when managed signing is enabled")]
     MissingManagedPaymentAuth,
+    #[error("card connector configuration error: {0}")]
+    Cards(String),
 }
 
 impl BackendState {
@@ -220,11 +226,14 @@ impl BackendState {
         if signer_provider.is_some() && config.auth_token.is_empty() {
             return Err(BackendStateError::MissingManagedPaymentAuth);
         }
+        let cards = crate::connectors::card_issuer::CardsConnector::from_env(store.clone())
+            .map_err(|error| BackendStateError::Cards(error.to_string()))?;
         Ok(Self {
             config,
             rpc,
             store,
             signer_provider,
+            cards,
         })
     }
 }
@@ -407,6 +416,7 @@ fn build_router_with_pet(state: BackendState, pet_enabled: bool) -> Router {
         .route("/v1/transactions/submit", post(submit_transaction))
         .route("/v1/transactions/{transaction_id}", get(get_transaction))
         .route("/rpc", post(proxy_rpc))
+        .merge(card_routes::router())
         .with_state(state)
         .layer(Extension(pet_routes::PetEnabled(pet_enabled)))
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
@@ -531,6 +541,7 @@ async fn auth_middleware(
                 | "/v1/auth/challenge"
                 | "/v1/auth/session"
         )
+        || card_routes::is_self_authenticated(path)
         || delivery_routes::is_public_delivery_path(request.method(), path)
         || pet_routes::is_public_pet_path(request.method(), path)
     {
@@ -543,6 +554,13 @@ async fn auth_middleware(
     match auth::identify(&state, request.headers()).await {
         Ok(principal) => {
             let mut request = request;
+            let connection = principal
+                .scope
+                .as_ref()
+                .and_then(|_| auth::connection_hash(request.headers()));
+            request
+                .extensions_mut()
+                .insert(card_routes::ConnectionHash(connection));
             request.extensions_mut().insert(principal);
             let mut response = next.run(request).await;
             response

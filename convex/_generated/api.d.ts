@@ -8,12 +8,14 @@
  * @module
  */
 
-import type * as pet from "../pet.js";
+import type * as cards from "../cards.js";
 import type * as cleanup from "../cleanup.js";
 import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as maintenance from "../maintenance.js";
 import type * as migration from "../migration.js";
+import type * as pet from "../pet.js";
+import type * as petValidators from "../petValidators.js";
 import type * as records from "../records.js";
 import type * as storage from "../storage.js";
 
@@ -24,12 +26,14 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  pet: typeof pet;
+  cards: typeof cards;
   cleanup: typeof cleanup;
   crons: typeof crons;
   http: typeof http;
   maintenance: typeof maintenance;
   migration: typeof migration;
+  pet: typeof pet;
+  petValidators: typeof petValidators;
   records: typeof records;
   storage: typeof storage;
 }>;
