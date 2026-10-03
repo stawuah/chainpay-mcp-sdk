@@ -49,4 +49,16 @@ http.route({ path: "/internal/storage/v1", method: "POST", handler: httpAction(a
     return response({ error: { code: "storage_error", message: "Storage operation failed; reconcile before retrying side effects" } }, 500);
   }
 }) });
+// Public, read-only support tracker. Only exact on-chain amounts; no secrets.
+const supportHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" };
+http.route({ path: "/support/v1", method: "GET", handler: httpAction(async (ctx) => {
+  try {
+    const summary = await ctx.runQuery(internal.support.publicSummary, {});
+    return new Response(JSON.stringify(summary), { status: 200, headers: { ...supportHeaders, "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
+  } catch (error) {
+    console.error("Support summary failed", error instanceof Error ? error.name : "unknown");
+    return new Response(JSON.stringify({ error: { code: "unavailable", message: "Support tracker unavailable" } }), { status: 503, headers: { ...supportHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+  }
+}) });
+http.route({ path: "/support/v1", method: "OPTIONS", handler: httpAction(async () => new Response(null, { status: 204, headers: { ...supportHeaders, "Access-Control-Max-Age": "86400" } })) });
 export default http;

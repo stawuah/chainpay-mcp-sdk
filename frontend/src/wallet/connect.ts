@@ -23,6 +23,8 @@ import { resolveConnectedWalletIcon } from "./icons";
 
 const DEVNET_CHAIN = "solana:devnet";
 
+export type SolanaChain = "solana:devnet" | "solana:mainnet";
+
 type StandardConnectFeature = {
   readonly [StandardConnect]: {
     readonly connect: (input?: { silent?: boolean }) => Promise<{
@@ -48,7 +50,8 @@ export type ChainPayWallet = {
   name: string;
   icon?: string;
   capabilities: WalletCapabilityReport;
-  signTransaction: (transaction: Transaction) => Promise<Transaction>;
+  /** `chain` defaults to devnet; /support passes its own cluster. */
+  signTransaction: (transaction: Transaction, options?: { chain?: SolanaChain }) => Promise<Transaction>;
   signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
   disconnect?: () => Promise<void>;
   changeAccount: () => Promise<ChainPayWallet>;
@@ -100,14 +103,14 @@ function walletAdapter(wallet: StandardSolanaWallet, account: WalletAccount, acc
       accountChains: account.chains,
       features: wallet.features as Record<string, unknown>,
     }),
-    signTransaction: async (transaction) => {
+    signTransaction: async (transaction, options) => {
       const unsignedTransaction = transaction.serialize({
         requireAllSignatures: false,
         verifySignatures: false,
       });
       const [signed] = await wallet.features[SolanaSignTransaction].signTransaction({
         account,
-        chain: DEVNET_CHAIN,
+        chain: options?.chain ?? DEVNET_CHAIN,
         transaction: unsignedTransaction,
         options: { preflightCommitment: "confirmed" },
       });
