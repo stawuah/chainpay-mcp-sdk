@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { checkRelayRequest } from './supportRpc';
 import { advanceCursor, parseSupportMemo, parseSupportTx, planPage, summarize, type RpcTransaction, type StoredEvent, type SupportCursor } from './supportParse';
 
 const PROGRAM = 'Sp1itter1111111111111111111111111111111111';
@@ -62,6 +63,23 @@ describe('parseSupportTx', () => {
     expect(r.events).toEqual([{ kind: 'contribution', asset: 'USDC', amount: '2500000', donor: null, note: 'hi', side: null }]);
   });
 
+  it('a swapped tip (pool -> vault inside a Jupiter route) is credited to the single signer, with the note', () => {
+    const POOL = 'Poo1Auth1111111111111111111111111111111111';
+    const r = parseSupportTx(tx({ signers: [DONOR], inner: [tokenTransfer(POOL, '3263830')], ixs: [memo('chainpay-support:v1 note=paid in JUP')], usdc: ['0', '3263830'] }), accounts)!;
+    expect(r.events).toEqual([{ kind: 'contribution', asset: 'USDC', amount: '3263830', donor: DONOR, note: 'paid in JUP', side: null }]);
+  });
+  it('a pool transfer without our memo, or with several signers, names nobody', () => {
+    const POOL = 'Poo1Auth1111111111111111111111111111111111';
+    const noMemo = parseSupportTx(tx({ signers: [DONOR], inner: [tokenTransfer(POOL, '100')], usdc: ['0', '100'] }), accounts)!;
+    expect(noMemo.events[0].donor).toBeNull();
+    const two = parseSupportTx(tx({ signers: [DONOR, DONOR2], inner: [tokenTransfer(POOL, '100')], ixs: [memo('chainpay-support:v1 note=x')], usdc: ['0', '100'] }), accounts)!;
+    expect(two.events[0]).toMatchObject({ donor: null, note: null });
+  });
+  it('a swapped tip with the hide flag stays anonymous', () => {
+    const POOL = 'Poo1Auth1111111111111111111111111111111111';
+    const r = parseSupportTx(tx({ signers: [DONOR], inner: [tokenTransfer(POOL, '100')], ixs: [memo('chainpay-support:v1 anon=1')], usdc: ['0', '100'] }), accounts)!;
+    expect(r.events[0].donor).toBeNull();
+  });
   it('a memo with no transfer counts for nothing', () => {
     const r = parseSupportTx(tx({ signers: [DONOR], ixs: [memo('chainpay-support:v1 note=I gave 1000 SOL')], sol: [10, 10] }), accounts)!;
     expect(r.events).toEqual([]);
@@ -160,5 +178,24 @@ describe('support storage', () => {
     expect(s.contributionCount).toBe(1);
     expect(s.totals.sol.contributed).toBe('5');
     expect(s.live).toBe(false);
+  });
+});
+
+describe('support RPC relay', () => {
+  const req = (body: unknown) => JSON.stringify(body);
+  it('forwards only the calls the tip card needs', () => {
+    for (const method of ['getBalance', 'getLatestBlockhash', 'sendTransaction', 'getAccountInfo', 'getSignatureStatuses']) {
+      expect(checkRelayRequest(req({ jsonrpc: '2.0', id: 1, method, params: [] })).ok).toBe(true);
+    }
+    for (const method of ['getProgramAccounts', 'requestAirdrop', 'getSignaturesForAddress', 'getTransaction', '__proto__']) {
+      expect(checkRelayRequest(req({ jsonrpc: '2.0', id: 1, method, params: [] }))).toMatchObject({ ok: false, status: 403 });
+    }
+  });
+  it('rejects batches, junk and oversized bodies', () => {
+    expect(checkRelayRequest(req([{ method: 'getBalance' }]))).toMatchObject({ ok: false, status: 400 });
+    expect(checkRelayRequest('{nope')).toMatchObject({ ok: false, status: 400 });
+    expect(checkRelayRequest(req({ method: 'getBalance', params: 'x' }))).toMatchObject({ ok: false, status: 400 });
+    expect(checkRelayRequest(req({ method: 'sendTransaction', params: ['A'.repeat(9000)] }))).toMatchObject({ ok: false, status: 413 });
+    expect(checkRelayRequest(req({ method: 'getSignatureStatuses', params: [Array(11).fill('s')] }))).toMatchObject({ ok: false, status: 400 });
   });
 });

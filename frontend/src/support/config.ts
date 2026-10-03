@@ -13,12 +13,16 @@ export const SUPPORT_CLUSTER: SupportCluster = env.VITE_SUPPORT_CLUSTER === "dev
 // Set after the mainnet deploy (DEPLOY.md gate 3). Until then the page shows "Opening soon".
 export const SUPPORT_PROGRAM_ID = env.VITE_SUPPORT_PROGRAM_ID ?? "";
 
-export const SUPPORT_RPC_URL =
-  env.VITE_SUPPORT_RPC_URL ??
-  (SUPPORT_CLUSTER === "devnet" ? "https://api.devnet.solana.com" : "https://api.mainnet-beta.solana.com");
-
 // Convex HTTP route that serves the indexed contributions (convex/http.ts).
 export const SUPPORT_TRACKER_URL = env.VITE_SUPPORT_TRACKER_URL ?? "";
+
+// Browsers can't use Solana's public mainnet RPC (it answers 403), so the page
+// talks to the narrow relay next to the tracker (convex/supportRpc.ts), which
+// keeps the RPC key server-side. VITE_SUPPORT_RPC_URL overrides it.
+const relayUrl = SUPPORT_TRACKER_URL.endsWith("/support/v1") ? SUPPORT_TRACKER_URL.replace(/\/support\/v1$/, "/support/rpc") : "";
+export const SUPPORT_RPC_URL =
+  env.VITE_SUPPORT_RPC_URL ??
+  (relayUrl || (SUPPORT_CLUSTER === "devnet" ? "https://api.devnet.solana.com" : "https://api.mainnet-beta.solana.com"));
 
 // Circle's published USDC mints, classic SPL Token program.
 export const USDC_MINTS: Record<SupportCluster, string> = {
@@ -35,6 +39,9 @@ export const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqX
 
 // Public GitHub handles shown next to each side. Side A is index 0 on-chain.
 export const MAINTAINER_LABELS = ["@tantshirt", "@stawuah"] as const;
+
+// Jupiter only routes on mainnet.
+export const SWAP_ENABLED = SUPPORT_CLUSTER === "mainnet";
 
 export const WALLET_CHAIN = SUPPORT_CLUSTER === "devnet" ? "solana:devnet" : "solana:mainnet";
 

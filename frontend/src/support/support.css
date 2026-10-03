@@ -319,3 +319,37 @@
   .support2 .tip-spinner { animation-duration: 2s; }
 }
 @keyframes s2-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* "Other" token (swap to USDC) */
+.support2 .tip-segment.is-three { grid-template-columns: repeat(3, 1fr); width: 270px; }
+.support2 .token-picker { display: grid; gap: 10px; }
+.support2 .token-section { margin: 4px 0 0; font: 500 12px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--body); }
+.support2 .token-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; max-height: 300px; overflow-y: auto; }
+.support2 .token-row {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  width: 100%; min-height: 56px; padding: 0 14px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--canvas); color: var(--ink); text-align: left; cursor: pointer;
+  transition: border-color .15s ease;
+}
+.support2 .token-row:hover { border-color: var(--blue); }
+.support2 .token-row img, .support2 .token-blank { width: 28px; height: 28px; border-radius: 50%; }
+.support2 .token-blank { display: grid; place-items: center; background: var(--strong); font-weight: 600; }
+.support2 .token-names { display: grid; gap: 2px; min-width: 0; }
+.support2 .token-symbol { font-weight: 600; font-size: 15px; }
+.support2 .token-name { font-size: 13px; color: var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.support2 .token-verified { color: #067647; font-weight: 700; }
+.support2 .token-foot { text-align: center; }
+.support2 .token-chip {
+  display: inline-flex; align-items: center; gap: 8px; justify-self: center;
+  min-height: 40px; padding: 0 14px 0 8px;
+  border: 1px solid var(--line); border-radius: var(--radius-control);
+  background: var(--canvas); color: var(--ink); font: 600 14px/1 inherit; cursor: pointer;
+}
+.support2 .token-chip img { border-radius: 50%; }
+.support2 .token-chip-change { color: var(--blue); font-weight: 500; }
+.support2 .tip-mono-soft { font-weight: 400; color: var(--body); }
+.support2 .tip-center { text-align: center; }
+.support2 .tip-stack { display: grid; justify-items: end; gap: 2px; }
+.support2 .tip-stack .tip-mono-soft { font-size: 12px; }
+.support2 .token-chip .token-blank { width: 20px; height: 20px; font-size: 11px; }

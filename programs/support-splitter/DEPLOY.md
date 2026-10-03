@@ -52,8 +52,15 @@ The splitter becomes permanent once its upgrade authority is removed: nobody can
 
 ## Gate 5: go live
 
-1. Set `VITE_SUPPORT_LIVE=true` and fill the mainnet IDs in `frontend/src/support/config.ts`.
-2. Make one small real contribution (about $1 USDC and 0.01 SOL), allocate, then each partner pays out their own half. Check both legs on an explorer.
+1. **Convex prod env** (server-side; the RPC key never reaches the browser):
+   - `SUPPORT_RPC_URL`: mainnet RPC
+   - `SUPPORT_PROGRAM_ID`, `SUPPORT_VAULT`, `SUPPORT_VAULT_USDC`
+   - `SUPPORT_LIVE=true`
+2. **Vercel env for the web app** (all public values):
+   - `VITE_SUPPORT_PROGRAM_ID`
+   - `VITE_SUPPORT_TRACKER_URL=https://<convex-site>/support/v1`. The page derives its RPC relay from this, as `/support/rpc`.
+   - `VITE_SUPPORT_LIVE=true`
+3. Make one small real contribution (about $1 USDC and 0.01 SOL, plus about $1 of USDT through "Other"), allocate, then each partner pays out their own half. Check every leg on an explorer.
 
 Post each gate's proof as a `<!-- support-gate:v1 -->` comment: a link, a hash, or command output with no secrets in it.
 

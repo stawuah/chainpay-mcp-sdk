@@ -1,7 +1,8 @@
-// Ruling P2–P7: one card, three steps + result.
+// Ruling P2–P7: one card, three steps + result. "Other" tips any verified token,
+// swapped to USDC by Jupiter inside the same transaction (swap.ts).
 import { useEffect, useRef, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
-import { SUPPORT_PROGRAM_ID, USDC_MINT, explorerTx } from "./config";
+import { SUPPORT_PROGRAM_ID, SWAP_ENABLED, USDC_DECIMALS, USDC_MINT, explorerTx } from "./config";
 import {
   NOTE_MAX,
   cleanNote,
@@ -15,20 +16,52 @@ import {
 } from "./donation";
 import { usdHint, useSolUsd } from "./price";
 import { checkBalance, friendlyError, sendSigned, signForSupport, type SendOutcome } from "./send";
+import { SLIPPAGE_BPS, buildSwapTip, quoteToUsdc, signVersionedForSupport, type SwapQuote, type SwapToken } from "./swap";
+import { TokenIcon, TokenPicker } from "./TokenPicker";
 import type { SupportWalletState } from "./useSupportWallet";
 import { WalletGrid } from "./WalletGrid";
 import { resolveConnectedWalletIcon } from "../wallet/icons";
 
+type Mode = SupportAsset | "OTHER";
 const PRESETS: Record<SupportAsset, string[]> = { SOL: ["0.05", "0.1", "0.5"], USDC: ["5", "10", "25"] };
 type Step = "amount" | "wallet" | "review" | "done";
-type Pending = "" | "checking" | "signing" | "sending";
+type Pending = "" | "checking" | "quoting" | "signing" | "sending";
 
 const STEP_INDEX: Record<Step, number> = { amount: 0, wallet: 1, review: 2, done: 3 };
+
+function useSwapQuote(token: SwapToken | null, units: bigint | null) {
+  const [quote, setQuote] = useState<SwapQuote | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "none">("idle");
+  useEffect(() => {
+    setQuote(null);
+    if (!token || !units) {
+      setState("idle");
+      return;
+    }
+    let alive = true;
+    setState("loading");
+    const timer = window.setTimeout(() => {
+      quoteToUsdc(token.mint, units, USDC_MINT)
+        .then((q) => {
+          if (!alive) return;
+          setQuote(q);
+          setState(q ? "idle" : "none");
+        })
+        .catch(() => alive && setState("none"));
+    }, 400);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [token, units]);
+  return { quote, state };
+}
 
 export function TipCard({ walletState, onSent }: { walletState: SupportWalletState; onSent: () => void }) {
   const { wallet } = walletState;
   const [step, setStep] = useState<Step>("amount");
-  const [asset, setAsset] = useState<SupportAsset>("SOL");
+  const [mode, setMode] = useState<Mode>("SOL");
+  const [token, setToken] = useState<SwapToken | null>(null);
   const [amountText, setAmountText] = useState("0.1");
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
@@ -39,11 +72,19 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
   const solUsd = useSolUsd();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const amountRef = useRef<HTMLInputElement>(null);
-  const isCustom = !PRESETS[asset].includes(amountText);
 
-  const units = toBaseUnits(amountText, decimalsFor(asset));
-  const amountLabel = units ? `${formatUnits(units, decimalsFor(asset))} ${asset}` : "";
-  const hint = usdHint(asset, units, solUsd);
+  const swapping = mode === "OTHER";
+  const symbol = swapping ? token?.symbol ?? "" : mode;
+  const decimals = swapping ? token?.decimals ?? 0 : decimalsFor(mode);
+  const units = swapping && !token ? null : toBaseUnits(amountText, decimals);
+  const amountLabel = units ? `${formatUnits(units, decimals)} ${symbol}` : "";
+  const { quote, state: quoteState } = useSwapQuote(swapping ? token : null, units);
+  const arrives = quote ? `${formatUnits(BigInt(quote.outAmount), USDC_DECIMALS)} USDC` : null;
+  const minimum = quote ? `${formatUnits(BigInt(quote.otherAmountThreshold), USDC_DECIMALS)} USDC` : null;
+  const hint = swapping
+    ? quoteState === "loading" ? "Getting a price…" : quoteState === "none" ? "No swap route for this amount." : arrives ? `≈ ${arrives} arrives` : null
+    : usdHint(mode, units, solUsd);
+  const isCustom = swapping || !PRESETS[mode].includes(amountText);
   const busy = pending !== "";
 
   // P12: move focus to the new step's heading.
@@ -61,14 +102,24 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
     setStep(next);
   };
 
-  const switchAsset = (next: SupportAsset) => {
-    setAsset(next);
-    setAmountText(PRESETS[next][1]);
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    setError("");
+    if (next === "OTHER") {
+      setToken(null);
+      setAmountText("");
+    } else {
+      setAmountText(PRESETS[next][1]);
+    }
   };
 
   const continueFromAmount = () => {
     if (!units) {
-      setError(`Enter an amount, up to ${decimalsFor(asset)} decimal places.`);
+      setError(`Enter an amount, up to ${decimals} decimal places.`);
+      return;
+    }
+    if (swapping && !quote) {
+      setError(quoteState === "loading" ? "One moment, getting a price…" : "There's no swap route for this amount. Try a different amount or token.");
       return;
     }
     go(wallet ? "review" : "wallet");
@@ -86,16 +137,30 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
     const owner = new PublicKey(wallet.address);
     try {
       setPending("checking");
-      const problem = await checkBalance(owner, asset, units, accounts);
+      const problem = await checkBalance(owner, swapping ? "SOL" : mode, swapping ? 0n : units, accounts);
       if (problem) {
         setError(problem);
         return;
       }
-      setPending("signing");
-      const signed = await signForSupport(
-        wallet,
-        contributionInstructions({ donor: owner, asset, amount: units, note, hideAddress, accounts }),
-      );
+      let signed;
+      if (swapping && token) {
+        setPending("quoting");
+        // Fresh quote right before signing, so the review isn't stale.
+        const fresh = await quoteToUsdc(token.mint, units, USDC_MINT);
+        if (!fresh) {
+          setError("The swap price isn't available right now. Nothing was sent.");
+          return;
+        }
+        const built = await buildSwapTip({ donor: owner, quote: fresh, note, hideAddress, accounts });
+        setPending("signing");
+        signed = await signVersionedForSupport(wallet, built, accounts);
+      } else {
+        setPending("signing");
+        signed = await signForSupport(
+          wallet,
+          contributionInstructions({ donor: owner, asset: mode as SupportAsset, amount: units, note, hideAddress, accounts }),
+        );
+      }
       setPending("sending");
       const result = await sendSigned(signed);
       setOutcome(result);
@@ -106,7 +171,8 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
         setError(result.message);
       }
     } catch (cause) {
-      setError(friendlyError(cause));
+      const message = cause instanceof Error ? cause.message : "";
+      setError(/^Swap |^Jupiter |^Unexpected /.test(message) ? `${message} Nothing was sent.` : friendlyError(cause));
     } finally {
       setPending("");
     }
@@ -121,7 +187,12 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
 
   const walletIcon = wallet ? resolveConnectedWalletIcon(wallet.name, wallet.icon) : undefined;
   const sendLabel =
-    pending === "checking" ? "Checking…" : pending === "signing" ? `Confirm in ${wallet?.name ?? "your wallet"}…` : pending === "sending" ? "Sending…" : `Send ${amountLabel}`;
+    pending === "checking" ? "Checking…"
+      : pending === "quoting" ? "Getting the latest price…"
+        : pending === "signing" ? `Confirm in ${wallet?.name ?? "your wallet"}…`
+          : pending === "sending" ? "Sending…"
+            : `Send ${amountLabel}`;
+  const modes: Mode[] = SWAP_ENABLED ? ["SOL", "USDC", "OTHER"] : ["SOL", "USDC"];
 
   return (
     <section className="tip-card" aria-label="Buy us a coffee">
@@ -143,67 +214,88 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
         {step === "amount" ? (
           <>
             <h2 ref={headingRef} tabIndex={-1} className="tip-title">Choose an amount</h2>
-            <div className="tip-segment" role="group" aria-label="Token">
-              {(["SOL", "USDC"] as const).map((option) => (
-                <button key={option} type="button" aria-pressed={asset === option} onClick={() => switchAsset(option)}>{option}</button>
-              ))}
-            </div>
-            <label className="tip-amount">
-              <span className="sr-only">Amount in {asset}</span>
-              <input
-                ref={amountRef}
-                inputMode="decimal"
-                autoComplete="off"
-                placeholder="0"
-                value={amountText}
-                size={Math.max(2, amountText.length)}
-                aria-invalid={amountText !== "" && !units}
-                onChange={(event) => setAmountText(event.target.value.replace(/[^\d.]/g, ""))}
-              />
-              <span className="tip-amount-unit">{asset}</span>
-            </label>
-            <p className="tip-usd" aria-live="polite">{hint ?? " "}</p>
-            <div className="tip-presets" role="group" aria-label="Quick amounts">
-              {PRESETS[asset].map((preset) => (
-                <button key={preset} type="button" aria-pressed={amountText === preset} onClick={() => setAmountText(preset)}>
-                  {asset === "USDC" ? `$${preset}` : `${preset} SOL`}
+            <div className={`tip-segment${modes.length === 3 ? " is-three" : ""}`} role="group" aria-label="Token">
+              {modes.map((option) => (
+                <button key={option} type="button" aria-pressed={mode === option} onClick={() => switchMode(option)}>
+                  {option === "OTHER" ? "Other" : option}
                 </button>
               ))}
-              <button
-                type="button"
-                aria-pressed={isCustom}
-                onClick={() => {
-                  if (!isCustom) setAmountText("");
-                  amountRef.current?.focus();
-                }}
-              >
-                Custom
-              </button>
             </div>
 
-            {noteOpen ? (
-              <div className="tip-note">
-                <label className="tip-field">
-                  <span className="tip-field-row">
-                    <span>Public note</span>
-                    <span className="tip-counter">{cleanNote(note).length}/{NOTE_MAX}</span>
-                  </span>
-                  <input maxLength={NOTE_MAX} value={note} placeholder="gm from the MCP crowd" onChange={(event) => setNote(event.target.value)} />
-                </label>
-                <label className="tip-check">
-                  <input type="checkbox" checked={hideAddress} onChange={(event) => setHideAddress(event.target.checked)} />
-                  <span>
-                    <span className="tip-check-label">Hide my address on this page</span>
-                    <span className="tip-hint">Your transaction is still public on-chain.</span>
-                  </span>
-                </label>
-              </div>
+            {swapping && !token ? (
+              <TokenPicker onPick={(picked) => {
+                setToken(picked);
+                window.setTimeout(() => amountRef.current?.focus(), 0);
+              }} />
             ) : (
-              <button type="button" className="tip-link-button" onClick={() => setNoteOpen(true)}>+ Add a note</button>
-            )}
+              <>
+                {swapping && token ? (
+                  <button type="button" className="token-chip" onClick={() => setToken(null)}>
+                    <TokenIcon token={token} size={20} />
+                    <span>{token.symbol}</span>
+                    <span className="token-chip-change">Change</span>
+                  </button>
+                ) : null}
+                <label className="tip-amount">
+                  <span className="sr-only">Amount in {symbol}</span>
+                  <input
+                    ref={amountRef}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="0"
+                    value={amountText}
+                    size={Math.max(2, amountText.length)}
+                    aria-invalid={amountText !== "" && !units}
+                    onChange={(event) => setAmountText(event.target.value.replace(/[^\d.]/g, ""))}
+                  />
+                  <span className="tip-amount-unit">{symbol}</span>
+                </label>
+                <p className="tip-usd" aria-live="polite">{hint ?? " "}</p>
+                {!swapping ? (
+                  <div className="tip-presets" role="group" aria-label="Quick amounts">
+                    {PRESETS[mode as SupportAsset].map((preset) => (
+                      <button key={preset} type="button" aria-pressed={amountText === preset} onClick={() => setAmountText(preset)}>
+                        {mode === "USDC" ? `$${preset}` : `${preset} SOL`}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      aria-pressed={isCustom}
+                      onClick={() => {
+                        if (!isCustom) setAmountText("");
+                        amountRef.current?.focus();
+                      }}
+                    >
+                      Custom
+                    </button>
+                  </div>
+                ) : null}
 
-            {error ? <p className="tip-error" role="alert">{error}</p> : null}
-            <button type="button" className="tip-primary" onClick={continueFromAmount}>Continue</button>
+                {noteOpen ? (
+                  <div className="tip-note">
+                    <label className="tip-field">
+                      <span className="tip-field-row">
+                        <span>Public note</span>
+                        <span className="tip-counter">{cleanNote(note).length}/{NOTE_MAX}</span>
+                      </span>
+                      <input maxLength={NOTE_MAX} value={note} placeholder="gm from the MCP crowd" onChange={(event) => setNote(event.target.value)} />
+                    </label>
+                    <label className="tip-check">
+                      <input type="checkbox" checked={hideAddress} onChange={(event) => setHideAddress(event.target.checked)} />
+                      <span>
+                        <span className="tip-check-label">Hide my address on this page</span>
+                        <span className="tip-hint">Your transaction is still public on-chain.</span>
+                      </span>
+                    </label>
+                  </div>
+                ) : (
+                  <button type="button" className="tip-link-button" onClick={() => setNoteOpen(true)}>+ Add a note</button>
+                )}
+
+                {error ? <p className="tip-error" role="alert">{error}</p> : null}
+                <button type="button" className="tip-primary" onClick={continueFromAmount}>Continue</button>
+              </>
+            )}
           </>
         ) : null}
 
@@ -228,10 +320,14 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
                 <span className="tip-mono">{shortAddress(wallet.address)}</span>
                 <button type="button" className="tip-link-button" disabled={busy} onClick={() => { walletState.disconnect(); go("wallet"); }}>Change</button>
               </dd></div>
+              {swapping && minimum ? (
+                <div><dt>Arrives</dt><dd className="tip-stack">{arrives}<span className="tip-mono-soft">at least {minimum}</span></dd></div>
+              ) : null}
               <div><dt>Network fee</dt><dd>{"< $0.01"}</dd></div>
               {cleanNote(note) ? <div><dt>Note</dt><dd className="tip-note-value">{cleanNote(note)}</dd></div> : null}
               <div><dt>Shown as</dt><dd>{hideAddress ? "Anonymous supporter" : shortAddress(wallet.address)}</dd></div>
             </dl>
+            {swapping ? <p className="tip-hint tip-center">Swapped to USDC by Jupiter in this same transaction ({SLIPPAGE_BPS / 100}% max slippage).</p> : null}
             <div aria-live="polite">
               {error ? <p className="tip-error" role="alert">{error}</p> : null}
               {outcome?.status === "unknown" ? (

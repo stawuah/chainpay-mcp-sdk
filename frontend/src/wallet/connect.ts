@@ -13,7 +13,7 @@ import {
   type SolanaSignMessageFeature,
   type SolanaSignTransactionFeature,
 } from "@solana/wallet-standard-features";
-import { Transaction } from "@solana/web3.js";
+import { Transaction, VersionedTransaction } from "@solana/web3.js";
 import {
   reportLegacyInjectedWallet,
   reportWalletCapabilities,
@@ -52,6 +52,8 @@ export type ChainPayWallet = {
   capabilities: WalletCapabilityReport;
   /** `chain` defaults to devnet; /support passes its own cluster. */
   signTransaction: (transaction: Transaction, options?: { chain?: SolanaChain }) => Promise<Transaction>;
+  /** v0 transactions (address lookup tables), used by /support's token swaps. */
+  signVersionedTransaction: (transaction: VersionedTransaction, options?: { chain?: SolanaChain }) => Promise<VersionedTransaction>;
   signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
   disconnect?: () => Promise<void>;
   changeAccount: () => Promise<ChainPayWallet>;
@@ -117,6 +119,16 @@ function walletAdapter(wallet: StandardSolanaWallet, account: WalletAccount, acc
       if (!signed) throw new Error(`${wallet.name} did not return a signed transaction.`);
       return Transaction.from(signed.signedTransaction);
     },
+    signVersionedTransaction: async (transaction, options) => {
+      const [signed] = await wallet.features[SolanaSignTransaction].signTransaction({
+        account,
+        chain: options?.chain ?? DEVNET_CHAIN,
+        transaction: transaction.serialize(),
+        options: { preflightCommitment: "confirmed" },
+      });
+      if (!signed) throw new Error(`${wallet.name} did not return a signed transaction.`);
+      return VersionedTransaction.deserialize(signed.signedTransaction);
+    },
     signMessage: signMessageFeature
       ? async (message) => {
           const [signed] = await signMessageFeature.signMessage({ account, message });
@@ -170,6 +182,9 @@ function legacyWalletAdapter(provider: LegacyProvider, address: string, name: st
     icon: resolveConnectedWalletIcon(name),
     capabilities: reportLegacyInjectedWallet({ name, address }),
     signTransaction: provider.signTransaction.bind(provider),
+    // Phantom, Solflare and Backpack's injected providers also accept v0 transactions.
+    signVersionedTransaction: (transaction) =>
+      (provider.signTransaction as unknown as (tx: VersionedTransaction) => Promise<VersionedTransaction>).call(provider, transaction),
     signMessage: provider.signMessage
       ? async (message) => (await provider.signMessage!(message, "utf8")).signature
       : undefined,

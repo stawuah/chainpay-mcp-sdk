@@ -168,3 +168,55 @@ test("maintainer panel only matches an exact on-chain recipient", () => {
   assert.equal(panel.recipientSide(null, "AAAA"), null);
   assert.equal(panel.recipientSide(vault, undefined), null);
 });
+
+// ---- swap safety (any token -> USDC) ----
+const swapMod = await bundle("../src/support/swap.ts", "swap");
+const DONOR = donor.toBase58();
+const JUPITER = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
+const goodSwap = () => ({
+  computeBudgetInstructions: [{ programId: "ComputeBudget111111111111111111111111111111", accounts: [], data: "AsBcAQA=" }],
+  setupInstructions: [{ programId: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", accounts: [{ pubkey: DONOR, isSigner: true, isWritable: true }, { pubkey: "AtaX", isSigner: false, isWritable: true }, { pubkey: DONOR, isSigner: false, isWritable: false }], data: "AQ==" }],
+  swapInstruction: { programId: JUPITER, accounts: [
+    { pubkey: TOKEN, isSigner: false, isWritable: false },
+    { pubkey: DONOR, isSigner: true, isWritable: false },
+    { pubkey: accounts.vaultUsdc.toBase58(), isSigner: false, isWritable: true },
+    { pubkey: USDC, isSigner: false, isWritable: false },
+  ], data: "AA==" },
+  cleanupInstruction: null,
+  otherInstructions: [],
+});
+
+test("swap safety: a normal Jupiter route into the vault passes", () => {
+  assert.doesNotThrow(() => swapMod.assertSafeSwap(goodSwap(), DONOR, accounts));
+});
+
+test("swap safety: anything that could misdirect funds is refused before signing", () => {
+  const cases = [
+    [(s) => { s.swapInstruction.programId = "Fake1111111111111111111111111111111111111111"; }, /isn't routed through Jupiter/],
+    [(s) => { s.swapInstruction.accounts[2].pubkey = "Thief111111111111111111111111111111111111111"; }, /doesn't deliver to the support vault/],
+    [(s) => { s.swapInstruction.accounts[2].isWritable = false; }, /doesn't deliver to the support vault/],
+    [(s) => { s.swapInstruction.accounts[3].pubkey = "OtherMint11111111111111111111111111111111111"; }, /doesn't output USDC/],
+    [(s) => { s.swapInstruction.accounts.push({ pubkey: "Extra1111111111111111111111111111111111111111", isSigner: true, isWritable: true }); }, /unexpected signer/],
+    [(s) => { s.setupInstructions[0].accounts[2].pubkey = "Someone11111111111111111111111111111111111111"; }, /isn't yours/],
+    [(s) => { s.setupInstructions[0].programId = TOKEN; }, /isn't yours/],
+    [(s) => { s.otherInstructions = [{ programId: TOKEN, accounts: [], data: "" }]; }, /extra instructions/],
+    [(s) => { s.computeBudgetInstructions[0].programId = TOKEN; }, /compute instruction/],
+    [(s) => { s.tokenLedgerInstruction = { programId: JUPITER, accounts: [], data: "" }; }, /token-ledger/],
+    [(s) => { s.cleanupInstruction = { programId: TOKEN, accounts: [{ pubkey: "W" }, { pubkey: "Thief111111111111111111111111111111111111111" }, { pubkey: DONOR }], data: Buffer.from([9]).toString("base64") }; }, /cleanup/],
+    [(s) => { s.error = "no route"; }, /couldn't build/],
+  ];
+  for (const [mutate, reason] of cases) {
+    const swap = goodSwap();
+    mutate(swap);
+    assert.throws(() => swapMod.assertSafeSwap(swap, DONOR, accounts), reason);
+  }
+});
+
+test("token search keeps verified tokens only", async () => {
+  const fake = async () => ({ ok: true, json: async () => ([
+    { id: "Good", symbol: "GOOD", name: "Good", decimals: 6, isVerified: true },
+    { id: "Scam", symbol: "USDT", name: "Tether USD", decimals: 6, isVerified: false },
+  ]) });
+  const list = await swapMod.searchTokens("usdt", fake);
+  assert.deepEqual(list.map((t) => t.mint), ["Good"]);
+});

@@ -7,6 +7,8 @@
 // - Payout sides come from `Paid` events, accepted only when the splitter
 //   program itself emitted them (a forged log line from another program counts for nothing).
 // - The donor is the transfer source (SOL) or transfer authority (USDC), never the fee payer.
+//   Exception: a swapped tip's USDC comes from a pool, so it's credited to the tx's single
+//   signer when our memo is present, and to nobody otherwise.
 
 export type Asset = "SOL" | "USDC";
 export type Side = "A" | "B";
@@ -165,7 +167,9 @@ export function parseSupportTx(tx: RpcTransaction | null, accounts: SupportAccou
   const signature = tx.transaction.signatures[0];
   const signers = new Set(tx.transaction.message.accountKeys.filter((k) => typeof k !== "string" && k.signer).map(key));
   const { paid, initialized } = splitterEvents(tx.meta.logMessages ?? [], accounts.programId);
-  const { anon, note } = parseSupportMemo(memoText(tx));
+  const memo = memoText(tx);
+  const hasSupportMemo = typeof memo === "string" && memo.startsWith("chainpay-support:v1");
+  const { anon, note } = parseSupportMemo(memo);
   const transfers = transfersIntoVault(tx, accounts);
   const events: SupportEvent[] = [];
 
@@ -197,8 +201,15 @@ export function parseSupportTx(tx: RpcTransaction | null, accounts: SupportAccou
     for (const t of mine) {
       if (t.amount === 0n) continue;
       // Notes and the hide flag belong to whoever signed the transaction.
-      const signed = t.donor !== null && signers.has(t.donor);
-      events.push({ kind: "contribution", asset, amount: t.amount.toString(), donor: signed && anon ? null : t.donor, note: signed ? note : null, side: null });
+      let donor = t.donor;
+      if (asset === "USDC" && donor !== null && !signers.has(donor)) {
+        // A swapped tip (any token -> USDC via Jupiter) arrives from a pool
+        // account, not from the tipper. Credit the tx's single signer when the
+        // tx carries our memo; otherwise don't name a pool as a supporter.
+        donor = hasSupportMemo && signers.size === 1 ? [...signers][0] : null;
+      }
+      const signed = donor !== null && signers.has(donor);
+      events.push({ kind: "contribution", asset, amount: t.amount.toString(), donor: signed && anon ? null : donor, note: signed ? note : null, side: null });
     }
     if (inflow > attributed) {
       events.push({ kind: "contribution", asset, amount: (inflow - attributed).toString(), donor: null, note: null, side: null });
