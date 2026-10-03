@@ -110,7 +110,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
         <section className="landing-hero page-width" aria-labelledby="landing-hero-heading">
           <div className="landing-hero-copy">
             <p className="landing-eyebrow">Policy payments · Solana Devnet</p>
-            <h1 id="landing-hero-heading" className="t-mega">Give agents limits. <em>Not your keys.</em></h1>
+            <h1 data-pet-perch id="landing-hero-heading" className="t-mega">Give agents limits. <em>Not your keys.</em></h1>
             <p className="t-body landing-hero-text">Let agents get work done with a spending permission you define—and a receipt you can verify.</p>
             <div className="landing-hero-actions">
               <Button type="button" variant="primary" size="lg" label="Open dashboard" isDisabled={false} onClick={onOpenDashboard} />
@@ -131,7 +131,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
 
         <section className="landing-section page-width" id="developers" aria-labelledby="landing-dev-heading">
           <p className="section-kicker">DEVELOPERS</p>
-          <h2 id="landing-dev-heading" className="t-xl">Fits the agent workflow you already have.</h2>
+          <h2 data-pet-perch id="landing-dev-heading" className="t-xl">Fits the agent workflow you already have.</h2>
           <p className="t-body landing-dev-intro">
             Connect through the TypeScript SDK or Model Context Protocol (MCP), which gives agents tools to prepare payments and inspect results. ChainPay keeps the spending rules on-chain.
           </p>
@@ -142,15 +142,15 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
           </div>
           <details className="landing-integration-details"><summary>Integration availability on Devnet</summary><div className="landing-status-grid">
             <article>
-              <h3 className="t-title">Custom x402/1.0</h3>
+              <h3 data-pet-perch className="t-title">Custom x402/1.0</h3>
               <p className="t-body-sm">A custom receipt-proof adapter exists. Proof is a signature plus receipt PDA, not a sponsored transaction.</p>
             </article>
             <article>
-              <h3 className="t-title">Standard x402 v2</h3>
+              <h3 data-pet-perch className="t-title">Standard x402 v2</h3>
               <p className="t-body-sm">Recognized and returned as unsupported-sponsor before wallet, signing, or settlement. Not live facilitator acceptance.</p>
             </article>
             <article>
-              <h3 className="t-title">Managed signing</h3>
+              <h3 data-pet-perch className="t-title">Managed signing</h3>
               <p className="t-body-sm">Optional delegated approved-agent setup in the dashboard. The owner still approves the mandate. This is not hosted key custody for visitors.</p>
             </article>
           </div></details>
@@ -158,7 +158,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
 
         <section className="landing-section landing-close page-width" id="faq" aria-labelledby="landing-faq-heading">
           <p className="section-kicker">FAQ</p>
-          <h2 id="landing-faq-heading" className="t-xl">Questions before you approve a mandate.</h2>
+          <h2 data-pet-perch id="landing-faq-heading" className="t-xl">Questions before you approve a mandate.</h2>
           <div className="landing-faq">
             {FAQ_ITEMS.map((item) => (
               <details key={item.question}>
@@ -170,7 +170,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
           <div className="landing-cta-scroll"><div className="landing-cta">
             <div className="landing-cta-copy">
             <p className="section-kicker">YOUR RULES. THEIR NEXT MOVE.</p>
-            <h2 className="t-lg">Put your first agent on a budget.</h2>
+            <h2 data-pet-perch className="t-lg">Put your first agent on a budget.</h2>
             <p>Start on Solana Devnet. Connecting your wallet does not authorize spending.</p>
             <Button type="button" variant="secondary" size="lg" label="Open dashboard" isDisabled={false} onClick={onOpenDashboard} />
             </div>

@@ -1,10 +1,18 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { world as petWorld, actionResult as petResult } from "./petValidators";
 
 // Record JSON is deliberately opaque: JavaScript must never round u64 values,
 // nested x402 proof numbers, or signed statements while persisting them.
 export const kind = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"), v.literal("receipt_requests"), v.literal("observed_policies"), v.literal("mandate_requests"));
 export default defineSchema({
+  pet_world: defineTable({ key: v.string(), world: petWorld }).index("by_key", ["key"]),
+  pet_sessions: defineTable({tokenHash:v.string(),peerHash:v.string(),expiresAt:v.number(),cooldowns:v.record(v.string(),v.number())}).index("by_token",["tokenHash"]).index("by_expires",["expiresAt"]),
+  pet_commands: defineTable({tokenHash:v.string(),commandId:v.string(),action:v.string(),result:petResult,expiresAt:v.number()}).index("by_token_command",["tokenHash","commandId"]).index("by_expires",["expiresAt"]),
+  pet_contributions: defineTable({tokenHash:v.string(),activity:v.string(),day:v.number(),at:v.number()}).index("by_token_activity_day",["tokenHash","activity","day"]).index("by_at",["at"]),
+  pet_activity_days: defineTable({day:v.number(),activity:v.string(),count:v.number()}).index("by_day_activity",["day","activity"]),
+  pet_memories: defineTable({key:v.string(),at:v.number(),cursor:v.number(),kind:v.string(),text:v.string()}).index("by_key",["key"]).index("by_cursor",["cursor"]),
+  pet_aggregates: defineTable({day:v.number(),counts:v.record(v.string(),v.number())}).index("by_day",["day"]),
   records: defineTable({
     kind, key: v.string(), record_json: v.string(), source_json: v.optional(v.string()),
     idempotency: v.optional(v.string()), receipt: v.optional(v.string()),

@@ -27,3 +27,9 @@ Connection identity. Keep public receipts independent from wallet startup.
 [Product walkthrough](../docs/getting-started/try-chainpay.md) ·
 [Configuration](../docs/reference/configuration.md) ·
 [Receipt semantics](../docs/reference/receipts.md)
+
+## Community robot preview
+
+The opt-in shared robot adds the walletless `/pet` room. See
+[flags, anonymous API, and preview acceptance](../docs/guides/community-pet.md).
+Legacy saves and Hide/Pin preferences remain intact.

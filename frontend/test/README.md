@@ -112,3 +112,14 @@ The unit suite also checks unavailable-slot refusal, network mismatch,
 acceptance deadlines, public proposals displaying **Acceptance unverified**,
 and invoice amount/token mismatches displaying **Invoice differs** in the
 receipt model and CSV.
+
+## Community robot
+
+With `VITE_CHAINPAY_SHARED_PET=on`, start the development server on port 5191
+(`PET_BROWSER_BASE` overrides its URL), then run
+`npm run test:community-pet-browser`. The mocked API suite covers 390/768/1440px,
+200% zoom, keyboard care, WebGL fallback, reduced motion, requested photos,
+uncertain command replay, hidden-tab polling, concurrent browser sessions,
+discoveries, repeat reactions, and scrapbook pagination during refreshes. The regular unit suite also
+checks shared client state and legacy cross-tab serialization. See the
+[preview guide](../../docs/guides/community-pet.md) for flags and evidence limits.

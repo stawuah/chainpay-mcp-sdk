@@ -5,6 +5,16 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::time::Duration;
 
+/// Pet failures carry only a small public code, never provider payloads.
+#[derive(Debug)]
+pub enum PetStoreError {
+    Unavailable,
+    Rejected {
+        code: String,
+        retry_after: Option<u64>,
+    },
+}
+
 #[derive(Clone)]
 pub struct ConvexStore {
     client: reqwest::Client,
@@ -27,6 +37,37 @@ pub fn decode<T: DeserializeOwned>(value: &str) -> Result<T, StorageError> {
 }
 
 impl ConvexStore {
+    pub async fn pet_call(&self, operation: &str, args: Value) -> Result<Value, PetStoreError> {
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .bearer_auth(&self.secret)
+            .json(&serde_json::json!({"operation": operation, "args": args}))
+            .send()
+            .await
+            .map_err(|_| PetStoreError::Unavailable)?;
+        let status = response.status();
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|_| PetStoreError::Unavailable)?;
+        if !status.is_success() {
+            let code = body["error"]["code"].as_str().unwrap_or("unavailable");
+            return Err(match code {
+                "unauthorized" | "rate_limited" | "conflict" | "invalid_argument" | "expired" => {
+                    PetStoreError::Rejected {
+                        code: code.into(),
+                        retry_after: body["error"]["retryAfterSeconds"]
+                            .as_u64()
+                            .filter(|seconds| (1..=86_400).contains(seconds)),
+                    }
+                }
+                _ => PetStoreError::Unavailable,
+            });
+        }
+        body.get("value").cloned().ok_or(PetStoreError::Unavailable)
+    }
+
     pub fn new(url: &str, secret: String) -> Result<Self, StorageError> {
         let url = reqwest::Url::parse(url)
             .map_err(|_| StorageError::Remote("invalid CHAINPAY_CONVEX_SITE_URL".into()))?;
