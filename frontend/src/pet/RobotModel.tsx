@@ -15,6 +15,7 @@ const BLUE = "#0052FF";
 const NAVY = "#14213D";
 
 type Props = {
+  reactionId?: number;
   expression: Expression;
   motion: Motion;
   /** Pointer position relative to the robot, roughly -1..1 on each axis. */
@@ -40,7 +41,7 @@ function Studio() {
 
 const lerp = THREE.MathUtils.lerp;
 
-export function RobotModel({ expression, motion, look, animate, gear }: Props) {
+export function RobotModel({ expression, motion, look, animate, gear, reactionId }: Props) {
   const root = useRef<THREE.Group>(null);
   const head = useRef<THREE.Group>(null);
   const eyes = useRef<THREE.Group>(null);
@@ -67,7 +68,7 @@ export function RobotModel({ expression, motion, look, animate, gear }: Props) {
   useEffect(() => {
     motionStart.current = clock.elapsedTime;
     invalidate();
-  }, [motion, expression, clock, invalidate]);
+  }, [motion, expression, reactionId, clock, invalidate]);
 
   useFrame((state, delta) => {
     if (!root.current || !head.current || !eyes.current || !discs.current || !arcs.current) return;

@@ -71,6 +71,7 @@ async function inViewport(page) {
   assert.match(await page.locator('.cp-pet-tile.is-suggested').innerText(), /Charge/);
   await page.locator('.cp-pet-tile.is-suggested').click();
   await page.locator('.cp-pet-tile', { hasText: 'Charge' }).click({ force: true });
+  await page.waitForFunction(() => /still full\. back in 10m\./.test(document.querySelector("#cp-pet-line")?.textContent ?? ""));
   assert.match(await page.locator('#cp-pet-line').innerText(), /still full\. back in 10m\./);
   assert.match(await page.locator('.cp-pet-tile', { hasText: 'Charge' }).innerText(), /Ready in 10m/);
   await page.keyboard.press('Escape');
@@ -153,6 +154,7 @@ async function inViewport(page) {
   const antenna = page.getByRole('button', { name: /Antenna/ });
   assert.equal(await antenna.getAttribute('aria-pressed'), 'true', 'crossing into Regular puts the antenna on automatically');
   await antenna.click();
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(button => button.textContent.includes("Antenna") && button.getAttribute("aria-pressed") === "false"));
   assert.equal(await antenna.getAttribute('aria-pressed'), 'false');
   await page.getByRole('button', { name: 'Back' }).click();
 

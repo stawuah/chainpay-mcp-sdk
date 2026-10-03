@@ -1,5 +1,37 @@
 # ChainPay backend
 
+## Optional community pet
+
+The shared pet requires the existing Convex storage adapter (`CHAINPAY_STORAGE=convex`)
+and `CHAINPAY_SHARED_PET=on` in both the relay and Convex environments. It is off by
+default; PostgreSQL and test-memory storage do not create a second pet world.
+The frontend independently opts in with `VITE_CHAINPAY_SHARED_PET=on`.
+
+- `GET /v1/pet/state` returns the authoritative community state and server time.
+- `POST /v1/pet/visitors` returns `{token, expiresAt}` (201). The anonymous pet-only
+  token expires after 30 days. Only its SHA-256 hash reaches persistence.
+- `POST /v1/pet/act` accepts `{commandId, action}` and `Authorization: Bearer <pet token>`.
+  `commandId` must be UUID v4. Actions are `charge`, `play`, `polish`, `pat`, `ball`,
+  `collect`, `coin`, `game`, `secret`, and `wake`. Extra fields are rejected.
+- `GET /v1/pet/memories?limit=20&before=<cursor>` returns a bounded page (maximum 50).
+  Pass `nextBefore` unchanged; the cursor is not a timestamp.
+
+The public-route exception is restricted to those exact methods and paths. Pet
+tokens grant no wallet or payment access. Session creation is limited using the
+trusted client peer; Convex atomically applies per-session/per-peer action limits,
+cooldowns, habits, and command deduplication. A timed-out action may have committed:
+retry its original command ID and token, never invent a replacement command. The
+relay does not automatically retry mutations. Expired sessions cannot replay old
+commands. Errors expose a small code, not storage/provider details. Replies are
+`no-store`; disabled or unavailable pet storage returns 503. State and memory reads
+share a durable limit of 600 requests per trusted peer/minute. Rate rejections
+expose the applicable bucket reset as `Retry-After`, including across CORS.
+
+Use an isolated Convex preview for deployment validation. Routine checks use
+`cargo test -p chainpay-backend` and `npm run test:convex`; they do not provision
+or deploy a shared world. Full rollout instructions are in
+[the community pet guide](../docs/guides/community-pet.md).
+
 Axum coordinates Devnet payment submission and PostgreSQL metadata. The program
 remains the authority for spending; a wallet login never authorizes a payment.
 

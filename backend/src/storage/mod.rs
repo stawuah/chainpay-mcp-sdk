@@ -5,6 +5,7 @@
 //! `DATABASE_URL`.
 
 mod convex;
+pub(crate) use convex::PetStoreError;
 use convex::{ConvexStore, decode, encode};
 use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
@@ -82,6 +83,33 @@ impl Default for StatusStore {
 }
 
 impl StatusStore {
+    /// Shared pet state has one authoritative implementation: Convex.
+    pub(crate) async fn pet_call(
+        &self,
+        operation: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, PetStoreError> {
+        if !matches!(
+            operation,
+            "pet.state" | "pet.visitors" | "pet.act" | "pet.memories"
+        ) {
+            return Err(PetStoreError::Unavailable);
+        }
+        match &self.backend {
+            StorageBackend::Convex(client) => client.pet_call(operation, args).await,
+            _ => Err(PetStoreError::Unavailable),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pet_test_store(url: &str) -> Self {
+        Self {
+            backend: StorageBackend::Convex(
+                ConvexStore::new(url, "pet-test-service-secret-not-for-deployment".into()).unwrap(),
+            ),
+        }
+    }
+
     /// Unit-test storage. Runtime startup never selects this implementation.
     pub fn in_memory() -> Self {
         Self {

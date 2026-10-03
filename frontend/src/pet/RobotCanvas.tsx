@@ -3,6 +3,7 @@ import { Canvas } from "@react-three/fiber";
 import { RobotModel, type Expression, type GearItem, type Motion } from "./RobotModel";
 
 type Props = {
+  reactionId?: number;
   expression: Expression;
   motion: Motion;
   look: { x: number; y: number };
@@ -10,7 +11,7 @@ type Props = {
   gear: readonly GearItem[];
 };
 
-export default function RobotCanvas({ expression, motion, look, animate, gear }: Props) {
+export default function RobotCanvas({ expression, motion, look, animate, gear, reactionId }: Props) {
   // Stop drawing while the tab is in the background.
   const [visible, setVisible] = useState(() => !document.hidden);
   useEffect(() => {
@@ -32,7 +33,7 @@ export default function RobotCanvas({ expression, motion, look, animate, gear }:
       <ambientLight intensity={0.35} />
       <directionalLight position={[2, 3, 4]} intensity={1.4} />
       <directionalLight position={[-3, 1, -2]} intensity={0.6} color="#9db8ff" />
-      <RobotModel expression={expression} motion={motion} look={look} animate={animate} gear={gear} />
+      <RobotModel reactionId={reactionId} expression={expression} motion={motion} look={look} animate={animate} gear={gear} />
     </Canvas>
   );
 }

@@ -162,11 +162,11 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
 /** One short lowercase entry in his voice, built only from what happened. */
 export function diaryText(log: DayLog): string {
   const lines: string[] = [];
-  const care = log.fed + log.played + log.polished;
-  if (care === 0 && log.pats === 0 && log.specks === 0 && log.calls === 0) {
+  if (!active(log) && !log.lowPower) {
     return pick(log.day, 1, ["quiet day. i floated a lot.", "nobody came by. i counted pixels.", "slow one. i practised blinking."]);
   }
   if (log.fed > 0) lines.push(pick(log.day, 2, [`got charged ${plural(log.fed, "time", "times")}.`, `battery top-ups: ${log.fed}.`]));
+  if (log.played > 0) lines.push(`played ${plural(log.played, "time", "times")}. good company.`);
   if (log.polished > 0) lines.push(pick(log.day, 3, ["someone polished me. felt fancy.", "got shined up. visor gleaming."]));
   if (log.wins > 0) lines.push(`won ${plural(log.wins, "round", "rounds")} of allowance. the limit held.`);
   else if (log.games > 0) lines.push("played allowance. close one.");
@@ -176,15 +176,16 @@ export function diaryText(log: DayLog): string {
   if (log.callsMissed > 0) lines.push(log.callsMissed === 1 ? "called once. you were busy." : "called a couple of times. you were busy.");
   if (log.coins > 0) lines.push(`caught ${plural(log.coins, "coin", "coins")}. all imaginary, all mine.`);
   if (log.dizzy > 0) lines.push("got shaken. room still spinning.");
-  if (log.pokes > 2) lines.push("too many pokes.");
+  if (log.pokes > 0) lines.push(log.pokes > 2 ? "too many pokes." : "got a poke. noticed.");
   if (log.secrets > 0) lines.push("someone found a secret.");
   if (log.lowPower) lines.push("ran low on power at one point.");
+  if (log.pats > 0 && log.pats < 3) lines.push(`got ${plural(log.pats, "pat", "pats")}. leaned in.`);
   if (log.pats >= 3) lines.push(pick(log.day, 4, ["lots of pats.", "head pats: plenty."]));
   return lines.slice(0, 3).join(" ");
 }
 
 function active(log: DayLog) {
-  return Object.entries(log).some(([key, value]) => key !== "day" && key !== "lowPower" && typeof value === "number" && value > 0);
+  return log.lowPower || Object.entries(log).some(([key, value]) => key !== "day" && key !== "lowPower" && typeof value === "number" && value > 0);
 }
 
 // ---- Updates ------------------------------------------------------------

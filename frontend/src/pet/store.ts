@@ -113,17 +113,47 @@ function createStore() {
   const set = (next: Partial<PetState>) => {
     state = { ...state, ...next };
     if (state.snapshot.lowPower) state = { ...state, bond: noteLowPower(state.bond, state.now) };
-    writeJson(STORAGE_KEY, state.snapshot);
-    writeJson(BOND_KEY, state.bond);
+    if (next.snapshot) writeJson(STORAGE_KEY, state.snapshot);
+    if (next.bond) writeJson(BOND_KEY, state.bond);
     emit();
   };
 
-  const tick = () => {
+  const tick = () => exclusive(() => {
     const now = Date.now();
-    set({ snapshot: decay(state.snapshot, now), bond: rollDay(state.bond, now), now });
+    const snapshot = decay(state.snapshot, now);
+    let bond = state.bond;
+    // Attribute an episode before midnight before closing that diary page.
+    const [year, month, day] = bond.today.day.split("-").map(Number);
+    const endOfLoggedDay = new Date(year!, month! - 1, day! + 1).getTime() - 1;
+    if (state.snapshot.at <= endOfLoggedDay && decay(state.snapshot, Math.min(now, endOfLoggedDay)).lowPower) {
+      bond = noteLowPower(bond, Math.min(now, endOfLoggedDay));
+    }
+    bond = rollDay(bond, now);
+    if (snapshot.lowPower) bond = noteLowPower(bond, now);
+    // Only bookkeeping transitions persist, and they re-read under the same
+    // lock as care. Ordinary projection and animation never overwrite saves.
+    if (bond !== state.bond) set({ snapshot, bond, now });
+    else { state = { ...state, snapshot, bond, now }; emit(); }
+  }, true);
+
+  const reload = (preserveTime = false) => {
+    const now = Date.now();
+    const savedSnapshot = readJson<PetSnapshot>(STORAGE_KEY);
+    const savedBond = readJson<Bond>(BOND_KEY);
+    // Blocked/cleared storage must not erase this tab's in-memory companion.
+    state = { ...state,
+      snapshot: savedSnapshot?.needs && typeof savedSnapshot.at === "number" ? (preserveTime ? savedSnapshot : decay(savedSnapshot, now)) : (preserveTime ? state.snapshot : decay(state.snapshot, now)),
+      bond: typeof savedBond?.xp === "number" ? (preserveTime ? { ...newBond(now), ...savedBond } : rollDay({ ...newBond(now), ...savedBond }, now)) : (preserveTime ? state.bond : rollDay(state.bond, now)),
+      now,
+    };
+  };
+  window.addEventListener("storage", event => { if (event.key === STORAGE_KEY || event.key === BOND_KEY) { reload(); emit(); } });
+  const exclusive = <T,>(work: () => T, preserveTime = false): Promise<T> => {
+    const run = () => { reload(preserveTime); return work(); };
+    return navigator.locks ? navigator.locks.request("chainpay.pet.legacy", run) : Promise.resolve(run());
   };
 
-  return {
+  const operations = {
     get: () => state,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -195,7 +225,7 @@ function createStore() {
     visit(): VisitResult["greeting"] {
       const now = Date.now();
       const result = visit(state.bond, now);
-      set({ bond: result.bond, now });
+      set({ snapshot: decay(state.snapshot, now), bond: result.bond, now });
       return result.greeting;
     },
 
@@ -209,6 +239,18 @@ function createStore() {
       if (result.fresh) set({ bond: result.bond, now });
       return result.fresh;
     },
+  };
+  // Serialize read/modify/write across browser tabs. Purely local animation and
+  // polling never rewrite another tab's persisted progress.
+  return {
+    ...operations,
+    act: (...args: Parameters<typeof operations.act>) => exclusive(() => operations.act(...args)),
+    reward: (...args: Parameters<typeof operations.reward>) => exclusive(() => operations.reward(...args)),
+    miss: (...args: Parameters<typeof operations.miss>) => exclusive(() => operations.miss(...args)),
+    note: (...args: Parameters<typeof operations.note>) => exclusive(() => operations.note(...args)),
+    visit: () => exclusive(() => operations.visit()),
+    toggleGear: (...args: Parameters<typeof operations.toggleGear>) => exclusive(() => operations.toggleGear(...args)),
+    secret: (...args: Parameters<typeof operations.secret>) => exclusive(() => operations.secret(...args)),
   };
 }
 

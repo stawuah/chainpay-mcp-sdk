@@ -6,6 +6,8 @@ import { Bot } from "lucide-react";
 // after that). Hiding the robot is remembered per browser.
 
 const PetLayer = lazy(() => import("./PetLayer"));
+const CommunityCompanion = lazy(() => import("./shared/CommunityCompanion"));
+const SHARED = import.meta.env.VITE_CHAINPAY_SHARED_PET === "on";
 
 const HIDDEN_KEY = "chainpay.pet.hidden";
 const DISABLED = import.meta.env.VITE_CHAINPAY_PET === "off";
@@ -65,7 +67,7 @@ export function PetMount({ routeKind, routeKey }: { routeKind: string; routeKey:
   }, []);
 
   // Embeds live inside someone else's page; he stays home for those.
-  if (DISABLED || !ready || routeKind === "embed-overview") return null;
+  if (DISABLED || !ready || routeKind === "embed-overview" || routeKind === "pet") return null;
 
   if (hidden) {
     return (
@@ -103,9 +105,10 @@ export function PetMount({ routeKind, routeKey }: { routeKind: string; routeKey:
     );
   }
 
+  const Layer = SHARED ? CommunityCompanion : PetLayer;
   return (
     <Suspense fallback={null}>
-      <PetLayer
+      <Layer
         routeKey={routeKey}
         routeKind={routeKind}
         onHide={() => {

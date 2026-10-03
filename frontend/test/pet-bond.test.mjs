@@ -75,3 +75,11 @@ test("secrets pay once", () => {
   assert.equal(r.fresh, false);
   assert.equal(r.bond.secretsFound.length, 1);
 });
+
+test('a diary containing only a coin, game, secret, play, or single pat stays truthful', () => {
+  for (const event of ['coins', 'games', 'secrets', 'played', 'pats', 'pokes', 'dizzy', 'callsMissed', 'specksMissed']) {
+    const text = bond.todaySoFar(bond.note(bond.newBond(day(1)), event, day(1))).text;
+    assert.ok(text.length > 0, event);
+    assert.doesNotMatch(text, /nobody came|quiet day|slow one/, event);
+  }
+});

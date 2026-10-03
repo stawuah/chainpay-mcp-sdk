@@ -40,8 +40,9 @@ http.route({ path: "/internal/storage/v1", method: "POST", handler: httpAction(a
   } catch (error) {
     if (error instanceof SyntaxError) return response({ error: { code: "invalid_argument", message: "Invalid JSON" } }, 400);
     if (error instanceof ConvexError && error.data && typeof error.data === "object" && "code" in error.data) {
-      const data = error.data as { code: string; message: string };
-      return response({ error: data }, data.code === "maintenance" ? 503 : data.code === "forbidden" ? 403 : data.code === "conflict" ? 409 : 400);
+      const raw = error.data as { code: string; message: string; retryAfterSeconds?: unknown };
+      const data = { code: raw.code, message: raw.message, ...(raw.code === "rate_limited" && typeof raw.retryAfterSeconds === "number" && Number.isInteger(raw.retryAfterSeconds) && raw.retryAfterSeconds >= 1 && raw.retryAfterSeconds <= 86_400 ? { retryAfterSeconds: raw.retryAfterSeconds } : {}) };
+      return response({ error: data }, ["maintenance", "unavailable"].includes(data.code) ? 503 : data.code === "unauthorized" ? 401 : data.code === "rate_limited" ? 429 : data.code === "forbidden" ? 403 : data.code === "conflict" ? 409 : 400);
     }
     // Never expose database payloads, provider identifiers, or token hashes.
     console.error("Storage operation failed", error instanceof Error ? error.name : "unknown");

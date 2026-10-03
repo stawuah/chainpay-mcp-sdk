@@ -1,11 +1,12 @@
 import { v } from "convex/values";
+import { petOperation } from "./pet";
 import { internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { decimal, encode, fail, getRecord, json, jsonValue, numberToken, receiptKey, safeNumber, sorted, sqlTimestampMicros, string, writeRecord } from "./records";
 import type { RecordKind } from "./records";
 
-export const backendOperations = new Set(["find_other_connector_job_for_owner","put_crossmint_proof","put_mandate_request","get_mandate_request","put_receipt_request","find_receipt_request","put_observed_policy","find_observed_policy","ping", "claim_operation", "operation_record", "operation_owner", "auth_rate", "put_auth", "get_auth", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "put_payment", "get_transaction", "find_transaction_by_idempotency", "put_transaction", "list_x402_for_owner", "find_x402_by_idempotency", "put_x402", "put_managed_signer_challenge", "get_managed_signer_challenge", "consume_managed_signer_challenge", "put_managed_signer", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "put_delivery_attestation", "find_delivery_attestation"]);
+export const backendOperations = new Set(["pet.state","pet.visitors","pet.act","pet.memories","find_other_connector_job_for_owner","put_crossmint_proof","put_mandate_request","get_mandate_request","put_receipt_request","find_receipt_request","put_observed_policy","find_observed_policy","ping", "claim_operation", "operation_record", "operation_owner", "auth_rate", "put_auth", "get_auth", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "put_payment", "get_transaction", "find_transaction_by_idempotency", "put_transaction", "list_x402_for_owner", "find_x402_by_idempotency", "put_x402", "put_managed_signer_challenge", "get_managed_signer_challenge", "consume_managed_signer_challenge", "put_managed_signer", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "put_delivery_attestation", "find_delivery_attestation"]);
 export const mcpOperations = new Set(["ping", "mcp.register", "mcp.identify", "mcp.observe", "mcp.list", "mcp.revoke", "mcp.appendInboxMessage", "mcp.listInbox", "mcp.rateLimit"]);
 const readOperations = new Set(["get_mandate_request","find_receipt_request","find_observed_policy","find_other_connector_job_for_owner","ping", "operation_record", "operation_owner", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "get_transaction", "find_transaction_by_idempotency", "list_x402_for_owner", "find_x402_by_idempotency", "get_managed_signer_challenge", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "find_delivery_attestation", "mcp.identify", "mcp.list", "mcp.listInbox"]);
 export function isRead(operation: string, args: Record<string, any>): boolean { return readOperations.has(operation) || operation === "get_auth" && args.consume === false; }
@@ -33,6 +34,7 @@ export const execute = internalMutation({
     if (!(role === "backend" ? backendOperations : mcpOperations).has(op)) return fail("forbidden", "Operation is not allowed for this service");
     if (!a || typeof a !== "object" || Array.isArray(a)) return fail("invalid_argument", "args must be an object");
     if (process.env.CHAINPAY_MAINTENANCE === "true" && !isRead(op, a)) return fail("maintenance", "Storage writes are paused");
+    if (op.startsWith("pet.")) return petOperation(ctx, op, a);
     if (op === "ping") return { version: 1 };
     if (op === "claim_operation" || op === "operation_record" || op === "operation_owner") {
       const key = string(a.id); const old = await ctx.db.query("operation_claims").withIndex("by_key", q => q.eq("key", key)).unique();

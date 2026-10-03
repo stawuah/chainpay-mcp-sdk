@@ -165,7 +165,7 @@ const arrive = () => (arrival ??= petStore.visit());
 type Props = { onHide: () => void; routeKey: string; routeKind: string };
 
 export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
-  const { snapshot, bond, reaction, speech } = usePet();
+  const { snapshot, bond, reaction, speech, now: storeClock } = usePet();
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const narrow = useMedia("(max-width: 600px)");
   const sheet = useMedia("(max-width: 600px), (max-height: 520px)");
@@ -213,7 +213,7 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
     writeBudget({ ...budget, lines: budget.lines + 1, lastAt: at });
     return true;
   }, []);
-  const now = clock;
+  const now = Math.max(clock, storeClock);
   const mood = moodOf(snapshot, now);
   const asleep = mood === "asleep";
   const busy = open || booting || tossing || coin !== null;
@@ -260,32 +260,35 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
 
   // ---- Arrival: boot up the first time, welcome back after that. ----------
   useEffect(() => {
-    const greeting = arrive();
     const timers: number[] = [];
-    if (greeting !== "same-day") {
-      // The hello (boot plus greeting) counts as one volunteered line.
-      const budget = readBudget();
-      writeBudget({ ...budget, lines: budget.lines + 1, lastAt: Date.now() });
-    }
-    const later = (ms: number, run: () => void) => timers.push(window.setTimeout(run, ms));
-    if (greeting === "first") {
-      setBooting(true);
-      later(1_600, () => {
-        setBooting(false);
-        petStore.react("excited");
-        petStore.say(BOOT_LINE, 2_400, "volunteer");
+    let cancelled = false;
+    void arrive().then(greeting => {
+      if (cancelled) return;
+      if (greeting !== "same-day") {
+        // The hello (boot plus greeting) counts as one volunteered line.
+        const budget = readBudget();
+        writeBudget({ ...budget, lines: budget.lines + 1, lastAt: Date.now() });
+      }
+      const later = (ms: number, run: () => void) => timers.push(window.setTimeout(run, ms));
+      if (greeting === "first") {
+        setBooting(true);
+        later(1_600, () => {
+          setBooting(false);
+          petStore.react("excited");
+          petStore.say(BOOT_LINE, 2_400, "volunteer");
+        });
+        later(4_200, () => petStore.say(GREETINGS.first, 5_000, "volunteer"));
+      } else if (greeting === "streak") {
+        later(1_400, () => petStore.say(GREETINGS.streak(petStore.get().bond.streak), 5_000, "volunteer"));
+      } else if (greeting === "back") {
+        later(1_400, () => petStore.say(GREETINGS.back, 4_000, "volunteer"));
+      }
+      // Once greeted, hiding and un-hiding him does not replay the hello.
+      later(4_300, () => {
+        arrival = Promise.resolve("same-day");
       });
-      later(4_200, () => petStore.say(GREETINGS.first, 5_000, "volunteer"));
-    } else if (greeting === "streak") {
-      later(1_400, () => petStore.say(GREETINGS.streak(petStore.get().bond.streak), 5_000, "volunteer"));
-    } else if (greeting === "back") {
-      later(1_400, () => petStore.say(GREETINGS.back, 4_000, "volunteer"));
-    }
-    // Once greeted, hiding and un-hiding him does not replay the hello.
-    later(4_300, () => {
-      arrival = "same-day";
     });
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
+    return () => { cancelled = true; timers.forEach((timer) => window.clearTimeout(timer)); };
   }, []);
 
   // ---- Panel ---------------------------------------------------------------
@@ -328,9 +331,9 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   const line = speaking ?? MOOD_LINES[mood];
 
   // ---- Combos and secrets ---------------------------------------------------
-  const secret = (name: string, line: string, kind: ReactionKind) => {
+  const secret = async (name: string, line: string, kind: ReactionKind) => {
     petStore.react(kind);
-    petStore.say(petStore.secret(name) ? `${line} (${SECRET_LINES.found})` : line);
+    petStore.say(await petStore.secret(name) ? `${line} (${SECRET_LINES.found})` : line);
   };
   const onPatCombo = usePatCombo(useCallback(() => secret("dance", SECRET_LINES.dance, "dance"), []));
   const shake = useShake(
@@ -345,9 +348,9 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   });
 
   // ---- Care ----------------------------------------------------------------
-  const act = (action: PetAction) => {
+  const act = async (action: PetAction) => {
     const wasAsleep = moodOf(petStore.get().snapshot, Date.now()) === "asleep";
-    const result = petStore.act(action);
+    const result = await petStore.act(action);
     if (action === "pet") onPatCombo();
     if (!result.ok) {
       const cooling = COOLING_LINES[action];
@@ -357,12 +360,14 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
     petStore.say(action === "poke" && wasAsleep ? MOOD_LINES.grumpy : DONE_LINES[action]);
   };
 
-  const onGameFinish = (won: boolean) => {
+  const onGameFinish = async (won: boolean) => {
     // Winning is a full play session; losing still cheers him up a little.
-    petStore.act("play", won ? undefined : { joy: 6, battery: -3 });
+    const result = await petStore.act("play", won ? undefined : { joy: 6, battery: -3 });
     petStore.note("games");
-    petStore.reward(won ? "game-won" : "game-played", won ? "wins" : null, {}, won ? "dance" : "happy");
-    petStore.say(won ? GAME_COPY.wonLine : GAME_COPY.lostLine);
+    if (won) petStore.note("wins");
+    if (result.ok) petStore.reward(won ? "game-won" : "game-played", null, {}, won ? "dance" : "happy");
+    else petStore.react(won ? "dance" : "happy");
+    petStore.say(result.ok ? won ? GAME_COPY.wonLine : GAME_COPY.lostLine : "good game. still enjoying the last top-up.");
   };
 
   // ---- "!" calls -------------------------------------------------------------

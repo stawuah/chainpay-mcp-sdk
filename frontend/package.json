@@ -22,7 +22,8 @@
     "test:crossmint-browser": "node test/crossmint-inbox.browser.mjs",
     "test:owner-onboarding-browser": "node test/owner-onboarding.browser.mjs",
     "test:dashboard-owner": "node test/dashboard-owner.browser.mjs",
-    "test:pet-browser": "node test/pet.browser.mjs"
+    "test:pet-browser": "node test/pet.browser.mjs",
+    "test:community-pet-browser": "node test/community-pet.browser.mjs && node test/community-review.browser.mjs"
   },
   "dependencies": {
     "@astryxdesign/core": "0.6.1",
