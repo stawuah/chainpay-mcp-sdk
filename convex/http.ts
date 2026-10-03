@@ -3,6 +3,7 @@ import { ConvexError } from "convex/values";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { backendOperations, mcpOperations } from "./storage";
+import { checkRelayRequest } from "./supportRpc";
 
 function response(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } }); }
 // Compare fixed-size digests so secret contents do not affect comparison time.
@@ -49,4 +50,31 @@ http.route({ path: "/internal/storage/v1", method: "POST", handler: httpAction(a
     return response({ error: { code: "storage_error", message: "Storage operation failed; reconcile before retrying side effects" } }, 500);
   }
 }) });
+// Public, read-only support tracker. Only exact on-chain amounts; no secrets.
+const supportHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" };
+http.route({ path: "/support/v1", method: "GET", handler: httpAction(async (ctx) => {
+  try {
+    const summary = await ctx.runQuery(internal.support.publicSummary, {});
+    return new Response(JSON.stringify(summary), { status: 200, headers: { ...supportHeaders, "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
+  } catch (error) {
+    console.error("Support summary failed", error instanceof Error ? error.name : "unknown");
+    return new Response(JSON.stringify({ error: { code: "unavailable", message: "Support tracker unavailable" } }), { status: 503, headers: { ...supportHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+  }
+}) });
+http.route({ path: "/support/v1", method: "OPTIONS", handler: httpAction(async () => new Response(null, { status: 204, headers: { ...supportHeaders, "Access-Control-Max-Age": "86400" } })) });
+// Narrow RPC relay for the /support page (see supportRpc.ts). The key stays in SUPPORT_RPC_URL.
+const relayHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" };
+http.route({ path: "/support/rpc", method: "POST", handler: httpAction(async (_ctx, req) => {
+  const upstream = process.env.SUPPORT_RPC_URL;
+  if (!upstream) return new Response(JSON.stringify({ error: { code: -32000, message: "Support RPC not configured" } }), { status: 503, headers: { ...relayHeaders, "Content-Type": "application/json" } });
+  const check = checkRelayRequest(await req.text());
+  if (!check.ok) return new Response(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: check.message } }), { status: check.status, headers: { ...relayHeaders, "Content-Type": "application/json" } });
+  try {
+    const res = await fetch(upstream, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(check.body) });
+    return new Response(await res.text(), { status: res.status, headers: { ...relayHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+  } catch {
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: check.body.id, error: { code: -32000, message: "Upstream RPC unavailable" } }), { status: 502, headers: { ...relayHeaders, "Content-Type": "application/json" } });
+  }
+}) });
+http.route({ path: "/support/rpc", method: "OPTIONS", handler: httpAction(async () => new Response(null, { status: 204, headers: { ...relayHeaders, "Access-Control-Max-Age": "86400" } })) });
 export default http;

@@ -17,6 +17,7 @@ export type AppRoute =
   | { kind: "landing" }
   | { kind: "pet" }
   | { kind: "use-cases" }
+  | { kind: "support" }
   | { kind: "use-case"; slug: string }
   | {
       kind: "app";
@@ -41,6 +42,7 @@ export function parsePathname(pathname: string): AppRoute {
   if (normalized === "/pet") return { kind: "pet" };
   if (normalized === "/") return { kind: "landing" };
   if (normalized === "/use-cases") return { kind: "use-cases" };
+  if (normalized === "/support") return { kind: "support" };
   if (/^\/use-cases\/[a-z0-9-]+$/.test(normalized)) return { kind: "use-case", slug: normalized.slice("/use-cases/".length) };
 
   if (normalized === "/app") return { kind: "app", tab: "overview" };
@@ -104,6 +106,7 @@ export function buildPath(route: AppRoute): string {
   if (route.kind === "pet") return "/pet";
   if (route.kind === "landing") return "/";
   if (route.kind === "use-cases") return "/use-cases";
+  if (route.kind === "support") return "/support";
   if (route.kind === "use-case") return `/use-cases/${route.slug}`;
   if (route.kind === "verify") {
     return route.receiptPda ? `/verify/${encodeURIComponent(route.receiptPda)}` : "/verify";

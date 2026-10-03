@@ -1,0 +1,55 @@
+[package]
+name = "support-splitter"
+version = "0.1.0"
+edition = "2021"
+description = "Holds ChainPay support contributions and pays them out 50/50 to two fixed maintainers."
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "support_splitter"
+
+[features]
+default = []
+no-entrypoint = []
+cpi = ["no-entrypoint"]
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# Devnet USDC mint instead of Circle's mainnet mint. Recipients are the same keys.
+devnet = []
+# Throwaway keys and mint derived from fixed seeds. Never deploy a build with this.
+test-config = []
+splitter-tests = [
+    "test-config",
+    "dep:litesvm",
+    "dep:solana-instruction",
+    "dep:solana-keypair",
+    "dep:solana-message",
+    "dep:solana-signer",
+    "dep:solana-system-interface",
+    "dep:solana-transaction",
+    "dep:spl-token-interface",
+    "dep:spl-associated-token-account-interface",
+    "dep:solana-program-option",
+    "dep:solana-program-pack",
+]
+
+[dependencies]
+anchor-lang = "1.1.2"
+anchor-spl = { version = "1.1.2", default-features = false, features = ["mint", "token", "associated_token"] }
+litesvm = { version = "0.10.0", optional = true }
+solana-instruction = { version = "3.0", optional = true }
+solana-keypair = { version = "3.1", optional = true }
+solana-message = { version = "3.0.1", optional = true }
+solana-signer = { version = "3.0", optional = true }
+solana-system-interface = { version = "2.0", features = ["bincode"], optional = true }
+solana-transaction = { version = "3.0", features = ["verify"], optional = true }
+spl-token-interface = { version = "2.0.0", optional = true }
+spl-associated-token-account-interface = { version = "2.0.0", optional = true }
+solana-program-option = { version = "3.0", optional = true }
+solana-program-pack = { version = "3.0", optional = true }
+
+[[test]]
+name = "splitter"
+path = "tests/splitter.rs"
+required-features = ["splitter-tests"]

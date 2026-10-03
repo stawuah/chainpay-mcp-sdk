@@ -13,9 +13,10 @@ const CommunityRoom = lazy(() => import("./pet/shared/CommunityRoom"));
 const EmbedOverview = lazy(() => import("./embed/EmbedOverview"));
 const UseCasesPage = lazy(() => import("./use-cases/UseCasesPage"));
 const UseCaseDetail = lazy(() => import("./use-cases/UseCaseDetail"));
+const SupportPage = lazy(() => import("./support/SupportPage"));
 
 function isWalletlessRoute(kind: string) {
-  return kind === "pet" || kind === "verify" || kind === "embed-overview" || kind === "use-cases" || kind === "use-case";
+  return kind === "pet" || kind === "verify" || kind === "embed-overview" || kind === "use-cases" || kind === "use-case" || kind === "support";
 }
 
 function RouteFallback() {
@@ -46,6 +47,14 @@ function Routes() {
     return (
       <Suspense fallback={<RouteFallback />}>
         <UseCasesPage />
+      </Suspense>
+    );
+  }
+
+  if (currentRoute.kind === "support") {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <SupportPage />
       </Suspense>
     );
   }
