@@ -106,3 +106,65 @@ test("decodes the Vault account layout", () => {
   assert.deepEqual(vault.usdc.owed, [0n, 11n]);
   assert.deepEqual(vault.usdc.paid, [0n, 13n]);
 });
+
+// ---- v2 page logic (ruling P4, P5, P10) ----
+const bundle = async (entry, name) => {
+  const out = new URL(`./.tmp-${name}.mjs`, import.meta.url).pathname;
+  await build({
+    entryPoints: [new URL(entry, import.meta.url).pathname],
+    bundle: true,
+    outfile: out,
+    platform: "node",
+    format: "esm",
+    external: ["@solana/web3.js", "react", "react/jsx-runtime"],
+    loader: { ".svg": "dataurl", ".png": "dataurl" },
+    define: { "import.meta.env": "{}" },
+  });
+  const mod = await import(out);
+  await rm(out);
+  return mod;
+};
+const price = await bundle("../src/support/price.ts", "price");
+const wallets = await bundle("../src/support/wallets.ts", "wallets");
+const panel = await bundle("../src/support/PayoutPanel.tsx", "panel");
+
+test("price hint: exact for USDC, hidden without a price, never a guess", async () => {
+  assert.equal(price.usdHint("USDC", 5_000_000n, null), "≈ $5.00");
+  assert.equal(price.usdHint("SOL", 100_000_000n, null), null);
+  assert.equal(price.usdHint("SOL", 100_000_000n, 124), "≈ $12.40");
+  assert.equal(price.usdHint("SOL", 1n, 124), "< $0.01");
+  assert.equal(price.usdHint("SOL", null, 124), null);
+
+  price.resetPriceCache();
+  const down = async () => { throw new Error("offline"); };
+  assert.equal(await price.fetchSolUsd(down), null);
+  const garbage = async () => ({ ok: true, json: async () => ({ So11111111111111111111111111111111111111112: { usdPrice: "NaN" } }) });
+  assert.equal(await price.fetchSolUsd(garbage), null);
+  const good = async () => ({ ok: true, json: async () => ({ So11111111111111111111111111111111111111112: { usdPrice: 120 } }) });
+  assert.equal(await price.fetchSolUsd(good, 1_000), 120);
+  assert.equal(await price.fetchSolUsd(down, 30_000), 120, "served from the 60s cache");
+  assert.equal(await price.fetchSolUsd(down, 70_000), null, "cache expires");
+});
+
+test("wallet grid: the four featured wallets in order, detected ones paired, others listed", () => {
+  assert.deepEqual(wallets.FEATURED_WALLETS.map((w) => w.name), ["Phantom", "Solflare", "Backpack", "Jupiter", "MetaMask"]);
+  const { featured, others } = wallets.arrangeWallets([
+    { id: "standard:Backpack", name: "Backpack", standard: true },
+    { id: "legacy:phantom", name: "Phantom", standard: false },
+    { id: "standard:Glow", name: "Glow", standard: true },
+    { id: "standard:Phantom Secure", name: "Phantom Secure", standard: true },
+  ]);
+  assert.equal(featured[0].option.id, "legacy:phantom");
+  assert.equal(featured[1].option, undefined);
+  assert.equal(featured[2].option.id, "standard:Backpack");
+  assert.deepEqual(others.map((o) => o.name), ["Glow", "Phantom Secure"], "look-alike names don't get the real logo slot");
+});
+
+test("maintainer panel only matches an exact on-chain recipient", () => {
+  const vault = { recipients: ["AAAA", "BBBB"] };
+  assert.equal(panel.recipientSide(vault, "AAAA"), 0);
+  assert.equal(panel.recipientSide(vault, "BBBB"), 1);
+  assert.equal(panel.recipientSide(vault, "CCCC"), null);
+  assert.equal(panel.recipientSide(null, "AAAA"), null);
+  assert.equal(panel.recipientSide(vault, undefined), null);
+});
