@@ -22,7 +22,7 @@ pub mod state;
 use instructions::*;
 use policy::{AuthorizeArgs, IntentArgs, PolicyArgs};
 
-declare_id!("Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F");
+declare_id!("H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n");
 
 // The ChainPay program, from its IDL (idls/chainpay.json). Not a crate
 // dependency: this workspace is pinned to the ER SDK's crates (contracts.md

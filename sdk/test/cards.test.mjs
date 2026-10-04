@@ -201,7 +201,7 @@ test("PDA helpers use the contract seeds and refuse an unconfigured program", ()
   assert.equal(deriveReservationAddress(accounts.policy, auth, PROGRAM), PublicKey.findProgramAddressSync([Buffer.from("res"), new PublicKey(accounts.policy).toBuffer(), Buffer.from(auth)], programKey)[0].toBase58());
   assert.equal(deriveCheckoutIntentAddress(accounts.policy, bytes(16, 1), PROGRAM), PublicKey.findProgramAddressSync([Buffer.from("intent"), new PublicKey(accounts.policy).toBuffer(), Buffer.from(bytes(16, 1))], programKey)[0].toBase58());
   assert.throws(() => deriveCheckoutIntentAddress(accounts.policy, bytes(32, 1), PROGRAM), /16 bytes/);
-  assert.equal(deriveCardBindingAddress(owner, cardId), deriveCardBindingAddress(owner, cardId, "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F"));
+  assert.equal(deriveCardBindingAddress(owner, cardId), deriveCardBindingAddress(owner, cardId, "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n"));
   assert.throws(() => deriveCardBindingAddress(owner, cardId, ""), /not configured/);
   assert.equal(cardIdToHex(cardIdFromHex("ab".repeat(32))), "ab".repeat(32));
   assert.throws(() => cardIdFromHex("xyz"), /hex/);
@@ -276,7 +276,7 @@ test("owner builders validate before anything is signed", () => {
   assert.throws(() => buildDelegateCardInstruction({ owner, cardId, validator: key() }, PROGRAM), /allowed TEE validator/);
   assert.throws(() => buildUpdatePermissionInstruction({ owner, cardId, op: { kind: "make_public", pubkey: key() } }, PROGRAM), /Only add_reader/);
   // Defaults to the deployed Devnet program; a blank override still refuses.
-  assert.equal(buildSetPolicyInstruction({ owner, cardId, policy: policyArgs() }).programId, "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F");
+  assert.equal(buildSetPolicyInstruction({ owner, cardId, policy: policyArgs() }).programId, "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n");
   assert.throws(() => buildSetPolicyInstruction({ owner, cardId, policy: policyArgs() }, " "), /not configured/);
 });
 

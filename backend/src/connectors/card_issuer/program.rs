@@ -8,7 +8,7 @@ use solana_address::Address;
 use solana_message::{AccountMeta, Hash, Instruction, Message, VersionedMessage};
 use solana_transaction::versioned::VersionedTransaction;
 
-pub const CARD_POLICY_PROGRAM_ID: &str = "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F";
+pub const CARD_POLICY_PROGRAM_ID: &str = "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n";
 pub const TEE_VALIDATOR: &str = "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo";
 pub const DELEGATION_PROGRAM: &str = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
 pub const PERMISSION_PROGRAM: &str = "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1";
@@ -1649,10 +1649,13 @@ mod tests {
     #[test]
     fn pdas_match_the_live_devnet_card() {
         // evidence/program-devnet.md run 3: owner 3dh3…, binding DyMY…, policy 9sq4…
+        // Recorded under the first Devnet deploy (program Cz9vYKFZ…82F, retired
+        // 2026-10-04 for a fresh deploy from a new wallet); the seed scheme is
+        // unchanged, so the derivation is still checked against that evidence.
         let binding: Address = "DyMYRrmXkFAwyfM2k6hEtJCiKEnTmwpMUJeRGwvUriU"
             .parse()
             .unwrap();
-        let program = program_id();
+        let program = addr("Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F");
         assert_eq!(
             pda(&[b"card_policy", binding.as_ref()], &program).to_string(),
             "9sq4BbFRZPFrgnEgLXeiLDSfNwUBjsxMd1iTRaSurT2C"

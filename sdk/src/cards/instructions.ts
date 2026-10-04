@@ -37,7 +37,7 @@ import {
  * args in the listed order). Account lists, discriminators and arg layouts
  * are checked against the deployed program's IDL
  * (programs/card_policy/idl/card_policy.json, Devnet
- * Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F) by test/cards-idl.test.mjs,
+ * H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n) by test/cards-idl.test.mjs,
  * including the `#[delegate]` macro accounts of `delegate_card`.
  */
 export const CARD_POLICY_ACCOUNT_ORDER_PROVISIONAL = false;

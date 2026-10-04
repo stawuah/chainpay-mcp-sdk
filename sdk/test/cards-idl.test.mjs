@@ -56,7 +56,7 @@ const idlIx = (name) => {
 };
 
 test("IDL copies agree and the SDK program id is the deployed one", () => {
-  assert.equal(CARD_POLICY_PROGRAM_ID, "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F");
+  assert.equal(CARD_POLICY_PROGRAM_ID, "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n");
   assert.equal(PROGRAM, CARD_POLICY_PROGRAM_ID);
   if (existsSync(inRepo)) assert.deepEqual(JSON.parse(readFileSync(inRepo, "utf8")), JSON.parse(readFileSync(vendored, "utf8")), "refresh test/fixtures/card_policy.idl.json");
 });

@@ -5,7 +5,7 @@ import type { Address } from "../types.js";
  * `address` in programs/card_policy/idl/card_policy.json). Every builder and
  * PDA helper takes an explicit `programId` and falls back to this value.
  */
-export const CARD_POLICY_PROGRAM_ID: Address = "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F";
+export const CARD_POLICY_PROGRAM_ID: Address = "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n";
 
 export function resolveCardPolicyProgramId(programId?: Address): Address {
   const value = (programId ?? CARD_POLICY_PROGRAM_ID).trim();

@@ -11,7 +11,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-card_policy = "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F"
+card_policy = "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n"
 
 [provider]
 cluster = "devnet"
