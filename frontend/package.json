@@ -27,7 +27,8 @@
     "test:pet-browser": "node test/pet.browser.mjs",
     "test:community-pet-browser": "node test/community-pet.browser.mjs && node test/community-review.browser.mjs",
     "test:dashboard-workspace": "node test/dashboard-workspace.browser.mjs",
-    "test:cards-browser": "node test/cards.browser.mjs"
+    "test:cards-browser": "node test/cards.browser.mjs",
+    "test:bam-bam-browser": "node test/bam-bam.browser.mjs"
   },
   "dependencies": {
     "@astryxdesign/core": "0.6.1",
