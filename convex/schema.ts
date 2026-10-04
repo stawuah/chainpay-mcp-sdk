@@ -16,7 +16,7 @@ export default defineSchema({
     title: v.string(), impact: v.union(v.literal("minor"), v.literal("major")), components: v.array(statusComponent),
     updates: v.array(v.object({ at: v.number(), state: v.union(v.literal("investigating"), v.literal("identified"), v.literal("monitoring"), v.literal("resolved")), message: v.string() })),
     startedAt: v.number(), resolvedAt: v.union(v.number(), v.null()),
-  }).index("by_started", ["startedAt"]),
+  }).index("by_started", ["startedAt"]).index("by_resolved", ["resolvedAt"]),
   pet_world: defineTable({ key: v.string(), world: petWorld }).index("by_key", ["key"]),
   pet_sessions: defineTable({tokenHash:v.string(),peerHash:v.string(),expiresAt:v.number(),cooldowns:v.record(v.string(),v.number())}).index("by_token",["tokenHash"]).index("by_expires",["expiresAt"]),
   pet_commands: defineTable({tokenHash:v.string(),commandId:v.string(),action:v.string(),result:petResult,expiresAt:v.number()}).index("by_token_command",["tokenHash","commandId"]).index("by_expires",["expiresAt"]),

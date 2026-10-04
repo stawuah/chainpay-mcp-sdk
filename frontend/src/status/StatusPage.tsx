@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, CircleHelp, XCircle } from "lucide-react";
 import { BrandLogo } from "../brand/Brand";
 import { STATUS_API_URL } from "../config/public";
 import {
-  STATUS_COMPONENTS, dayLevel, overallState, recentDays, uptimeRatio,
+  MIN_COVERAGE, STATUS_COMPONENTS, coverage, currentState, dayLevel, expectedChecks, overallState, recentDays, uptimeRatio,
   type CheckState, type DayCounts, type Overall,
 } from "../../../shared/status";
 import "./status.css";
@@ -14,7 +14,7 @@ type Summary = {
   incidents: { id: string; title: string; impact: "minor" | "major"; components: string[]; startedAt: number; resolvedAt: number | null; updates: { at: number; state: string; message: string }[] }[];
 };
 
-type Bar = "ok" | "issues" | "outage" | "none";
+type Bar = "ok" | "issues" | "outage" | "gaps" | "none";
 
 const REFRESH_MS = 60_000;
 const PHONE = "(max-width: 640px)";
@@ -46,19 +46,20 @@ const CURRENT: Record<CheckState, { label: string; tone: Bar }> = {
   down: { label: "Down", tone: "outage" },
 };
 
-const BAR_LABEL: Record<Bar, string> = { ok: "No issues", issues: "Some issues", outage: "Outage", none: "No data" };
+const BAR_LABEL: Record<Bar, string> = { ok: "No issues", issues: "Some issues", outage: "Outage", gaps: "Partial data", none: "No data" };
 
-function toBar(day: DayCounts | undefined): Bar {
-  const level = dayLevel(day);
+function toBar(day: DayCounts | undefined, expected: number): Bar {
+  const level = dayLevel(day, expected);
   if (level === "operational") return "ok";
   if (level === "major") return "outage";
-  if (level === "none") return "none";
+  if (level === "none" || level === "gaps") return level;
   return "issues";
 }
 
 function StateIcon({ tone, size = 18 }: { tone: Bar; size?: number }) {
   const Icon = tone === "ok" ? CheckCircle2 : tone === "issues" ? AlertTriangle : tone === "outage" ? XCircle : CircleHelp;
-  return <Icon aria-hidden="true" size={size} strokeWidth={2.25} className={`status-icon status-tone-${tone}`} />;
+  // "gaps" shares the unknown icon and color: nothing is claimed about unobserved time.
+  return <Icon aria-hidden="true" size={size} strokeWidth={2.25} className={`status-icon status-tone-${tone === "gaps" ? "none" : tone}`} />;
 }
 
 function ago(at: number, now: number) {
@@ -73,20 +74,53 @@ const dateLabel = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateStri
 const timeLabel = (at: number) => new Date(at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" });
 const percent = (ratio: number | null) => ratio === null ? "No data yet" : `${(Math.floor(ratio * 10_000) / 100).toFixed(2)}% uptime`;
 
-function UptimeBars({ name, days, keys }: { name: string; days: Map<string, DayCounts>; keys: string[] }) {
+/** Uptime of the checks that ran, plus how much of the window they cover when that is short. */
+function windowLabel(keys: string[], days: Map<string, DayCounts>, now: number) {
+  const ratio = uptimeRatio(keys.flatMap((key) => days.get(key) ?? []));
+  const covered = coverage(keys, days, now);
+  if (ratio === null || covered === null || covered >= MIN_COVERAGE) return percent(ratio);
+  return `${percent(ratio)} · ${covered < 0.01 ? "<1" : Math.floor(covered * 100)}% of time checked`;
+}
+
+function UptimeBars({ name, days, keys, now }: { name: string; days: Map<string, DayCounts>; keys: string[]; now: number }) {
   const [active, setActive] = useState<number | null>(null);
-  const problems = keys.filter((key) => { const bar = toBar(days.get(key)); return bar === "issues" || bar === "outage"; });
-  const summary = problems.length === 0
+  const wrap = useRef<HTMLDivElement>(null);
+  const tip = useRef<HTMLDivElement>(null);
+  const bars = keys.map((key) => toBar(days.get(key), expectedChecks(key, now)));
+  const problems = keys.filter((_, index) => bars[index] === "issues" || bars[index] === "outage");
+  const gaps = keys.filter((_, index) => bars[index] === "gaps");
+  const empty = bars.filter((bar) => bar === "none").length;
+  const summary = (problems.length === 0
     ? `${name}: no issues recorded in the last ${keys.length} days.`
-    : `${name}: issues on ${problems.map(dateLabel).join(", ")}.`;
+    : `${name}: issues on ${problems.map(dateLabel).join(", ")}.`)
+    + (gaps.length === 0 ? "" : ` Checks were missing, partial data on ${gaps.map(dateLabel).join(", ")}.`)
+    + (empty === 0 ? "" : ` No checks on ${empty} of these days.`);
   const activeKey = active === null ? null : keys[active];
   const activeDay = activeKey ? days.get(activeKey) : undefined;
+  const activeExpected = activeKey ? expectedChecks(activeKey, now) : 0;
+
+  // Centre the tooltip on its bar, clamped so edge bars keep it inside the row.
+  useLayoutEffect(() => {
+    if (active === null || !wrap.current || !tip.current) return;
+    const width = wrap.current.clientWidth;
+    const half = tip.current.offsetWidth / 2;
+    const centre = ((active + 0.5) / keys.length) * width;
+    tip.current.style.left = `${Math.max(half, Math.min(width - half, centre))}px`;
+  }, [active, keys.length]);
+
+  // A touch tap ends with pointerleave, so touch tooltips stay until a tap elsewhere.
+  useEffect(() => {
+    if (active === null) return;
+    const close = (event: PointerEvent) => { if (!wrap.current?.contains(event.target as Node)) setActive(null); };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [active]);
 
   return (
-    <div className="status-bars-wrap">
-      <div className="status-bars" role="img" aria-label={summary} onPointerLeave={() => setActive(null)}>
+    <div className="status-bars-wrap" ref={wrap}>
+      <div className="status-bars" role="img" aria-label={summary} onPointerLeave={(event) => { if (event.pointerType === "mouse") setActive(null); }}>
         {keys.map((key, index) => {
-          const bar = toBar(days.get(key));
+          const bar = bars[index];
           return (
             <span
               key={key}
@@ -98,10 +132,14 @@ function UptimeBars({ name, days, keys }: { name: string; days: Map<string, DayC
         })}
       </div>
       {activeKey ? (
-        <div className="status-tooltip" style={{ left: `${((active! + 0.5) / keys.length) * 100}%` }} aria-hidden="true">
+        <div className="status-tooltip" ref={tip} aria-hidden="true">
           <strong>{dateLabel(activeKey)}</strong>
-          <span><StateIcon tone={toBar(activeDay)} size={14} /> {BAR_LABEL[toBar(activeDay)]}</span>
-          {activeDay ? <span className="status-tooltip-meta">{percent(uptimeRatio([activeDay]))} · {activeDay.total} checks</span> : null}
+          <span><StateIcon tone={bars[active!]} size={14} /> {BAR_LABEL[bars[active!]]}</span>
+          {activeDay ? (
+            <span className="status-tooltip-meta">
+              {percent(uptimeRatio([activeDay]))} · {activeDay.total < activeExpected ? `${activeDay.total} of ${activeExpected} checks ran` : `${activeDay.total} checks`}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -181,7 +219,7 @@ export default function StatusPage() {
           <div className="status-card-head">
             <h2 id="status-components">Components</h2>
             <div className="status-legend" aria-hidden="true">
-              {(["ok", "issues", "outage", "none"] as Bar[]).map((bar) => (
+              {(["ok", "issues", "outage", "gaps", "none"] as Bar[]).map((bar) => (
                 <span key={bar}><i className={`status-bar status-bar-${bar}`} /> {BAR_LABEL[bar]}</span>
               ))}
             </div>
@@ -189,7 +227,10 @@ export default function StatusPage() {
           {STATUS_COMPONENTS.map((component) => {
             const row = byId.get(component.id);
             const days = new Map((row?.days ?? []).map((d) => [d.day, d]));
-            const current = row?.state ? CURRENT[row.state] : { label: data ? "No data yet" : failed ? "Unknown" : "Checking…", tone: "none" as Bar };
+            // A stale check is unknown, never its last state (the banner applies the same rule).
+            const state = currentState(row, now);
+            const current = state !== "unknown" ? CURRENT[state]
+              : { label: !data ? (failed ? "Unknown" : "Checking…") : row?.at ? "Unknown" : "No data yet", tone: "none" as Bar };
             return (
               <article key={component.id} className="status-row">
                 <div className="status-row-head">
@@ -199,10 +240,10 @@ export default function StatusPage() {
                   </div>
                   <span className={`status-current status-tone-${current.tone}`}><StateIcon tone={current.tone} /> {current.label}</span>
                 </div>
-                <UptimeBars name={component.name} days={days} keys={keys} />
+                <UptimeBars name={component.name} days={days} keys={keys} now={now} />
                 <div className="status-axis">
                   <span>{dayCount} days ago</span>
-                  <span>{percent(uptimeRatio(keys.flatMap((key) => days.get(key) ?? [])))}</span>
+                  <span>{windowLabel(keys, days, now)}</span>
                   <span>Today</span>
                 </div>
               </article>
