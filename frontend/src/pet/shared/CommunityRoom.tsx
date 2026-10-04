@@ -13,7 +13,7 @@ import "./community.css";
 const LABEL: Record<PetAction, string> = { charge: "Charge", play: "Play ball", polish: "Polish visor", pat: "Give a pat", ball: "Roll the ball", collect: "Look for treasure", coin: "Toss a coin", game: "Play Allowance", secret: "Find a secret", wake: "Wake gently" };
 const LINES: Record<PetAction, string> = { charge: "a little spark. a lot of swagger.", play: "my ball. our ball. my ball.", ball: "again? again.", polish: "yes. this is my good side.", pat: "oh. right there.", collect: "a serious expedition. very shiny business.", coin: "imaginary money. real enthusiasm.", game: "a tiny game. a very good time.", secret: "you found my tiny trick.", wake: "five more… oh, hi." };
 export function moodLine(state: PetState | null) {
-  if (!state) return "Waiting to hear from our little rascal.";
+  if (!state) return "Waiting to hear from Bam Bam.";
   if (state.sleeping) return "Ten-minute nap. Dreaming of round things.";
   if (state.lowPower) return "A little worn out. Some care will help.";
   return state.favorite === "ball" ? "Brought the ball over. Subtle as ever." : state.favorite === "collect" ? "Inspecting the treasure shelf. Very important work." : state.favorite === "polish" ? "Presenting the visor. Hint, hint." : "Here for the company. And possibly mischief.";
@@ -81,7 +81,7 @@ export default function CommunityRoom() {
   const entries = mergeMemories(memories.memories, state?.recentMemories ?? []);
   return <main className="community-room">
     <header className="community-header"><a href="/" aria-label="ChainPay home"><BrandLogo /></a><a href="/"><ArrowLeft size={16} /> Back to ChainPay</a></header>
-    <div className="community-heading"><span className="community-eyebrow">THE COMMUNITY ROOM</span><h1>One little robot.<br />All of us.</h1><p>A shared home for our resident rascal. Drop in, make a little mischief, leave a little care.</p></div>
+    <div className="community-heading"><span className="community-eyebrow">THE COMMUNITY ROOM</span><h1>One little robot.<br />All of us.</h1><p>A shared home for Bam Bam. Drop in, make a little mischief, leave a little care.</p></div>
     {!introduced ? <aside className="community-intro"><p><strong>Meet the community robot.</strong> We all care for the same pet. Its habits and scrapbook grow from our time together. {hasLegacySave ? "Your old local save, Hide and Pin preferences stay safe." : "No wallet or sign-up needed. Just a little company."}</p><button onClick={() => { setIntroduced(true); try { localStorage.setItem("chainpay.pet.community.introduced", "1"); } catch { /* memory only */ } }}>Got it</button></aside> : null}
     <div className="community-layout"><section className="community-living" aria-label="Robot's room">
       <div className="community-scene" ref={scene} data-action={action ?? "idle"} data-reaction={reactionId}>

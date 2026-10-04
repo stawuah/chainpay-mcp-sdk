@@ -64,6 +64,12 @@ try {
   assert.equal(await page.evaluate(() => window.onboardingFixture.state.messages), 1);
   await page.evaluate(() => { window.onboardingFixture.state.rejectLogin = false; });
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  // Bam Bam's loader opens over the loading dashboard right after sign-in, then
+  // steps aside by itself once the data lands.
+  const bamBam = page.getByRole("dialog", { name: "Opening your dashboard" });
+  await bamBam.waitFor();
+  await page.getByRole("button", { name: "Go to dashboard" }).waitFor();
+  await bamBam.waitFor({ state: "detached", timeout: 12000 });
   await page.getByRole("heading", { name: "Set your spending limits." }).waitFor();
   assert.equal(await page.evaluate(() => window.onboardingFixture.state.messages), 2);
   await page.getByRole("button", { name: "Review mandate", exact: true }).click();

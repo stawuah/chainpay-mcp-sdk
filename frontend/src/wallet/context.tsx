@@ -67,6 +67,8 @@ export type WalletContextValue = {
   mcpTools: McpTool[];
   mcpResult: McpToolResponse | null;
   integrationStatus: "idle" | "loading" | "ready" | "error";
+  /** Which part of the wallet read is running, for the sign-in loader. */
+  loadStage: "wallet" | "permissions" | "agents" | null;
   integrationError: string;
   signTransaction?: (transaction: Transaction) => Promise<Transaction>;
   signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
@@ -100,6 +102,7 @@ const disconnected: WalletContextValue = {
   mcpTools: [],
   mcpResult: null,
   integrationStatus: "idle",
+  loadStage: null,
   integrationError: "",
   requestWalletConnection: () => {},
   refreshWalletOptions: () => {},

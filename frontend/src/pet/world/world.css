@@ -1,0 +1,225 @@
+/* Bam Bam's world and the sign-in loader share these. Council ruling
+   bam-bam-loader-ruling-2026-10-04 (B1–B36). Tokens are restated here because
+   the world can open outside .cp-app. */
+
+:root { --z-pet-toggle: 52; --z-bb-loader: 55; --z-bb-world: 55; }
+
+.cp-bb {
+  --blue: #0052ff; --blue-active: #003ecc; --blue-soft: #eaf0ff;
+  --canvas: #fff; --soft: #f7f7f7; --strong: #eef0f3;
+  --ink: #0a0b0d; --body: #5b616e; --muted: #7c828a; --muted-soft: #a8acb3;
+  --line: #dee1e6; --line-soft: #eef0f3; --red: #cf202f;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --pet-shadow: 0 0 0 1px rgba(10, 11, 13, .06), 0 2px 4px rgba(10, 11, 13, .04), 0 18px 48px -16px rgba(20, 33, 61, .28);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.cp-bb *, .cp-bb *::before, .cp-bb *::after { box-sizing: border-box; }
+.cp-bb button { font: inherit; color: inherit; }
+.cp-bb :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.cp-sr {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---- World surface (B19, B20) ------------------------------------------- */
+
+.cp-world { background: var(--canvas); display: flex; flex-direction: column; }
+.cp-world.is-panel {
+  position: fixed; inset: 0; z-index: var(--z-bb-world);
+  overflow-y: auto; animation: cp-bb-fade-in 160ms var(--ease-out);
+}
+.cp-world.is-loader { flex: 1; min-height: 0; overflow-y: auto; }
+
+.cp-world-head {
+  display: flex; align-items: center; justify-content: flex-end; gap: 16px;
+  min-height: 64px; padding: 12px 24px;
+}
+
+.cp-world-body {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 48px;
+  padding: 8px 24px 32px;
+}
+.cp-world-board { display: grid; justify-items: center; min-width: 0; }
+.cp-world-body.is-snake .cp-world-board { width: min(640px, 100%); }
+
+.cp-world-bam { position: relative; width: 200px; flex: none; display: grid; gap: 12px; justify-items: center; }
+.cp-world-robot { position: relative; width: 200px; height: 200px; }
+.cp-world-robot > canvas, .cp-world-robot > svg { width: 100% !important; height: 100% !important; display: block; }
+.cp-world-line {
+  margin: 0; min-height: 2.9em; font-size: 15px; line-height: 1.45; text-align: center; color: var(--ink);
+}
+
+/* His hand: left-lower edge of his column, at 60% of its height (B32). */
+.cp-world-hand {
+  position: absolute; left: -36px; top: 120px; display: grid; justify-items: center; gap: 4px;
+}
+
+@media (max-width: 900px) {
+  .cp-world-bam, .cp-world-robot { width: 160px; }
+  .cp-world-robot { height: 160px; }
+  .cp-world-hand { top: 96px; }
+}
+@media (max-width: 600px) {
+  .cp-world-head { padding: 8px 16px; min-height: 56px; }
+  .cp-world-body { flex-direction: column-reverse; justify-content: flex-end; gap: 12px; padding: 0 16px 24px; }
+  .cp-world-bam { width: 100%; display: flex; align-items: center; gap: 12px; }
+  .cp-world-robot { width: 96px; height: 96px; flex: none; position: static; }
+  .cp-world-line { text-align: left; flex: 1; min-height: 0; }
+  .cp-world-hand { position: static; display: flex; flex-direction: row-reverse; align-items: center; gap: 6px; }
+}
+
+/* ---- Shared controls ----------------------------------------------------- */
+
+.cp-world-icon {
+  display: inline-grid; place-items: center; width: 40px; height: 40px; padding: 0;
+  border: 0; border-radius: 100px; background: transparent; cursor: pointer; flex: none;
+}
+.cp-world-icon:hover:not(:disabled) { background: var(--soft); }
+.cp-world-icon:disabled { opacity: .4; cursor: default; }
+
+.cp-world-cta {
+  min-height: 44px; min-width: 160px; padding: 0 20px; border: 0; border-radius: 100px;
+  background: var(--blue); color: #fff !important; font-weight: 600; font-size: 15px; cursor: pointer;
+  transition: background 150ms ease-out;
+}
+.cp-world-cta:hover { background: var(--blue-active); }
+
+/* Segmented controls (B21). */
+.cp-seg { display: inline-flex; height: 40px; padding: 4px; gap: 2px; background: var(--soft); border-radius: 100px; }
+.cp-seg-item {
+  padding: 0 14px; border: 0; border-radius: 100px; background: transparent; color: var(--body) !important;
+  font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;
+}
+.cp-seg-item[aria-checked="true"] {
+  background: #fff; color: var(--ink) !important;
+  box-shadow: 0 1px 2px rgba(10, 11, 13, .08), 0 0 0 1px rgba(10, 11, 13, .06);
+}
+
+.cp-switch { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--body); cursor: pointer; min-height: 40px; }
+.cp-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.cp-switch-track { position: relative; width: 32px; height: 20px; border-radius: 100px; background: var(--strong); box-shadow: inset 0 0 0 1px var(--line); transition: background 150ms ease-out; }
+.cp-switch-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(10, 11, 13, .2); transition: transform 150ms ease-out; }
+.cp-switch input:checked + .cp-switch-track { background: var(--blue); box-shadow: none; }
+.cp-switch input:checked + .cp-switch-track::after { transform: translateX(12px); }
+.cp-switch input:focus-visible + .cp-switch-track { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* ---- Snake (B24, B29) ---------------------------------------------------- */
+
+.cp-snake { width: 100%; display: grid; gap: 8px; }
+.cp-snake-hud { display: flex; align-items: center; gap: 16px; height: 40px; }
+.cp-snake-hud .cp-world-icon { margin-left: auto; }
+.cp-snake-stat { display: inline-flex; align-items: baseline; gap: 6px; }
+.cp-snake-label { font-size: 12px; font-weight: 500; color: var(--body); }
+.cp-snake-stat b { font-family: var(--mono); font-weight: 600; font-size: 15px; font-variant-numeric: tabular-nums; }
+.cp-snake-stat.is-best b { color: var(--blue); }
+.cp-snake-new { font-size: 12px; font-weight: 600; color: var(--blue); }
+.cp-snake-frame { padding: 8px; background: var(--soft); border-radius: 16px; }
+.cp-snake-field { position: relative; background: #fff; border-radius: 10px; overflow: hidden; outline-offset: 4px; }
+.cp-snake-field:focus-visible { outline: 2px solid var(--line); }
+.cp-snake-rule { font-size: 12px; color: var(--body); }
+.cp-snake-count {
+  position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+  font-size: 56px; font-weight: 500; color: var(--ink);
+  animation: cp-bb-count 160ms var(--ease-out);
+}
+.cp-snake-overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; }
+/* Game over sits low so the crash stays visible above it. */
+.cp-snake-overlay.is-over { align-items: end; }
+.cp-snake-card {
+  display: grid; justify-items: center; gap: 10px; padding: 20px; min-width: 220px;
+  background: #fff; border-radius: 24px; box-shadow: var(--pet-shadow); text-align: center;
+}
+.cp-snake-card p { margin: 0; }
+.cp-snake-card-title { font-size: 17px; font-weight: 600; }
+.cp-snake-card-meta { font-size: 14px; color: var(--body); }
+.cp-snake-card-score { font-family: var(--mono); font-size: 14px; }
+.cp-snake-hint { font-size: 12px; color: var(--body); }
+/* Phone turn pad: Bam Bam's navy visor, its two eyes the buttons. Pressing an
+   eye blinks it. */
+.cp-snake-pad {
+  display: none; align-items: center; justify-content: space-between; gap: 12px;
+  width: min(320px, 100%); height: 84px; margin: 8px auto 0; padding: 10px 14px;
+  border-radius: 100px; background: linear-gradient(180deg, #1d2d52 0%, #14213d 60%, #0f1a31 100%);
+  box-shadow: 0 0 0 4px #f4f7ff, 0 0 0 5px rgba(10, 11, 13, .08), 0 14px 32px -12px rgba(20, 33, 61, .45), inset 0 1px 0 rgba(255, 255, 255, .12);
+}
+.cp-snake-pad-mid { width: 28px; height: 6px; border-radius: 100px; background: rgba(255, 255, 255, .12); }
+.cp-snake-eye {
+  position: relative; display: grid; place-items: center; width: 64px; height: 64px; padding: 0;
+  border: 0; border-radius: 50%; background: #fff; color: var(--blue) !important; cursor: pointer;
+  box-shadow: 0 0 18px rgba(157, 184, 255, .45), inset 0 -3px 0 rgba(20, 33, 61, .12);
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  transition: transform 90ms ease-out, box-shadow 150ms ease-out;
+}
+.cp-snake-eye::after { content: ""; position: absolute; top: 11px; left: 15px; width: 12px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, .9); filter: blur(.5px); }
+.cp-snake-eye:active { transform: scaleY(.62); box-shadow: 0 0 26px rgba(157, 184, 255, .7), inset 0 -2px 0 rgba(20, 33, 61, .12); }
+.cp-snake-eye:focus-visible { outline: 3px solid #9db8ff; outline-offset: 3px; }
+@media (max-width: 600px) { .cp-snake-pad { display: flex; } }
+
+/* ---- Tic-tac-toe (B30–B35) ----------------------------------------------- */
+
+.cp-ttt { display: grid; justify-items: center; gap: 16px; }
+.cp-ttt-stage { display: flex; align-items: center; gap: 24px; }
+.cp-ttt-tray { width: 64px; display: grid; justify-items: center; gap: 6px; }
+.cp-ttt-tray-label { font-size: 12px; color: var(--body); font-weight: 400; transition: color 150ms ease-out; }
+.cp-ttt-token {
+  display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%;
+  background: var(--soft); opacity: .4; transition: opacity 120ms ease-out;
+}
+.cp-ttt-token .cp-ttt-piece { width: 40px; height: 40px; }
+.cp-ttt-tray.is-active .cp-ttt-tray-label, .cp-world-hand.is-active .cp-ttt-tray-label { color: var(--ink); font-weight: 600; }
+.cp-ttt-tray.is-active .cp-ttt-token, .cp-world-hand.is-active .cp-ttt-token { opacity: 1; }
+
+.cp-ttt-board { position: relative; display: grid; gap: 8px; width: 304px; }
+.cp-ttt-row { display: grid; grid-template-columns: repeat(3, 96px); gap: 8px; }
+.cp-ttt-cell {
+  width: 96px; height: 96px; padding: 0; border: 0; border-radius: 16px; background: var(--soft);
+  display: grid; place-items: center; cursor: default;
+}
+.cp-ttt-cell.is-open { cursor: pointer; }
+.cp-ttt-cell.is-open:hover { background: var(--strong); }
+.cp-ttt-cell .cp-ttt-piece { width: 96px; height: 96px; transition: opacity 200ms ease-out; }
+.cp-ttt-piece.is-you { color: var(--ink); }
+.cp-ttt-piece.is-bam { color: var(--blue); }
+.cp-ttt-piece.is-pop { animation: cp-bb-pop 140ms var(--ease-out); }
+.cp-ttt-board.is-won .cp-ttt-cell:not(.is-lit) .cp-ttt-piece { opacity: .35; }
+.cp-ttt-board.is-draw .cp-ttt-piece { opacity: .6; }
+.cp-ttt-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.cp-ttt-line line { stroke-width: 8; stroke-linecap: round; }
+.cp-ttt-line.is-you line { stroke: var(--ink); }
+.cp-ttt-line.is-bam line { stroke: var(--blue); }
+.cp-ttt-line.is-drawn line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: cp-bb-draw 320ms var(--ease-out) 80ms forwards; }
+.cp-ttt-result { min-height: 24px; font-size: 17px; font-weight: 600; }
+.cp-ttt-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
+.cp-ttt-tally { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--body); }
+.cp-ttt-tally b { font-family: var(--mono); font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.cp-ttt-reset {
+  position: relative; margin-left: 8px; padding: 0 4px; border: 0; background: none;
+  font-size: 12px; color: var(--body) !important; text-decoration: underline; cursor: pointer;
+}
+.cp-ttt-reset::before { content: ""; position: absolute; inset: -12px -6px; }
+
+@media (max-width: 600px) {
+  .cp-ttt-stage { flex-direction: column; gap: 12px; }
+  .cp-ttt-tray { width: auto; display: flex; align-items: center; align-self: flex-start; }
+}
+@media (max-width: 360px) {
+  .cp-ttt-board { width: 280px; }
+  .cp-ttt-row { grid-template-columns: repeat(3, 88px); }
+  .cp-ttt-cell, .cp-ttt-cell .cp-ttt-piece { width: 88px; height: 88px; }
+}
+
+/* ---- Keyframes and reduced motion (B36) --------------------------------- */
+
+@keyframes cp-bb-fade-in { from { opacity: 0; } }
+@keyframes cp-bb-count { from { opacity: 0; transform: scale(1.1); } }
+@keyframes cp-bb-pop { from { opacity: 0; transform: scale(.8); } }
+@keyframes cp-bb-draw { to { stroke-dashoffset: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-bb *, .cp-world { animation: none !important; transition: none !important; }
+  .cp-ttt-line.is-drawn line { stroke-dashoffset: 0; }
+}

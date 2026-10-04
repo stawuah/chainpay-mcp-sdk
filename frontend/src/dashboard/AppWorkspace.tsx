@@ -1,4 +1,6 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
+import { clearJustSignedIn, useJustSignedIn } from "../owner/signInMoment";
+import { hasReadySession } from "../session";
 import { OwnerEntry } from "../owner/OwnerEntry";
 import { useOwnerSignIn } from "../owner/useOwnerSignIn";
 import "./owner-dashboard.css";
@@ -9,6 +11,9 @@ import { buildStablecoinOptions } from "../owner/runtime";
 import { clearWalletDrafts } from "../wallet/draftStore";
 
 const Dashboard = lazy(() => import("./Dashboard"));
+// Preloaded while the sign-in card is up so it can paint the moment sign-in finishes.
+const loadBamBamLoader = () => import("../owner/BamBamLoader");
+const BamBamLoader = lazy(loadBamBamLoader);
 
 function RouteFallback() {
   return (
@@ -22,6 +27,11 @@ export default function AppWorkspace() {
   const { currentRoute, navigate } = useRoute();
   const wallet = useWallet();
   const signIn = useOwnerSignIn();
+  const justSignedIn = useJustSignedIn();
+  const awaitingSignIn = Boolean(wallet.wallet) && signIn.status !== "ready";
+  useEffect(() => {
+    if (awaitingSignIn) void loadBamBamLoader();
+  }, [awaitingSignIn]);
   if (currentRoute.kind !== "app") return null;
   if (!wallet.wallet) return <OwnerWelcome />;
 
@@ -29,6 +39,18 @@ export default function AppWorkspace() {
 
   return (
     <>
+      {justSignedIn ? (
+        <Suspense fallback={null}>
+          <BamBamLoader
+            integrationStatus={wallet.integrationStatus}
+            loadStage={wallet.loadStage}
+            withAgents={hasReadySession()}
+            onDone={clearJustSignedIn}
+          />
+        </Suspense>
+      ) : null}
+      {/* The dashboard really loads under Bam Bam's loader; it's inert until he steps aside. */}
+      <div inert={justSignedIn || undefined} style={{ display: "contents" }}>
       <Suspense fallback={<RouteFallback />}>
         {/*
           Keyed by address so switching accounts remounts the dashboard. An account
@@ -81,6 +103,7 @@ export default function AppWorkspace() {
           onCallMcp={wallet.callMcp}
         />
       </Suspense>
+      </div>
     </>
   );
 }
