@@ -49,6 +49,16 @@ not imported by production and are not included in its build. The fixture cannot
 sign or submit transactions. Its records and screenshots are regression evidence,
 not payment acceptance. Local HMR websocket restrictions do not affect these checks.
 
+## Status page browser check
+
+With the frontend dev server on port 5189, run `npm run test:status-browser`. It opens
+the real `/status` route with a mocked `/status/v1` feed and blocks every other external
+request. It checks that stale checks read "Unknown" on each row (not "Operational"), that a
+day the prober barely ran is a "Partial data" bar, and that at 390/320px a tapped bar keeps
+its tooltip on-screen until a tap elsewhere, with no horizontal scroll. Screenshots go to
+`/tmp/chainpay-status-*.png` (`CHAINPAY_STATUS_SHOTS` overrides the prefix).
+`status-page.test.mjs` covers the same states in the ordinary suite with jsdom.
+
 ## Landing story browser check
 
 With the frontend dev server on port 5189, run `node test/landing.browser.mjs`

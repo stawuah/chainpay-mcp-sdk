@@ -30,3 +30,6 @@ export const CARD_PARTNER_TOKEN_ACCOUNT: string | null = import.meta.env.VITE_CH
  * deposits in the live run. Devnet only: private repayment is a Devnet sandbox feature.
  */
 export const DEVNET_SEND_RPC_URL = import.meta.env.VITE_CHAINPAY_DEVNET_SEND_RPC_URL || "https://api.devnet.solana.com";
+
+// /status reads Convex directly so it still loads when the relay is down.
+export const STATUS_API_URL = (import.meta.env.VITE_CHAINPAY_STATUS_URL ?? "https://notable-bee-447.convex.site").replace(/\/$/, "");

@@ -121,3 +121,20 @@ Hide/Pin remain device preferences in the frontend and legacy saves are retained
 Run `npm run check:convex` and `npm run test:convex`. These use local
 `convex-test` with simulated clocks; they do not deploy or demonstrate a live
 cloud session. Cloud rollout and human usability remain pending.
+
+## Status page
+
+A cron probes five components every 5 minutes (`status.ts`): web, relay `/healthz`, MCP `/healthz`, Solana devnet `getHealth`, and the program account. `GET <convex site>/status/v1` serves the public JSON that `/status` on the web app renders.
+
+The program check shares the devnet RPC with the Solana check, so it is marked down only when the RPC answers that the account is missing or not executable; if the RPC can't answer, no program row is written and that time shows as partial data. A probe that needed its retry records the full wait, so a timeout then a success reads as slow. Missed probes are never counted as up: a day with under 90% of its expected checks is "partial data".
+
+Optional env vars (defaults are the production hosts): `STATUS_WEB_URL`, `STATUS_RELAY_URL`, `STATUS_MCP_URL`, `STATUS_SOLANA_RPC_URL`, `STATUS_PROGRAM_ID`.
+
+Post and close an incident by hand:
+
+```sh
+npx convex run status:openIncident '{"title":"Relay responding slowly","impact":"minor","components":["relay"],"message":"Payments are slower than usual. Funds are safe."}'
+npx convex run status:updateIncident '{"id":"<id from above>","state":"resolved","message":"Fixed."}'
+```
+
+Posting any state other than `resolved` to a resolved incident reopens it.
