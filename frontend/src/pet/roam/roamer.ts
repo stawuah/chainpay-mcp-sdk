@@ -83,9 +83,18 @@ function overlaps(a: DOMRect, x: number, y: number, size: number) {
   return x < a.right && x + size > a.left && y < a.bottom && y + size > a.top;
 }
 
+/**
+ * The on/off toggle lives in the bottom-right corner (16 + 40 + 8 px), so he
+ * rests and walks the bottom edge just above it, never on it (council B16a).
+ */
+const TOGGLE_CLEARANCE = 64;
+const aboveToggle = (y: number, size: number, view: Viewport) => Math.min(y, view.top + view.height - size - TOGGLE_CLEARANCE);
+
 function restSpot(size: number): RoamPosition {
   const view = viewport();
-  const { x, y } = bound(Infinity, Infinity, size, view);
+  const spot = bound(Infinity, Infinity, size, view);
+  const x = spot.x;
+  const y = aboveToggle(spot.y, size, view);
   const focused = document.activeElement;
   if (isTypingTarget(focused) && focused) {
     const rect = focused.getBoundingClientRect();
@@ -144,7 +153,7 @@ function pick(size: number): { position: RoamPosition; perch?: { element: HTMLEl
   }
   if (roll < 0.9) {
     const spot = bound(view.left + Math.random() * view.width, Infinity, size, view);
-    return { position: { ...spot, mode: "edge", side: "right", glide: true } };
+    return { position: { ...spot, y: aboveToggle(spot.y, size, view), mode: "edge", side: "right", glide: true } };
   }
   return { position: restSpot(size) };
 }

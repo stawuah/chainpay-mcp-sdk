@@ -56,10 +56,10 @@ async function inViewport(page) {
 //    Escape closes it and returns focus to him.
 {
   const { page, context } = await open('/', { reducedMotion: 'reduce', needs: { battery: 30, joy: 62, clean: 85 } });
-  const robot = page.getByRole('button', { name: 'ChainPay robot' });
+  const robot = page.getByRole('button', { name: 'Open Bam Bam' });
   await robot.waitFor({ timeout: 20000 });
   await robot.click();
-  const panel = page.getByRole('dialog', { name: '???' });
+  const panel = page.getByRole('dialog', { name: 'Bam Bam' });
   await panel.waitFor();
   await page.waitForTimeout(100);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'cp-pet-panel', 'focus moves into the panel on open');
@@ -77,7 +77,7 @@ async function inViewport(page) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
   assert.equal(await page.locator('.cp-pet-panel').count(), 0);
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'ChainPay robot');
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Open Bam Bam');
   // Outside press closes too.
   await robot.click();
   await panel.waitFor();
@@ -90,7 +90,7 @@ async function inViewport(page) {
 // 3. Phone: bottom sheet, robot stays visible.
 {
   const { page, context } = await open('/', { viewport: { width: 390, height: 800 }, reducedMotion: 'reduce' });
-  const robot = page.getByRole('button', { name: 'ChainPay robot' });
+  const robot = page.getByRole('button', { name: 'Open Bam Bam' });
   await robot.waitFor({ timeout: 20000 });
   await robot.click();
   await page.waitForTimeout(400);
@@ -110,19 +110,26 @@ async function inViewport(page) {
   await context.close();
 }
 
-// 4. Hide persists across reloads; the restore button brings him back.
+// 4. Hide turns him off for this surface, persists across reloads, and the
+//    toggle brings him back without a greeting (council B14–B17).
 {
   const { page, context } = await open('/', { reducedMotion: 'reduce' });
-  await page.getByRole('button', { name: 'ChainPay robot' }).click({ timeout: 20000 });
+  await page.getByRole('button', { name: 'Open Bam Bam' }).click({ timeout: 20000 });
+  assert.equal(await page.locator('.cp-pet-toggle').count(), 0, 'the toggle steps aside while his panel is open');
   await page.getByRole('button', { name: 'Hide' }).click();
   await page.waitForTimeout(200);
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Bring the robot back', 'focus lands on the restore button after Hide');
+  const toggle = page.getByRole('button', { name: 'Bam Bam', exact: true });
+  assert.equal(await page.evaluate(() => document.activeElement?.className), 'cp-pet-toggle', 'focus lands on the toggle after Hide');
+  assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
   await page.reload({ waitUntil: 'load' });
-  const restore = page.getByRole('button', { name: 'Bring the robot back' });
-  await restore.waitFor({ timeout: 20000 });
+  await toggle.waitFor({ timeout: 20000 });
   assert.equal(await page.locator('.cp-pet').count(), 0);
-  await restore.click();
+  assert.equal(await toggle.getAttribute('title'), 'Bam Bam: off');
+  await toggle.click();
   await page.locator('.cp-pet-body').waitFor({ timeout: 20000 });
+  assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+  await page.waitForTimeout(2500);
+  assert.equal(await page.locator('.cp-pet-speech').count(), 0, 'turning him on is not an arrival: no hello');
   await context.close();
 }
 
@@ -130,7 +137,7 @@ async function inViewport(page) {
 {
   const { page, context } = await open('/', { reducedMotion: 'reduce', firstVisit: true });
   await page.locator('.cp-pet.is-booting').waitFor({ timeout: 20000 });
-  await page.locator('.cp-pet-speech', { hasText: "oh hi. i'm new here. no name yet." }).waitFor({ timeout: 8000 });
+  await page.locator('.cp-pet-speech', { hasText: "oh hi. i'm bam bam." }).waitFor({ timeout: 8000 });
   assert.equal(await page.locator('.cp-pet-panel').count(), 0);
   await context.close();
 }
@@ -138,7 +145,7 @@ async function inViewport(page) {
 // 6. Play: sweep a dust speck, answer a call, toss a coin, open the game, wear gear.
 {
   const { page, context } = await open('/', { reducedMotion: 'reduce', bond: { xp: 18 } });
-  const robot = page.getByRole('button', { name: /ChainPay robot/ });
+  const robot = page.getByRole('button', { name: /^(Open Bam Bam|Bam Bam is calling you)$/ });
   await robot.waitFor({ timeout: 20000 });
   await page.waitForFunction(() => window.__chainpayPet);
 
@@ -147,7 +154,7 @@ async function inViewport(page) {
   await page.locator('.cp-pet-speech', { hasText: /got it|swept|visor/ }).waitFor();
 
   await page.evaluate(() => window.__chainpayPet.call());
-  await page.getByRole('button', { name: 'ChainPay robot is calling you' }).click();
+  await page.getByRole('button', { name: 'Bam Bam is calling you' }).click();
   assert.match(await page.locator('#cp-pet-line').innerText(), /you came|checking|thanks/);
 
   await page.getByRole('button', { name: 'Gear' }).click();
@@ -159,8 +166,22 @@ async function inViewport(page) {
   await page.getByRole('button', { name: 'Back' }).click();
 
   await page.locator('.cp-pet-tile', { hasText: 'Play' }).click();
+  await page.getByRole('button', { name: /Allowance/ }).click();
   await page.getByRole('button', { name: 'Start' }).waitFor();
   assert.match(await page.locator('.cp-pet-game').innerText(), /No real USDC/);
+  await page.getByRole('button', { name: 'Back' }).click();
+
+  // His world: he picks the game, the roaming robot steps aside, Esc closes it.
+  const opener = page.getByRole('button', { name: /Play with Bam Bam/ });
+  await opener.click();
+  const world = page.getByRole('dialog', { name: "Bam Bam's world" });
+  await world.waitFor();
+  assert.equal(await page.locator('.cp-pet').evaluate((el) => getComputedStyle(el).visibility), 'hidden', 'one Bam Bam on screen');
+  assert.equal(await world.getByRole('radiogroup', { name: /Game|Difficulty/ }).count(), 0, 'no game or difficulty menu');
+  assert.ok((await world.locator('.cp-snake, .cp-ttt').count()) === 1, 'he picked a game');
+  await page.keyboard.press('Escape');
+  await world.waitFor({ state: 'detached' });
+  await page.waitForFunction(() => document.activeElement?.hasAttribute('data-world-opener'), null, { timeout: 2000 }).catch(() => assert.fail('focus returns to the row that opened it'));
   await page.getByRole('button', { name: 'Back' }).click();
 
   await page.getByRole('button', { name: 'Toss a coin' }).click();
@@ -180,7 +201,7 @@ async function inViewport(page) {
 // 7. Pin: he stays where he was pinned, across reloads, until unpinned.
 {
   const { page, context } = await open('/');
-  const robot = page.getByRole('button', { name: /ChainPay robot/ });
+  const robot = page.getByRole('button', { name: /^(Open Bam Bam|Bam Bam is calling you)$/ });
   await robot.waitFor({ timeout: 20000 });
   await page.waitForTimeout(1200);
   await robot.click();
@@ -263,7 +284,34 @@ async function inViewport(page) {
 {
   const { page, context } = await open('/embed/overview');
   await page.waitForTimeout(3000);
-  assert.equal(await page.locator('.cp-pet, .cp-pet-return').count(), 0);
+  assert.equal(await page.locator('.cp-pet, .cp-pet-toggle').count(), 0);
+  await context.close();
+}
+
+// 10. Dashboard: off by default, toggle on persists, and no hello off the landing (R5).
+{
+  const { page, context } = await open('/app', { reducedMotion: 'reduce', firstVisit: true });
+  const toggle = page.getByRole('button', { name: 'Bam Bam', exact: true });
+  await toggle.waitFor({ timeout: 20000 });
+  assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('.cp-pet').count(), 0, 'no robot in the dashboard by default');
+  await toggle.click();
+  await page.locator('.cp-pet-body').waitFor({ timeout: 20000 });
+  await page.waitForTimeout(5000);
+  assert.equal(await page.locator('.cp-pet-speech').count(), 0, 'no greeting on /app');
+  // He rests above the toggle, never on it.
+  const me = await page.locator('.cp-pet').boundingBox();
+  const t = await toggle.boundingBox();
+  assert.ok(me.y + me.height <= t.y + 1 || me.x + me.width <= t.x, 'robot clears the toggle');
+  await page.reload({ waitUntil: 'load' });
+  await page.locator('.cp-pet-body').waitFor({ timeout: 20000 });
+  // The landing keeps its own choice.
+  await page.goto(BASE + '/', { waitUntil: 'load' });
+  await page.locator('.cp-pet-body').waitFor({ timeout: 20000 });
+  await toggle.click();
+  await page.goto(BASE + '/app', { waitUntil: 'load' });
+  await page.locator('.cp-pet-body').waitFor({ timeout: 20000 });
   await context.close();
 }
 
@@ -281,8 +329,8 @@ async function inViewport(page) {
   await page.locator('.cp-pet-body svg').waitFor({ timeout: 20000 });
   assert.ok(await page.locator('main').count(), 'renderer failure must preserve the page');
   await page.waitForFunction(() => !document.querySelector('.cp-pet')?.classList.contains('is-booting'));
-  await page.getByRole('button', { name: 'ChainPay robot' }).click();
-  await page.getByRole('dialog', { name: '???' }).waitFor();
+  await page.getByRole('button', { name: 'Open Bam Bam' }).click();
+  await page.getByRole('dialog', { name: 'Bam Bam' }).waitFor();
   await context.close();
 }
 

@@ -1,33 +1,19 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Bot } from "lucide-react";
+import { Bot, BotOff } from "lucide-react";
+import { setPetEnabled, surfaceFor, usePetEnabled, usePetSuppressed } from "../pet-prefs";
+import "../pet-toggle.css";
 
 // The only pet module on the every-route path. It stays tiny: it waits for the
 // page to finish loading and go idle, then pulls in the pet chunk (and three.js
-// after that). Hiding the robot is remembered per browser.
+// after that). Bam Bam is on by default on public pages and off in the
+// dashboard; the bottom-right toggle flips him per surface, remembered per
+// browser (council ruling B14–B18).
 
 const PetLayer = lazy(() => import("./PetLayer"));
 const CommunityCompanion = lazy(() => import("./shared/CommunityCompanion"));
 const SHARED = import.meta.env.VITE_CHAINPAY_SHARED_PET === "on";
 
-const HIDDEN_KEY = "chainpay.pet.hidden";
 const DISABLED = import.meta.env.VITE_CHAINPAY_PET === "off";
-
-function readHidden() {
-  try {
-    return window.localStorage.getItem(HIDDEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function writeHidden(hidden: boolean) {
-  try {
-    if (hidden) window.localStorage.setItem(HIDDEN_KEY, "1");
-    else window.localStorage.removeItem(HIDDEN_KEY);
-  } catch {
-    // Memory only.
-  }
-}
 
 function whenIdle(callback: () => void): () => void {
   let cancelled = false;
@@ -50,16 +36,21 @@ function whenIdle(callback: () => void): () => void {
 
 export function PetMount({ routeKind, routeKey }: { routeKind: string; routeKey: string }) {
   const [ready, setReady] = useState(false);
-  const [hidden, setHidden] = useState(readHidden);
-  // Hiding him from his panel moves focus to the button that brings him back,
-  // so keyboard users are not dropped onto <body>.
-  const focusRestore = useRef(false);
-  const restore = useRef<HTMLButtonElement>(null);
+  const surface = surfaceFor(routeKind);
+  const on = usePetEnabled(surface);
+  const hiddenForOverlay = usePetSuppressed("pet");
+  const toggleAway = usePetSuppressed("toggle");
+  const toggle = useRef<HTMLButtonElement>(null);
+  // Turning him on is not an arrival: no boot, no greeting (B17). Only the
+  // first mount of a page visit with him already on may say hello.
+  const [quiet, setQuiet] = useState(false);
+  const focusToggle = useRef(false);
+  // After Hide, focus lands on the toggle once it's back on screen (B17).
   useEffect(() => {
-    if (!hidden || !focusRestore.current) return;
-    focusRestore.current = false;
-    restore.current?.focus();
-  }, [hidden]);
+    if (on || !focusToggle.current || !toggle.current) return;
+    focusToggle.current = false;
+    toggle.current.focus();
+  }, [on, toggleAway]);
 
   useEffect(() => {
     if (DISABLED) return;
@@ -70,54 +61,38 @@ export function PetMount({ routeKind, routeKey }: { routeKind: string; routeKey:
   // /support stars the robot in its hero, and the floating pet covered the tip card on phones (support-v2 ruling P13).
   if (DISABLED || !ready || routeKind === "embed-overview" || routeKind === "pet" || routeKind === "support") return null;
 
-  if (hidden) {
-    return (
-      <button
-        ref={restore}
-        type="button"
-        className="cp-pet-return"
-        onClick={() => {
-          writeHidden(false);
-          setHidden(false);
-        }}
-        aria-label="Bring the robot back"
-        title="Bring the robot back"
-        style={{
-          position: "fixed",
-          right: 16,
-          bottom: "calc(16px + env(safe-area-inset-bottom))",
-          // pet.css may not be loaded yet when he starts hidden, hence the fallback.
-          zIndex: "var(--z-pet, 50)",
-          display: "grid",
-          placeItems: "center",
-          width: 40,
-          height: 40,
-          padding: 0,
-          border: 0,
-          borderRadius: 100,
-          background: "#fff",
-          color: "#0a0b0d",
-          boxShadow: "0 0 0 1px rgba(10,11,13,.06), 0 2px 4px rgba(10,11,13,.04), 0 18px 48px -16px rgba(20,33,61,.28)",
-          cursor: "pointer",
-        }}
-      >
-        <Bot size={18} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-    );
-  }
-
   const Layer = SHARED ? CommunityCompanion : PetLayer;
   return (
-    <Suspense fallback={null}>
-      <Layer
-        routeKey={routeKey}
-        routeKind={routeKind}
-        onHide={() => {
-          focusRestore.current = true;
-          writeHidden(true);
-          setHidden(true);
-        }}
-      />
-    </Suspense>
+    <>
+      {on && !hiddenForOverlay ? (
+        <Suspense fallback={null}>
+          <Layer
+            routeKey={routeKey}
+            routeKind={routeKind}
+            quiet={quiet}
+            onHide={() => {
+              focusToggle.current = true;
+              setPetEnabled(surface, false);
+            }}
+          />
+        </Suspense>
+      ) : null}
+      {toggleAway ? null : (
+        <button
+          ref={toggle}
+          type="button"
+          className={`cp-pet-toggle${on ? " is-on" : ""}`}
+          aria-label="Bam Bam"
+          aria-pressed={on}
+          title={on ? "Bam Bam: on" : "Bam Bam: off"}
+          onClick={() => {
+            setQuiet(true);
+            setPetEnabled(surface, !on);
+          }}
+        >
+          {on ? <Bot size={18} strokeWidth={1.75} aria-hidden="true" /> : <BotOff size={18} strokeWidth={1.75} aria-hidden="true" />}
+        </button>
+      )}
+    </>
   );
 }

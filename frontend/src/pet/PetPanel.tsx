@@ -5,7 +5,7 @@ import { COOLDOWN_MS, NEEDS, type Need, type PetAction, type PetSnapshot } from 
 import { GEAR, levelOf, todaySoFar, unlockedGear, type Bond, type Gear } from "./sim/bond";
 import { AllowanceGame } from "./play/AllowanceGame";
 
-export type PanelView = "main" | "diary" | "gear" | "game";
+export type PanelView = "main" | "diary" | "gear" | "game" | "play";
 
 // His panel, per the design council ruling of 2026-10-03
 // (_bmad-output/design-council/pet-panel-ruling-2026-10-03.md, P1–P20).
@@ -89,6 +89,8 @@ type Props = {
   /** viaKeyboard: started with Enter/Space, so the hint mentions Enter. */
   onToss: (viaKeyboard: boolean) => void;
   onGameFinish: (won: boolean) => void;
+  /** Opens Bam Bam's world; he picks the game. */
+  onOpenWorld: () => void;
   onToggleGear: (item: Gear) => void;
   pinned: boolean;
   onTogglePin: () => void;
@@ -109,7 +111,7 @@ type Props = {
 
 export function PetPanel(props: Props) {
   const { open, sheet, anchor, snapshot, now, stage, asleepUntil, line, onCare, onQuick, onHide, onClose, onSheetRect } = props;
-  const { view, onView, bond, onToss, onGameFinish, onToggleGear, pinned, onTogglePin } = props;
+  const { view, onView, bond, onToss, onGameFinish, onOpenWorld, onToggleGear, pinned, onTogglePin } = props;
   const panel = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(false);
@@ -160,10 +162,12 @@ export function PetPanel(props: Props) {
 
   useEffect(() => {
     if (!open || !mounted) return;
+    // His world opens from this panel and returns to it, so it counts as inside.
     const inside = (target: EventTarget | null) =>
-      target instanceof Node && (panel.current?.contains(target) || anchor?.contains(target));
+      target instanceof Node &&
+      (panel.current?.contains(target) || anchor?.contains(target) || (target instanceof Element && target.closest(".cp-world") !== null));
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose(true);
+      if (event.key === "Escape" && !event.defaultPrevented && !document.querySelector(".cp-world")) onClose(true);
     };
     const onDown = (event: PointerEvent) => {
       if (!inside(event.target)) onClose(false);
@@ -209,8 +213,10 @@ export function PetPanel(props: Props) {
         <DiaryView bond={bond} onBack={() => onView("main")} />
       ) : view === "gear" ? (
         <GearView bond={bond} onBack={() => onView("main")} onToggle={onToggleGear} />
+      ) : view === "play" ? (
+        <PlayView onBack={() => onView("main")} onAllowance={() => onView("game")} onWorld={onOpenWorld} />
       ) : (
-        <AllowanceGame onBack={() => onView("main")} onFinish={onGameFinish} />
+        <AllowanceGame onBack={() => onView("play")} onFinish={onGameFinish} />
       )}
 
       <footer className="cp-pet-panel-foot">
@@ -241,11 +247,11 @@ function MainView(props: MainProps) {
       <header className="cp-pet-panel-head">
         <div>
           <div className="cp-pet-title-row">
-            <h2 id="cp-pet-title" className="cp-pet-title">???</h2>
+            <h2 id="cp-pet-title" className="cp-pet-title">Bam Bam</h2>
             <span className="cp-pet-chip">{level.label}</span>
           </div>
           <p className="cp-pet-meta">
-            No name yet · {stage}
+            {stage}
             {bond.streak > 1 ? ` · ${bond.streak}-day streak` : ""}
             {asleepUntil ? ` · Asleep until ${asleepUntil}` : ""}
           </p>
@@ -274,7 +280,7 @@ function MainView(props: MainProps) {
               className={classes.join(" ")}
               aria-disabled={wait > 0 && need !== "joy" ? "true" : undefined}
               aria-label={`${care.label}. ${NEED_NAME[need]}: ${wait > 0 ? `ready in ${minutes(wait)} minutes` : word}.`}
-              onClick={() => (need === "joy" ? onView("game") : onCare(care.action))}
+              onClick={() => (need === "joy" ? onView("play") : onCare(care.action))}
             >
               <span className="cp-pet-tile-top">
                 {care.icon}
@@ -328,6 +334,29 @@ function MainView(props: MainProps) {
           <Shirt size={16} strokeWidth={1.75} aria-hidden="true" />
           <span>Gear</span>
           <span className="cp-pet-link-meta">{gearCount} of {GEAR.length}</span>
+          <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      </nav>
+    </>
+  );
+}
+
+/** Play (council B23, with Dre's change: Bam Bam picks the game, no menu). */
+function PlayView({ onBack, onAllowance, onWorld }: { onBack: () => void; onAllowance: () => void; onWorld: () => void }) {
+  return (
+    <>
+      <ViewHead title="Play" onBack={onBack} />
+      <nav className="cp-pet-links" aria-label="Games" id="cp-pet-line">
+        <button type="button" className="cp-pet-link" onClick={onAllowance}>
+          <Coins size={16} strokeWidth={1.75} aria-hidden="true" />
+          <span>Allowance</span>
+          <span className="cp-pet-link-meta">Spending limits practice</span>
+          <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+        <button type="button" className="cp-pet-link" onClick={onWorld} data-world-opener="">
+          <Gamepad2 size={16} strokeWidth={1.75} aria-hidden="true" />
+          <span>Play with Bam Bam</span>
+          <span className="cp-pet-link-meta">His pick</span>
           <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
         </button>
       </nav>

@@ -23,9 +23,11 @@ import {
   SECRET_LINES,
 } from "./play/lines";
 import type { Expression, Motion } from "./RobotModel";
+import { setPetSuppressed } from "../pet-prefs";
 import "./pet.css";
 
 const RobotCanvas = lazy(() => import("./RobotCanvas"));
+const BamBamWorld = lazy(() => import("./world/BamBamWorld").then((m) => ({ default: m.BamBamWorld })));
 
 const DAY = 86_400_000;
 const DEBUG_KEY = "chainpay.pet.debug";
@@ -163,9 +165,15 @@ const minutes = (ms: number) => Math.max(1, Math.ceil(ms / 60_000));
 let arrival: ReturnType<typeof petStore.visit> | null = null;
 const arrive = () => (arrival ??= petStore.visit());
 
-type Props = { onHide: () => void; routeKey: string; routeKind: string };
+type Props = {
+  onHide: () => void;
+  routeKey: string;
+  routeKind: string;
+  /** Turned on with the toggle: not an arrival, so no boot and no hello (B17). */
+  quiet?: boolean;
+};
 
-export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
+export default function PetLayer({ onHide, routeKey, routeKind, quiet = false }: Props) {
   const { snapshot, bond, reaction, speech, now: storeClock } = usePet();
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const narrow = useMedia("(max-width: 600px)");
@@ -184,6 +192,7 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   const [view, setView] = useState<PanelView>("main");
   const [booting, setBooting] = useState(false);
   const [tossing, setTossing] = useState(false);
+  const [world, setWorld] = useState(false);
   const [coin, setCoin] = useState<{ x: number; y: number } | null>(null);
   const [look, setLook] = useState({ x: 0, y: 0 });
   const [clock, setClock] = useState(() => Date.now());
@@ -197,6 +206,10 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   // Play that happens to you (specks, calls, the tour) lives on the landing page
   // only. The dashboard and public receipts are for reading money, not play.
   const playful = routeKind === "landing";
+  useEffect(() => {
+    setPetSuppressed("pet-panel", open || tossing || world, "toggle");
+    return () => setPetSuppressed("pet-panel", false);
+  }, [open, tossing, world]);
   const latestBusy = useRef(false);
 
   /** One gate for specks, calls and lines he volunteers. Counts what it allows. */
@@ -260,9 +273,14 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
   }, [position.x, position.y, size, reducedMotion]);
 
   // ---- Arrival: boot up the first time, welcome back after that. ----------
+  const quietArrival = useRef(quiet);
+  const routeKindAtMount = useRef(routeKind);
   useEffect(() => {
     const timers: number[] = [];
     let cancelled = false;
+    // A hello is volunteered speech, which R5 allows on the landing only. Turning
+    // him on with the toggle is not an arrival at all.
+    if (quietArrival.current || routeKindAtMount.current !== "landing") return;
     void arrive().then(greeting => {
       if (cancelled) return;
       if (greeting !== "same-day") {
@@ -556,7 +574,7 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
     <>
       <div
         className={`cp-pet${position.glide ? " is-gliding" : ""}${mood === "low" ? " is-low" : ""}${asleep ? " is-asleep" : ""}${booting ? " is-booting" : ""}`}
-        style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)`, width: size, height: size }}
+        style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)`, width: size, height: size, visibility: world ? "hidden" : undefined }}
         data-mode={position.mode}
         data-stage={stage}
       >
@@ -564,7 +582,7 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
           ref={body}
           type="button"
           className="cp-pet-body"
-          aria-label={calls.calling ? "ChainPay robot is calling you" : "ChainPay robot"}
+          aria-label={calls.calling ? "Bam Bam is calling you" : "Open Bam Bam"}
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-controls={open ? "cp-pet-panel" : undefined}
@@ -590,6 +608,18 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
       {tossing ? <CoinToss onToss={onToss} onCancel={cancelToss} viaKeyboard={tossByKeyboard} /> : null}
       {coin ? <LandedCoin x={coin.x} y={coin.y} /> : null}
       <DustLayer specks={specks} onSweep={onSweep} />
+      {world ? (
+        <Suspense fallback={null}>
+          <BamBamWorld
+            mode="panel"
+            onClose={() => {
+              setWorld(false);
+              requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-world-opener]")?.focus({ preventScroll: true }));
+            }}
+            onFinish={({ won }) => void onGameFinish(won)}
+          />
+        </Suspense>
+      ) : null}
 
       <PetPanel
         open={open}
@@ -598,6 +628,7 @@ export default function PetLayer({ onHide, routeKey, routeKind }: Props) {
         bond={bond}
         onToss={startToss}
         onGameFinish={onGameFinish}
+        onOpenWorld={() => setWorld(true)}
         onToggleGear={(item) => petStore.toggleGear(item)}
         pinned={pin !== null}
         onTogglePin={() => {

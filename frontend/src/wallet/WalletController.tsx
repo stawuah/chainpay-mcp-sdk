@@ -35,6 +35,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
   const [mcpTools, setMcpTools] = useState<WalletContextValue["mcpTools"]>([]);
   const [mcpResult, setMcpResult] = useState<WalletContextValue["mcpResult"]>(null);
   const [integrationStatus, setIntegrationStatus] = useState<WalletContextValue["integrationStatus"]>("idle");
+  const [loadStage, setLoadStage] = useState<WalletContextValue["loadStage"]>(null);
   const [integrationError, setIntegrationError] = useState("");
   const wallet = walletConnection?.address ?? "";
 
@@ -52,6 +53,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     const legacyAddress = deriveMandateAddress(owner, PROGRAM_ID);
     setMandateAddress(preferredMandateAddress ?? legacyAddress);
     setIntegrationStatus("loading");
+    setLoadStage("wallet");
     setIntegrationError("");
 
     const [configState, toolsState, assetsState] = await Promise.allSettled([
@@ -77,6 +79,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
       legacyAddress,
       ...candidateMints.map((mint) => deriveMandateAddress(owner, PROGRAM_ID, mint)),
     ];
+    setLoadStage("permissions");
     const discoveredState = await Promise.allSettled([
       chainpayClient.getMandatesByOwner(owner),
     ]);
@@ -113,6 +116,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     selectedMandateAddress.current = selectedMandate?.address;
     setMandateAddress(selectedMandate?.address ?? legacyAddress);
 
+    setLoadStage("agents");
     const mcpState = await Promise.allSettled([
       hasReadySession() ? runtime.mcpRequest<WalletContextValue["mcpResult"]>("tools/call", { name: "get_mandate", arguments: { address: selectedMandate?.address ?? legacyAddress } }, undefined, "passive") : Promise.resolve(null),
     ]);
@@ -124,6 +128,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     const errors = [configState, toolsState, assetsState, ...mandateStates]
       .filter((state): state is PromiseRejectedResult => state.status === "rejected")
       .map((state) => state.reason instanceof Error ? state.reason.message : String(state.reason));
+    setLoadStage(null);
     if (errors.length > 0) {
       setIntegrationStatus("error");
       setIntegrationError(errors.join(" · "));
@@ -143,6 +148,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     setMcpTools([]);
     setMcpResult(null);
     setIntegrationStatus("idle");
+    setLoadStage(null);
     setIntegrationError("");
   }, []);
 
@@ -272,6 +278,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     mcpTools,
     mcpResult,
     integrationStatus,
+    loadStage,
     integrationError,
     signTransaction: walletConnection
       ? async (transaction) => {
@@ -308,6 +315,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
     connecting,
     integrationError,
     integrationStatus,
+    loadStage,
     leaveCurrentWallet,
     loadWalletState,
     mandate,

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { markJustSignedIn } from "./signInMoment";
 import { ensureSessionReady, hasReadySession, sessionWalletAddress, subscribeSession } from "../session";
 
 export function useOwnerSignIn() {
@@ -17,7 +18,10 @@ export function useOwnerSignIn() {
     setError("");
     try {
       await ensureSessionReady();
-      if (sessionWalletAddress() === expectedOwner) setStatus("idle");
+      if (sessionWalletAddress() === expectedOwner) {
+        setStatus("idle");
+        markJustSignedIn();
+      }
     } catch (cause) {
       if (sessionWalletAddress() === expectedOwner) {
         setStatus("error");

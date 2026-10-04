@@ -1,0 +1,43 @@
+/* Bam Bam's on/off toggle (council ruling B14–B16). Loaded with PetMount, so
+   it works even when the pet chunk never loads. */
+:root { --z-pet-toggle: 52; }
+
+.cp-pet-toggle {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: var(--z-pet-toggle);
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 100px;
+  background: #fff;
+  color: #5b616e;
+  box-shadow: 0 0 0 1px rgba(10, 11, 13, .06), 0 2px 4px rgba(10, 11, 13, .04), 0 18px 48px -16px rgba(20, 33, 61, .28);
+  cursor: pointer;
+  transition: background 150ms ease-out, transform 100ms ease-out;
+}
+.cp-pet-toggle:hover { background: #f7f7f7; }
+.cp-pet-toggle.is-on { background: #eaf0ff; color: #0052ff; box-shadow: inset 0 0 0 1.5px rgba(0, 82, 255, .35); }
+.cp-pet-toggle.is-on:hover { background: #dfe8ff; }
+.cp-pet-toggle:active { transform: scale(.97); }
+.cp-pet-toggle:focus-visible { outline: 3px solid rgba(0, 82, 255, .25); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-pet-toggle { transition: none; }
+  .cp-pet-toggle:active { transform: none; }
+}
+
+/* Phones: the dashboard's last row can scroll clear of the toggle (B16d). */
+@media (max-width: 600px) {
+  body:has(.cp-pet-toggle) .dashboard-main::after { content: ""; display: block; height: 64px; }
+}
+
+/* Phones: the landing footer's last links sit clear of the resting robot and
+   the toggle (Phase 5 m9). Only while the toggle is on the page. */
+@media (max-width: 600px) {
+  body:has(.cp-pet-toggle) .landing-footer { padding-bottom: 96px; }
+}
