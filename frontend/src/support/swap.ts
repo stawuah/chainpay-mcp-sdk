@@ -200,7 +200,8 @@ export function assertSafeSwap(response: JupSwapInstructions, donor: string, acc
 /** Network fee + priority fee + rent for any new token account, in lamports. */
 export function swapFeeLamports(plan: SwapPlan, existing: ReadonlySet<string>) {
   const rent = plan.createsAccounts.filter((a) => !existing.has(a.address)).reduce((sum, a) => sum + a.rentLamports, 0n);
-  return { totalLamports: BASE_FEE_LAMPORTS + plan.priorityFeeLamports + rent, rentLamports: rent };
+  const newAccounts = plan.createsAccounts.filter((a) => !existing.has(a.address)).length;
+  return { totalLamports: BASE_FEE_LAMPORTS + plan.priorityFeeLamports + rent, rentLamports: rent, newAccounts };
 }
 
 export type PreparedSwap = {
@@ -208,7 +209,9 @@ export type PreparedSwap = {
   instructions: TransactionInstruction[];
   lookupTables: string[];
   feeLamports: bigint;
+  /** Part of the fee that opens token accounts in the donor's wallet (refundable by closing them). */
   rentLamports: bigint;
+  newAccounts: number;
   preparedAt: number;
 };
 
@@ -285,6 +288,7 @@ export async function buildSwapTip(input: {
     lookupTables: body.addressLookupTableAddresses ?? [],
     feeLamports: fee.totalLamports,
     rentLamports: fee.rentLamports,
+    newAccounts: fee.newAccounts,
     preparedAt: (input.now ?? Date.now)(),
   };
 }

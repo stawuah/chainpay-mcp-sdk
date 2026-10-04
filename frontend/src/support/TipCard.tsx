@@ -370,12 +370,14 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
                 <button type="button" className="tip-link-button" disabled={busy} onClick={() => { walletState.disconnect(); go("wallet"); }}>Change</button>
               </dd></div>
               {swapping ? (
-                <div><dt>Arrives</dt><dd className="tip-stack">{minimum ? <>{shownArrives}<span className="tip-mono-soft">at least {minimum}</span></> : "Getting the latest price…"}</dd></div>
+                <div><dt>Arrives</dt><dd className="tip-stack">{minimum ? <>{shownArrives}<span className="tip-mono-soft">at least {minimum}</span></> : error ? "—" : "Getting the latest price…"}</dd></div>
               ) : null}
               <div><dt>Network fee</dt><dd className="tip-stack">
-                {feeLamports !== null ? <>≈ {formatUnits(feeLamports, SOL_DECIMALS)} SOL{feeUsd ? ` (${feeUsd.replace(/^≈ /, "")})` : ""}</> : "…"}
+                {feeLamports !== null ? <>≈ {formatUnits(feeLamports, SOL_DECIMALS)} SOL{feeUsd ? ` (${feeUsd.replace(/^≈ /, "")})` : ""}</> : error ? "—" : "…"}
                 {prepared && prepared.rentLamports > 0n ? (
-                  <span className="tip-mono-soft">includes {formatUnits(prepared.rentLamports, SOL_DECIMALS)} SOL to open a token account in your wallet</span>
+                  <span className="tip-mono-soft">
+                    includes {formatUnits(prepared.rentLamports, SOL_DECIMALS)} SOL to open {prepared.newAccounts === 1 ? "a token account" : `${prepared.newAccounts} token accounts`} in your wallet
+                  </span>
                 ) : null}
               </dd></div>
               {cleanNote(note) ? <div><dt>Note</dt><dd className="tip-note-value">{cleanNote(note)}</dd></div> : null}
