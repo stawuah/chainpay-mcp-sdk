@@ -124,7 +124,8 @@ pub async fn issue(
         program::hex(&agent),
         body.client_operation_id
     );
-    let request_digest = json!({"merchantRef": body.merchant_ref, "amountCents": cents(amount)});
+    // Keyed digest only: the claim row is plaintext in Convex.
+    let request_digest = json!({"v": 2, "terms": cards.crypto.blind("checkout-terms", json!({"merchantRef": body.merchant_ref, "amountCents": cents(amount)}).to_string().as_bytes())});
     let (won, _, stored_intent, initial) = cards
         .store
         .claim_operation(
@@ -155,9 +156,6 @@ pub async fn issue(
         "cardId": card_id,
         "intentId": program::hex(&intent_id),
         "agent": bs58::encode(agent).into_string(),
-        "merchantRef": merchant.reference,
-        "merchantHash": program::hex(&merchant_hash),
-        "mcc": merchant.mcc,
         "maxAmountCents": cents(amount),
         "currency": "USD",
         "expiresAtSecs": expires_secs,
@@ -167,12 +165,14 @@ pub async fn issue(
         "createdAt": rfc3339(now_ms()),
         // The capability itself, sealed, so a retried request with the same
         // clientOperationId gets the same single-use capability back.
-        "secret": cards.crypto.seal_json(CardKind::CardEvents.as_str(), &key, &json!({"capability": capability})),
+        // The merchant stays sealed too: an intent row must not reveal which
+        // shops the card may use.
+        "secret": cards.crypto.seal_json(CardKind::CardEvents.as_str(), &key, &json!({"capability": capability, "merchantRef": merchant.reference})),
     });
     let index = CardIndex {
         owner: Some(owner.clone()),
         connector: Some(CONNECTOR.into()),
-        reference: Some(super::asa::match_reference(&card_id, &merchant_hash)),
+        reference: Some(super::asa::match_reference(cards, &card_id, &merchant_hash)),
         idempotency: Some(format!("cap:{hash}")),
     };
     let row = match cards
@@ -392,7 +392,15 @@ pub async fn redeem(cards: &Arc<CardsConnector>, body: RedeemRequest) -> Result<
             "This checkout capability expired",
         ));
     }
-    let bound = merchant_by_ref(row.record["merchantRef"].as_str().unwrap_or(""))
+    let sealed: Value = cards
+        .crypto
+        .open_json(
+            CardKind::CardEvents.as_str(),
+            &row.key,
+            &row.record["secret"],
+        )
+        .map_err(|_| CardsError::internal())?;
+    let bound = merchant_by_ref(sealed["merchantRef"].as_str().unwrap_or(""))
         .ok_or_else(CardsError::internal)?;
     let merchant = match &body.merchant_ref {
         Some(reference) => merchant_by_ref(reference).ok_or_else(|| {

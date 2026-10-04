@@ -32,12 +32,15 @@ pub mod events;
 #[cfg(test)]
 pub(crate) mod fake_per;
 pub mod lithic;
+pub mod metrics;
 pub mod per;
 pub mod program;
 pub mod reconcile;
+pub mod recovery;
 pub mod routes;
 #[cfg(test)]
 pub(crate) mod sim;
+pub mod statements;
 pub mod tee;
 #[cfg(test)]
 mod tests;
@@ -84,6 +87,8 @@ pub struct CardsConfig {
     pub asa_budget: Duration,
     pub embed_origin: Option<String>,
     pub issuer_code: u8,
+    /// Statement repayment target (simulated partner account on Devnet).
+    pub repayment: statements::RepaymentConfig,
 }
 
 impl std::fmt::Debug for CardsConfig {
@@ -104,6 +109,8 @@ pub struct CardsConnector {
     pub per: Per,
     pub crypto: RecordCrypto,
     pub store: StatusStore,
+    pub metrics: metrics::CardMetrics,
+    base: std::sync::OnceLock<statements::BaseChain>,
     attestation: RwLock<AttestationStatus>,
     attestation_refreshing: std::sync::atomic::AtomicBool,
     card_cache: RwLock<HashMap<String, (StoredCardRecord, Instant)>>,
@@ -143,6 +150,28 @@ fn min_secret(name: &str, min: usize) -> Result<Option<String>, CardsConfigError
         }
         other => Ok(other),
     }
+}
+
+/// `CARDS_REPAYMENT_MINT` (default Devnet USDC) and the simulated partner's
+/// token account `CARDS_PARTNER_TOKEN_ACCOUNT` (Devnet only).
+fn repayment_config() -> Result<statements::RepaymentConfig, CardsConfigError> {
+    let mint = env("CARDS_REPAYMENT_MINT").unwrap_or_else(|| statements::DEVNET_USDC_MINT.into());
+    if !statements::is_address(&mint) {
+        return Err(invalid("CARDS_REPAYMENT_MINT must be a Solana address"));
+    }
+    let partner = env("CARDS_PARTNER_TOKEN_ACCOUNT");
+    if partner
+        .as_deref()
+        .is_some_and(|p| !statements::is_address(p))
+    {
+        return Err(invalid(
+            "CARDS_PARTNER_TOKEN_ACCOUNT must be a Solana address",
+        ));
+    }
+    Ok(statements::RepaymentConfig {
+        mint,
+        partner_token_account: partner,
+    })
 }
 
 fn flag(name: &str) -> bool {
@@ -211,6 +240,7 @@ impl CardsConnector {
             ),
             embed_origin: env("CARDS_EMBED_TARGET_ORIGIN"),
             issuer_code: program::ISSUER_LITHIC_SANDBOX,
+            repayment: repayment_config()?,
         };
         Ok(Some(Arc::new(Self::new(
             config,
@@ -235,6 +265,8 @@ impl CardsConnector {
             per,
             crypto,
             store,
+            metrics: metrics::CardMetrics::default(),
+            base: std::sync::OnceLock::new(),
             attestation: RwLock::new(AttestationStatus::unchecked(mode)),
             attestation_refreshing: std::sync::atomic::AtomicBool::new(false),
             card_cache: RwLock::new(HashMap::new()),
@@ -244,6 +276,24 @@ impl CardsConnector {
 
     pub fn authorizer(&self) -> solana_address::Address {
         self.per.authorizer()
+    }
+
+    /// Base-layer RPC for repayment receipts. Attached once by the server.
+    pub fn attach_base(
+        &self,
+        rpc: crate::rpc::RpcClient,
+        chainpay_program: String,
+        cluster: &'static str,
+    ) {
+        let _ = self.base.set(statements::BaseChain {
+            rpc,
+            chainpay_program,
+            cluster,
+        });
+    }
+
+    pub fn base(&self) -> Option<statements::BaseChain> {
+        self.base.get().cloned()
     }
 
     pub async fn attestation(&self) -> AttestationStatus {
@@ -549,6 +599,20 @@ pub fn parse_cents(value: &str) -> Option<u64> {
 }
 
 // ---------------------------------------------------------------- merchants
+
+/// Display name for a transaction row: fixture name, else the issuer descriptor.
+pub fn merchant_display(cards: &CardsConnector, row: &StoredCardRecord) -> String {
+    let provider = cards.open_provider(row);
+    let acceptor = provider["merchant"]["acceptorId"].as_str().unwrap_or("");
+    merchant_by_acceptor(acceptor)
+        .map(|m| m.display_name.to_owned())
+        .unwrap_or_else(|| {
+            provider["merchant"]["descriptor"]
+                .as_str()
+                .unwrap_or("Merchant")
+                .to_owned()
+        })
+}
 
 /// Registered fixture merchants (contracts.md §3.4 `merchantRef`). The demo
 /// extends `demo-merchant/`: one shop is on the card's allowlist, one is not.

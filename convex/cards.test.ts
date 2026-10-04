@@ -43,6 +43,10 @@ describe("card records", () => {
     expect((await call(t, "put_card_record", { kind: "card_events", key: "intent:i", record_json: JSON.stringify({ v: 1, rev: 1, capabilityHash: "ab" + "4111111111111111" + "c".repeat(46), perTx: "3x" + "4111111111111111" + "Z".repeat(60) }), updated: "1" })).written).toBe(true);
     await expect(call(t, "put_card_record", { kind: "card_events", key: "asa:u", record_json: JSON.stringify({ v: 1, rev: 1, note: "4111111111111111" }), updated: "1" })).rejects.toThrow(/card-number/);
     expect((await call(t, "put_card_record", { kind: "card_statements", key: "stmt:c:1", record_json: JSON.stringify({ v: 1, rev: 1, totalCents: "-250", lines: envelope }), updated: "1" })).written).toBe(true);
+    // Statement postings and recovery reports are sealed too.
+    await expect(call(t, "put_card_record", { kind: "card_events", key: "post:c:e", record_json: JSON.stringify({ v: 1, rev: 1, type: "posting", line: { kind: "purchase", amountCents: "2000" } }), updated: "1" })).rejects.toThrow(/encrypted/);
+    expect((await call(t, "put_card_record", { kind: "card_events", key: "post:c:f", record_json: JSON.stringify({ v: 1, rev: 1, type: "posting", line: envelope }), updated: "1" })).written).toBe(true);
+    await expect(call(t, "put_card_record", { kind: "cards", key: "card:r", record_json: JSON.stringify({ v: 1, rev: 1, recoveryReport: { numbers: [] } }), updated: "1" })).rejects.toThrow(/encrypted/);
   });
 
   it("scans by key prefix with a resumable cursor and keeps card ops off the MCP role", async () => {

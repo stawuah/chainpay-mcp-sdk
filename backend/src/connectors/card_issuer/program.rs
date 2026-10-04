@@ -507,6 +507,51 @@ pub fn checkpoint(
     )
 }
 
+/// `roll_period` (authorizer). `expired_reservations` are passed writable as
+/// remaining accounts so the program can release holds past `hold_expires_at`.
+pub fn roll_period(
+    authorizer: &Address,
+    policy: &Address,
+    period: &Address,
+    expired_reservations: &[Address],
+) -> Instruction {
+    let mut accounts = vec![signer(*authorizer), w(*policy), w(*period)];
+    accounts.extend(expired_reservations.iter().map(|r| w(*r)));
+    ix("roll_period", accounts, &[])
+}
+
+/// `record_repayment` (authorizer, contracts.md §1.3 #27). Only after the
+/// statement is `partner_confirmed`; the digest is single use on-chain.
+pub fn record_repayment(
+    authorizer: &Address,
+    policy: &Address,
+    period: &Address,
+    statement_digest: &[u8; 32],
+    amount_cents: u64,
+) -> Instruction {
+    let mut args = statement_digest.to_vec();
+    args.extend_from_slice(&amount_cents.to_le_bytes());
+    ix(
+        "record_repayment",
+        vec![signer(*authorizer), w(*policy), r(*period)],
+        &args,
+    )
+}
+
+/// `confirm_reconciled` (owner only). Built unsigned for the owner's wallet.
+pub fn confirm_reconciled(
+    owner: &Address,
+    policy: &Address,
+    period: &Address,
+    recon_digest: &[u8; 32],
+) -> Instruction {
+    ix(
+        "confirm_reconciled",
+        vec![signer(*owner), w(*policy), w(*period)],
+        recon_digest,
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct RestoreArgs {
     pub policy: PolicyArgs,
@@ -841,6 +886,17 @@ pub struct CardPolicyAccount {
     pub ledger_head: [u8; 32],
     pub ledger_seq: u64,
     pub commit_seq: u64,
+    /// Appended in 1A: digest `restore` stored; `confirm_reconciled` must match.
+    pub recon_digest: [u8; 32],
+    /// Last statement digests `record_repayment` accepted (replay ring).
+    pub repayment_digests: Vec<[u8; 32]>,
+}
+
+impl CardPolicyAccount {
+    /// `record_repayment` already accepted this statement digest.
+    pub fn repayment_recorded(&self, digest: &[u8; 32]) -> bool {
+        self.repayment_digests.iter().any(|d| d == digest)
+    }
 }
 
 pub fn decode_policy(data: &[u8]) -> Result<CardPolicyAccount, DecodeError> {
@@ -878,6 +934,20 @@ pub fn decode_policy(data: &[u8]) -> Result<CardPolicyAccount, DecodeError> {
     let ledger_head = r.arr::<32>()?;
     let ledger_seq = r.u64()?;
     let commit_seq = r.u64()?;
+    // Appended fields: absent on a short (pre-1A) account, never guessed.
+    let (recon_digest, repayment_digests) = (|| {
+        let _bump = r.u8()?;
+        let recon = r.arr::<32>()?;
+        let mut ring = Vec::new();
+        for _ in 0..8 {
+            ring.push(r.arr::<32>()?);
+        }
+        let _count = r.u8()?;
+        // A ring: every non-zero slot is a recorded digest.
+        ring.retain(|d| *d != [0u8; 32]);
+        Ok::<_, DecodeError>((recon, ring))
+    })()
+    .unwrap_or(([0u8; 32], Vec::new()));
     merchants.truncate(merchant_count.min(8));
     mccs.truncate(mcc_count.min(16));
     Ok(CardPolicyAccount {
@@ -903,6 +973,8 @@ pub fn decode_policy(data: &[u8]) -> Result<CardPolicyAccount, DecodeError> {
         ledger_head,
         ledger_seq,
         commit_seq,
+        recon_digest,
+        repayment_digests,
     })
 }
 
@@ -1212,6 +1284,15 @@ mod tests {
                 close_checkout_intent(&a, &policy, &res),
             ),
             ("checkpoint", checkpoint(&a, &accounts, &[1; 32], 1)),
+            ("roll_period", roll_period(&a, &policy, &period, &[])),
+            (
+                "record_repayment",
+                record_repayment(&a, &policy, &period, &[1; 32], 1),
+            ),
+            (
+                "confirm_reconciled",
+                confirm_reconciled(&a, &policy, &period, &[1; 32]),
+            ),
             ("init_card", init_card(&a, &[9; 32], 1, &[1; 32], 1)),
             ("delegate_card", delegate_card(&a, &[9; 32])),
             (
@@ -1359,8 +1440,8 @@ mod tests {
     #[test]
     fn hashes_follow_the_contract_domains() {
         assert_eq!(
-            merchant_id_hash("  demo-data-api-credits "),
-            sha256(&[b"chainpay-merchant:v1\nDEMO-DATA-API-CREDITS"])
+            merchant_id_hash("  demo-dataapi "),
+            sha256(&[b"chainpay-merchant:v1\nDEMO-DATAAPI"])
         );
         assert_ne!(auth_id_hash(1, "t"), auth_id_hash(2, "t"));
         assert_eq!(unhex::<2>("0aff"), Some([10, 255]));

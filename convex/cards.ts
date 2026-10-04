@@ -44,8 +44,8 @@ export function panLike(value: string): boolean {
 
 /** Fields that must be encrypted when present, per kind (contracts.md §5 🔒 column). */
 const SENSITIVE: Record<CardKind, string[]> = {
-  cards: ["issuer", "label"],
-  card_events: ["provider", "raw", "secret"],
+  cards: ["issuer", "label", "recoveryReport"],
+  card_events: ["provider", "raw", "secret", "line"],
   card_statements: ["lines"],
   card_recovery: ["snapshot", "masterSalt", "report"],
 };

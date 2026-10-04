@@ -33,10 +33,18 @@ pub struct FakePolicy {
     pub fee_bps: u16,
     pub ledger_seq: u64,
     pub commit_seq: u64,
+    pub ledger_head: [u8; 32],
+    pub recon_digest: [u8; 32],
+    pub repayments: Vec<[u8; 32]>,
+    pub period_seconds: u32,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct FakePeriod {
+    pub index: u32,
+    pub start: i64,
+    /// 0 = far future (the default test card never ends its period).
+    pub end: i64,
     pub captured: u64,
     pub reserved: u64,
     pub refunded: u64,
@@ -94,6 +102,8 @@ pub struct Knobs {
     pub drop_next: usize,
     /// Reads return RpcError while set.
     pub outage: bool,
+    /// The card's private state is gone: reads return null, writes fail.
+    pub lost: bool,
 }
 
 pub struct FakePer {
@@ -120,7 +130,11 @@ fn account_disc(name: &str) -> [u8; 8] {
         .unwrap()
 }
 
-const NAMES: [&str; 14] = [
+const NAMES: [&str; 18] = [
+    "roll_period",
+    "record_repayment",
+    "confirm_reconciled",
+    "resolve_exception",
     "open_checkout_intent",
     "authorize",
     "capture",
@@ -208,6 +222,12 @@ impl FakePer {
                 signature: Some(signature),
             };
         }
+        if knobs.lost {
+            return TxOutcome::Failed {
+                signature: Some(signature),
+                reason: "account not found".into(),
+            };
+        }
         let result = {
             let mut state = self.state.lock().unwrap();
             let mut result = Ok(());
@@ -253,6 +273,9 @@ impl FakePer {
         if self.knobs.lock().unwrap().outage {
             return TeeRead::RpcError("outage".into());
         }
+        if self.knobs.lock().unwrap().lost {
+            return TeeRead::NotVisible { slot: Some(1) };
+        }
         let state = self.state.lock().unwrap();
         for (policy_pda, card) in &state.cards {
             if policy_pda == address {
@@ -292,9 +315,23 @@ fn now_secs() -> i64 {
     (super::now_ms() / 1000) as i64
 }
 
+fn with_fee(amount: u64, bps: u16) -> u64 {
+    amount + (amount as u128 * bps as u128).div_ceil(10_000) as u64
+}
+
+fn ledger(card: &mut Card, kind: u8, amount: u64) {
+    card.policy.ledger_seq += 1;
+    let mut h = Sha256::new();
+    h.update(card.policy.ledger_head);
+    h.update([kind]);
+    h.update(amount.to_le_bytes());
+    card.policy.ledger_head = h.finalize().into();
+}
+
 fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) -> Result<(), u32> {
     let args = &ix.data[8..];
-    let policy_pda = ix.accounts[1].pubkey;
+    // `restore` is co-signed: [owner, authorizer, policy, period].
+    let policy_pda = ix.accounts[if name == "restore" { 2 } else { 1 }].pubkey;
     let signer = ix.accounts[0].pubkey;
     let card = state.cards.get_mut(&policy_pda).ok_or(6039u32)?;
     let is_authorizer = signer == *authorizer && card.policy.authorizer == *authorizer;
@@ -402,10 +439,12 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
                 r.captured = amount;
                 r.flags |= program::FLAG_SINGLE_MESSAGE;
                 card.period.captured += amount;
+                card.policy.outstanding += with_fee(amount, card.policy.fee_bps);
             } else {
                 card.period.reserved += amount;
             }
             card.reservations.insert(reservation, r);
+            ledger(card, 1, amount);
             Ok(())
         }
         "capture" | "reverse" | "record_dispute" | "adjust_reservation" => {
@@ -520,15 +559,24 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
             card.event_ids.insert(id);
             let res_key = ix.accounts[3].pubkey;
             let reservation = (res_key != program::program_id()).then_some(res_key);
+            let bps = card.policy.fee_bps;
+            let credit = |card: &mut Card| {
+                let gross = with_fee(amount, bps);
+                card.policy.outstanding -= gross.min(card.policy.outstanding);
+            };
             if name == "refund" {
                 card.period.refunded += amount;
                 if let Some(r) = reservation.and_then(|k| card.reservations.get_mut(&k)) {
                     r.refunded += amount;
                 }
+                credit(card);
             } else {
                 card.policy.exceptions_open += 1;
                 match kind {
-                    program::exception_kind::CORRECTION_CREDIT => {}
+                    program::exception_kind::CORRECTION_CREDIT => {
+                        card.period.refunded += amount;
+                        credit(card);
+                    }
                     program::exception_kind::OVER_HOLD => {
                         if let Some(r) = reservation.and_then(|k| card.reservations.get_mut(&k)) {
                             r.hold += amount;
@@ -538,7 +586,7 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
                     _ => {
                         card.period.captured += amount;
                         card.period.exception += amount;
-                        card.policy.outstanding += amount;
+                        card.policy.outstanding += with_fee(amount, bps);
                     }
                 }
             }
@@ -546,11 +594,115 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
         }
         "freeze" => {
             card.policy.frozen = true;
+            ledger(card, 8, 0);
+            Ok(())
+        }
+        "unfreeze" => {
+            if signer != card.policy.owner {
+                return err(6000);
+            }
+            if card.policy.recovery != 0 {
+                return err(6005);
+            }
+            card.policy.frozen = false;
+            Ok(())
+        }
+        "roll_period" => {
+            if !is_authorizer {
+                return err(6000);
+            }
+            if card.period.end != 0 && now_secs() < card.period.end || card.period.end == 0 {
+                return err(6022);
+            }
+            let now = now_secs();
+            for meta in &ix.accounts[3..] {
+                if let Some(r) = card.reservations.get_mut(&meta.pubkey) {
+                    if matches!(r.state, rs::RESERVED | rs::PARTIALLY_CAPTURED) {
+                        card.period.reserved = card.period.reserved.saturating_sub(r.hold);
+                        r.hold = 0;
+                        r.state = rs::EXPIRED;
+                    }
+                }
+            }
+            card.period.index = card.period.index.max(1) + 1;
+            card.period.start = now;
+            card.period.end = now + card.policy.period_seconds.max(86_400) as i64;
+            // Purchase allowance only: holds and credit exposure carry over.
+            card.period.captured = 0;
+            card.period.refunded = 0;
+            card.period.count = 0;
+            card.period.exception = 0;
+            ledger(card, 7, card.period.reserved);
+            Ok(())
+        }
+        "record_repayment" => {
+            if !is_authorizer {
+                return err(6000);
+            }
+            let digest: [u8; 32] = args[0..32].try_into().unwrap();
+            let amount = u64_at(args, 32);
+            if amount == 0 {
+                return err(6035);
+            }
+            if digest == [0; 32] {
+                return err(6042);
+            }
+            if card.policy.repayments.contains(&digest) {
+                return err(6032);
+            }
+            if amount > card.policy.outstanding {
+                return err(6038);
+            }
+            card.policy.outstanding -= amount;
+            card.policy.repayments.push(digest);
+            if card.policy.repayments.len() > 8 {
+                card.policy.repayments.remove(0);
+            }
+            ledger(card, 15, amount);
+            Ok(())
+        }
+        "restore" => {
+            // Co-signed: owner + the member authorizer.
+            if signer != card.policy.owner || ix.accounts[1].pubkey != *authorizer {
+                return err(6000);
+            }
+            if card.policy.recovery != 1 {
+                return err(6026);
+            }
+            let tail = &args[args.len() - (4 + 8 * 3 + 2 + 8 * 2 + 32 + 8 + 32)..];
+            let period_index = u32::from_le_bytes(tail[0..4].try_into().unwrap());
+            card.period.index = period_index;
+            card.period.captured = u64_at(tail, 4);
+            card.period.reserved = u64_at(tail, 12);
+            card.period.refunded = u64_at(tail, 20);
+            card.period.count = u16::from_le_bytes(tail[28..30].try_into().unwrap());
+            card.period.exception = u64_at(tail, 30);
+            card.policy.outstanding = u64_at(tail, 38);
+            card.policy.ledger_head = tail[46..78].try_into().unwrap();
+            card.policy.ledger_seq = u64_at(tail, 78);
+            card.policy.recon_digest = tail[86..118].try_into().unwrap();
+            card.policy.recovery = 2;
+            card.policy.version += 1;
+            ledger(card, 13, 0);
+            Ok(())
+        }
+        "confirm_reconciled" => {
+            if signer != card.policy.owner {
+                return err(6000);
+            }
+            if card.policy.recovery != 2 {
+                return err(6026);
+            }
+            if args[0..32] != card.policy.recon_digest {
+                return err(6037);
+            }
+            card.policy.recovery = 0;
             Ok(())
         }
         "recovery_freeze" => {
             card.policy.frozen = true;
             card.policy.recovery = 1;
+            ledger(card, 12, 0);
             Ok(())
         }
         "checkpoint" => {
@@ -570,7 +722,14 @@ pub fn encode_policy(p: &FakePolicy) -> Vec<u8> {
     d.extend_from_slice(&p.budget.to_le_bytes());
     d.extend_from_slice(&p.max_purchase.to_le_bytes());
     d.extend_from_slice(&p.max_count.to_le_bytes());
-    d.extend_from_slice(&2_592_000u32.to_le_bytes());
+    d.extend_from_slice(
+        &(if p.period_seconds == 0 {
+            2_592_000
+        } else {
+            p.period_seconds
+        })
+        .to_le_bytes(),
+    );
     d.extend_from_slice(b"USD");
     d.push(p.merchants.len() as u8);
     for i in 0..8 {
@@ -590,19 +749,25 @@ pub fn encode_policy(p: &FakePolicy) -> Vec<u8> {
     d.extend_from_slice(&p.exceptions_open.to_le_bytes());
     d.push(2);
     d.extend_from_slice(&[0; 32 * 6 + 6]);
-    d.extend_from_slice(&[7; 32]);
+    d.extend_from_slice(&p.ledger_head);
     d.extend_from_slice(&p.ledger_seq.to_le_bytes());
     d.extend_from_slice(&p.commit_seq.to_le_bytes());
-    d.extend_from_slice(&[0; 1 + 32 + 32 * 8 + 1 + 32 * 16 + 1 + 2]);
+    d.push(1);
+    d.extend_from_slice(&p.recon_digest);
+    for i in 0..8 {
+        d.extend_from_slice(p.repayments.get(i).unwrap_or(&[0; 32]));
+    }
+    d.push(p.repayments.len() as u8);
+    d.extend_from_slice(&[0; 32 * 16 + 1 + 2]);
     d
 }
 
 pub fn encode_period(policy: &Address, p: &FakePeriod) -> Vec<u8> {
     let mut d = account_disc("CardPeriod").to_vec();
     d.extend_from_slice(policy.as_ref());
-    d.extend_from_slice(&1u32.to_le_bytes());
-    d.extend_from_slice(&0i64.to_le_bytes());
-    d.extend_from_slice(&i64::MAX.to_le_bytes());
+    d.extend_from_slice(&p.index.max(1).to_le_bytes());
+    d.extend_from_slice(&p.start.to_le_bytes());
+    d.extend_from_slice(&(if p.end == 0 { i64::MAX } else { p.end }).to_le_bytes());
     d.extend_from_slice(&p.captured.to_le_bytes());
     d.extend_from_slice(&p.reserved.to_le_bytes());
     d.extend_from_slice(&p.refunded.to_le_bytes());

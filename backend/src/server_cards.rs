@@ -6,6 +6,7 @@ use crate::connectors::card_issuer::{
     routes::{self, Caller, CardsError},
 };
 use axum::{body::Bytes, http::HeaderMap};
+use solana_transaction::versioned::VersionedTransaction;
 use std::sync::Arc;
 
 /// Token hash of a scoped MCP connection (never the token itself), attached
@@ -22,6 +23,7 @@ pub(super) fn is_self_authenticated(path: &str) -> bool {
             | "/v1/cards/lithic/events"
             | "/v1/cards/checkout/redeem"
             | "/internal/cron/cards/reconcile"
+            | "/internal/ops/cards/metrics"
     )
 }
 
@@ -210,7 +212,12 @@ pub(super) async fn get_card(
     let commitment = commitment(&state, &card).await;
     (
         StatusCode::OK,
-        Json(routes::card_view(&cards, &card, commitment)),
+        Json(routes::card_view(
+            &cards,
+            &card,
+            commitment,
+            Some(&cards.attestation().await),
+        )),
     )
         .into_response()
 }
@@ -329,13 +336,97 @@ pub(super) async fn statement(
 pub(super) async fn repayment(
     State(state): State<BackendState>,
     Extension(principal): Extension<Principal>,
+    connection: Option<Extension<ConnectionHash>>,
+    Path((card_id, statement_id)): Path<(String, String)>,
+    body: Bytes,
 ) -> Response {
-    let _cards = cards_or_404!(state);
-    if principal.scope.is_some() {
-        return CardsError::forbidden("Owner session required").into_response();
+    let cards = cards_or_404!(state);
+    let caller = caller(&principal, connection.as_deref());
+    respond(match parse_body(&body) {
+        Ok(request) => {
+            cards::statements::submit_repayment(&cards, &caller, &card_id, &statement_id, request)
+                .await
+        }
+        Err(error) => Err(error),
+    })
+}
+
+pub(super) async fn close_statement(
+    State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
+    connection: Option<Extension<ConnectionHash>>,
+    Path(card_id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let cards = cards_or_404!(state);
+    let caller = caller(&principal, connection.as_deref());
+    respond(match parse_body(&body) {
+        Ok(request) => cards::statements::close_now(&cards, &caller, &card_id, request).await,
+        Err(error) => Err(error),
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct SaltQuery {
+    seq: Option<String>,
+}
+
+pub(super) async fn disclosure_salt(
+    State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
+    connection: Option<Extension<ConnectionHash>>,
+    Path(card_id): Path<String>,
+    Query(query): Query<SaltQuery>,
+) -> Response {
+    let cards = cards_or_404!(state);
+    let caller = caller(&principal, connection.as_deref());
+    let card = match routes::owned_card(&cards, &caller, &card_id).await {
+        Ok(card) => card,
+        Err(error) => return error.into_response(),
+    };
+    let on_chain = commitment(&state, &card)
+        .await
+        .and_then(|c| c["seq"].as_str().and_then(|s| s.parse().ok()));
+    respond(
+        routes::disclosure_salt(&cards, &caller, &card_id, query.seq.as_deref(), on_chain).await,
+    )
+}
+
+pub(super) async fn recovery_reconcile(
+    State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
+    connection: Option<Extension<ConnectionHash>>,
+    Path(card_id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let cards = cards_or_404!(state);
+    let caller = caller(&principal, connection.as_deref());
+    respond(match parse_body(&body) {
+        Ok(request) => {
+            cards::recovery::reconcile_after_restore(&cards, &caller, &card_id, request).await
+        }
+        Err(error) => Err(error),
+    })
+}
+
+/// `GET /internal/ops/cards/metrics` (bearer `CRON_SECRET`): opaque counters,
+/// ASA latency percentiles and durable gauges recomputed from storage.
+pub(super) async fn ops_metrics(State(state): State<BackendState>, headers: HeaderMap) -> Response {
+    let cards = cards_or_404!(state);
+    let auth = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if !routes::bearer_matches(auth, cards.config.cron_secret.as_deref()) {
+        return CardsError {
+            status: StatusCode::UNAUTHORIZED,
+            ..CardsError::forbidden("Ops authorization required")
+        }
+        .into_response();
     }
-    // Workstream E (statement close + repayment verification) lands next.
-    CardsError::not_implemented("Statement repayment verification is not available yet")
+    (
+        StatusCode::OK,
+        Json(cards::reconcile::ops_metrics(&cards).await),
+    )
         .into_response()
 }
 
@@ -373,6 +464,94 @@ pub(super) async fn restore(
     })
 }
 
+// ------------------------------------------------- card setup submission
+
+/// A base-layer transaction for `card_policy` or the delegation program (the
+/// card's escrow top-up). Routed through `/v1/transactions/submit` like every
+/// other owner transaction, but validated against the card registry instead
+/// of the ChainPay owner-action rules.
+pub(super) fn is_card_setup(tx: &VersionedTransaction) -> bool {
+    let keys = tx.message.static_account_keys();
+    let program = cards::program::program_id();
+    let delegation = cards::program::addr(cards::program::DELEGATION_PROGRAM);
+    tx.message.instructions().iter().any(|ix| {
+        keys.get(ix.program_id_index as usize)
+            .is_some_and(|key| *key == program || *key == delegation)
+    })
+}
+
+/// Accept only the exact transactions `/v1/cards/prepare` produced for one of
+/// the caller's own cards (`init_card`, `delegate_card`, escrow top-up),
+/// re-derived from the registry, with the caller as fee payer. Any other
+/// instruction, account or amount is refused. The blockhash may be fresh.
+pub(super) async fn validate_card_setup(
+    state: &BackendState,
+    wallet: &str,
+    tx: &VersionedTransaction,
+) -> Result<(), ApiError> {
+    let refuse = || {
+        ApiError::BadRequest(
+            "Relay accepts only the card setup transactions prepared for your own card".into(),
+        )
+    };
+    let cards = state.cards.as_ref().ok_or_else(refuse)?;
+    let owner: solana_address::Address = wallet.parse().map_err(|_| refuse())?;
+    if tx.message.static_account_keys().first() != Some(&owner) {
+        return Err(ApiError::BadRequest(
+            "Owner must sign and pay transaction fees".into(),
+        ));
+    }
+    let blockhash = tx.message.recent_blockhash().to_bytes();
+    let submitted = tx.message.serialize();
+    let rows = cards
+        .store
+        .list_card_records_for_owner(
+            crate::storage::CardKind::Cards,
+            wallet,
+            cards::CONNECTOR,
+            cards::CARD_LIST_REFERENCE,
+            None,
+            50,
+        )
+        .await?;
+    for row in &rows {
+        let (Some(card_id), Some(issuer)) = (
+            row.record["cardId"]
+                .as_str()
+                .and_then(cards::program::unhex::<32>),
+            cards.card_issuer(row),
+        ) else {
+            continue;
+        };
+        let Some(salt) = cards::program::unhex::<32>(&issuer.ref_salt) else {
+            continue;
+        };
+        let accounts = cards::program::CardAccounts::derive(&owner, &card_id);
+        let expected = [
+            vec![cards::program::init_card(
+                &owner,
+                &card_id,
+                cards.config.issuer_code,
+                &cards::program::issuer_card_ref_hash(&issuer.card_token, &salt),
+                cards::program::PREFUND_LAMPORTS,
+            )],
+            vec![cards::program::delegate_card(&owner, &card_id)],
+            vec![cards::program::top_up_escrow(
+                &owner,
+                &accounts.policy,
+                cards::program::ESCROW_TOP_UP_LAMPORTS,
+            )],
+        ];
+        for instructions in expected {
+            let candidate = cards::program::unsigned_transaction(&owner, &instructions, blockhash);
+            if candidate.message.serialize() == submitted {
+                return Ok(());
+            }
+        }
+    }
+    Err(refuse())
+}
+
 pub(super) fn router() -> Router<BackendState> {
     let webhook_limit = DefaultBodyLimit::max(crate::connectors::inbox::MAX_WEBHOOK_BYTES);
     Router::new()
@@ -407,4 +586,14 @@ pub(super) fn router() -> Router<BackendState> {
             post(checkout_intent),
         )
         .route("/v1/cards/{card_id}/recovery/restore", post(restore))
+        .route(
+            "/v1/cards/{card_id}/recovery/reconcile",
+            post(recovery_reconcile),
+        )
+        .route(
+            "/v1/cards/{card_id}/statements/close",
+            post(close_statement),
+        )
+        .route("/v1/cards/{card_id}/disclosure-salt", get(disclosure_salt))
+        .route("/internal/ops/cards/metrics", get(ops_metrics))
 }

@@ -200,7 +200,7 @@ async function main() {
   await expectOk("initPermission", erSend(erOwner, owner,
     await program.methods.initPermission(authorizer.publicKey).accountsPartial(permAccounts).instruction()));
 
-  const merchant = sha256(Buffer.from("chainpay-merchant:v1\n"), Buffer.from("DEMO-DATA-API-CREDITS"));
+  const merchant = sha256(Buffer.from("chainpay-merchant:v1\n"), Buffer.from("DEMO-DATAAPI"));
   const otherMerchant = sha256(Buffer.from("chainpay-merchant:v1\n"), Buffer.from("DEMO-UNAPPROVED-SHOP"));
   const policyArgs = {
     budgetCents: new BN(5_000), maxPurchaseCents: new BN(4_000), maxPurchasesPerPeriod: 0,

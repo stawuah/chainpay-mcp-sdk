@@ -35,6 +35,9 @@ struct Harness {
     policy: solana_address::Address,
     responses: Arc<std::sync::Mutex<Vec<String>>>,
     asa_seq: std::sync::atomic::AtomicU64,
+    chain: Chain,
+    commitments: Arc<std::sync::Mutex<Vec<String>>>,
+    owner_key: ed25519_dalek::SigningKey,
 }
 
 fn config(mode: AttestationMode) -> CardsConfig {
@@ -53,15 +56,43 @@ fn config(mode: AttestationMode) -> CardsConfig {
         asa_budget: Duration::from_millis(2_000),
         embed_origin: None,
         issuer_code: program::ISSUER_LITHIC_SANDBOX,
+        repayment: statements::RepaymentConfig {
+            mint: statements::DEVNET_USDC_MINT.into(),
+            partner_token_account: Some(PARTNER_TOKEN_ACCOUNT.into()),
+        },
     }
 }
 
-async fn base_rpc() -> String {
+/// Simulated partner's token account in tests (any valid address).
+pub(super) const PARTNER_TOKEN_ACCOUNT: &str = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+
+/// Base-layer accounts served by the test RPC: address -> (owner, data).
+pub(super) type Chain = Arc<std::sync::Mutex<HashMap<String, (String, Vec<u8>)>>>;
+
+async fn base_rpc(chain: Chain, commitments: Arc<std::sync::Mutex<Vec<String>>>) -> String {
     use axum::{Json as AxJson, Router};
-    let app = Router::new().fallback(|AxJson(body): AxJson<Value>| async move {
-        match body["method"].as_str() {
-            Some("getLatestBlockhash") => AxJson(json!({"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":{"blockhash":"11111111111111111111111111111111","lastValidBlockHeight":100}}})),
-            _ => AxJson(json!({"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":null}})),
+    use base64::Engine;
+    let app = Router::new().fallback(move |AxJson(body): AxJson<Value>| {
+        let chain = chain.clone();
+        let commitments = commitments.clone();
+        async move {
+            match body["method"].as_str() {
+                Some("getLatestBlockhash") => AxJson(json!({"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":{"blockhash":"11111111111111111111111111111111","lastValidBlockHeight":100}}})),
+                Some("getAccountInfo") => {
+                    let address = body["params"][0].as_str().unwrap_or_default();
+                    if let Some(c) = body["params"][1]["commitment"].as_str() {
+                        commitments.lock().unwrap().push(c.to_owned());
+                    }
+                    let value = chain.lock().unwrap().get(address).map(|(owner, data)| {
+                        json!({"owner": owner, "data": [base64::engine::general_purpose::STANDARD.encode(data), "base64"], "lamports": 1, "executable": false, "rentEpoch": 0})
+                    });
+                    AxJson(json!({"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":value}}))
+                }
+                Some("sendTransaction") => AxJson(json!({"jsonrpc":"2.0","id":1,"result":"5wHu1qwD7q5ifaN5nwdcDqNFo53GJqa7nLp2BeeEpcHCusb4GzARz4GjgzsEHMkBMgCJMGa6GSQ1VG96Exv8kt2W"})),
+                Some("getSignatureStatuses") => AxJson(json!({"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":[{"slot":3,"confirmations":null,"confirmationStatus":"finalized","err":null}]}})),
+                Some("getSlot") => AxJson(json!({"jsonrpc":"2.0","id":1,"result":5})),
+                _ => AxJson(json!({"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":null}})),
+            }
         }
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -87,8 +118,10 @@ impl Harness {
             crypto::test_crypto(),
             store.clone(),
         ));
+        let chain: Chain = Arc::default();
+        let commitments: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
         let mut backend = BackendConfig::from_env().unwrap();
-        backend.rpc.url = base_rpc().await;
+        backend.rpc.url = base_rpc(chain.clone(), commitments.clone()).await;
         let mut state = BackendState::new(backend, store.clone()).unwrap();
         state.cards = Some(cards.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -135,6 +168,9 @@ impl Harness {
             policy: solana_address::Address::default(),
             responses: Arc::new(std::sync::Mutex::new(Vec::new())),
             asa_seq: std::sync::atomic::AtomicU64::new(0),
+            chain,
+            commitments,
+            owner_key,
         };
         harness.create_card(activate).await;
         harness
@@ -1522,3 +1558,6 @@ async fn a_freeze_retried_with_the_same_operation_finishes_an_unconfirmed_freeze
     .await;
     assert_eq!(h.program_count("freeze"), before);
 }
+
+#[path = "tests_statements.rs"]
+mod statements_tests;

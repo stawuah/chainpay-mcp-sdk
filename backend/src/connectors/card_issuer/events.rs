@@ -296,6 +296,10 @@ pub async fn apply_transaction(
     let mut notes: Vec<Value> = Vec::new();
     let authorizer = cards.authorizer();
     let mut stop: Option<String> = None;
+    // Money movements PER confirmed in this pass, booked as statement
+    // postings before the row is marked applied (a crash in between
+    // re-submits, gets Duplicate*, and books the posting then).
+    let mut postings: Vec<([u8; 32], &'static str, u64)> = Vec::new();
     for event in sorted_events(truth) {
         let Some(event_token) = event["token"].as_str() else {
             continue;
@@ -471,6 +475,8 @@ pub async fn apply_transaction(
                     TxOutcome::Confirmed { signature } => {
                         signatures.push(signature.clone());
                         apply_label(&mut record, label, amount);
+                        note_exception(&mut record, label, &id_hex);
+                        postings.push((id, label, amount));
                         newly_applied.push(id_hex);
                     }
                     TxOutcome::ProgramError { code, signature } => match program::error_name(*code)
@@ -478,6 +484,8 @@ pub async fn apply_transaction(
                         // Already applied by an earlier attempt.
                         Some("DuplicateCapture" | "DuplicateEvent") => {
                             apply_label(&mut record, label, amount);
+                            note_exception(&mut record, label, &id_hex);
+                            postings.push((id, label, amount));
                             newly_applied.push(id_hex);
                         }
                         // Releasing a hold that is already gone is a true no-op.
@@ -512,6 +520,7 @@ pub async fn apply_transaction(
                                 TxOutcome::Confirmed { signature } => {
                                     signatures.push(signature);
                                     apply_label(&mut record, "over_hold", excess);
+                                    note_exception(&mut record, "over_hold", &id_hex);
                                     newly_applied.push(id_hex);
                                 }
                                 TxOutcome::ProgramError { code, .. }
@@ -542,6 +551,27 @@ pub async fn apply_transaction(
     }
     if reservation_present {
         refresh_from_reservation(cards, &mut record, &reservation).await;
+        // An over-capture is flagged by the program on the capture itself.
+        if record["exception"] == "over_capture" && record["exceptionEventId"].is_null() {
+            if let Some((id, _, _)) = postings.iter().rev().find(|(_, l, _)| *l == "capture") {
+                record["exceptionEventId"] = json!(program::hex(id));
+            }
+        }
+    }
+    if !postings.is_empty() {
+        let display = super::merchant_display(cards, &row);
+        for (id, label, amount) in &postings {
+            if !super::statements::record_posting(cards, card, id, label, *amount, &display).await {
+                // Not billed yet: leave the whole pass unapplied. The retry
+                // gets Duplicate* from the program and books the posting then
+                // (postings are keyed by event id, so nothing doubles).
+                return Err("statement posting not stored".into());
+            }
+            if matches!(*label, "forced_capture" | "unpaired_capture") {
+                cards.metrics.count("unpaired_captures");
+            }
+        }
+        cards.metrics.add("events_applied", postings.len() as u64);
     }
     let all_applied: Vec<String> = applied
         .iter()
@@ -578,6 +608,7 @@ pub async fn apply_transaction(
                     "disputeState",
                     "needsReview",
                     "exception",
+                    "exceptionEventId",
                     "issuerStatus",
                 ] {
                     // Only fields this pass changed: never revert a concurrent
@@ -627,6 +658,22 @@ fn flag(record: &mut Value, name: &str) {
         record["flags"] = json!({});
     }
     record["flags"][name] = json!(true);
+}
+
+/// Keep the event id of the newest exception on the row: the owner passes it
+/// to `resolve_exception` (activity `eventIdHash`).
+fn note_exception(record: &mut Value, label: &str, id_hex: &str) {
+    if matches!(
+        label,
+        "forced_capture"
+            | "unpaired_capture"
+            | "over_hold"
+            | "return_reversal"
+            | "correction_debit"
+            | "correction_credit"
+    ) {
+        record["exceptionEventId"] = json!(id_hex);
+    }
 }
 
 /// Local projection for transactions without a PER Reservation (and as a
@@ -780,19 +827,25 @@ async fn card_updated(cards: &Arc<CardsConnector>, body: &Value) -> InboxOutcome
         .unwrap_or_default()
         .to_owned();
     let at = rfc3339(now_ms());
+    let mut acked = false;
     let result = cards
         .update_card(&card_id, |record| {
             record["issuerState"] = json!(state);
             let wanted = record["freeze"]["wantedIssuerState"]
                 .as_str()
                 .map(str::to_owned);
-            if wanted.as_deref() == Some(state) {
+            acked = false;
+            if wanted.as_deref() == Some(state) && record["freeze"]["issuer"] != "confirmed" {
+                acked = true;
                 record["freeze"]["issuer"] = json!("confirmed");
                 record["freeze"]["ackAt"] = json!(at);
                 record["freeze"]["ackSource"] = json!("card.updated");
             }
         })
         .await;
+    if acked && result.is_ok() {
+        cards.metrics.count("freeze_acks");
+    }
     match result {
         Ok(_) => InboxOutcome::Applied,
         Err(_) => InboxOutcome::Retry("storage".into()),

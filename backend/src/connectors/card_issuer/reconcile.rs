@@ -74,6 +74,7 @@ pub async fn resolve_ambiguous(
             "stale_per_read card {}",
             log_id(card.record["cardId"].as_str().unwrap_or(""))
         );
+        cards.metrics.count("stale_per_reads");
         return Err("policy not visible to the authorizer".into());
     }
     let reservation = program::reservation_pda(
@@ -82,9 +83,14 @@ pub async fn resolve_ambiguous(
     );
     let approved = issuer_approved(truth);
     let read = cards.per.read(&reservation, Duration::from_secs(4)).await;
+    let mut single_message_capture: Option<u64> = None;
     let (state, signature, has_reservation) = match read {
         TeeRead::Visible { data, .. } => {
             let r = program::decode_reservation(&data).map_err(|_| "reservation undecodable")?;
+            if r.flags & program::FLAG_SINGLE_MESSAGE != 0 && r.captured_cents > 0 {
+                // `authorize` booked this single-message purchase itself.
+                single_message_capture = Some(r.captured_cents);
+            }
             if approved {
                 let state = match r.state {
                     reservation_state::CAPTURED => "captured",
@@ -174,11 +180,25 @@ pub async fn resolve_ambiguous(
             if let (Some(signature), Some(list)) = (&signature, record["perTx"].as_array_mut()) {
                 list.push(json!(signature));
             }
+            if single_message_capture.is_some() {
+                record["singleMessage"] = json!(true);
+            }
             true
         })
         .await
         .map_err(|_| "storage")?;
-    let _ = row;
+    if let Some(amount) = single_message_capture {
+        let display = super::merchant_display(cards, row);
+        super::statements::record_posting(
+            cards,
+            card,
+            &program::auth_id_hash(cards.config.issuer_code, &token),
+            "single_message",
+            amount,
+            &display,
+        )
+        .await;
+    }
     Ok(())
 }
 
@@ -270,7 +290,88 @@ pub async fn run(cards: &Arc<CardsConnector>, budget: Duration) -> ReconcileRepo
     // Wrap around once the page runs out.
     let next = if page.len() < 10 { None } else { last };
     save_cursor(cards, cursor_row, next).await;
+    cards.metrics.count("reconcile_runs");
+    // Opaque metrics line (counters and latencies only).
+    super::card_log!("metrics {}", cards.metrics.snapshot());
     report
+}
+
+/// Durable gauges for the ops route, recomputed from storage (bounded: the
+/// first 50 cards). Counts only; never ids, amounts or merchants.
+pub async fn ops_metrics(cards: &Arc<CardsConnector>) -> Value {
+    let mut unresolved = 0u64;
+    let mut unpaired = 0u64;
+    let mut mismatches = 0u64;
+    let mut awaiting_freeze_ack = 0u64;
+    let mut in_recovery = 0u64;
+    let page = cards
+        .store
+        .scan_card_records(CardKind::Cards, "card:", None, 50)
+        .await
+        .unwrap_or_default();
+    for card in &page {
+        let owner = card.index.owner.clone().unwrap_or_default();
+        let card_id = card.record["cardId"].as_str().unwrap_or_default();
+        if card.record["freeze"]["issuer"] == "pending_issuer_confirmation" {
+            awaiting_freeze_ack += 1;
+        }
+        if matches!(card.record["recovery"]["state"].as_str(), Some(s) if s != "restored") {
+            in_recovery += 1;
+        }
+        if let Ok(rows) = cards
+            .store
+            .list_card_records_for_owner(
+                CardKind::CardEvents,
+                &owner,
+                super::CONNECTOR,
+                card_id,
+                None,
+                200,
+            )
+            .await
+        {
+            for row in rows.iter().filter(|r| r.record["type"] == "transaction") {
+                if matches!(row.record["state"].as_str(), Some("ambiguous" | "pending")) {
+                    unresolved += 1;
+                }
+                if matches!(
+                    row.record["exception"].as_str(),
+                    Some("unpaired_capture" | "unpaired_authorization" | "forced_capture")
+                ) {
+                    unpaired += 1;
+                }
+            }
+        }
+        if let Ok(rows) = cards
+            .store
+            .list_card_records_for_owner(
+                CardKind::CardStatements,
+                &owner,
+                super::CONNECTOR,
+                card_id,
+                None,
+                50,
+            )
+            .await
+        {
+            mismatches += rows
+                .iter()
+                .filter(|r| r.record["state"] == "repayment_mismatch")
+                .count() as u64;
+        }
+    }
+    json!({
+        "process": cards.metrics.snapshot(),
+        "gauges": {
+            "cardsScanned": page.len(),
+            "unresolvedReservations": unresolved,
+            "unpairedCaptures": unpaired,
+            "repaymentMismatchesOpen": mismatches,
+            "freezesAwaitingIssuerAck": awaiting_freeze_ack,
+            "cardsInRecovery": in_recovery,
+        },
+        "attestation": {"mode": cards.config.attestation_mode == super::tee::AttestationMode::Enforce},
+    })
 }
 
 async fn reconcile_card(
@@ -281,6 +382,8 @@ async fn reconcile_card(
     let Some(issuer) = cards.card_issuer(card) else {
         return;
     };
+    // Lost or stale private state freezes the card before anything else runs.
+    let lost = super::recovery::check(cards, card).await;
     let card_id = card.record["cardId"]
         .as_str()
         .unwrap_or_default()
@@ -358,6 +461,7 @@ async fn reconcile_card(
                         .is_some_and(|e| e.iter().any(|e| e["type"] == "CLEARING"))
                 {
                     report.unpaired_flagged += 1;
+                    cards.metrics.count("unpaired_captures");
                 }
             }
             Err(_) => {
@@ -421,6 +525,22 @@ async fn reconcile_card(
                 })
                 .await;
             report.freezes_confirmed += 1;
+            cards.metrics.count("freeze_acks");
+        }
+    }
+    if lost.is_none() {
+        // Postings a crash skipped, then period roll + statement close and
+        // repayments waiting on the partner or on PER. Never on a lost card:
+        // its counters are not trustworthy until the owner restores them.
+        if let Some(fresh) = cards
+            .card(&card_id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|c| !super::recovery::in_recovery(c))
+        {
+            super::statements::backfill_postings(cards, &fresh).await;
+            super::statements::tick(cards, &fresh).await;
         }
     }
     if advance {

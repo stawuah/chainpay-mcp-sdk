@@ -162,6 +162,11 @@ pub async fn handle(cards: Arc<CardsConnector>, headers: HeaderMap, raw: &[u8]) 
         return reply(token, SUSPECTED_FRAUD);
     };
     let result = decide(&cards, &request, deadline).await;
+    cards.metrics.asa_latency(received.elapsed().as_millis());
+    cards.metrics.count("asa_decisions");
+    if result == APPROVED {
+        cards.metrics.count("asa_approved");
+    }
     super::card_log!(
         "asa {} -> {} ({} ms)",
         log_id(&request.token),
@@ -171,9 +176,16 @@ pub async fn handle(cards: Arc<CardsConnector>, headers: HeaderMap, raw: &[u8]) 
     reply(&request.token, result)
 }
 
-fn claim_intent(card_id: &str, request: &AsaRequest, merchant_hash: &[u8; 32]) -> Value {
-    json!({
-        "v": 1,
+/// Claim intent for `operation_claims` (plaintext in Convex): only a keyed
+/// digest of the authorization, so a replay with different terms is still
+/// detected but amounts, merchant and MCC never sit there in the clear.
+fn claim_intent(
+    cards: &CardsConnector,
+    card_id: &str,
+    request: &AsaRequest,
+    merchant_hash: &[u8; 32],
+) -> Value {
+    let terms = json!({
         "cardId": card_id,
         "amountCents": cents(request.amount_cents),
         "merchant": program::hex(merchant_hash),
@@ -181,6 +193,11 @@ fn claim_intent(card_id: &str, request: &AsaRequest, merchant_hash: &[u8; 32]) -
         "status": request.status,
         "currency": request.currency,
         "merchantInitiated": request.merchant_initiated,
+    });
+    json!({
+        "v": 2,
+        "cardId": card_id,
+        "terms": cards.crypto.blind("asa-terms", terms.to_string().as_bytes()),
     })
 }
 
@@ -209,7 +226,7 @@ pub async fn decide(
     let owner = card.index.owner.clone().unwrap_or_default();
     let merchant_hash = program::merchant_id_hash(&request.acceptor_id);
     let claim_id = format!("card-asa:v1:{}", request.token);
-    let intent = claim_intent(&card_id, request, &merchant_hash);
+    let intent = claim_intent(cards, &card_id, request, &merchant_hash);
     let claim = cards
         .store
         .claim_operation(
@@ -277,7 +294,6 @@ async fn create_pending(
         "state": "pending",
         "amountCents": cents(request.amount_cents),
         "reservedCents": "0", "capturedCents": "0", "reversedCents": "0", "refundedCents": "0", "exceptionCents": "0",
-        "merchantHash": program::hex(merchant_hash),
         "singleMessage": request.status == "FINANCIAL_AUTHORIZATION",
         "appliedEventIds": [],
         "perTx": [],
@@ -285,7 +301,7 @@ async fn create_pending(
         "receivedAt": rfc3339(now_ms()),
         "provider": cards.crypto.seal_json(CardKind::CardEvents.as_str(), &key, &provider),
     });
-    let _ = card;
+    let _ = (card, merchant_hash);
     match cards
         .store
         .put_card_record(
@@ -500,8 +516,14 @@ async fn observe(
     }
 }
 
-pub fn match_reference(card_id: &str, merchant_hash: &[u8; 32]) -> String {
-    format!("match:{card_id}:{}", program::hex(merchant_hash))
+/// Index reference that finds a card's open intents for one merchant. The
+/// merchant part is blinded: a plain `sha256(acceptor id)` would let a reader
+/// of Convex confirm which shops a card may use (an allowlist member).
+pub fn match_reference(cards: &CardsConnector, card_id: &str, merchant_hash: &[u8; 32]) -> String {
+    format!(
+        "match:{card_id}:{}",
+        &cards.crypto.blind("intent-match", merchant_hash)[..48]
+    )
 }
 
 /// Newest open, unexpired intent for this card + merchant (+ USD) whose
@@ -520,7 +542,7 @@ pub async fn find_intent(
             CardKind::CardEvents,
             owner,
             CONNECTOR,
-            &match_reference(card_id, merchant_hash),
+            &match_reference(cards, card_id, merchant_hash),
             None,
             20,
         )
@@ -553,7 +575,7 @@ pub async fn find_intent(
 }
 
 async fn persist(
-    cards: &CardsConnector,
+    cards: &Arc<CardsConnector>,
     request: &AsaRequest,
     decision: &Decision,
 ) -> Result<(), ()> {
@@ -572,6 +594,7 @@ async fn persist(
             record["reservedCents"] = json!(cents(decision.reserved_cents));
             if decision.state == "captured" {
                 record["capturedCents"] = json!(cents(request.amount_cents));
+                record["singleMessage"] = json!(true);
             }
             if let Some(signature) = &decision.signature {
                 if let Some(list) = record["perTx"].as_array_mut() {
@@ -585,8 +608,42 @@ async fn persist(
         })
         .await
         .map_err(|_| ())?;
-    if updated.is_none() {
+    let Some(updated) = updated else {
         return Err(());
+    };
+    if decision.state == "ambiguous" {
+        cards.metrics.count("asa_timeouts");
+    }
+    if decision.state == "captured" && updated.record["state"] == "captured" {
+        // `authorize` booked a single-message purchase itself: post it after
+        // the reply (the reconcile job backfills it if this task is lost).
+        {
+            let cards = cards.clone();
+            let token = request.token.clone();
+            let amount = request.amount_cents;
+            tokio::spawn(async move {
+                let Ok(Some(row)) = cards.txn(&token).await else {
+                    return;
+                };
+                let Some(card_id) = row.record["cardId"].as_str() else {
+                    return;
+                };
+                let Ok(Some(card)) = cards.card(card_id).await else {
+                    return;
+                };
+                let display = super::merchant_display(&cards, &row);
+                let id = program::auth_id_hash(cards.config.issuer_code, &token);
+                super::statements::record_posting(
+                    &cards,
+                    &card,
+                    &id,
+                    "single_message",
+                    amount,
+                    &display,
+                )
+                .await;
+            });
+        }
     }
     // A $0 verification leaves the intent open for the real purchase.
     if decision.result == APPROVED && decision.state != "account_verification" {

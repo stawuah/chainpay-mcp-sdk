@@ -5,7 +5,16 @@
 //! cargo run -p chainpay-backend --example cards_live_sandbox -- setup <public relay url> <secrets out file>
 //! cargo run -p chainpay-backend --example cards_live_sandbox -- run <results json>
 //! cargo run -p chainpay-backend --example cards_live_sandbox -- teardown
+//! cargo run -p chainpay-backend --example cards_live_sandbox -- statement <out json>
+//! cargo run -p chainpay-backend --example cards_live_sandbox -- repay <state json> <receipt> <mandate> <label>
 //! ```
+//!
+//! `statement` (workstream E) creates and activates a card, captures one $10
+//! purchase through the full checkout path, shows that the period cannot roll
+//! early, closes the running statement and writes its digest and amount due
+//! (no secrets) to `<out json>` for the Devnet `execute_payment`. `repay`
+//! submits a receipt to the repayment route and reads the card's credit
+//! exposure back over PER as the owner.
 //!
 //! Env: LITHIC_SANDBOX_API_KEY, RELAY_URL (local relay), OWNER_KEYPAIR,
 //! STRANGER_KEYPAIR, CONVEX_SITE + CHAINPAY_CONVEX_MCP_SECRET (to register a
@@ -48,7 +57,11 @@ async fn main() {
         Some("setup") => setup(&args[2], &args[3]).await,
         Some("run") => run(&args[2]).await,
         Some("teardown") => teardown().await,
-        _ => eprintln!("usage: setup <public url> <secrets file> | run <results.json> | teardown"),
+        Some("statement") => statement(&args[2]).await,
+        Some("repay") => repay(&args[2], &args[3], &args[4], &args[5]).await,
+        _ => eprintln!(
+            "usage: setup <public url> <secrets file> | run <results.json> | teardown | statement <out.json> | repay <state.json> <receipt> <mandate> <label>"
+        ),
     }
 }
 
@@ -658,4 +671,253 @@ async fn duplicate_asa(
     let status = response.status().as_u16();
     let result: Value = response.json().await.unwrap_or(Value::Null);
     json!({"status": status, "result": result["result"], "ms": started.elapsed().as_millis()})
+}
+
+// ------------------------------------------------- workstream E: statements
+
+async fn new_card(
+    relay: &mut Relay,
+    owner: &SigningKey,
+    label: &str,
+) -> (String, Address, Address, Value) {
+    let http = relay.http.clone();
+    let owner_pk = Address::from(owner.verifying_key().to_bytes());
+    let op = |name: &str| {
+        format!(
+            "live-{name}-{}",
+            chainpay_backend::connectors::card_issuer::now_ms()
+        )
+    };
+    let (status, prepared) = relay
+        .owner(
+            "POST",
+            "/v1/cards/prepare",
+            Some(json!({"clientOperationId": op("prepare"), "label": label})),
+        )
+        .await;
+    assert_eq!(status, 200, "prepare: {prepared}");
+    let card_id = prepared["cardId"].as_str().unwrap().to_owned();
+    let authorizer: Address = prepared["authorizer"].as_str().unwrap().parse().unwrap();
+    let policy: Address = prepared["accounts"]["policy"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let period: Address = prepared["accounts"]["period"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let init = devnet_send(&http, prepared["initTx"].as_str().unwrap(), owner).await;
+    let topup = devnet_send(&http, prepared["escrowTopUpTx"].as_str().unwrap(), owner).await;
+    let delegate = devnet_send(&http, prepared["delegateTx"].as_str().unwrap(), owner).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let owner_tee = TeeClient::new(DEVNET_TEE_URL, owner.clone()).unwrap();
+    let deadline = || Instant::now() + Duration::from_secs(25);
+    let perm = owner_tee
+        .submit(
+            vec![program::init_permission(
+                &owner_pk,
+                &policy,
+                &period,
+                &authorizer,
+            )],
+            deadline(),
+        )
+        .await;
+    let args = PolicyArgs {
+        budget_cents: 5_000,
+        max_purchase_cents: 4_000,
+        max_purchases_per_period: 0,
+        period_seconds: 30 * 86_400,
+        merchant_id_hashes: vec![program::merchant_id_hash("DEMO-DATAAPI")],
+        mccs: vec![],
+        expires_at: 0,
+        recurring_allowed: false,
+        fee_bps: 50,
+        authorizer: authorizer.to_bytes(),
+    };
+    let set = owner_tee
+        .submit(
+            vec![program::set_policy(&owner_pk, &policy, &period, &args)],
+            deadline(),
+        )
+        .await;
+    let (status, view) = relay
+        .owner(
+            "POST",
+            &format!("/v1/cards/{card_id}/activate"),
+            Some(json!({"clientOperationId": op("activate"), "expectedPolicyVersion": 1})),
+        )
+        .await;
+    assert_eq!(status, 200, "activate: {view}");
+    relay.agent = register_agent(&owner_pk.to_string(), &card_id).await;
+    let setup = json!({
+        "cardId": card_id,
+        "accounts": prepared["accounts"],
+        "authorizer": authorizer.to_string(),
+        "base": {"initCard": init, "escrowTopUp": topup, "delegateCard": delegate},
+        "per": {"initPermission": outcome(&perm), "setPolicy": outcome(&set)},
+        "policy": {"budgetCents": "5000", "maxPurchaseCents": "4000", "merchants": ["demo-approved"], "feeBps": 50, "periodDays": 30},
+        "activate": {"issuerState": view["issuerState"], "mirror": view["mirror"]["state"]},
+    });
+    (card_id, policy, period, setup)
+}
+
+async fn statement(out_path: &str) {
+    let http = reqwest::Client::new();
+    let url = env("RELAY_URL");
+    let owner = keypair(&env("OWNER_KEYPAIR"));
+    let l = lithic();
+    let session = login(&http, &url, &owner).await;
+    let mut relay = Relay {
+        http: http.clone(),
+        url: url.clone(),
+        session,
+        agent: String::new(),
+    };
+    let mut out = json!({"ranAt": chainpay_backend::connectors::card_issuer::rfc3339(chainpay_backend::connectors::card_issuer::now_ms()), "network": "solana-devnet + magicblock-devnet-tee + lithic-sandbox"});
+    let (card_id, policy, _period, setup) = new_card(&mut relay, &owner, "Statement card").await;
+    out["card"] = setup;
+    let op = |name: &str| {
+        format!(
+            "live-{name}-{}",
+            chainpay_backend::connectors::card_issuer::now_ms()
+        )
+    };
+
+    // One $10 purchase through the contract path, cleared in full.
+    let (s10, c10) = checkout(&relay, &card_id, &op("c10"), "demo-approved", "1000").await;
+    assert_eq!(s10, 200, "checkout: {c10}");
+    let (_, r10, ms) = redeem(&relay, c10["capability"].as_str().unwrap()).await;
+    let t10 = r10["lithicToken"].as_str().unwrap().to_owned();
+    let row = wait_row(&relay, &card_id, &t10, |r| r["lifecycle"] == "reserved", 15).await;
+    out["authorize"] = json!({"redeemMs": ms, "chainpay": summary(&row)});
+    let cleared = simulate(
+        &l,
+        "/v1/simulate/clearing",
+        json!({"token": t10, "amount": 1_000}),
+    )
+    .await;
+    let row = wait_row(&relay, &card_id, &t10, |r| r["lifecycle"] == "captured", 45).await;
+    out["clearing"] =
+        json!({"simulated": cleared, "chainpay": summary(&row), "issuer": issuer(&l, &t10).await});
+
+    // The period cannot roll early: the cron leaves it open (PER PeriodNotEnded
+    // guard is never even reached because period_end is in the future).
+    let (cs, cron) = relay
+        .call(
+            "POST",
+            "/internal/cron/cards/reconcile",
+            &env("CRON_SECRET"),
+            None,
+        )
+        .await;
+    out["cronBeforePeriodEnd"] = json!({"status": cs, "report": cron});
+    let owner_tee = TeeClient::new(DEVNET_TEE_URL, owner.clone()).unwrap();
+    let authorizer_roll =
+        TeeClient::new(DEVNET_TEE_URL, keypair(&env("AUTHORIZER_KEYPAIR"))).unwrap();
+    let period_pda: Address = out["card"]["accounts"]["period"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let early = authorizer_roll
+        .submit(
+            vec![program::roll_period(
+                &authorizer_roll.authorizer,
+                &policy,
+                &period_pda,
+                &[],
+            )],
+            Instant::now() + Duration::from_secs(25),
+        )
+        .await;
+    out["rollPeriodEarly"] = outcome(&early);
+
+    // Running statement, then the owner closes it now (interim close).
+    let (_, open) = relay
+        .owner("GET", &format!("/v1/cards/{card_id}/statements"), None)
+        .await;
+    out["openStatement"] = json!({"lineCount": open["open"]["lineCount"], "runningTotalCents": open["open"]["runningTotalCents"]});
+    let (status, stmt) = relay
+        .owner(
+            "POST",
+            &format!("/v1/cards/{card_id}/statements/close"),
+            Some(json!({"clientOperationId": op("close")})),
+        )
+        .await;
+    assert_eq!(status, 200, "close: {stmt}");
+    out["statement"] = json!({
+        "statementId": stmt["statementId"], "state": stmt["state"], "closeKind": stmt["closeKind"],
+        "purchasesCents": stmt["purchasesCents"], "feeCents": stmt["feeCents"], "totalCents": stmt["totalCents"],
+        "amountDueCents": stmt["amountDueCents"], "dueAt": stmt["dueAt"], "digest": stmt["digest"],
+        "lines": stmt["lines"], "payWith": stmt["payWith"], "label": stmt["label"],
+    });
+    let exposure = match owner_tee
+        .read_account(&policy, Duration::from_secs(10))
+        .await
+    {
+        TeeRead::Visible { data, .. } => program::decode_policy(&data)
+            .map(|p| p.statement_outstanding_cents.to_string())
+            .unwrap_or_default(),
+        _ => "not_visible".into(),
+    };
+    out["perExposureCents"] = json!(exposure);
+    std::fs::write(out_path, serde_json::to_string_pretty(&out).unwrap()).unwrap();
+    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+}
+
+async fn repay(state_path: &str, receipt: &str, mandate: &str, label: &str) {
+    let http = reqwest::Client::new();
+    let url = env("RELAY_URL");
+    let owner = keypair(&env("OWNER_KEYPAIR"));
+    let session = login(&http, &url, &owner).await;
+    let relay = Relay {
+        http,
+        url,
+        session,
+        agent: String::new(),
+    };
+    let mut state: Value =
+        serde_json::from_str(&std::fs::read_to_string(state_path).unwrap()).unwrap();
+    let card_id = state["card"]["cardId"].as_str().unwrap().to_owned();
+    let statement_id = state["statement"]["statementId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let started = Instant::now();
+    let (status, body) = relay
+        .owner(
+            "POST",
+            &format!("/v1/cards/{card_id}/statements/{statement_id}/repayment"),
+            Some(json!({"receiptPda": receipt, "mandatePda": mandate, "cluster": "devnet"})),
+        )
+        .await;
+    let policy: Address = state["card"]["accounts"]["policy"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let owner_tee = TeeClient::new(DEVNET_TEE_URL, owner.clone()).unwrap();
+    let digest: [u8; 32] = program::unhex(state["statement"]["digest"].as_str().unwrap()).unwrap();
+    let per = match owner_tee
+        .read_account(&policy, Duration::from_secs(10))
+        .await
+    {
+        TeeRead::Visible { data, .. } => {
+            let p = program::decode_policy(&data).unwrap();
+            json!({"statementOutstandingCents": p.statement_outstanding_cents.to_string(), "repaymentRecorded": p.repayment_recorded(&digest)})
+        }
+        _ => json!("not_visible"),
+    };
+    let s = &body["statement"];
+    state[label] = json!({
+        "receiptPda": receipt, "mandatePda": mandate, "status": status, "ms": started.elapsed().as_millis(),
+        "state": body["state"], "mismatch": body["mismatch"], "code": body["code"],
+        "statementState": s["state"], "repayment": s["repayment"], "partner": s["partner"],
+        "history": s["history"], "amountDueCents": s["amountDueCents"], "per": per,
+    });
+    std::fs::write(state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+    println!("{}", serde_json::to_string_pretty(&state[label]).unwrap());
 }

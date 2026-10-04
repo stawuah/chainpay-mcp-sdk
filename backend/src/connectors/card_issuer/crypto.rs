@@ -35,6 +35,10 @@ pub enum CryptoError {
 pub struct RecordCrypto {
     current: String,
     keys: HashMap<String, [u8; 32]>,
+    /// Key id the blind-index key derives from. Pinned separately from
+    /// `current` (`CARDS_RECORD_INDEX_KID`) so rotating the encryption key
+    /// never changes index values or claim digests.
+    index: String,
 }
 
 impl std::fmt::Debug for RecordCrypto {
@@ -57,15 +61,19 @@ impl RecordCrypto {
         }
         Ok(Self {
             current: current.to_owned(),
+            index: current.to_owned(),
             keys,
         })
     }
 
     pub fn from_vars(vars: impl Iterator<Item = (String, String)>) -> Result<Self, CryptoError> {
         let mut current = None;
+        let mut index = None;
         let mut keys = HashMap::new();
         for (name, value) in vars {
-            if name == "CARDS_RECORD_KID" {
+            if name == "CARDS_RECORD_INDEX_KID" {
+                index = Some(value.trim().to_owned()).filter(|v| !v.is_empty());
+            } else if name == "CARDS_RECORD_KID" {
                 current = Some(value.trim().to_owned());
             } else if let Some(kid) = name.strip_prefix("CARDS_RECORD_KEY_") {
                 let bytes = BASE64
@@ -77,7 +85,14 @@ impl RecordCrypto {
                 keys.insert(kid.to_owned(), key);
             }
         }
-        Self::new(current.as_deref().ok_or(CryptoError::MissingKey)?, keys)
+        let mut crypto = Self::new(current.as_deref().ok_or(CryptoError::MissingKey)?, keys)?;
+        if let Some(index) = index {
+            if !crypto.keys.contains_key(&index) {
+                return Err(CryptoError::MissingKey);
+            }
+            crypto.index = index;
+        }
+        Ok(crypto)
     }
 
     pub fn seal(&self, kind: &str, key: &str, plaintext: &[u8]) -> Value {
@@ -124,6 +139,27 @@ impl RecordCrypto {
             .map_err(|_| CryptoError::Authentication)
     }
 
+    /// Keyed, one-way index value (hex HMAC-SHA256) for plaintext columns and
+    /// claim intents: equal inputs match, but a reader of Convex cannot test a
+    /// guess (e.g. "is DEMO-DATAAPI on this card's allowlist?") without the
+    /// record key. The index key is derived from the `CARDS_RECORD_INDEX_KID`
+    /// record key (default: the current one) and is never used for encryption.
+    pub fn blind(&self, label: &str, data: &[u8]) -> String {
+        use hmac::{Hmac, Mac};
+        type H = Hmac<sha2_010::Sha256>;
+        let mut derive = <H as Mac>::new_from_slice(&self.keys[&self.index]).expect("hmac key");
+        derive.update(b"chainpay-card-index-key:v1");
+        let index_key = derive.finalize().into_bytes();
+        let mut mac = <H as Mac>::new_from_slice(&index_key).expect("hmac key");
+        mac.update(format!("chainpay-card-index:v1\n{label}\n").as_bytes());
+        mac.update(data);
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
     pub fn seal_json<T: Serialize>(&self, kind: &str, key: &str, value: &T) -> Value {
         self.seal(kind, key, &serde_json::to_vec(value).expect("serializable"))
     }
@@ -154,6 +190,35 @@ pub(crate) fn test_crypto() -> RecordCrypto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blind_index_values_survive_key_rotation() {
+        use base64::Engine;
+        let k = |b: u8| base64::engine::general_purpose::STANDARD.encode([b; 32]);
+        let before = RecordCrypto::from_vars(
+            [
+                ("CARDS_RECORD_KID", "k1".to_owned()),
+                ("CARDS_RECORD_KEY_k1", k(1)),
+            ]
+            .into_iter()
+            .map(|(a, b)| (a.to_owned(), b)),
+        )
+        .unwrap();
+        let rotated = RecordCrypto::from_vars(
+            [
+                ("CARDS_RECORD_KID", "k2".to_owned()),
+                ("CARDS_RECORD_INDEX_KID", "k1".to_owned()),
+                ("CARDS_RECORD_KEY_k1", k(1)),
+                ("CARDS_RECORD_KEY_k2", k(2)),
+            ]
+            .into_iter()
+            .map(|(a, b)| (a.to_owned(), b)),
+        )
+        .unwrap();
+        assert_eq!(before.blind("x", b"m"), rotated.blind("x", b"m"));
+        assert_ne!(before.blind("x", b"m"), before.blind("y", b"m"));
+        assert_eq!(before.blind("x", b"m").len(), 64);
+    }
 
     #[test]
     fn envelopes_round_trip_and_bind_to_their_record() {
