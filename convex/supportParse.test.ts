@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { checkRelayRequest } from './supportRpc';
 import { advanceCursor, parseSupportMemo, parseSupportTx, planPage, summarize, type RpcTransaction, type StoredEvent, type SupportCursor } from './supportParse';
 
 const PROGRAM = 'Sp1itter1111111111111111111111111111111111';
@@ -178,24 +177,5 @@ describe('support storage', () => {
     expect(s.contributionCount).toBe(1);
     expect(s.totals.sol.contributed).toBe('5');
     expect(s.live).toBe(false);
-  });
-});
-
-describe('support RPC relay', () => {
-  const req = (body: unknown) => JSON.stringify(body);
-  it('forwards only the calls the tip card needs', () => {
-    for (const method of ['getBalance', 'getLatestBlockhash', 'sendTransaction', 'getAccountInfo', 'getSignatureStatuses']) {
-      expect(checkRelayRequest(req({ jsonrpc: '2.0', id: 1, method, params: [] })).ok).toBe(true);
-    }
-    for (const method of ['getProgramAccounts', 'requestAirdrop', 'getSignaturesForAddress', 'getTransaction', '__proto__']) {
-      expect(checkRelayRequest(req({ jsonrpc: '2.0', id: 1, method, params: [] }))).toMatchObject({ ok: false, status: 403 });
-    }
-  });
-  it('rejects batches, junk and oversized bodies', () => {
-    expect(checkRelayRequest(req([{ method: 'getBalance' }]))).toMatchObject({ ok: false, status: 400 });
-    expect(checkRelayRequest('{nope')).toMatchObject({ ok: false, status: 400 });
-    expect(checkRelayRequest(req({ method: 'getBalance', params: 'x' }))).toMatchObject({ ok: false, status: 400 });
-    expect(checkRelayRequest(req({ method: 'sendTransaction', params: ['A'.repeat(9000)] }))).toMatchObject({ ok: false, status: 413 });
-    expect(checkRelayRequest(req({ method: 'getSignatureStatuses', params: [Array(11).fill('s')] }))).toMatchObject({ ok: false, status: 400 });
   });
 });

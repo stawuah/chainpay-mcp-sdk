@@ -3,7 +3,7 @@ import { ConvexError } from "convex/values";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { backendOperations, mcpOperations } from "./storage";
-import { checkRelayRequest } from "./supportRpc";
+import { MAX_BODY_BYTES, UPSTREAM_TIMEOUT_MS, checkRelayRequest, clientKey, readLimited } from "./supportRpc";
 
 function response(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } }); }
 // Compare fixed-size digests so secret contents do not affect comparison time.
@@ -62,18 +62,28 @@ http.route({ path: "/support/v1", method: "GET", handler: httpAction(async (ctx)
   }
 }) });
 http.route({ path: "/support/v1", method: "OPTIONS", handler: httpAction(async () => new Response(null, { status: 204, headers: { ...supportHeaders, "Access-Control-Max-Age": "86400" } })) });
-// Narrow RPC relay for the /support page (see supportRpc.ts). The key stays in SUPPORT_RPC_URL.
+// Narrow RPC relay for the /support page (see supportRpc.ts). Its key stays in
+// SUPPORT_RELAY_RPC_URL, separate from the tracker's SUPPORT_RPC_URL.
 const relayHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" };
-http.route({ path: "/support/rpc", method: "POST", handler: httpAction(async (_ctx, req) => {
-  const upstream = process.env.SUPPORT_RPC_URL;
-  if (!upstream) return new Response(JSON.stringify({ error: { code: -32000, message: "Support RPC not configured" } }), { status: 503, headers: { ...relayHeaders, "Content-Type": "application/json" } });
-  const check = checkRelayRequest(await req.text());
-  if (!check.ok) return new Response(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: check.message } }), { status: check.status, headers: { ...relayHeaders, "Content-Type": "application/json" } });
+const relayError = (status: number, message: string, id: unknown = null) => new Response(JSON.stringify({ jsonrpc: "2.0", id, error: { code: status === 429 ? -32005 : -32600, message } }), { status, headers: { ...relayHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+http.route({ path: "/support/rpc", method: "POST", handler: httpAction(async (ctx, req) => {
+  // Cheap checks first, so a flood costs no database writes or upstream calls.
+  const upstream = process.env.SUPPORT_RELAY_RPC_URL;
+  const programId = process.env.SUPPORT_PROGRAM_ID;
+  if (process.env.SUPPORT_LIVE !== "true" || !upstream || !programId) return relayError(503, "Support RPC is off");
+  const text = await readLimited(req, MAX_BODY_BYTES);
+  if (text === null) return relayError(413, "Request too large");
+  const check = checkRelayRequest(text, { programId });
+  if (!check.ok) return relayError(check.status, check.message);
+  const allowed = await ctx.runMutation(internal.support.relayAllowed, { client: await clientKey(req.headers), send: check.body.method === "sendTransaction" });
+  if (!allowed) return relayError(429, "Too many requests; try again in a minute", check.body.id);
   try {
-    const res = await fetch(upstream, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(check.body) });
-    return new Response(await res.text(), { status: res.status, headers: { ...relayHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+    const res = await fetch(upstream, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(check.body), signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+    const body = await readLimited(res);
+    if (body === null) return relayError(502, "Upstream response too large", check.body.id);
+    return new Response(body, { status: res.status, headers: { ...relayHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" } });
   } catch {
-    return new Response(JSON.stringify({ jsonrpc: "2.0", id: check.body.id, error: { code: -32000, message: "Upstream RPC unavailable" } }), { status: 502, headers: { ...relayHeaders, "Content-Type": "application/json" } });
+    return relayError(502, "Upstream RPC unavailable", check.body.id);
   }
 }) });
 http.route({ path: "/support/rpc", method: "OPTIONS", handler: httpAction(async () => new Response(null, { status: 204, headers: { ...relayHeaders, "Access-Control-Max-Age": "86400" } })) });
