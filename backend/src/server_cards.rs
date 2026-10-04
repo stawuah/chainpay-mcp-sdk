@@ -540,7 +540,11 @@ pub(super) async fn validate_card_setup(
         ));
     }
     let blockhash = tx.message.recent_blockhash().to_bytes();
-    let submitted = tx.message.serialize();
+    // Compare meaning, not bytes: the browser's web3.js re-sorts account keys
+    // when it refreshes the blockhash (seen live: a second card's init_card
+    // was refused because its PDAs sorted differently).
+    let submitted = cards::program::decode_message(&tx.message).ok_or_else(refuse)?;
+    let signers = tx.message.header().num_required_signatures;
     let rows = cards
         .store
         .list_card_records_for_owner(
@@ -582,7 +586,9 @@ pub(super) async fn validate_card_setup(
         ];
         for instructions in expected {
             let candidate = cards::program::unsigned_transaction(&owner, &instructions, blockhash);
-            if candidate.message.serialize() == submitted {
+            if candidate.message.header().num_required_signatures == signers
+                && cards::program::decode_message(&candidate.message).as_ref() == Some(&submitted)
+            {
                 return Ok(());
             }
         }

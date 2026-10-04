@@ -200,6 +200,18 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
     return merchantList;
   }
 
+  /** 0 init_card: binding exists · 1 delegate_card: policy owned by the delegation program · 2 escrow top-up: escrow funded. */
+  async function baseStepDone(index: number, prepared: PreparedCard): Promise<boolean> {
+    try {
+      const connection = chainpayClient.connection;
+      if (index === 0) return (await connection.getAccountInfo(new PublicKey(prepared.accounts.binding), "confirmed")) !== null;
+      if (index === 1) return (await connection.getAccountInfo(new PublicKey(prepared.accounts.policy), "confirmed"))?.owner.toBase58() === DELEGATION_PROGRAM_ID;
+      return ((await connection.getAccountInfo(new PublicKey(prepared.accounts.escrow), "confirmed"))?.lamports ?? 0) > 0;
+    } catch {
+      return false;
+    }
+  }
+
   async function readCommitment(cardId: string) {
     const info = await chainpayClient.connection.getAccountInfo(new PublicKey(accounts(cardId).commitment), "finalized");
     return info ? decodeCardCommitment(info.data) : null;
@@ -278,6 +290,9 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       const encodedTxs = [prepared.initTx, prepared.delegateTx, prepared.escrowTopUpTx];
       for (let index = attempt.baseDone; index < encodedTxs.length; index += 1) {
         progress("base", "active", `Approval ${index + 1} of 3`);
+        // Resume after a reload or an outcome we never heard back: skip a step whose effect is
+        // already on Solana instead of asking the wallet to sign it again.
+        if (await baseStepDone(index, prepared)) { attempt.baseDone = index + 1; continue; }
         const transaction = Transaction.from(Uint8Array.from(atob(encodedTxs[index]), (char) => char.charCodeAt(0)));
         assertBaseTransaction(transaction);
         // Server-built, owner-only transactions: refresh the blockhash right before
@@ -286,7 +301,9 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
           transaction.recentBlockhash = (await chainpayClient.connection.getLatestBlockhash("confirmed")).blockhash;
         }
         const signed = await deps.signTransaction(transaction);
-        await submitSignedTransaction(`card-base:${prepared.cardId}:${index}`, signed.serialize(), { dismissOnConfirm: true });
+        // One operation per signed transaction: a step the relay refused before sending can be
+        // signed again with a fresh blockhash instead of hitting the refused operation forever.
+        await submitSignedTransaction(`card-base:${prepared.cardId}:${index}:${signed.recentBlockhash}`, signed.serialize(), { dismissOnConfirm: true });
         attempt.baseDone = index + 1;
       }
       progress("base", "done");

@@ -1095,7 +1095,11 @@ async fn checkout_capabilities_are_scoped_single_use_and_merchant_bound() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    assert_eq!(h.program_count("close_checkout_intent"), 1, "consumed intent closed");
+    assert_eq!(
+        h.program_count("close_checkout_intent"),
+        1,
+        "consumed intent closed"
+    );
     let (status, used) = h
         .call(
             "POST",

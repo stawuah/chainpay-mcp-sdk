@@ -763,6 +763,49 @@ pub fn set_compute_unit_limit(units: u32) -> Instruction {
 }
 
 /// Legacy message for `payer` with zero signatures in place.
+/// A message's meaning, independent of how a client ordered its account keys:
+/// fee payer, then each instruction's program, `(key, signer, writable)`
+/// metas and data. Wallets and web3.js re-sort keys when they recompile a
+/// message (e.g. after refreshing the blockhash), so equality of bytes is
+/// the wrong test for "is this the transaction we prepared".
+pub type DecodedInstruction = (Address, Vec<(Address, bool, bool)>, Vec<u8>);
+
+pub fn decode_message(message: &VersionedMessage) -> Option<(Address, Vec<DecodedInstruction>)> {
+    if message
+        .address_table_lookups()
+        .is_some_and(|lookups| !lookups.is_empty())
+    {
+        return None;
+    }
+    let keys = message.static_account_keys();
+    let header = message.header();
+    let signed = header.num_required_signatures as usize;
+    let ro_signed = header.num_readonly_signed_accounts as usize;
+    let ro_unsigned = header.num_readonly_unsigned_accounts as usize;
+    if signed == 0 || signed > keys.len() || ro_signed > signed || ro_unsigned > keys.len() - signed
+    {
+        return None;
+    }
+    let writable = |i: usize| {
+        if i < signed {
+            i < signed - ro_signed
+        } else {
+            i - signed < keys.len() - signed - ro_unsigned
+        }
+    };
+    let mut out = Vec::new();
+    for ix in message.instructions() {
+        let program = *keys.get(ix.program_id_index as usize)?;
+        let mut metas = Vec::new();
+        for &index in &ix.accounts {
+            let i = index as usize;
+            metas.push((*keys.get(i)?, i < signed, writable(i)));
+        }
+        out.push((program, metas, ix.data.clone()));
+    }
+    Some((keys[0], out))
+}
+
 pub fn unsigned_transaction(
     payer: &Address,
     instructions: &[Instruction],
@@ -1192,6 +1235,94 @@ pub fn decline_reason_for(code: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Re-sort a legacy message's unsigned keys the way web3.js does
+    /// (stringwise within each header group) and remap the instructions.
+    fn resort_like_web3(message: &Message) -> Message {
+        let mut m = message.clone();
+        let signed = m.header.num_required_signatures as usize;
+        let ro_unsigned = m.header.num_readonly_unsigned_accounts as usize;
+        let n = m.account_keys.len();
+        let mut order: Vec<usize> = (0..n).collect();
+        let (writable_unsigned, readonly_unsigned) = (signed..n - ro_unsigned, n - ro_unsigned..n);
+        order[writable_unsigned.clone()].sort_by_key(|&i| message.account_keys[i].to_string());
+        order[readonly_unsigned.clone()].sort_by_key(|&i| message.account_keys[i].to_string());
+        m.account_keys = order.iter().map(|&i| message.account_keys[i]).collect();
+        let remap = |old: u8| order.iter().position(|&i| i == old as usize).unwrap() as u8;
+        for ix in &mut m.instructions {
+            ix.program_id_index = remap(ix.program_id_index);
+            ix.accounts = ix.accounts.iter().map(|&a| remap(a)).collect();
+        }
+        m
+    }
+
+    #[test]
+    fn card_setup_transactions_compare_by_meaning_not_key_order() {
+        let owner = Address::from([7u8; 32]);
+        for seed in 1u8..40 {
+            let card_id = [seed; 32];
+            let ix = vec![init_card(
+                &owner,
+                &card_id,
+                ISSUER_LITHIC_SANDBOX,
+                &[3; 32],
+                PREFUND_LAMPORTS,
+            )];
+            let tx = unsigned_transaction(&owner, &ix, [9; 32]);
+            let VersionedMessage::Legacy(legacy) = &tx.message else {
+                unreachable!()
+            };
+            let resorted = VersionedMessage::Legacy(resort_like_web3(legacy));
+            assert_eq!(
+                decode_message(&tx.message),
+                decode_message(&resorted),
+                "seed {seed}"
+            );
+        }
+        // A changed amount or an extra instruction is a different transaction.
+        let card_id = [1u8; 32];
+        let want = unsigned_transaction(
+            &owner,
+            &[init_card(
+                &owner,
+                &card_id,
+                ISSUER_LITHIC_SANDBOX,
+                &[3; 32],
+                PREFUND_LAMPORTS,
+            )],
+            [9; 32],
+        );
+        let more = unsigned_transaction(
+            &owner,
+            &[init_card(
+                &owner,
+                &card_id,
+                ISSUER_LITHIC_SANDBOX,
+                &[3; 32],
+                PREFUND_LAMPORTS + 1,
+            )],
+            [9; 32],
+        );
+        let extra = unsigned_transaction(
+            &owner,
+            &[
+                init_card(
+                    &owner,
+                    &card_id,
+                    ISSUER_LITHIC_SANDBOX,
+                    &[3; 32],
+                    PREFUND_LAMPORTS,
+                ),
+                delegate_card(&owner, &card_id),
+            ],
+            [9; 32],
+        );
+        assert_ne!(decode_message(&want.message), decode_message(&more.message));
+        assert_ne!(
+            decode_message(&want.message),
+            decode_message(&extra.message)
+        );
+    }
 
     const IDL: &str = include_str!("../../../../programs/card_policy/idl/card_policy.json");
 
