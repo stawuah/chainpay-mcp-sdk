@@ -142,7 +142,7 @@
 }
 
 /* U2: one featured card */
-/* 2×2 on desktop: 4 + 14 cells fill six rows of three with no orphan */
+/* 2×2 on desktop. A trailing orphan card stretches into a full-row horizontal card (see end of file). */
 .use-cases .uc-card-featured {
   grid-column: span 2;
   grid-row: span 2;
@@ -341,4 +341,20 @@
   .use-cases .uc-card-featured .uc-card-media { aspect-ratio: 4 / 3; }
   .use-cases .uc-card-featured .uc-card-body { padding: 20px 24px 24px; }
   .use-cases .uc-card-featured .uc-card-title { font-size: 22px; }
+}
+
+/* Trailing orphan: a lone card on the last row stretches across the row as a horizontal card.
+   Ruling C10: _bmad-output/design-council/agent-cards-landing-ruling-2026-10-03.md */
+@media (min-width: 1080px) {
+  .use-cases .uc-grid > .uc-card:last-child:nth-child(3n+1):not(:first-child) { grid-column: 1 / -1; flex-direction: row; align-items: stretch; }
+  .use-cases .uc-grid > .uc-card:last-child:nth-child(3n+1):not(:first-child) .uc-card-media { flex: none; width: calc((100% - 48px) / 3); }
+  .use-cases .uc-grid > .uc-card:last-child:nth-child(3n+1):not(:first-child) .uc-card-body { justify-content: center; padding: 32px 40px; max-width: 40rem; }
+}
+@media (min-width: 640px) and (max-width: 1079px) {
+  .use-cases .uc-grid-featured > .uc-card:last-child:nth-child(even),
+  .use-cases .uc-grid:not(.uc-grid-featured) > .uc-card:last-child:nth-child(odd):not(:first-child) { grid-column: 1 / -1; flex-direction: row; align-items: stretch; }
+  .use-cases .uc-grid-featured > .uc-card:last-child:nth-child(even) .uc-card-media,
+  .use-cases .uc-grid:not(.uc-grid-featured) > .uc-card:last-child:nth-child(odd):not(:first-child) .uc-card-media { flex: none; width: calc((100% - 24px) / 2); }
+  .use-cases .uc-grid-featured > .uc-card:last-child:nth-child(even) .uc-card-body,
+  .use-cases .uc-grid:not(.uc-grid-featured) > .uc-card:last-child:nth-child(odd):not(:first-child) .uc-card-body { justify-content: center; padding: 28px 32px; }
 }

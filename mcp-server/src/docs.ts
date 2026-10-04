@@ -552,7 +552,7 @@ export function renderDocsHtml(): string {
             </div>
           </section>
 
-          <footer class="footer"><span>ChainPay MCP · Solana Devnet</span><span><a href="${escapeHtml(PRODUCT_APP_URL)}">Dashboard</a> · <a href="/mcp">Connect</a> · <a href="/tools">Tools</a> · <a href="/healthz">Status</a></span></footer>
+          <footer class="footer"><span>ChainPay MCP · Solana Devnet</span><span><a href="${escapeHtml(PRODUCT_APP_URL)}">Dashboard</a> · <a href="/mcp">Connect</a> · <a href="/tools">Tools</a> · <a href="${escapeHtml(PRODUCT_APP_URL)}/status">Status</a></span></footer>
         </div>
       </main>
     </div>

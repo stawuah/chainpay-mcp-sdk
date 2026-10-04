@@ -17,6 +17,7 @@ import type * as migration from "../migration.js";
 import type * as pet from "../pet.js";
 import type * as petValidators from "../petValidators.js";
 import type * as records from "../records.js";
+import type * as status from "../status.js";
 import type * as storage from "../storage.js";
 
 import type {
@@ -35,6 +36,7 @@ declare const fullApi: ApiFromModules<{
   pet: typeof pet;
   petValidators: typeof petValidators;
   records: typeof records;
+  status: typeof status;
   storage: typeof storage;
 }>;
 
