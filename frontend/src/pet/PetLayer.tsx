@@ -24,6 +24,7 @@ import {
 } from "./play/lines";
 import type { Expression, Motion } from "./RobotModel";
 import { setPetSuppressed } from "../pet-prefs";
+import { setPetGreeting, setPetSpeaking } from "../pet-presence";
 import "./pet.css";
 
 const RobotCanvas = lazy(() => import("./RobotCanvas"));
@@ -281,6 +282,8 @@ export default function PetLayer({ onHide, routeKey, routeKind, quiet = false }:
     // A hello is volunteered speech, which R5 allows on the landing only. Turning
     // him on with the toggle is not an arrival at all.
     if (quietArrival.current || routeKindAtMount.current !== "landing") return;
+    // The hero clip waits on its poster while he says hello (landing-brand ruling B12).
+    setPetGreeting(true);
     void arrive().then(greeting => {
       if (cancelled) return;
       if (greeting !== "same-day") {

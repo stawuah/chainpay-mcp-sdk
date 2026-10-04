@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import { PET_STATE_EVENT, type PetPresence } from "../pet-presence";
+import { getPetEnabled } from "../pet-prefs";
 
 // The hero's motion lane: a payment stays inside its boundary and leaves a receipt.
 // Ruling: _bmad-output/design-council/landing-brand-ruling-2026-10-04.md (B7, B12, B13).
@@ -41,11 +42,7 @@ function prefersStill() {
 
 function petExpected() {
   if (import.meta.env.VITE_CHAINPAY_PET === "off") return false;
-  try {
-    return window.localStorage.getItem("chainpay.pet.hidden") !== "1";
-  } catch {
-    return true;
-  }
+  return getPetEnabled("landing");
 }
 
 function petBlocks({ greeting, speaking, perch }: PetPresence, hero: Element | null) {
