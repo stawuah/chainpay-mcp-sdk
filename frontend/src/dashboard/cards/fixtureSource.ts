@@ -359,6 +359,13 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
     repaymentTarget() {
       return { recipientTokenAccount: "SimPartnerUsdc11111111111111111111111111111", mint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", decimals: 6, cluster: "devnet" };
     },
+    repayAgent() {
+      return "RepayAgentFixture111111111111111111111111111";
+    },
+    async createRepaymentPermission() {
+      await wait(delay);
+      return "MdT1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    },
     async payStatement(_card, statement, mandateAddress) {
       await wait(delay * 2);
       const receiptPda = "4RcptStatementFixture11111111111111111111";

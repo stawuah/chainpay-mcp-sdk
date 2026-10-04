@@ -193,6 +193,11 @@ export interface CardsSource {
 
   /** Where a statement is repaid: the statement's own instructions when ChainPay sent them, checked against this build. */
   repaymentTarget(statement?: StatementView): RepaymentTarget;
+  /** The card's repay agent (card_policy PDA `["repay_agent", binding]`): the approved agent of a repayment permission. */
+  repayAgent(card: CardView): string;
+  /** Owner signs a one-payment ChainPay permission for this statement's amount, approved for the card's repay agent. */
+  createRepaymentPermission(card: CardView, statement: StatementView): Promise<string>;
+  /** card_policy `repay_statement`: the repay agent pays the statement through ChainPay `execute_payment` under `mandateAddress`. */
   payStatement(card: CardView, statement: StatementView, mandateAddress: string): Promise<RepaymentResult>;
   /** Has this statement been paid, or is an attempt unresolved, under any of these permissions? Throws when it can't tell. */
   repaymentStatus(statement: StatementView, mandateAddresses: string[]): Promise<RepaymentLookup>;
