@@ -342,10 +342,48 @@ pub(super) async fn repayment(
 ) -> Response {
     let cards = cards_or_404!(state);
     let caller = caller(&principal, connection.as_deref());
+    // `method: magicblock_private_payments` selects the opt-in private path (contracts.md §7.3); a body
+    // without it is the transparent receipt path, unchanged.
+    let private = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .is_some_and(|v| v["method"] == cards::private_repay::METHOD);
+    respond(if private {
+        match parse_body(&body) {
+            Ok(request) => {
+                cards::private_repay::submit(&cards, &caller, &card_id, &statement_id, request)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        match parse_body(&body) {
+            Ok(request) => {
+                cards::statements::submit_repayment(
+                    &cards,
+                    &caller,
+                    &card_id,
+                    &statement_id,
+                    request,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        }
+    })
+}
+
+pub(super) async fn private_repayment(
+    State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
+    connection: Option<Extension<ConnectionHash>>,
+    Path((card_id, statement_id)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let cards = cards_or_404!(state);
+    let caller = caller(&principal, connection.as_deref());
     respond(match parse_body(&body) {
         Ok(request) => {
-            cards::statements::submit_repayment(&cards, &caller, &card_id, &statement_id, request)
-                .await
+            cards::private_repay::prepare(&cards, &caller, &card_id, &statement_id, request).await
         }
         Err(error) => Err(error),
     })
@@ -580,6 +618,10 @@ pub(super) fn router() -> Router<BackendState> {
         .route(
             "/v1/cards/{card_id}/statements/{statement_id}/repayment",
             post(repayment),
+        )
+        .route(
+            "/v1/cards/{card_id}/statements/{statement_id}/repayment/private",
+            post(private_repayment),
         )
         .route(
             "/v1/cards/{card_id}/checkout-intents",

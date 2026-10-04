@@ -49,6 +49,16 @@ describe("card records", () => {
     await expect(call(t, "put_card_record", { kind: "cards", key: "card:r", record_json: JSON.stringify({ v: 1, rev: 1, recoveryReport: { numbers: [] } }), updated: "1" })).rejects.toThrow(/encrypted/);
   });
 
+  it("refuses plaintext private-repayment references and settlements", async () => {
+    const t = test();
+    const stmt = (extra: Record<string, unknown>) => call(t, "put_card_record", { kind: "card_statements", key: "stmt:c:2", record_json: JSON.stringify({ v: 1, rev: 1, lines: envelope, ...extra }), updated: "1" });
+    await expect(stmt({ privateRepayment: { attempts: [{ attemptId: "p1", clientRefId: "104958883709" }] } })).rejects.toThrow(/clientRefId must be encrypted/);
+    await expect(stmt({ privateRepayment: { attempts: [{ attemptId: "p1", secret: { clientRefId: "1" } }] } })).rejects.toThrow(/secret must be encrypted/);
+    await expect(stmt({ repayment: { method: "magicblock_private_payments", settlementSignatures: ["sig"] } })).rejects.toThrow(/settlementSignatures must be encrypted/);
+    await expect(stmt({ repayment: { method: "magicblock_private_payments", settlement: { signatures: ["sig"] } } })).rejects.toThrow(/settlement must be encrypted/);
+    expect((await stmt({ privateRepayment: { method: "magicblock_private_payments", attempts: [{ attemptId: "p1", state: "verified", secret: envelope }] }, repayment: { method: "magicblock_private_payments", settlement: envelope } })).written).toBe(true);
+  });
+
   it("scans by key prefix with a resumable cursor and keeps card ops off the MCP role", async () => {
     const t = test();
     for (const id of ["a", "b", "c"]) await call(t, "put_card_record", { kind: "cards", key: `card:${id.repeat(64)}`, record_json: card(1), updated: "1" });
