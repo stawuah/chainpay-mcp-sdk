@@ -302,7 +302,7 @@
 .landing .landing-hero h1 em { display: block; }
 .landing .landing-hero-text { font-size: 19px; max-width: 29rem; line-height: 1.6; }
 .landing .landing-hero-note { font-size: 13px; max-width: 26rem; }
-.landing .landing-hero-visual { background: var(--soft); padding: 28px 28px 20px; border-radius: 36px; position: relative; }
+.landing .landing-hero-visual { background: #e6eefd; padding: 28px 28px 12px; border-radius: 36px; position: relative; } /* sampled from the hero clip's own field so the lane has no visible box (landing-brand ruling B8) */
 .hero-product-label { display: flex; justify-content: space-between; gap: 12px; font-size: 10px; color: var(--body); letter-spacing: .04em; margin-bottom: 26px; }
 .hero-product-caption { text-align: center; font-size: 13px; color: var(--body); padding: 22px 0 2px; }
 .story-document { background: white; border: 1px solid var(--line); border-radius: 24px; padding: 28px; box-shadow: 0 18px 42px -24px #14213d35; color: var(--ink); min-width: 0; width: 100%; }
@@ -311,16 +311,12 @@
 .story-agent { display: flex; gap: 14px; align-items: center; margin: 26px 0; }
 .story-agent h3 { font-size: 18px; font-weight: 600; letter-spacing: -.03em; }
 .story-agent p { color: var(--body); font-size: 12px; margin-top: 4px; }
-.story-agent-symbol,.hero-slip-symbol { display: grid; place-items: center; height: 44px; width: 44px; flex-shrink: 0; background: var(--soft); color: var(--blue); border-radius: 14px; font-size: 24px; }
+.story-agent-symbol { display: grid; place-items: center; height: 44px; width: 44px; flex-shrink: 0; background: var(--soft); color: var(--blue); border-radius: 14px; font-size: 24px; }
 .story-fields { margin: 20px 0 0; display: grid; gap: 0; font-size: 13px; }
 .story-fields > div { display: flex; justify-content: space-between; gap: 20px; padding: 13px 0; border-bottom: 1px solid var(--line); }
 .story-fields dt { color: var(--body); }
 .story-fields dd { margin: 0; font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
 .story-document-note { font-size: 12px; line-height: 1.65; color: var(--body); margin-top: 18px; }
-.hero-payment-slip { position: relative; margin: -4px -44px 0 36px; display: flex; align-items: center; gap: 14px; padding: 20px; border: 1px solid var(--line); background: #fff; box-shadow: 0 14px 36px -16px #14213d30; border-radius: 20px; }
-.hero-payment-slip > div { display: grid; gap: 5px; flex: 1; }
-.hero-payment-slip > div > span { font-size: 12px; color: var(--body); }
-.hero-payment-slip strong { font-size: 23px; font-weight: 500; letter-spacing: -.04em; }
 .story-intro { padding-top: 96px; padding-bottom: 60px; border-top: 1px solid var(--line); text-align: center; }
 .landing .story-intro h2 { font-size: clamp(34px, 4vw, 56px); line-height: 1.14; font-weight: 500; letter-spacing: -.05em; margin-top: 20px; }
 .story-intro h2 span { color: var(--body); }
@@ -364,9 +360,7 @@
  .landing .landing-hero { margin: 0 20px; padding-bottom: 64px; }
  .landing .landing-hero h1 { font-size: clamp(43px, 11vw, 64px); }
  .landing .landing-hero-visual { padding: 22px 16px 16px; border-radius: 26px; }
- .hero-payment-slip { margin-left: 8px; margin-right: -6px; padding: 16px 12px; gap: 10px; }
- .hero-payment-slip .story-tag { max-width: 80px; text-align: center; }
- .hero-product-label { font-size: 9px; gap: 6px; }
+   .hero-product-label { font-size: 9px; gap: 6px; }
  .story-intro { padding-top: 64px; padding-bottom: 16px; text-align: left; }
  .story-intro > p:last-child { margin-left: 0; }
  .story-chapter { grid-template-columns: 1fr; gap: 26px; padding: 48px 0; }
@@ -507,4 +501,53 @@
  .landing-next-copy { padding: 0 8px; justify-items: stretch; }
  .landing .landing-next .astryx-button { width: 100%; }
  .landing-next-body { font-size: 16px; }
+}
+
+/* Hero motion lane and its pause control. Ruling: _bmad-output/design-council/landing-brand-ruling-2026-10-04.md (B7, B13). */
+.hero-lane { margin-top: 12px; aspect-ratio: 16 / 5; }
+.hero-lane video {
+  display: block; width: 100%; height: 100%; object-fit: cover;
+  /* Fade all four edges into the frame field so the lane never reads as a box (B8). */
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent), linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent), linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+  mask-composite: intersect;
+}
+.hero-motion-row { display: flex; align-items: center; gap: 14px; padding-top: 8px; }
+.hero-motion-row .hero-product-caption { padding: 0; text-align: left; flex: 1; min-width: 0; }
+.hero-motion-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; min-width: 132px; white-space: nowrap; cursor: pointer; }
+
+/* Use-case strip between the story and the "Coming next" teaser. Static on purpose (B1 to B4, B11). */
+.landing-uses { padding: 32px 0 56px; }
+.landing-uses-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+.landing .landing-uses h2 { margin: 14px 0 0; font-weight: 400; }
+.landing-uses-all { color: var(--blue); font-size: 16px; font-weight: 600; white-space: nowrap; }
+.landing-uses-all:hover { color: var(--blue-active); }
+.landing-uses-all-below { display: none; margin-top: 20px; }
+.landing-uses-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; list-style: none; margin: 0; padding: 0; }
+.landing-use { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--line); border-radius: 24px; color: var(--ink); text-decoration: none; }
+.landing-use-media { display: block; aspect-ratio: 4 / 3; overflow: hidden; }
+.landing-use-media img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.landing-use-body { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 18px 20px 20px; }
+.landing-use-title { font-size: 17px; font-weight: 600; line-height: 1.35; }
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .landing-use { transition: box-shadow 180ms ease-out; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .landing-use:hover { box-shadow: 0 12px 32px rgba(10, 11, 13, .08); }
+}
+@media (max-width: 1079px) {
+  .landing-uses-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .landing-uses-head .landing-uses-all { display: none; }
+  .landing-uses-all-below { display: inline-block; }
+}
+@media (max-width: 639px) {
+  .landing-uses-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .landing-use { flex-direction: row; border-radius: 20px; }
+  .landing-use-media { flex: none; width: 112px; aspect-ratio: auto; }
+  .landing-use-body { justify-content: center; gap: 6px; padding: 14px 16px; min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The asset strip hides its pause under reduced motion; the hero's must stay (B13). */
+  .hero-motion-toggle { display: inline-flex; }
 }

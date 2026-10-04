@@ -3,8 +3,10 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { PROGRAM_ID } from "../config/public";
 import { AgentCardTeaser } from "./AgentCardTeaser";
+import { HeroLoop } from "./HeroLoop";
 import { PaymentStory, PermissionExample } from "./PaymentStory";
 import { SupportedAssets } from "./SupportedAssets";
+import { UseCaseStrip } from "./UseCaseStrip";
 import { useLandingMotion } from "./useLandingMotion";
 import "./landing.css";
 
@@ -123,13 +125,13 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
           <div className="landing-hero-visual">
             <div className="hero-product-label"><span>YOUR AGENT’S NEXT PAYMENT</span><span>Illustrative example</span></div>
             <PermissionExample />
-            <div className="hero-payment-slip"><span className="hero-slip-symbol" aria-hidden="true">↗</span><div><span>Research agent requests</span><strong>4.50 USDC</strong></div><span className="story-tag">For your review</span></div>
-            <p className="hero-product-caption">A little autonomy. A clear boundary.</p>
+            <HeroLoop />
           </div>
         </section>
 
         <SupportedAssets />
         <PaymentStory onOpenDashboard={onOpenDashboard} />
+        <UseCaseStrip />
         <AgentCardTeaser />
 
         <section className="landing-section page-width" id="developers" aria-labelledby="landing-dev-heading">

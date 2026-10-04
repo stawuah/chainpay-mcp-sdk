@@ -64,6 +64,7 @@ export const TOUR_LINES: Record<string, string> = {
   "spend-limits": "this is the allowance part. agents get a budget, not your keys.",
   "payment-review": "4.50 USDC, and you see it before your wallet does.",
   receipts: "receipts. my favorite part.",
+  "what-agents-pay-for": "people use these today. one's still cooking.",
   "stay-in-control": "pause or revoke when plans change. please don't revoke me.",
   developers: "devs: SDK or MCP. fits the workflow you already have.",
   faq: "good questions. read these before you approve anything.",

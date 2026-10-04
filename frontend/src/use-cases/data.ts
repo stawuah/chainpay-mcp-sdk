@@ -365,6 +365,36 @@ export const USE_CASES: readonly UseCase[] = [
     cta: DASHBOARD,
     imageAlt: "A shopping bag with the ChainPay logo, the robot behind it.",
   },
+  {
+    // Planning only: _bmad-output/planning-artifacts/chainpay-paypal-2026-10-03. Copy per landing-brand ruling B5.
+    slug: "paypal-invoices",
+    audience: "sellers",
+    status: "soon",
+    title: "PayPal invoices, paid on Solana",
+    summary: "Your buyer pays a PayPal sandbox invoice on Solana. Once you approve, PayPal records it as paid. No money goes through PayPal.",
+    steps: [
+      "You send a PayPal sandbox invoice. The buyer gets a ChainPay link to pay.",
+      "The buyer approves the exact amount on Solana. A receipt is saved.",
+      "You check the receipt, then approve marking the invoice paid in PayPal.",
+    ],
+    why: [
+      "The money moves on Solana. PayPal only keeps a record.",
+      "Two separate records: the Solana receipt and the PayPal entry.",
+      "If PayPal is slow to answer, nobody gets asked to pay twice.",
+    ],
+    example: [
+      ["Invoice", "USD 12.50 · PayPal sandbox"],
+      ["Paid on Solana", "12.500000 test tokens · Devnet"],
+      ["PayPal record", "External payment · you approve it"],
+      ["Moved through PayPal", "Nothing"],
+    ],
+    cta: RECEIPT,
+    soonNote: {
+      title: "Coming soon. Not built yet.",
+      body: "It's planned and needs PayPal sandbox checks first. Every Solana payment already gets a receipt you can share or export.",
+    },
+    imageAlt: "A white invoice with a navy header and a blue check tab clipped to its top edge, and in front of it a receipt slip stamped with the ChainPay logo.",
+  },
 ];
 
 export function findUseCase(slug: string): UseCase | undefined {

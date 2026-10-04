@@ -94,6 +94,7 @@ jobs:
           npm --prefix frontend run test:permission-request-browser
           npm --prefix frontend run test:crossmint-browser
           npm --prefix frontend run test:pet-browser
+          npm --prefix frontend run test:landing-brand-browser
       - name: Shared community pet regressions
         run: |
           VITE_CHAINPAY_SHARED_PET=on npm --prefix frontend run dev -- --host 127.0.0.1 --port 5191 > /tmp/vite-shared.log 2>&1 &
