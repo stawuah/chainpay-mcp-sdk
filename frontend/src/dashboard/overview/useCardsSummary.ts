@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Transaction } from "@solana/web3.js";
 import { cardsSourceOverride, CardsNotEnabledError, type CardsSource } from "../cards/source";
-import { createLiveCardsSource } from "../cards/liveSource";
 import { summarizeCards, type CardsSummaryState } from "./cardsSummary";
 
 export type { CardsSummaryState } from "./cardsSummary";
@@ -29,15 +28,19 @@ export function useCardsSummary({ wallet, signedIn, walletSigner, walletMessageS
   useEffect(() => {
     if (!signedIn) return;
     let active = true;
-    const source: CardsSource = cardsSourceOverride() ?? createLiveCardsSource(() => deps.current);
+    // liveSource lives in the lazy cards chunk; a static import here would make the
+    // dashboard and cards chunks import each other.
+    const loadSource = async (): Promise<CardsSource> =>
+      cardsSourceOverride() ?? (await import("../cards/liveSource")).createLiveCardsSource(() => deps.current);
     setResult({ wallet, value: { state: "loading" } });
-    source.listCards().then(
+    let mode: CardsSource["mode"] | undefined;
+    loadSource().then((source) => { mode = source.mode; return source.listCards(); }).then(
       (cards) => {
         if (!active) return;
         // A malformed answer is a failed read, never "no cards".
         if (!Array.isArray(cards)) { setResult({ wallet, value: { state: "failed" } }); return; }
         const summary = summarizeCards(cards);
-        const illustrative = source.mode === "fixture";
+        const illustrative = mode === "fixture";
         setResult({ wallet, value: summary.total ? { state: "loaded", summary, illustrative } : { state: "empty", summary, illustrative } });
       },
       (error: unknown) => {

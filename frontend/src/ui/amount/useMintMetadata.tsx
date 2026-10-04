@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
-import { chainpayClient, RPC_URL } from "../../config/client";
+import { RPC_URL } from "../../config/public";
 import { createMintMetadataStore, type DecimalsFetcher, type MintMetadataState, type MintMetadataStore } from "./mintMetadataStore";
 
 /*
@@ -19,7 +19,12 @@ export function setMintMetadataFetcherOverride(fetcher: DecimalsFetcher | null) 
 }
 
 // Read at call time: harness fixtures replace chainpayClient.getMintDecimals after import.
-const fetchDecimals: DecimalsFetcher = (mint) => (fetcherOverride ?? ((value: string) => chainpayClient.getMintDecimals(value)))(mint);
+// config/client pulls the SDK into the dashboard chunk; a static import here would make
+// app-shared and dashboard import each other and the app dies on load with a TDZ error.
+const fetchDecimals: DecimalsFetcher = (mint) =>
+  fetcherOverride
+    ? fetcherOverride(mint)
+    : import("../../config/client").then(({ chainpayClient }) => chainpayClient.getMintDecimals(mint));
 
 export const MINT_METADATA_NETWORK = RPC_URL;
 

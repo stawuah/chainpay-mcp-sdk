@@ -28,8 +28,10 @@ export default defineConfig({
           ) return "wallet";
           // Card dashboard code rides the lazy CardsArea chunk, so /verify and /verify/card
           // (which share the dashboard chunk through receipts) don't download it. Only
-          // the two small modules receipts reuse stay in the dashboard chunk.
-          if (id.includes("/src/dashboard/cards/") && !/\/src\/dashboard\/cards\/(lifecycle|ui)\.tsx?$/.test(id)) return "cards";
+          // the small modules receipts and Overview import statically stay in the dashboard
+          // chunk. Anything else here imported statically from dashboard code makes the two
+          // chunks import each other and the app dies on load with a TDZ ReferenceError.
+          if (id.includes("/src/dashboard/cards/") && !/\/src\/dashboard\/cards\/(lifecycle|ui|source)\.tsx?$/.test(id)) return "cards";
           if (id.includes("/sdk/dist/cards/private-repayment") || id.includes("/sdk/src/cards/private-repayment")) return "cards";
           if (id.includes("/src/dashboard/") || id.includes("/src/owner/") || id.includes("/src/receipts/") || id.includes("/src/config/client") || id.includes("/sdk/") || id.includes("/src/settlement")) return "dashboard";
           if (id.includes("/src/verify/")) return "verify";
