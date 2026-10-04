@@ -45,18 +45,18 @@ function Routes() {
     );
   }
 
-  if (currentRoute.kind === "status") {
-    return (
-      <Suspense fallback={<RouteFallback />}>
-        <StatusPage />
-      </Suspense>
-    );
-  }
-
   if (currentRoute.kind === "verify-card") {
     return (
       <Suspense fallback={<RouteFallback />}>
         <CardVerifyPage />
+      </Suspense>
+    );
+  }
+
+  if (currentRoute.kind === "status") {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <StatusPage />
       </Suspense>
     );
   }

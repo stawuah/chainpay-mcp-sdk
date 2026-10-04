@@ -16,8 +16,6 @@ export const RPC_URL = configuredRpcUrl && configuredRpcUrl !== "https://api.dev
 export const MCP_URL = import.meta.env.VITE_CHAINPAY_MCP_URL ?? "https://chainpay-mcp.vercel.app/mcp";
 export const AGENT_URL = import.meta.env.VITE_CHAINPAY_AGENT_URL
   ?? `${MCP_URL.replace(/\/mcp\/?$/, "")}/agent/chat`;
-// /status reads Convex directly so it still loads when the relay is down.
-export const STATUS_API_URL = (import.meta.env.VITE_CHAINPAY_STATUS_URL ?? "https://notable-bee-447.convex.site").replace(/\/$/, "");
 /** card_policy program on Devnet (same as the SDK's CARD_POLICY_PROGRAM_ID). Override per environment. */
 export const CARD_POLICY_PROGRAM_ID = import.meta.env.VITE_CHAINPAY_CARD_POLICY_PROGRAM_ID || "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F";
 /** Card issuer environment. Only Lithic sandbox exists today, so anything but "production" is sandbox. */
@@ -32,3 +30,6 @@ export const CARD_PARTNER_TOKEN_ACCOUNT: string | null = import.meta.env.VITE_CH
  * deposits in the live run. Devnet only: private repayment is a Devnet sandbox feature.
  */
 export const DEVNET_SEND_RPC_URL = import.meta.env.VITE_CHAINPAY_DEVNET_SEND_RPC_URL || "https://api.devnet.solana.com";
+
+// /status reads Convex directly so it still loads when the relay is down.
+export const STATUS_API_URL = (import.meta.env.VITE_CHAINPAY_STATUS_URL ?? "https://notable-bee-447.convex.site").replace(/\/$/, "");
