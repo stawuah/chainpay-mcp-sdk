@@ -52,6 +52,14 @@ export function deriveCardCommitmentAddress(binding: Address, programId?: Addres
   return pda([utf8(CARD_SEEDS.commitment), publicKey(binding).toBytes()], resolveCardPolicyProgramId(programId));
 }
 
+/**
+ * `["repay_agent", binding]` (base, system-owned, lamport-only). The owner's ChainPay
+ * repayment mandate names it as `approved_agent`; it signs only inside `repay_statement`.
+ */
+export function deriveRepayAgentAddress(binding: Address, programId?: Address): Address {
+  return pda([utf8(CARD_SEEDS.repayAgent), publicKey(binding).toBytes()], resolveCardPolicyProgramId(programId));
+}
+
 /** MagicBlock permission PDA for a private account: `["permission:", account]` under the permission program. */
 export function derivePermissionAddress(account: Address): Address {
   return pda([utf8("permission:"), publicKey(account).toBytes()], PERMISSION_PROGRAM_ID);

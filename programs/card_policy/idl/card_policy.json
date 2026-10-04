@@ -1,5 +1,5 @@
 {
-  "address": "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F",
+  "address": "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n",
   "metadata": {
     "name": "card_policy",
     "version": "0.1.0",
@@ -192,9 +192,6 @@
         },
         {
           "name": "intent",
-          "docs": [
-            "intent maps to `IntentInvalid` instead of a generic account error."
-          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -324,9 +321,6 @@
         },
         {
           "name": "auth_guard",
-          "docs": [
-            "the first reservation is closed; read in the handler."
-          ],
           "pda": {
             "seeds": [
               {
@@ -961,10 +955,6 @@
         },
         {
           "name": "reservation",
-          "docs": [
-            "handler. Unchecked (like `close_checkout_intent`'s intent) so Anchor",
-            "never re-serializes an account the magic program just closed."
-          ],
           "writable": true
         },
         {
@@ -1309,38 +1299,38 @@
             "program": {
               "kind": "const",
               "value": [
-                3,
+                238,
+                100,
+                52,
+                71,
+                92,
+                88,
                 18,
-                3,
-                81,
-                91,
-                200,
-                225,
-                11,
-                17,
+                98,
+                247,
+                132,
+                146,
+                42,
+                168,
                 155,
-                151,
-                84,
-                179,
-                195,
-                6,
-                85,
-                43,
-                240,
-                252,
-                201,
-                17,
-                190,
-                232,
-                110,
-                123,
-                69,
-                78,
+                37,
+                158,
+                116,
+                18,
+                174,
+                59,
+                192,
+                4,
+                254,
+                92,
                 200,
-                231,
-                35,
-                6,
-                180
+                66,
+                132,
+                220,
+                210,
+                190,
+                135,
+                209
               ]
             }
           }
@@ -1444,38 +1434,38 @@
             "program": {
               "kind": "const",
               "value": [
-                3,
+                238,
+                100,
+                52,
+                71,
+                92,
+                88,
                 18,
-                3,
-                81,
-                91,
-                200,
-                225,
-                11,
-                17,
+                98,
+                247,
+                132,
+                146,
+                42,
+                168,
                 155,
-                151,
-                84,
-                179,
-                195,
-                6,
-                85,
-                43,
-                240,
-                252,
-                201,
-                17,
-                190,
-                232,
-                110,
-                123,
-                69,
-                78,
+                37,
+                158,
+                116,
+                18,
+                174,
+                59,
+                192,
+                4,
+                254,
+                92,
                 200,
-                231,
-                35,
-                6,
-                180
+                66,
+                132,
+                220,
+                210,
+                190,
+                135,
+                209
               ]
             }
           }
@@ -1557,7 +1547,7 @@
         },
         {
           "name": "owner_program",
-          "address": "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F"
+          "address": "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n"
         },
         {
           "name": "delegation_program",
@@ -2591,6 +2581,97 @@
       ]
     },
     {
+      "name": "record_private_repayment",
+      "discriminator": [
+        91,
+        51,
+        18,
+        9,
+        7,
+        33,
+        77,
+        147
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "statement_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "amount_cents",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "record_repayment",
       "discriminator": [
         193,
@@ -2663,6 +2744,15 @@
               }
             ]
           }
+        },
+        {
+          "name": "receipt"
+        },
+        {
+          "name": "recipient_token_account"
+        },
+        {
+          "name": "mint"
         }
       ],
       "args": [
@@ -2878,6 +2968,141 @@
               32
             ]
           }
+        }
+      ]
+    },
+    {
+      "name": "repay_statement",
+      "discriminator": [
+        56,
+        158,
+        212,
+        137,
+        146,
+        226,
+        174,
+        82
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "binding"
+          ]
+        },
+        {
+          "name": "binding",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  98,
+                  105,
+                  110,
+                  100,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "binding.card_id",
+                "account": "CardBinding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "repay_agent",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  112,
+                  97,
+                  121,
+                  95,
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "binding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "chainpay_config"
+        },
+        {
+          "name": "asset_registry"
+        },
+        {
+          "name": "mandate",
+          "writable": true
+        },
+        {
+          "name": "receipt",
+          "writable": true
+        },
+        {
+          "name": "allowed_mint"
+        },
+        {
+          "name": "source_token_account",
+          "writable": true
+        },
+        {
+          "name": "recipient_token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "chainpay_program",
+          "address": "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4"
+        }
+      ],
+      "args": [
+        {
+          "name": "statement_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "amount",
+          "type": "u64"
         }
       ]
     },
@@ -4254,7 +4479,7 @@
         },
         {
           "name": "source_program",
-          "address": "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F"
+          "address": "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n"
         },
         {
           "name": "escrow_auth"
@@ -4619,6 +4844,26 @@
       "code": 6049,
       "name": "BudgetBelowCommitted",
       "msg": "Budget can't go below what this period already spent or holds"
+    },
+    {
+      "code": 6050,
+      "name": "InvalidRepaymentReceipt",
+      "msg": "Repayment receipt is not a settled ChainPay receipt for this card and statement"
+    },
+    {
+      "code": 6051,
+      "name": "RepaymentRecipientMismatch",
+      "msg": "Repayment receipt paid a different account than the partner's"
+    },
+    {
+      "code": 6052,
+      "name": "RepaymentExceedsReceipt",
+      "msg": "Repayment is more than the receipt paid"
+    },
+    {
+      "code": 6053,
+      "name": "InvalidRepaymentMandate",
+      "msg": "Repayment mandate does not belong to this card's owner and repay agent"
     }
   ],
   "types": [
@@ -4684,9 +4929,6 @@
     },
     {
       "name": "CardBinding",
-      "docs": [
-        "Base layer, never delegated, public. Owner <-> card link, no sensitive fields."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -4749,9 +4991,6 @@
     },
     {
       "name": "CardCommitment",
-      "docs": [
-        "Base layer, never delegated, public. Written only by the checkpoint Magic Action."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -4793,9 +5032,6 @@
     },
     {
       "name": "CardPeriod",
-      "docs": [
-        "Delegated, private. Current-period counters."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -4844,10 +5080,6 @@
     },
     {
       "name": "CardPolicy",
-      "docs": [
-        "Delegated to the TEE validator, private. Created zeroed on base apart from",
-        "`binding`, `owner` and `bump` (already public through `CardBinding`)."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -5000,9 +5232,6 @@
           },
           {
             "name": "recon_digest",
-            "docs": [
-              "Digest the owner signed in `restore`; `confirm_reconciled` must match it."
-            ],
             "type": {
               "array": [
                 "u8",
@@ -5012,9 +5241,6 @@
           },
           {
             "name": "repayment_digests",
-            "docs": [
-              "Last statement digests passed to `record_repayment` (replay guard)."
-            ],
             "type": {
               "array": [
                 {
@@ -5033,10 +5259,6 @@
           },
           {
             "name": "event_ids",
-            "docs": [
-              "Last issuer event ids applied by reverse/refund/dispute/exception/resolve.",
-              "Guards against a retried transaction landing twice."
-            ],
             "type": {
               "array": [
                 {
@@ -5055,9 +5277,6 @@
           },
           {
             "name": "ephemeral_count",
-            "docs": [
-              "Live ephemeral accounts (intents + reservations). `wipe_card` needs 0."
-            ],
             "type": "u16"
           }
         ]
@@ -5065,9 +5284,6 @@
     },
     {
       "name": "CheckoutIntent",
-      "docs": [
-        "PER-only ephemeral account, private. What the agent may buy, once."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -5189,6 +5405,78 @@
       }
     },
     {
+      "name": "PaymentMandate",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "approved_agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "source_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowed_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "legacy_allowed_recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_per_payment",
+            "type": "u64"
+          },
+          {
+            "name": "total_limit",
+            "type": "u64"
+          },
+          {
+            "name": "amount_spent",
+            "type": "u64"
+          },
+          {
+            "name": "payment_count",
+            "type": "u64"
+          },
+          {
+            "name": "expires_at_slot",
+            "type": "u64"
+          },
+          {
+            "name": "max_payment_count",
+            "type": "u64"
+          },
+          {
+            "name": "cooldown_slots",
+            "type": "u64"
+          },
+          {
+            "name": "last_payment_slot",
+            "type": "u64"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "revoked",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "PermissionOp",
       "type": {
         "kind": "enum",
@@ -5282,9 +5570,6 @@
     },
     {
       "name": "Reservation",
-      "docs": [
-        "PER-only ephemeral account, private. PDA existence is the replay guard."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -5311,9 +5596,6 @@
           },
           {
             "name": "amount_reserved_cents",
-            "docs": [
-              "Open hold still reserved against the budget."
-            ],
             "type": "u64"
           },
           {
@@ -5358,10 +5640,6 @@
           },
           {
             "name": "capture_ids",
-            "docs": [
-              "Every capture id of this hold: `capture` refuses one more than fits",
-              "(`CaptureLimit`), so a retried capture can never land twice."
-            ],
             "type": {
               "array": [
                 {
@@ -5376,10 +5654,6 @@
           },
           {
             "name": "max_amount_cents",
-            "docs": [
-              "The checkout intent's `max_amount_cents`: an `adjust_reservation`",
-              "increase never takes the hold past what the agent was approved for."
-            ],
             "type": "u64"
           }
         ]

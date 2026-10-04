@@ -582,8 +582,8 @@ test("F4/X2: an unknown repayment outcome reads 'Outcome unknown — checking', 
   source.payStatement = async (...args) => { calls.push(args[2]); return fixturePay(...args); };
   const wallet = "Owner1111111111111111111111111111111111111";
   const mandates = [
-    { address: "MandA111111111111111111111111111111111111", approvedAgent: wallet, allowedMint: USDC, status: "active" },
-    { address: "MandB111111111111111111111111111111111111", approvedAgent: wallet, allowedMint: USDC, status: "active" },
+    { address: "MandA111111111111111111111111111111111111", approvedAgent: source.repayAgent(card), allowedMint: USDC, status: "active" },
+    { address: "MandB111111111111111111111111111111111111", approvedAgent: source.repayAgent(card), allowedMint: USDC, status: "active" },
   ];
   const { host, unmount } = await render(createElement(m.CardStatement, { source, card, statements, mandates, wallet, onChanged() {} }));
   await click([...host.querySelectorAll("button")].find((b) => /^Pay \$/.test(b.textContent.trim())));
@@ -616,6 +616,37 @@ test("F4/X2: an unknown repayment outcome reads 'Outcome unknown — checking', 
   document.body.innerHTML = "";
 });
 
+test("repayment pays only through a permission for the card's repay agent, created in the dialog when missing", async () => {
+  dialogSetup();
+  document.body.innerHTML = "";
+  const source = m.createFixtureCardsSource({ delayMs: 0 });
+  const [card] = await source.listCards();
+  const statements = await source.statements(card.cardId);
+  const calls = [];
+  const fixturePay = source.payStatement;
+  source.payStatement = async (...args) => { calls.push(args[2]); return fixturePay(...args); };
+  const wallet = "Owner1111111111111111111111111111111111111";
+  // An ordinary permission the owner signed for its own key can't repay a card statement.
+  const mandates = [{ address: "MandOwn11111111111111111111111111111111111", approvedAgent: wallet, allowedMint: USDC, status: "active" }];
+  const { host, unmount } = await render(createElement(m.CardStatement, { source, card, statements, mandates, wallet, onChanged() {} }));
+  await click([...host.querySelectorAll("button")].find((b) => /^Pay \$/.test(b.textContent.trim())));
+  await settle(20);
+  const dialog = document.querySelector('[data-testid="repayment-dialog"]');
+  assert.match(dialog.textContent, /repay agent/);
+  assert.ok(document.querySelector('[data-testid="repay-permission-needed"]'), "asks for a repayment permission");
+  let [pay] = payButtons().slice(-1);
+  assert.ok(pay.disabled || pay.getAttribute("aria-disabled") === "true", "no Pay without a repay-agent permission");
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Create repayment permission"));
+  await settle(20);
+  assert.equal(document.querySelector('[data-testid="repay-permission-needed"]'), null);
+  [pay] = payButtons().slice(-1);
+  await click(pay);
+  await settle(20);
+  assert.deepEqual(calls, ["MdT1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+  await unmount();
+  document.body.innerHTML = "";
+});
+
 test("X2: a receipt already on Solana under another permission closes the statement instead of offering Pay", async () => {
   dialogSetup();
   document.body.innerHTML = "";
@@ -630,8 +661,8 @@ test("X2: a receipt already on Solana under another permission closes the statem
   source.payStatement = async () => { paid += 1; throw new Error("must not be called"); };
   const wallet = "Owner1111111111111111111111111111111111111";
   const mandates = [
-    { address: "MandA111111111111111111111111111111111111", approvedAgent: wallet, allowedMint: USDC, status: "active" },
-    { address: "MandB111111111111111111111111111111111111", approvedAgent: wallet, allowedMint: USDC, status: "paused" },
+    { address: "MandA111111111111111111111111111111111111", approvedAgent: source.repayAgent(card), allowedMint: USDC, status: "active" },
+    { address: "MandB111111111111111111111111111111111111", approvedAgent: source.repayAgent(card), allowedMint: USDC, status: "paused" },
   ];
   const { host, unmount } = await render(createElement(m.CardStatement, { source, card, statements, mandates, wallet, onChanged() {} }));
   await click([...host.querySelectorAll("button")].find((b) => /^Pay \$/.test(b.textContent.trim())));

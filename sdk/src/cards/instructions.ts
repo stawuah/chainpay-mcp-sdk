@@ -1,6 +1,7 @@
 import type { Address, ChainPayInstruction } from "../types.js";
 import { instruction, meta } from "../encoding.js";
-import { SYSTEM_PROGRAM_ID } from "../constants.js";
+import { DEFAULT_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID } from "../constants.js";
+import { deriveAssetAddress, deriveConfigAddress, deriveReceiptAddress } from "../pda.js";
 import {
   CARD_POLICY_DISCRIMINATORS,
   DELEGATION_PROGRAM_ID,
@@ -27,6 +28,7 @@ import {
   deriveDelegationMetadataAddress,
   deriveDelegationRecordAddress,
   derivePermissionAddress,
+  deriveRepayAgentAddress,
   deriveReservationAddress,
 } from "./pda.js";
 
@@ -35,7 +37,7 @@ import {
  * args in the listed order). Account lists, discriminators and arg layouts
  * are checked against the deployed program's IDL
  * (programs/card_policy/idl/card_policy.json, Devnet
- * Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F) by test/cards-idl.test.mjs,
+ * H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n) by test/cards-idl.test.mjs,
  * including the `#[delegate]` macro accounts of `delegate_card`.
  */
 export const CARD_POLICY_ACCOUNT_ORDER_PROVISIONAL = false;
@@ -103,6 +105,8 @@ export type CardInstructionArgs = {
   closeReservation: Record<string, never>;
   closeCard: Record<string, never>;
   recordRepayment: { statementDigest: Uint8Array; amountCents: bigint };
+  repayStatement: { statementDigest: Uint8Array; amount: bigint };
+  recordPrivateRepayment: { statementDigest: Uint8Array; amountCents: bigint };
 };
 
 type Codec<T> = { encode(w: BorshWriter, args: T): void; decode(r: BorshReader): T };
@@ -246,6 +250,14 @@ const CODECS: { [K in CardPolicyInstructionName]: Codec<CardInstructionArgs[K]> 
   closeCard: empty,
   closeReservation: empty,
   recordRepayment: {
+    encode: (w, a) => { w.fixed(a.statementDigest, 32, "statementDigest").u64(a.amountCents, "amountCents"); },
+    decode: (r) => ({ statementDigest: r.fixed(32, "statementDigest"), amountCents: r.u64("amountCents") }),
+  },
+  repayStatement: {
+    encode: (w, a) => { w.fixed(a.statementDigest, 32, "statementDigest").u64(a.amount, "amount"); },
+    decode: (r) => ({ statementDigest: r.fixed(32, "statementDigest"), amount: r.u64("amount") }),
+  },
+  recordPrivateRepayment: {
     encode: (w, a) => { w.fixed(a.statementDigest, 32, "statementDigest").u64(a.amountCents, "amountCents"); },
     decode: (r) => ({ statementDigest: r.fixed(32, "statementDigest"), amountCents: r.u64("amountCents") }),
   },
@@ -461,6 +473,52 @@ export function buildCloseCheckoutIntentInstruction(input: CardRef & { intentId:
     meta(MAGIC_PROGRAM_ID),
     meta(PERMISSION_PROGRAM_ID),
   ], {});
+}
+
+export type RepayStatementInput = CardRef & {
+  /** The owner's ChainPay mandate whose `approvedAgent` is this card's repay agent. */
+  mandate: Address;
+  mint: Address;
+  sourceTokenAccount: Address;
+  /** The partner token account the statement's `payWith` names. */
+  recipientTokenAccount: Address;
+  /** 32-byte statement digest; becomes the receipt's `invoice_hash`. */
+  statementDigest: Uint8Array;
+  /** Exact base units of `mint` (the statement's amount due). */
+  amount: bigint;
+  tokenProgram?: Address;
+  chainpayProgramId?: Address;
+};
+
+/**
+ * Base layer, owner-signed. card_policy's repay agent PDA `["repay_agent", binding]`
+ * signs ChainPay `execute_payment` by CPI, so ChainPay enforces the mandate and creates
+ * the receipt `["receipt", mandate, statementDigest]`. The owner pays the receipt rent.
+ * Returns the receipt address the Axum relay verifies and `record_repayment` re-checks on PER.
+ */
+export function buildRepayStatementInstruction(input: RepayStatementInput, programId?: Address): { instruction: ChainPayInstruction; receipt: Address; repayAgent: Address } {
+  if (input.amount <= 0n) throw new Error("Repayment amount must be positive");
+  const id = resolveCardPolicyProgramId(programId);
+  const chainpay = input.chainpayProgramId ?? DEFAULT_PROGRAM_ID;
+  const a = deriveCardAccounts(input.owner, input.cardId, id);
+  const repayAgent = deriveRepayAgentAddress(a.binding, id);
+  const receipt = deriveReceiptAddress(input.mandate, input.statementDigest, chainpay);
+  const ix = build("repayStatement", "repay_statement", id, [
+    meta(input.owner, true, true),
+    meta(a.binding),
+    meta(repayAgent, true),
+    meta(deriveConfigAddress(chainpay)),
+    meta(deriveAssetAddress(input.mint, chainpay)),
+    meta(input.mandate, true),
+    meta(receipt, true),
+    meta(input.mint),
+    meta(input.sourceTokenAccount, true),
+    meta(input.recipientTokenAccount, true),
+    meta(input.tokenProgram ?? SPL_TOKEN_PROGRAM_ID),
+    meta(SYSTEM_PROGRAM_ID),
+    meta(chainpay),
+  ], { statementDigest: input.statementDigest, amount: input.amount });
+  return { instruction: ix, receipt, repayAgent };
 }
 
 export function buildConfirmReconciledInstruction(input: CardRef & { reconDigest: Uint8Array }, programId?: Address): ChainPayInstruction {

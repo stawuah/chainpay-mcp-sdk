@@ -1,0 +1,1492 @@
+{
+  "address": "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4",
+  "metadata": {
+    "name": "chainpay",
+    "version": "0.1.0",
+    "spec": "0.1.0"
+  },
+  "instructions": [
+    {
+      "name": "create_mandate",
+      "discriminator": [
+        230,
+        170,
+        158,
+        68,
+        33,
+        169,
+        16,
+        158
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "asset_registry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  115,
+                  115,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.allowed_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mandate",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  110,
+                  100,
+                  97,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "arg",
+                "path": "params.allowed_mint"
+              },
+              {
+                "kind": "arg",
+                "path": "params.mandate_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "allowed_mint"
+        },
+        {
+          "name": "source_token_account"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "MandateParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "execute_payment",
+      "discriminator": [
+        86,
+        4,
+        7,
+        7,
+        120,
+        139,
+        232,
+        139
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "asset_registry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  115,
+                  115,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mandate.allowed_mint",
+                "account": "PaymentMandate"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mandate",
+          "writable": true
+        },
+        {
+          "name": "receipt",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  99,
+                  101,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mandate"
+              },
+              {
+                "kind": "arg",
+                "path": "params.invoice_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "agent",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "allowed_mint"
+        },
+        {
+          "name": "source_token_account",
+          "writable": true
+        },
+        {
+          "name": "recipient_token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "PaymentParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize_config",
+      "discriminator": [
+        208,
+        127,
+        21,
+        1,
+        194,
+        190,
+        196,
+        70
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "supported_mints",
+          "type": {
+            "array": [
+              "pubkey",
+              3
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "pause_mandate",
+      "discriminator": [
+        192,
+        108,
+        97,
+        124,
+        56,
+        229,
+        236,
+        3
+      ],
+      "accounts": [
+        {
+          "name": "mandate",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "mandate"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "register_asset",
+      "discriminator": [
+        21,
+        80,
+        155,
+        149,
+        117,
+        207,
+        235,
+        16
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "asset",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  115,
+                  115,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "mint_account"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "mint",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "revoke_mandate",
+      "discriminator": [
+        252,
+        97,
+        140,
+        119,
+        67,
+        43,
+        177,
+        108
+      ],
+      "accounts": [
+        {
+          "name": "mandate",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "mandate"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "set_asset_status",
+      "discriminator": [
+        58,
+        54,
+        181,
+        102,
+        68,
+        238,
+        240,
+        245
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "asset",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  115,
+                  115,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "asset.mint",
+                "account": "SupportedAsset"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "config",
+            "asset"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "update_config",
+      "discriminator": [
+        29,
+        158,
+        252,
+        191,
+        10,
+        83,
+        219,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "supported_mints",
+          "type": {
+            "array": [
+              "pubkey",
+              3
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "update_mandate",
+      "discriminator": [
+        69,
+        131,
+        248,
+        29,
+        105,
+        50,
+        139,
+        30
+      ],
+      "accounts": [
+        {
+          "name": "mandate",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "mandate"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "MandateUpdate"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PaymentMandate",
+      "discriminator": [
+        139,
+        106,
+        43,
+        122,
+        82,
+        211,
+        96,
+        162
+      ]
+    },
+    {
+      "name": "PaymentReceipt",
+      "discriminator": [
+        168,
+        198,
+        209,
+        4,
+        60,
+        235,
+        126,
+        109
+      ]
+    },
+    {
+      "name": "ProtocolConfig",
+      "discriminator": [
+        207,
+        91,
+        250,
+        28,
+        152,
+        179,
+        215,
+        209
+      ]
+    },
+    {
+      "name": "SupportedAsset",
+      "discriminator": [
+        129,
+        27,
+        96,
+        192,
+        89,
+        180,
+        227,
+        200
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AssetRegistered",
+      "discriminator": [
+        252,
+        56,
+        47,
+        89,
+        8,
+        180,
+        249,
+        254
+      ]
+    },
+    {
+      "name": "AssetStatusChanged",
+      "discriminator": [
+        50,
+        89,
+        231,
+        242,
+        218,
+        23,
+        131,
+        216
+      ]
+    },
+    {
+      "name": "ConfigInitialized",
+      "discriminator": [
+        181,
+        49,
+        200,
+        156,
+        19,
+        167,
+        178,
+        91
+      ]
+    },
+    {
+      "name": "ConfigUpdated",
+      "discriminator": [
+        40,
+        241,
+        230,
+        122,
+        11,
+        19,
+        198,
+        194
+      ]
+    },
+    {
+      "name": "MandateCreated",
+      "discriminator": [
+        140,
+        30,
+        209,
+        254,
+        5,
+        128,
+        147,
+        113
+      ]
+    },
+    {
+      "name": "MandateStatusChanged",
+      "discriminator": [
+        132,
+        170,
+        184,
+        73,
+        106,
+        76,
+        214,
+        53
+      ]
+    },
+    {
+      "name": "MandateUpdated",
+      "discriminator": [
+        100,
+        65,
+        226,
+        199,
+        157,
+        3,
+        34,
+        110
+      ]
+    },
+    {
+      "name": "PaymentExecuted",
+      "discriminator": [
+        153,
+        165,
+        141,
+        18,
+        246,
+        20,
+        204,
+        227
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidConfigAuthority",
+      "msg": "The protocol configuration authority is invalid."
+    },
+    {
+      "code": 6001,
+      "name": "UnsupportedMint",
+      "msg": "The mint is not enabled in the ChainPay protocol configuration."
+    },
+    {
+      "code": 6002,
+      "name": "InvalidSupportedMintList",
+      "msg": "The supported mint list must contain unique, non-default mints."
+    },
+    {
+      "code": 6003,
+      "name": "AssetNotEnabled",
+      "msg": "The supported asset registry entry is missing or disabled."
+    },
+    {
+      "code": 6004,
+      "name": "InvalidAssetAuthority",
+      "msg": "The supported asset registry authority is invalid."
+    },
+    {
+      "code": 6005,
+      "name": "InvalidTokenProgram",
+      "msg": "The token accounts and mint must use the same token program."
+    },
+    {
+      "code": 6006,
+      "name": "InvalidAgent",
+      "msg": "The approved agent must be a non-default public key."
+    },
+    {
+      "code": 6007,
+      "name": "InvalidMandateNonce",
+      "msg": "The mandate nonce is invalid or missing its ChainPay prefix."
+    },
+    {
+      "code": 6008,
+      "name": "InvalidSourceTokenAccount",
+      "msg": "The source token account must be the owner's token account."
+    },
+    {
+      "code": 6009,
+      "name": "InvalidSourceMint",
+      "msg": "The source token account does not use the mandate mint."
+    },
+    {
+      "code": 6010,
+      "name": "InvalidRecipientMint",
+      "msg": "The recipient token account does not use the mandate mint."
+    },
+    {
+      "code": 6011,
+      "name": "InvalidRecipient",
+      "msg": "The recipient token account is invalid for this payment."
+    },
+    {
+      "code": 6012,
+      "name": "InvalidMint",
+      "msg": "The allowed mint must be a non-default public key."
+    },
+    {
+      "code": 6013,
+      "name": "InvalidPerPaymentLimit",
+      "msg": "The per-payment limit must be greater than zero."
+    },
+    {
+      "code": 6014,
+      "name": "InvalidTotalLimit",
+      "msg": "The total limit must be at least the per-payment limit."
+    },
+    {
+      "code": 6015,
+      "name": "InvalidExpiry",
+      "msg": "The mandate expiry must be in the future."
+    },
+    {
+      "code": 6016,
+      "name": "MandatePaused",
+      "msg": "The mandate has been paused."
+    },
+    {
+      "code": 6017,
+      "name": "MandateRevoked",
+      "msg": "The mandate has been revoked."
+    },
+    {
+      "code": 6018,
+      "name": "MandateExpired",
+      "msg": "The mandate has expired."
+    },
+    {
+      "code": 6019,
+      "name": "InvalidPaymentAmount",
+      "msg": "The payment amount must be greater than zero."
+    },
+    {
+      "code": 6020,
+      "name": "AmountExceedsPerPayment",
+      "msg": "The payment amount exceeds the mandate's per-payment limit."
+    },
+    {
+      "code": 6021,
+      "name": "TotalLimitExceeded",
+      "msg": "The payment would exceed the mandate's total limit."
+    },
+    {
+      "code": 6022,
+      "name": "PaymentCountExceeded",
+      "msg": "The payment would exceed the mandate's payment-count limit."
+    },
+    {
+      "code": 6023,
+      "name": "PaymentCooldownActive",
+      "msg": "The mandate cooldown has not elapsed since the previous payment."
+    },
+    {
+      "code": 6024,
+      "name": "InvalidInvoiceHash",
+      "msg": "The invoice hash must not be all zeroes."
+    },
+    {
+      "code": 6025,
+      "name": "InvalidPaymentId",
+      "msg": "The payment ID must not be all zeroes."
+    },
+    {
+      "code": 6026,
+      "name": "InvalidSignatureReference",
+      "msg": "The signature reference must not be all zeroes."
+    }
+  ],
+  "types": [
+    {
+      "name": "AssetRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "asset",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AssetStatusChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "asset",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "config",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "supported_mints",
+            "type": {
+              "array": [
+                "pubkey",
+                3
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "config",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "supported_mints",
+            "type": {
+              "array": [
+                "pubkey",
+                3
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "MandateCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mandate",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "approved_agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowed_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "expires_at_slot",
+            "type": "u64"
+          },
+          {
+            "name": "max_payment_count",
+            "type": "u64"
+          },
+          {
+            "name": "cooldown_slots",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MandateParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "approved_agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "source_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowed_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_per_payment",
+            "type": "u64"
+          },
+          {
+            "name": "total_limit",
+            "type": "u64"
+          },
+          {
+            "name": "expires_at_slot",
+            "type": "u64"
+          },
+          {
+            "name": "max_payment_count",
+            "type": "u64"
+          },
+          {
+            "name": "cooldown_slots",
+            "type": "u64"
+          },
+          {
+            "name": "mandate_nonce",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MandateStatusChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mandate",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "revoked",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MandateUpdate",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "approved_agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_per_payment",
+            "type": "u64"
+          },
+          {
+            "name": "total_limit",
+            "type": "u64"
+          },
+          {
+            "name": "expires_at_slot",
+            "type": "u64"
+          },
+          {
+            "name": "max_payment_count",
+            "type": "u64"
+          },
+          {
+            "name": "cooldown_slots",
+            "type": "u64"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MandateUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mandate",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "approved_agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_per_payment",
+            "type": "u64"
+          },
+          {
+            "name": "total_limit",
+            "type": "u64"
+          },
+          {
+            "name": "expires_at_slot",
+            "type": "u64"
+          },
+          {
+            "name": "max_payment_count",
+            "type": "u64"
+          },
+          {
+            "name": "cooldown_slots",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentExecuted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "receipt",
+            "type": "pubkey"
+          },
+          {
+            "name": "mandate",
+            "type": "pubkey"
+          },
+          {
+            "name": "invoice_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "payment_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "executed_at_slot",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentMandate",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "approved_agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "source_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowed_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "legacy_allowed_recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_per_payment",
+            "type": "u64"
+          },
+          {
+            "name": "total_limit",
+            "type": "u64"
+          },
+          {
+            "name": "amount_spent",
+            "type": "u64"
+          },
+          {
+            "name": "payment_count",
+            "type": "u64"
+          },
+          {
+            "name": "expires_at_slot",
+            "type": "u64"
+          },
+          {
+            "name": "max_payment_count",
+            "type": "u64"
+          },
+          {
+            "name": "cooldown_slots",
+            "type": "u64"
+          },
+          {
+            "name": "last_payment_slot",
+            "type": "u64"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "revoked",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "invoice_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "payment_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "signature_reference",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentReceipt",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mandate",
+            "type": "pubkey"
+          },
+          {
+            "name": "invoice_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "payment_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "source_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "executed_at_slot",
+            "type": "u64"
+          },
+          {
+            "name": "signature_reference",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "snapshot_version",
+            "type": "u8"
+          },
+          {
+            "name": "policy_max_per_payment",
+            "type": "u64"
+          },
+          {
+            "name": "policy_total_limit",
+            "type": "u64"
+          },
+          {
+            "name": "policy_amount_spent_after",
+            "type": "u64"
+          },
+          {
+            "name": "policy_payment_count_after",
+            "type": "u64"
+          },
+          {
+            "name": "policy_max_payment_count",
+            "type": "u64"
+          },
+          {
+            "name": "policy_expires_at_slot",
+            "type": "u64"
+          },
+          {
+            "name": "policy_cooldown_slots",
+            "type": "u64"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "supported_mints",
+            "type": {
+              "array": [
+                "pubkey",
+                3
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SupportedAsset",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ]
+}

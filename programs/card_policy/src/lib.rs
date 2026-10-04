@@ -22,7 +22,13 @@ pub mod state;
 use instructions::*;
 use policy::{AuthorizeArgs, IntentArgs, PolicyArgs};
 
-declare_id!("Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F");
+declare_id!("H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n");
+
+// The ChainPay program, from its IDL (idls/chainpay.json). Not a crate
+// dependency: this workspace is pinned to the ER SDK's crates (contracts.md
+// CD-1). `repay_statement` CPIs into its `execute_payment`, and
+// `record_repayment` reads its receipt.
+declare_program!(chainpay);
 
 #[ephemeral]
 #[program]
@@ -210,12 +216,30 @@ pub mod card_policy {
         instructions::close_reservation::close_reservation(ctx)
     }
 
-    // 27 · PER
+    // 27 · PER. Needs the ChainPay receipt of `repay_statement`.
     pub fn record_repayment(
-        ctx: Context<FreezeCard>,
+        ctx: Context<RecordRepayment>,
         statement_digest: [u8; 32],
         amount_cents: u64,
     ) -> Result<()> {
         instructions::repayment::record_repayment(ctx, statement_digest, amount_cents)
+    }
+
+    // 30 · base (appended for the ChainPay repayment CPI)
+    pub fn repay_statement(
+        ctx: Context<RepayStatement>,
+        statement_digest: [u8; 32],
+        amount: u64,
+    ) -> Result<()> {
+        instructions::repayment::repay_statement(ctx, statement_digest, amount)
+    }
+
+    // 31 · PER (appended): MagicBlock private payment, authorizer-attested.
+    pub fn record_private_repayment(
+        ctx: Context<FreezeCard>,
+        statement_digest: [u8; 32],
+        amount_cents: u64,
+    ) -> Result<()> {
+        instructions::repayment::record_private_repayment(ctx, statement_digest, amount_cents)
     }
 }

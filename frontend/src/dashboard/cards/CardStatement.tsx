@@ -206,14 +206,21 @@ function statementName(statement: StatementView): string {
 
 function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, onDone }: { source: CardsSource; card: CardView; statement: StatementView; mandates: MandateOption[]; wallet: string; onClose: () => void; onDone: () => void }) {
   const target = source.repaymentTarget(statement);
-  // Two methods: the transparent execute_payment (default) and, when ChainPay offers it, MagicBlock private payments.
+  // Two methods: the transparent card_policy repay_statement → ChainPay execute_payment (default)
+  // and, when ChainPay offers it, MagicBlock private payments.
   const privateActions = useMemo(() => source.privateRepay(card, statement), [source, card, statement]);
   const [method, setMethod] = useState<"transparent" | "private">("transparent");
-  const eligible = useMemo(() => mandates.filter((mandate) => mandate.status === "active" && mandate.approvedAgent === wallet && mandate.allowedMint === target.mint), [mandates, wallet, target.mint]);
-  const [mandate, setMandate] = useState(eligible[0]?.address ?? "");
+  // Only permissions approved for this card's repay agent can pay it (record_repayment checks the receipt's agent).
+  const repayAgent = useMemo(() => source.repayAgent(card), [source, card]);
+  const [created, setCreated] = useState<string[]>([]);
+  const eligible = useMemo(() => [
+    ...mandates.filter((mandate) => mandate.status === "active" && mandate.approvedAgent === repayAgent && mandate.allowedMint === target.mint).map((mandate) => mandate.address),
+    ...created,
+  ].filter((address, index, all) => all.indexOf(address) === index), [mandates, repayAgent, target.mint, created]);
+  const [mandate, setMandate] = useState(eligible[0] ?? "");
   const [receiptPda, setReceiptPda] = useState("");
   const [mandatePda, setMandatePda] = useState("");
-  const [busy, setBusy] = useState<"" | "pay" | "check">("");
+  const [busy, setBusy] = useState<"" | "pay" | "check" | "permission">("");
   // Once money moved, keep the receipt: a failed confirmation must never read as "not paid".
   const [paid, setPaid] = useState<{ receiptPda: string; mandatePda: string; signature?: string } | null>(null);
   // Earlier attempts at this statement under ANY permission. Pay stays off until this says "none".
@@ -222,7 +229,7 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
   const [error, setError] = useState("");
   const total = statementAmountDue(statement);
   const baseUnits = centsToTokenBaseUnits(total, target.decimals);
-  const ownAddresses = useMemo(() => mandates.map((item) => item.address), [mandates]);
+  const ownAddresses = useMemo(() => [...new Set([...mandates.map((item) => item.address), ...created])], [mandates, created]);
 
   const prefill = (found: { receiptPda: string; mandatePda: string }) => {
     setReceiptPda(found.receiptPda);
@@ -283,6 +290,20 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
     }
   }
 
+  async function createPermission() {
+    setBusy("permission");
+    setError("");
+    try {
+      const address = await source.createRepaymentPermission(card, statement);
+      setCreated((current) => [...current, address]);
+      setMandate(address);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function check() {
     setBusy("check");
     setError("");
@@ -336,11 +357,15 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
                 <div><span>Statement reference</span><strong className="mono">{statement.digest ? shortKey(statement.digest) : "Not computed yet"}</strong></div>
               </div>
               <p className="owner-muted">ChainPay never pays on its own. The statement closes only when the receipt matches the token, network, amount and reference exactly, and the simulated partner confirms it.</p>
-              <h3>Pay from a spending permission</h3>
+              <h3>Pay from a repayment permission</h3>
+              <p className="owner-muted">The card's repay agent <span className="mono">{shortKey(repayAgent)}</span> pays through ChainPay under a permission you sign, for this amount only. It can't spend anything else.</p>
               {eligible.length ? (
-                <Selector label="Spending permission" value={mandate} onChange={setMandate} options={eligible.map((item) => ({ value: item.address, label: `USDC permission · ${shortKey(item.address)}` }))} description="Only permissions you sign yourself, for Devnet USDC." />
+                <Selector label="Repayment permission" value={mandate} onChange={setMandate} options={eligible.map((address) => ({ value: address, label: `USDC repayment permission · ${shortKey(address)}` }))} description="Only permissions you signed for this card's repay agent, for Devnet USDC." />
               ) : (
-                <p className="owner-muted">You need a USDC spending permission that you sign yourself (human signing). Create one in Spending permissions, then come back.</p>
+                <div className="cp-repay-permission" data-testid="repay-permission-needed">
+                  <p className="owner-muted">First sign a one-time permission for {formatUsdCents(total)} in Devnet USDC, approved for this card's repay agent.</p>
+                  <Button type="button" variant="secondary" label={busy === "permission" ? "Waiting for wallet…" : "Create repayment permission"} isDisabled={Boolean(busy) || Boolean(target.conflict) || total <= 0n} onClick={() => void createPermission()} />
+                </div>
               )}
               <h3>Already paid?</h3>
               <TextInput label="Receipt address" value={receiptPda} onChange={setReceiptPda} placeholder="The repayment's receipt address" />

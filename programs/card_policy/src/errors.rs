@@ -109,4 +109,13 @@ pub enum CardPolicyError {
     CaptureLimit, // 6048
     #[msg("Budget can't go below what this period already spent or holds")]
     BudgetBelowCommitted, // 6049
+    // ---- appended for the ChainPay repayment CPI (2026-10-04) ----
+    #[msg("Repayment receipt is not a settled ChainPay receipt for this card and statement")]
+    InvalidRepaymentReceipt, // 6050
+    #[msg("Repayment receipt paid a different account than the partner's")]
+    RepaymentRecipientMismatch, // 6051
+    #[msg("Repayment is more than the receipt paid")]
+    RepaymentExceedsReceipt, // 6052
+    #[msg("Repayment mandate does not belong to this card's owner and repay agent")]
+    InvalidRepaymentMandate, // 6053
 }

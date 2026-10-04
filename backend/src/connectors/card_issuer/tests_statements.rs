@@ -122,6 +122,10 @@ impl Harness {
             .unwrap();
         let amount = p.base_units.unwrap_or(due * 10_000);
         data[200..208].copy_from_slice(&amount.to_le_bytes());
+        let agent = p.agent.unwrap_or_else(|| {
+            program::repay_agent(&self.per.with_card(&self.policy, |c| c.policy.binding))
+        });
+        data[208..240].copy_from_slice(agent.as_ref());
         data[240..248].copy_from_slice(&77u64.to_le_bytes());
         data[280] = 1;
         let mut mandate_data = vec![0u8; 235];
@@ -167,6 +171,9 @@ pub(super) struct Payment {
     pub(super) recipient: Option<&'static str>,
     pub(super) base_units: Option<u64>,
     pub(super) payer: Option<solana_address::Address>,
+    /// Receipt `agent`; defaults to the card's repay agent PDA (a payment
+    /// made through card_policy `repay_statement`).
+    pub(super) agent: Option<solana_address::Address>,
     pub(super) skip_receipt: bool,
 }
 
@@ -407,6 +414,18 @@ async fn wrong_mint_network_amount_recipient_reference_or_payer_never_closes_a_s
             "devnet",
             &["payer"],
         ),
+        (
+            // A direct execute_payment by an ordinary agent, not the card's
+            // repay_statement: record_repayment on PER would refuse it.
+            "agent",
+            Payment {
+                mandate_seed: seed(9),
+                agent: Some(addr([4; 32])),
+                ..Default::default()
+            },
+            "devnet",
+            &["agent"],
+        ),
     ];
     for (name, payment, cluster, expected) in cases {
         let (receipt, mandate) = h.pay(&stmt, payment);
@@ -507,6 +526,7 @@ async fn wrong_mint_network_amount_recipient_reference_or_payer_never_closes_a_s
         states,
         vec![
             "closed",
+            "repayment_mismatch",
             "repayment_mismatch",
             "repayment_mismatch",
             "repayment_mismatch",

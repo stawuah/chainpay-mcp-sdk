@@ -2,6 +2,7 @@ import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import {
   buildConfirmReconciledInstruction,
   buildDisclosureBundle,
+  buildRepayStatementInstruction,
   buildInitPermissionInstruction,
   buildResolveExceptionInstruction,
   buildSetPolicyInstruction,
@@ -16,7 +17,9 @@ import {
   decodeCardCommitment,
   decodeCardPeriod,
   decodeCardPolicy,
+  deriveAssociatedTokenAddress,
   deriveCardAccounts,
+  deriveRepayAgentAddress,
   DEVNET_TEE_URL,
   DELEGATION_PROGRAM_ID,
   getTeeSession,
@@ -26,6 +29,7 @@ import {
   readTeeAccount,
   toWeb3Instruction,
   toWeb3Transaction,
+  TOKEN_2022_PROGRAM_ID,
   walletAdapterSigner,
   type CardActivityRow,
   type CardMerchantListing,
@@ -42,11 +46,11 @@ import { BACKEND_URL, CARD_PARTNER_TOKEN_ACCOUNT, CARD_POLICY_PROGRAM_ID, DEVNET
 import { registerMcpConnection } from "../../owner/runtime";
 import { payStatementPrivately, preparePrivateRepayment, submitPrivateRepayment, waitForPrivateRepayment, type ChainPayRoutesOptions } from "@chainpay/sdk/cards/private-repayment";
 import { chainpayClient } from "../../config/client";
-import { sha256Hex, submitSignedTransaction } from "../../owner/runtime";
+import { submitSignedTransaction } from "../../owner/runtime";
 import { checkTeeAttestation } from "./teeAttestation";
 import { statementAmountDue } from "./statementMath";
 import { assertCardSetupTransaction, assertCoSignedRestore, reviewedRestore, type ReviewedRestore } from "./signingGuards";
-import { lookupRepayment, recordRepaymentAttempt } from "./repaymentAttempts";
+import { clearRepaymentAttempt, lookupRepayment, recordRepaymentAttempt } from "./repaymentAttempts";
 import {
   CardsNotEnabledError,
   CARD_AGENT_TOOLS,
@@ -364,7 +368,36 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
 
     repaymentTarget: (statement) => repaymentTargetFor(statement),
 
-    async payStatement(_card, statement, mandateAddress) {
+    repayAgent: (card) => deriveRepayAgentAddress(accounts(card.cardId).binding, programId),
+
+    async createRepaymentPermission(card, statement) {
+      if (!deps.signTransaction) throw new Error("This wallet can't sign transactions.");
+      const target = repaymentTargetFor(statement);
+      if (target.conflict) throw new Error(target.conflict);
+      const total = statementAmountDue(statement);
+      if (total <= 0n) throw new Error("Nothing to pay on this statement.");
+      const amount = centsToTokenBaseUnits(total, target.decimals);
+      const slot = BigInt(await chainpayClient.connection.getSlot("confirmed"));
+      // One payment of exactly this statement, for the card's repay agent only; ~1 day to use it.
+      const prepared = await chainpayClient.buildCreateMandate({
+        approvedAgent: deriveRepayAgentAddress(accounts(card.cardId).binding, programId),
+        sourceTokenAccount: deriveAssociatedTokenAddress(deps.wallet, target.mint, "spl-token"),
+        allowedMint: target.mint,
+        maxPerPayment: amount,
+        totalLimit: amount,
+        expiresAtSlot: slot + 216_000n,
+        maxPaymentCount: 1n,
+        cooldownSlots: 0n,
+        tokenProgram: "spl-token",
+        delegateAmount: amount,
+      }, deps.wallet);
+      const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
+      const signed = await deps.signTransaction(toWeb3Transaction(prepared.transaction, latest.blockhash));
+      await submitSignedTransaction(`card-repay-permission:${statement.statementId}:${signed.recentBlockhash}`, signed.serialize(), { dismissOnConfirm: true });
+      return prepared.mandateAddress;
+    },
+
+    async payStatement(card, statement, mandateAddress) {
       if (!deps.signTransaction) throw new Error("This wallet can't sign transactions.");
       const target = repaymentTargetFor(statement);
       if (!target.recipientTokenAccount) throw new Error("ChainPay hasn't set the simulated partner's account yet, so statements can't be paid.");
@@ -372,53 +405,59 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       if (!statement.digest) throw new Error("This statement has no reference yet.");
       const total = statementAmountDue(statement);
       if (total <= 0n) throw new Error("Nothing to pay on this statement.");
-      // Repayment = execute_payment with invoice_hash = statement digest (contracts §7.2).
-      const [paymentId, signatureReference] = await Promise.all([sha256Hex(`${statement.digest}:payment`), sha256Hex(`${statement.digest}:signature`)]);
-      const prepared = await chainpayClient.preparePayment({
+      const repayAgent = deriveRepayAgentAddress(accounts(card.cardId).binding, programId);
+      const mandate = await chainpayClient.getMandate(mandateAddress);
+      if (!mandate || mandate.owner !== deps.wallet || mandate.approvedAgent !== repayAgent) throw new Error("This isn't this card's repayment permission, so nothing was paid.");
+      if (mandate.allowedMint !== target.mint) throw new Error("This permission is for a different token, so nothing was paid.");
+      if (mandate.status !== "active") throw new Error("This repayment permission isn't active, so nothing was paid.");
+      // Repayment = card_policy repay_statement: the card's repay agent signs ChainPay
+      // execute_payment by CPI, invoice_hash = statement digest (contracts §7.2).
+      const { instruction, receipt } = buildRepayStatementInstruction({
+        ...cardRef(card.cardId),
         mandate: mandateAddress,
-        invoiceHash: hexBytes(statement.digest),
-        paymentId: hexBytes(paymentId),
-        signatureReference: hexBytes(signatureReference),
         mint: target.mint,
-        recipient: target.recipientTokenAccount,
+        sourceTokenAccount: mandate.sourceTokenAccount,
+        recipientTokenAccount: target.recipientTokenAccount,
+        statementDigest: hexBytes(statement.digest),
         amount: centsToTokenBaseUnits(total, target.decimals),
-      }, deps.wallet);
-      if (!prepared.preflight.valid) throw new Error(prepared.preflight.checks.filter((check) => !check.ok).map((check) => check.message).join(" · ") || "This spending permission can't pay the statement.");
-      const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
-      const signed = await deps.signTransaction(toWeb3Transaction(prepared.transaction, latest.blockhash));
+        chainpayProgramId: chainpayClient.programId,
+        ...(mandate.tokenProgram === "token-2022" ? { tokenProgram: TOKEN_2022_PROGRAM_ID } : {}),
+      }, programId);
+      const connection = new Connection(DEVNET_SEND_RPC_URL, "confirmed");
+      const latest = await connection.getLatestBlockhash("confirmed");
+      const transaction = new Transaction({ feePayer: new PublicKey(deps.wallet), recentBlockhash: latest.blockhash }).add(toWeb3Instruction(instruction));
+      const signed = await deps.signTransaction(transaction);
       // Signed: from here on the outcome can be unknown. Recorded per statement, so no other
       // permission can pay it again until a receipt shows up or this blockhash expires.
-      recordRepaymentAttempt(statement.digest, { mandatePda: mandateAddress, receiptPda: prepared.receiptAddress, lastValidBlockHeight: latest.lastValidBlockHeight });
+      recordRepaymentAttempt(statement.digest, { mandatePda: mandateAddress, receiptPda: receipt, lastValidBlockHeight: latest.lastValidBlockHeight });
       const unknown = (reason?: string) => ({
         outcome: "unknown" as const,
-        receiptPda: prepared.receiptAddress,
+        receiptPda: receipt,
         mandatePda: mandateAddress,
         reason: reason || "No clear answer came back after you signed, so this payment may have settled.",
       });
-      const hex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-      let result: McpResponse;
+      let signature: string;
       try {
-        result = await deps.onCallMcp("execute_payment", {
-        mandate: prepared.request.mandate,
-        agent: deps.wallet,
-        invoiceHash: hex(prepared.request.invoiceHash),
-        paymentId: hex(prepared.request.paymentId),
-        signatureReference: hex(prepared.request.signatureReference),
-        mint: prepared.request.mint,
-        recipient: prepared.request.recipient,
-        amount: prepared.request.amount.toString(),
-        signingMode: "human",
-        ...(prepared.request.tokenProgram ? { tokenProgram: prepared.request.tokenProgram } : {}),
-        signedTransaction: btoa(String.fromCharCode(...signed.serialize())),
-      });
+        signature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
       } catch (error) {
+        // A failed preflight simulation means the transaction was never broadcast: not paid.
+        if (error instanceof Error && /simulation failed/i.test(error.message)) {
+          clearRepaymentAttempt(statement.digest, receipt);
+          throw new Error("Solana refused the repayment before sending it, so nothing was paid. Check the permission's limit and your USDC balance.");
+        }
         return unknown(error instanceof Error ? error.message : undefined);
       }
-      const body = result.structuredContent as { status?: string; signature?: string; receiptAddress?: string; error?: string } | undefined;
-      // Anything short of a confirmation for this exact receipt is unknown, never "not paid":
-      // the signed bytes reached the relay. The receipt check settles it.
-      if (result.isError || body?.status !== "confirmed" || body.receiptAddress !== prepared.receiptAddress) return unknown(body?.error);
-      return { outcome: "confirmed", receiptPda: prepared.receiptAddress, mandatePda: mandateAddress, signature: body.signature };
+      try {
+        const result = await connection.confirmTransaction({ signature, ...latest }, "confirmed");
+        if (result.value.err) {
+          clearRepaymentAttempt(statement.digest, receipt);
+          throw new Error("The repayment failed on Solana, so nothing was paid.");
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("The repayment failed")) throw error;
+        return unknown(error instanceof Error ? error.message : undefined);
+      }
+      return { outcome: "confirmed", receiptPda: receipt, mandatePda: mandateAddress, signature };
     },
 
     async repaymentStatus(statement, mandateAddresses): Promise<RepaymentLookup> {
