@@ -1,10 +1,11 @@
 import { useState } from "react";
+import { SectionHeader } from "../../ui/workspace/SectionHeader";
 import { PublicKey } from "@solana/web3.js";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { Share2, ShieldCheck, UserPlus, Users } from "lucide-react";
+import { ShieldCheck, UserPlus } from "lucide-react";
 import type { CardView } from "@chainpay/sdk";
 import type { CardPrivateRead, CardsSource } from "./source";
 import { errorText } from "./shared";
@@ -69,11 +70,11 @@ export function CardSharing({ source, card, read, unlocked, onUnlocked, onChange
 
   return (
     <section className="cp-sharing" data-testid="card-sharing">
-      <div className="dashboard-card">
-        <div className="dashboard-card-heading">
-          <h2><Users size={18} aria-hidden="true" /> Who can read this card</h2>
-          <Button type="button" variant="primary" label="Add a reader" icon={<UserPlus size={16} />} isDisabled={!unlocked || readers.length >= MAX_READERS} onClick={() => { setError(""); setAdding(true); }} />
-        </div>
+      <div className="cp-surface cp-cards-surface">
+        <SectionHeader
+          title="Who can read this card"
+          action={<Button type="button" variant="primary" label="Add a reader" icon={<UserPlus size={16} />} isDisabled={!unlocked || readers.length >= MAX_READERS} onClick={() => { setError(""); setAdding(true); }} />}
+        />
         {!unlocked ? (
           <UnlockStrip source={source} onUnlocked={onUnlocked} compact />
         ) : (
@@ -91,8 +92,8 @@ export function CardSharing({ source, card, read, unlocked, onUnlocked, onChange
         {error && !adding && <div className="builder-error" role="alert"><b>Needs attention</b><span>{error}</span></div>}
       </div>
 
-      <div className="dashboard-card cp-share-card">
-        <div className="dashboard-card-heading"><h2><Share2 size={18} aria-hidden="true" /> Share a few details</h2><Button type="button" variant="secondary" label="Pick fields to share" onClick={() => setSharing(true)} /></div>
+      <div className="cp-surface cp-cards-surface cp-share-card">
+        <SectionHeader title="Share a few details" action={<Button type="button" variant="secondary" label="Pick fields to share" onClick={() => setSharing(true)} />} />
         <p>Make a link that shows only the fields you pick, like this period's charges for your accountant. Anyone can check them against the card's public checkpoint. It's an integrity check, not a zero-knowledge proof: the fields you pick are shown in the clear.</p>
       </div>
 

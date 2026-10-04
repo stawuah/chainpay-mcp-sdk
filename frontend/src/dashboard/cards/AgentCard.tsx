@@ -1,4 +1,4 @@
-import { Clock3, Lock, Snowflake, Wrench } from "lucide-react";
+import { Clock3, Lock, Snowflake, TriangleAlert } from "lucide-react";
 import type { CardView } from "@chainpay/sdk";
 import { CONNECTION_PATH } from "../../brand/Brand";
 import { CARD_ISSUER_ENV, type CardIssuerEnvironment } from "../../config/public";
@@ -64,7 +64,7 @@ export type AgentCardProps = {
 const FROST_COPY: Record<Exclude<AgentCardFrost, "none">, { icon: typeof Snowflake; label: string; sub?: string }> = {
   frozen: { icon: Snowflake, label: "Frozen" },
   freeze_pending: { icon: Snowflake, label: "Frozen", sub: "Card network confirming" },
-  needs_restore: { icon: Wrench, label: "Needs restore" },
+  needs_restore: { icon: TriangleAlert, label: "Needs restore" },
 };
 
 export function AgentCard({ label, lastFour, frost = "none", leftCents = null, size = "standard", pendingNote, issuerEnvironment = CARD_ISSUER_ENV, className }: AgentCardProps) {

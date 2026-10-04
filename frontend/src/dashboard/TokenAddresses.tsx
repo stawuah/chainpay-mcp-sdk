@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { SectionHeader } from "../ui/workspace/SectionHeader";
 import { Button } from "@astryxdesign/core/Button";
-import { Copy, ReceiptText } from "lucide-react";
+import { Copy } from "lucide-react";
 import { deriveAssociatedTokenAddress } from "@chainpay/sdk";
 import { TokenIcon } from "../ui/TokenIcon";
 import { copyValue, type StablecoinOption } from "../owner/runtime";
@@ -33,14 +34,8 @@ export function TokenAddresses({ options, wallet }: { options: StablecoinOption[
     };
   }
 
-  return <section className="dashboard-card">
-    <div className="owner-settings-heading">
-      <span className="owner-row-icon neutral"><ReceiptText /></span>
-      <div>
-        <h2>Token addresses</h2>
-        <p>Your token account receives payments in that stablecoin. The mint address names the stablecoin itself and can never receive one.</p>
-      </div>
-    </div>
+  return <section className="cp-surface">
+    <SectionHeader title="Token addresses" description="Your token account receives payments in that stablecoin. The mint address names the stablecoin itself and can never receive one." />
     {options.length === 0
       ? <p className="owner-caption">No enabled registry assets have loaded yet.</p>
       : options.map((option) => {

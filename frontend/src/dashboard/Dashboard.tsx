@@ -5,9 +5,12 @@ import payshLogo from "../assets/brands/paysh.svg";
 import x402Logo from "../assets/brands/x402-official.png";
 import { ArrowLeft, ArrowRight, ArrowUpRight, Bot, Check, ChevronDown, Copy, Download, Inbox, Menu, Plus, RefreshCw, Search, ReceiptText, Share2, ExternalLink, LogOut, CircleAlert, Settings2, ShieldCheck, Wallet, X } from "lucide-react";
 import { OwnerOverview } from "./OwnerOverview";
+import { connectionStatusProps, requestStageStatus } from "./workspaceStatus";
+import { useCardsSummary } from "./overview/useCardsSummary";
+import { deriveCollectionState, type CollectionStateKind } from "../ui/workspace/collectionModel";
 import { TokenAddresses } from "./TokenAddresses";
 import { PendingSettlements } from "../settlement";
-import "./owner-dashboard.css";
+import "./workspace.css";
 import { BrandLogo } from "../brand/Brand";
 import { useSidebarCollapse } from "./useSidebarCollapse";
 import { useSettlementFormStatus, settlementPendingEvent, settlementTerminalEvent, listStoredOperations, publishSettlement, PendingSettlementError, type Operation, isPendingSettlement } from "../settlement";
@@ -35,12 +38,18 @@ import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { Popover } from "@astryxdesign/core/Popover";
 import { RadioList, RadioListItem } from "@astryxdesign/core/RadioList";
 import { Selector } from "@astryxdesign/core/Selector";
+import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow } from "@astryxdesign/core/Table";
 import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { useToast } from "@astryxdesign/core/Toast";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { Amount, AmountsUnavailable, MintMetadataNotice } from "../ui/amount/Amount";
+import { Status, mandateStatusProps, statusFor } from "../ui/workspace/Status";
+import { SectionHeader } from "../ui/workspace/SectionHeader";
+import { CollectionState } from "../ui/workspace/CollectionState";
+import { MintMetadataProvider, useCreateMintMetadataStore, useMintMetadata, useMintMetadataMany, useMintMetadataStore } from "../ui/amount/useMintMetadata";
 import { Arrow, Shield, shortAddress } from "../ui/marks";
 import { DashboardMobileNav, DashboardNav } from "./DashboardNav";
 import { PageHeader } from "./PageHeader";
@@ -55,7 +64,6 @@ import { EmptyOwnerOverview } from "../owner/EmptyOwnerOverview";
 import {
   attentionInboxItems,
   connectionIsLive,
-  inboxAttentionCounts,
   preparedRequestReceiptAddresses,
   purchaseCardFromInboxItem,
 } from "../owner/purchaseCard";
@@ -67,7 +75,7 @@ import { loadWalletDrafts, saveWalletDrafts, type BatchCsvPayment } from "../wal
 import { chunkPreparedTransactions } from "../wallet/transactionChunks";
 import { createRecipientTokenAccount, type RecipientAtaReview } from "../wallet/recipientAta";
 import { assertCanPayTokenAccountRent, tokenProgramForMint } from "../wallet/tokenAccount";
-import { estimatedSlotsForDays, mandateExpiryLabel, parseExpirySlot } from "../owner/slotEstimate";
+import { estimatedSlotsForDays, ledgerExpiryLabel, mandateExpiryLabel, parseExpirySlot } from "../owner/slotEstimate";
 import { retryRead } from "../owner/retryRead";
 import { useOwnerSignIn } from "../owner/useOwnerSignIn";
 import { useSlotEstimate } from "../owner/useSlotEstimate";
@@ -101,6 +109,7 @@ import {
   type ManagedSigner,
   type AgentCheck,
   connectionScopeDetails,
+  workspaceDateTime,
   fetchMcpConnections,
   registerMcpConnection,
   revokeMcpConnection,
@@ -275,12 +284,15 @@ export function Dashboard({
   const [assistantHistory, setAssistantHistory] = useState<AgentHistoryItem[]>([]);
   const [agentToolsUsed, setAgentToolsUsed] = useState<string[]>([]);
   const voiceRecognition = useRef<SpeechRecognitionLike | null>(null);
-  const [mandateDecimals, setMandateDecimals] = useState<number | null>(null);
   const [connections, setConnections] = useState<AgentConnection[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [connectionsVersion, setConnectionsVersion] = useState(0);
   const [dangerStatus, setDangerStatus] = useState("");
   const ownerSignIn = useOwnerSignIn();
   const [mandateCreateOpen, setMandateCreateOpen] = useState(Boolean(mandateBuilder));
+  // The Requests composer and the new-payment form open from the page header's primary action.
+  const [requestComposerOpen, setRequestComposerOpen] = useState(false);
+  const [paymentComposerOpen, setPaymentComposerOpen] = useState(false);
   useEffect(() => {
     setMandateCreateOpen(Boolean(mandateBuilder));
   }, [mandateBuilder]);
@@ -310,6 +322,7 @@ export function Dashboard({
   const [approvalErrors, setApprovalErrors] = useState<Record<string, string>>({});
   const [hostedAssistantStatus, setHostedAssistantStatus] = useState<"unknown" | "available" | "unavailable">("unknown");
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
+  const phoneTopbar = usePhoneWidth();
   const [walletAssets, setWalletAssets] = useState<WalletAssetSummary[]>([]);
   const [walletAssetRefresh, setWalletAssetRefresh] = useState(0);
   const [preparingWalletAsset, setPreparingWalletAsset] = useState("");
@@ -318,7 +331,9 @@ export function Dashboard({
   const walletCopyTimer = useRef<number | null>(null);
   const toast = useToast();
 
-  const spent = mandate ? formatTokenAmount(mandate.amountSpent, mandateDecimals) : "—";
+  // One mint metadata store per owner wallet, shared by every tab.
+  const mintMetadataStore = useCreateMintMetadataStore(wallet);
+  const { decimals: mandateDecimals } = useMintMetadata(mandate?.allowedMint, mintMetadataStore);
   const solWalletAsset = walletAssets.find((asset) => asset.symbol === "SOL");
   const tokenWalletAssets = walletAssets.filter((asset) => asset.symbol !== "SOL");
   const walletAssetRegistryKey = stablecoinOptions
@@ -393,6 +408,9 @@ export function Dashboard({
             exists: true,
             loading: false,
           }));
+        // Settle the SOL read now, so it never becomes an unhandled rejection if the
+        // token-account read below throws first.
+        const solSettled = Promise.allSettled([solPromise]).then(([state]) => state);
         const preparations = await chainpayClient.prepareRegisteredAssetTokenAccounts(wallet);
         const tokenPromises = preparations.map(async (preparation): Promise<WalletAssetSummary> => {
           const symbol = stablecoinOptions.find((asset) => asset.mint === preparation.mint)?.label
@@ -404,7 +422,7 @@ export function Dashboard({
           return { symbol, mint: preparation.mint, address: preparation.address, balance: balance.value.uiAmountString ?? balance.value.amount, exists: true, loading: false };
         });
         const [solState, tokenStates] = await Promise.all([
-          Promise.allSettled([solPromise]).then(([state]) => state),
+          solSettled,
           Promise.allSettled(tokenPromises),
         ]);
         if (!active) return;
@@ -485,18 +503,6 @@ export function Dashboard({
 
   useEffect(() => {
     let active = true;
-    setMandateDecimals(null);
-    if (!mandate) return () => { active = false; };
-    void chainpayClient.getMintDecimals(mandate.allowedMint).then((decimals) => {
-      if (active) setMandateDecimals(decimals);
-    }).catch(() => {
-      if (active) setMandateDecimals(null);
-    });
-    return () => { active = false; };
-  }, [mandate?.allowedMint]);
-
-  useEffect(() => {
-    let active = true;
     if (ownerSignIn.status !== "ready") { setConnections([]); setConnectionStatus("idle"); return; }
     setConnectionStatus("loading");
     const refreshConnections = async () => {
@@ -517,7 +523,7 @@ export function Dashboard({
       active = false;
       window.clearInterval(interval);
     };
-  }, [wallet, ownerSignIn.status]);
+  }, [wallet, ownerSignIn.status, connectionsVersion]);
 
   function updateAgentInboxItem(id: string, patch: Partial<AgentInboxItem>) {
     setAgentInbox((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
@@ -1039,7 +1045,6 @@ export function Dashboard({
       ? "error"
       : "ready";
 
-  const inboxCounts = inboxAttentionCounts(agentInbox);
   const attentionItems = attentionInboxItems(agentInbox);
   const preparedReceiptAddresses = preparedRequestReceiptAddresses(agentInbox);
   const recentActivity = buildRecentActivity(agentInbox, settlementHistory);
@@ -1047,16 +1052,20 @@ export function Dashboard({
   const mandateApproved = mandates.some((item) => item.owner === wallet && item.status !== "revoked");
   const agentPaired = connections.length > 0 || hostedAssistantStatus === "available";
   const agentsTabActive = tab === "agents" || tab === "connect-mcp";
+  const connectionState = deriveCollectionState({ signedIn: ownerSignIn.status === "ready", status: connectionStatus, count: connections.length });
+  const cardsSummary = useCardsSummary({ wallet, signedIn: ownerSignIn.status === "ready" && tab === "overview", walletSigner, walletMessageSigner, onCallMcp });
 
   const dashboardNav = {
     tab: (agentsTabActive ? "agents" : tab) as DashboardTab,
-    approvalCount: inboxCounts.waiting,
+    // The same count as Overview's "Open requests" and the Requests "Needs attention" list.
+    approvalCount: attentionItems.length,
     toolCount: mcpTools.length,
     onSelect: selectTab,
     onNavigateHome,
   };
 
   return (
+    <MintMetadataProvider store={mintMetadataStore}>
     <div className="dashboard-app cp-app">
       <DashboardMobileNav isOpen={mobileNav} onOpenChange={setMobileNav} {...dashboardNav} />
       <div className={`dashboard-layout${sidebarCollapsed ? " is-rail" : ""}`}>
@@ -1109,7 +1118,9 @@ export function Dashboard({
                     type="button"
                     variant="secondary"
                     className="wallet-chip"
-                    label={switchingWalletAccount ? `Opening ${walletName}…` : `${walletName} · ${shortAddress(wallet)}`}
+                    // Phone width: the address alone, so a CSS ellipsis never cuts into an already shortened address.
+                    label={switchingWalletAccount ? `Opening ${walletName}…` : phoneTopbar ? shortAddress(wallet) : `${walletName} · ${shortAddress(wallet)}`}
+                    aria-label={switchingWalletAccount ? undefined : `${walletName} wallet ${shortAddress(wallet)}`}
                     icon={<WalletBrandMark name={walletName} icon={walletIcon} size={18} fallback />}
                     endContent={<ChevronDown size={16} />}
                   />
@@ -1123,6 +1134,8 @@ export function Dashboard({
             action={
               ["tools", "protocol", "connect-mcp"].includes(tab) ? <Button label="Back to settings" variant="secondary" icon={<ArrowLeft size={16} />} onClick={() => { setAdvancedSettingsOpen(true); selectTab("settings"); }} />
               : tab === "overview" && mandates.length === 0 ? null
+              // No permissions yet: the empty state carries the one New permission action.
+              : tab === "mandates" && mandates.length === 0 && !mandateCreateOpen ? null
               : tab === "overview" || tab === "mandates" ? (
                 mandateCreateOpen
                   ? <Button type="button" variant="secondary" className="refresh-button" label="Back to permissions" icon={<ArrowLeft size={16} />} isDisabled={false} onClick={closeMandateBuilder} />
@@ -1131,7 +1144,9 @@ export function Dashboard({
               // Receipts carries its own scoped Refresh on the settlement-history
               // card. A second, identical-looking page-level button next to it
               // refreshed mandates instead, which read as a duplicate.
-              : ["receipts", "payments", "settings", "assistant", "agents", "connect-mcp"].includes(tab) ? null
+              : tab === "assistant" ? <Button label={requestComposerOpen ? "Close composer" : "New request"} variant={requestComposerOpen ? "secondary" : "primary"} icon={requestComposerOpen ? <X size={18} /> : <Plus size={18} />} onClick={() => setRequestComposerOpen((open) => !open)} />
+              : tab === "payments" ? <Button variant={paymentComposerOpen ? "secondary" : "primary"} label={paymentComposerOpen ? "Back to payments" : "New payment"} icon={paymentComposerOpen ? <ArrowLeft size={18} /> : <Plus size={18} />} onClick={() => setPaymentComposerOpen((open) => !open)} />
+              : ["receipts", "settings", "agents", "connect-mcp"].includes(tab) ? null
               : <Button type="button" variant="secondary" className="refresh-button" label="Refresh" icon={<RefreshCw size={16} />} isDisabled={integrationStatus === "loading"} onClick={() => void onRefresh()} />
             }
           />}
@@ -1146,7 +1161,7 @@ export function Dashboard({
           <PendingSettlements wallet={wallet} />
 
 
-          <div>{tab === "cards" ? <Suspense fallback={<p className="owner-muted" aria-busy="true">Loading cards…</p>}><CardsArea wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} onCallMcp={onCallMcp} mandates={mandates} cardsNew={cardsNew} cardId={cardId} cardSection={cardSection} notice={ownerSignIn.status !== "ready" ? <div className="cp-workspace-signin is-compact"><div><p>Sign in to load your cards. A login message is not a spending approval.</p></div>{ownerSignIn.error && <p role="alert">{ownerSignIn.error}</p>}</div> : undefined} onNavigate={(target) => { setMobileNav(false); onTabChange("cards", target); }} /></Suspense> : tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} inbox={agentInbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} attachments={agentAttachments} attachmentError={attachmentError} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} mandate={mandate} sessionReady={ownerSignIn.status === "ready"} onSignIn={() => void ownerSignIn.signIn()} onAsk={() => void askChainPay()} onVoice={startVoice} onLoadDemoInvoice={() => void loadDemoPaymentRequest()} onApprove={approveAgentRequest} onAddAttachments={addAgentAttachments} onRemoveAttachment={removeAgentAttachment} onArchive={archiveInboxItemById} onRestore={restoreInboxItemById} onCallMcp={onCallMcp} permissionRequests={{ focusId: focusedRequestId, retryingHash: retryingLinkHash, symbolFor: requestSymbol, onReview: reviewPermissionRequest, onDecline: declinePermissionRequestById, onRetryLink: (record) => void retryPermissionLink(record) }} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} loadStatus={mandateLoadStatus} createOpen={mandateCreateOpen} onCreateOpenChange={(open) => { if (open) openMandateCreate(); else closeMandateBuilder(); }} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onOpenPayments={() => selectTab("payments")} onOpenAgents={() => selectTab("agents")} onRefresh={onRefresh} onPermissionRequestCreated={permissionRequestCreated} /> : tab === "payments" ? <PaymentsWorkspace wallet={wallet} history={<ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} preparedReceiptAddresses={preparedReceiptAddresses} onCallMcp={onCallMcp} />} form={<PaymentPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} stablecoinOptions={stablecoinOptions} onSelectMandate={onSelectMandate} onCallMcp={onCallMcp} onAskAgent={(message) => { selectTab("assistant"); void askChainPay(message); }} onRefresh={onRefresh} onOpenMandateBuilder={openMandateCreate} onOpenAgents={() => selectTab("agents")} />} /> : agentsTabActive ? <AgentsTabPanel connectionStatus={connectionStatus} serverUrl={MCP_URL} wallet={wallet} mandates={mandates} stablecoinOptions={stablecoinOptions} connections={connections} hostedAssistantStatus={hostedAssistantStatus} connectDialogInitiallyOpen={tab === "connect-mcp"} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} onCreateMandate={openMandateCreate} onOpenAssistant={() => selectTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} preparedReceiptAddresses={preparedReceiptAddresses} receiptDetail={receiptDetail} onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "settings" ? <SettingsPanel advancedOpen={advancedSettingsOpen} onAdvancedOpenChange={setAdvancedSettingsOpen} onAdvanced={(destination) => selectTab(destination)} wallet={wallet} walletName={walletName} walletIcon={walletIcon} walletCapabilities={walletCapabilities} stablecoinOptions={stablecoinOptions} activeMandateCount={revocableMandateCount} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} onChangeWallet={onChangeWallet} /> : (
+          <div>{tab === "cards" ? <Suspense fallback={<p className="owner-muted" aria-busy="true">Loading cards…</p>}><CardsArea wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} onCallMcp={onCallMcp} mandates={mandates} cardsNew={cardsNew} cardId={cardId} cardSection={cardSection} notice={ownerSignIn.status !== "ready" ? <div className="cp-workspace-signin is-compact"><div><p>Sign in to load your cards. A login message is not a spending approval.</p></div>{ownerSignIn.error && <p role="alert">{ownerSignIn.error}</p>}</div> : undefined} onNavigate={(target) => { setMobileNav(false); onTabChange("cards", target); }} /></Suspense> : tab === "assistant" ? <AssistantPanel composing={requestComposerOpen} onComposingChange={setRequestComposerOpen} prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} inbox={agentInbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} attachments={agentAttachments} attachmentError={attachmentError} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} mandate={mandate} sessionReady={ownerSignIn.status === "ready"} onSignIn={() => void ownerSignIn.signIn()} onAsk={() => void askChainPay()} onVoice={startVoice} onLoadDemoInvoice={() => void loadDemoPaymentRequest()} onApprove={approveAgentRequest} onAddAttachments={addAgentAttachments} onRemoveAttachment={removeAgentAttachment} onArchive={archiveInboxItemById} onRestore={restoreInboxItemById} onCallMcp={onCallMcp} permissionRequests={{ focusId: focusedRequestId, retryingHash: retryingLinkHash, symbolFor: requestSymbol, onReview: reviewPermissionRequest, onDecline: declinePermissionRequestById, onRetryLink: (record) => void retryPermissionLink(record) }} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} loadStatus={mandateLoadStatus} createOpen={mandateCreateOpen} onCreateOpenChange={(open) => { if (open) openMandateCreate(); else closeMandateBuilder(); }} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onOpenPayments={() => selectTab("payments")} onOpenAgents={() => selectTab("agents")} onRefresh={onRefresh} onPermissionRequestCreated={permissionRequestCreated} /> : tab === "payments" ? <PaymentsWorkspace composing={paymentComposerOpen} history={<ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} preparedReceiptAddresses={preparedReceiptAddresses} onCallMcp={onCallMcp} />} form={<PaymentPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} stablecoinOptions={stablecoinOptions} onSelectMandate={onSelectMandate} onCallMcp={onCallMcp} onAskAgent={(message) => { selectTab("assistant"); void askChainPay(message); }} onRefresh={onRefresh} onOpenMandateBuilder={openMandateCreate} onOpenAgents={() => selectTab("agents")} />} /> : agentsTabActive ? <AgentsTabPanel connectionState={connectionState} onSignIn={() => void ownerSignIn.signIn()} onRetry={() => setConnectionsVersion((value) => value + 1)} serverUrl={MCP_URL} wallet={wallet} mandates={mandates} stablecoinOptions={stablecoinOptions} connections={connections} hostedAssistantStatus={hostedAssistantStatus} connectDialogInitiallyOpen={tab === "connect-mcp"} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} onCreateMandate={openMandateCreate} onOpenAssistant={() => selectTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} preparedReceiptAddresses={preparedReceiptAddresses} receiptDetail={receiptDetail} onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "settings" ? <SettingsPanel advancedOpen={advancedSettingsOpen} onAdvancedOpenChange={setAdvancedSettingsOpen} onAdvanced={(destination) => selectTab(destination)} wallet={wallet} walletName={walletName} walletIcon={walletIcon} walletCapabilities={walletCapabilities} stablecoinOptions={stablecoinOptions} activeMandateCount={revocableMandateCount} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} onChangeWallet={onChangeWallet} /> : (
             <>
               {integrationStatus === "loading" ? (
                 <section className="dashboard-card"><span className="section-kicker">LOADING PERMISSIONS</span><h2>Reading on-chain mandates…</h2><p className="t-body">ChainPay is discovering spending permissions for this wallet. First-run setup appears only after a successful read returns zero mandates.</p></section>
@@ -1168,7 +1183,7 @@ export function Dashboard({
                 />
               ) : (
                 <>
-                  <OwnerOverview mandates={mandates} connections={connections} connectionError={connectionStatus === "error"} attention={attentionItems} activity={recentActivity} assets={stablecoinOptions} onRequests={() => selectTab("assistant")} onAgents={() => selectTab("agents")} onPermissions={() => selectTab("mandates")} onPermission={(address) => onTabChange("mandates", { mandateDetail: address })} onPayments={() => selectTab("payments")} />
+                  <OwnerOverview mandates={mandates} connections={connections} connectionState={connectionState} attention={attentionItems} activity={recentActivity} assets={stablecoinOptions} cards={cardsSummary} onRetryConnections={() => setConnectionsVersion((value) => value + 1)} onRequests={() => selectTab("assistant")} onAgents={() => selectTab("agents")} onCards={() => selectTab("cards")} onPermissions={() => selectTab("mandates")} onPermission={(address) => onTabChange("mandates", { mandateDetail: address })} onPayments={() => selectTab("payments")} />
                 </>
               )}
             </>
@@ -1177,13 +1192,15 @@ export function Dashboard({
         </main>
       </div>
     </div>
+    </MintMetadataProvider>
   );
 }
 
-function PaymentsWorkspace({ history, form }: { wallet: string; history: ReactNode; form: ReactNode }) {
-  const [composing, setComposing] = useState(false);
-  const [started, setStarted] = useState(false);
-  return <section className="owner-payments-workspace"><div className="owner-page-actions"><Button variant={composing ? "secondary" : "primary"} label={composing ? "Back to payments" : "New payment"} icon={composing ? <ArrowLeft size={18} /> : <Plus size={18} />} onClick={() => { setStarted(true); setComposing(!composing); }} /></div><div hidden={composing}>{history}</div>{started && <div hidden={!composing}>{form}</div>}</section>;
+function PaymentsWorkspace({ composing, history, form }: { composing: boolean; history: ReactNode; form: ReactNode }) {
+  // The form mounts on first open and then stays mounted (hidden), so a draft survives "Back to payments".
+  const [started, setStarted] = useState(composing);
+  useEffect(() => { if (composing) setStarted(true); }, [composing]);
+  return <section className="owner-payments-workspace"><div hidden={composing}>{history}</div>{started && <div hidden={!composing}>{form}</div>}</section>;
 }
 
 type MandateTableStatus = Mandate["status"];
@@ -1246,7 +1263,9 @@ export function MandatesPanel({
   const actionLock = useRef(false);
   const [currentSlot, setCurrentSlot] = useState<bigint | null>(null);
   const { estimate: slotEstimate } = useSlotEstimate();
-  const [decimalsByMint, setDecimalsByMint] = useState<Record<string, number>>({});
+  const mandateMints = useMintMetadataMany(mandates.map((value) => value.allowedMint));
+  const decimalsByMint: Record<string, number> = {};
+  for (const [mint, state] of Object.entries(mandateMints.states)) if (state.status === "verified") decimalsByMint[mint] = state.decimals;
   const [sourceDelegate, setSourceDelegate] = useState<string | null>(null);
   const [sourceDelegatedAmount, setSourceDelegatedAmount] = useState<bigint>(0n);
   const [delegateLoading, setDelegateLoading] = useState(false);
@@ -1327,6 +1346,10 @@ export function MandatesPanel({
   const expandedMandateAsset = expandedMandate ? stablecoinOptions.find((option) => option.mint === expandedMandate.allowedMint) : null;
   const expandedMandateDecimals = expandedMandate ? decimalsByMint[expandedMandate.allowedMint] : undefined;
   const expandedMandateExpiry = expandedMandate
+    ? ledgerExpiryLabel(expandedMandate.expiresAtSlot, currentSlot, slotEstimate, { expired: expandedMandate.status === "expired" })
+    : "";
+  // The sponsor statement keeps its own wording, slot included ("expires at slot N" / "expires ≈ date").
+  const expandedMandateStatementExpiry = expandedMandate
     ? mandateExpiryLabel(expandedMandate.expiresAtSlot, currentSlot, slotEstimate)
     : "";
 
@@ -1339,21 +1362,6 @@ export function MandatesPanel({
     });
     return () => { active = false; };
   }, [mandate?.address, createOpen]);
-
-  useEffect(() => {
-    let active = true;
-    void Promise.all(mandates.map(async (value) => {
-      try {
-        return [value.allowedMint, await chainpayClient.getMintDecimals(value.allowedMint)] as const;
-      } catch {
-        return null;
-      }
-    })).then((entries) => {
-      if (!active) return;
-      setDecimalsByMint(Object.fromEntries(entries.filter((entry): entry is readonly [string, number] => entry !== null)));
-    });
-    return () => { active = false; };
-  }, [mandates.map((value) => value.allowedMint).join(",")]);
 
   useEffect(() => {
     if (!expandedMandate) {
@@ -1502,7 +1510,7 @@ export function MandatesPanel({
       `Total spending limit: ${formatTokenAmount(expandedMandate.totalLimit, expandedMandateDecimals ?? null)}`,
       `Already spent: ${formatTokenAmount(expandedMandate.amountSpent, expandedMandateDecimals ?? null)}`,
       `Payments used: ${expandedMandate.paymentCount.toString()}${expandedMandate.maxPaymentCount === 0n ? " (no payment-count limit)" : ` of ${expandedMandate.maxPaymentCount.toString()}`}`,
-      `Expires: ${expandedMandateExpiry}`,
+      `Expires: ${expandedMandateExpiry} (slot ${expandedMandate.expiresAtSlot.toString()})`,
       `Cooldown slots: ${expandedMandate.cooldownSlots.toString()}${expandedMandate.cooldownSlots === 0n ? " (no cooldown)" : ""}`,
     ].join("\n"));
   }
@@ -1523,36 +1531,38 @@ export function MandatesPanel({
   return (
     <section className="mandates-panel" aria-labelledby="mandate-table-title">
       <div hidden={Boolean(fullDetailAddress)}>
-      <div className="mandate-filter-controls"><div className="mandate-filter-bar">
-        <RadioList
-          label="Filter permissions"
-          isLabelHidden
-          orientation="horizontal"
-          value={filter}
-          onChange={(value) => setFilter(value as "all" | MandateTableStatus)}
-        >
-          <RadioListItem value="all" label="All" />
-          <RadioListItem value="active" label="Active" />
-          <RadioListItem value="paused" label="Paused" />
-          <RadioListItem value="revoked" label="Revoked" />
-          <RadioListItem value="expired" label="Expired" />
-        </RadioList>
-      </div><div className="mandate-search-group"><TextInput label="Search permissions" isLabelHidden value={mandateSearch} onChange={setMandateSearch} onEnter={() => { if (searchedMandate && document.activeElement instanceof HTMLElement) openRecord(searchedMandate, document.activeElement); }} placeholder="Search permissions…" />{searchedMandate && <Button type="button" variant="secondary" className="mandate-search-action" label="Inspect permission" isDisabled={false} onClick={(event) => openRecord(searchedMandate, event.currentTarget)} />}</div></div>
-      <div className="mandate-list-meta" aria-live="polite">
+      {mandates.length === 0 ? (
+        // Nothing loaded: no filters, search or count over zero rows, and one action.
+        <div className="cp-surface cp-ledger cp-ledger-empty">
+          <CollectionState state="empty" noun="permissions" title="No spending permissions yet" description="Create a permission to give an agent bounded spending authority." icon={ShieldCheck} action={<Button type="button" variant="primary" label="New permission" icon={<Plus size={18} />} isDisabled={false} onClick={() => onCreateOpenChange(true)} />} />
+        </div>
+      ) : <>
+      <div className="cp-ledger-toolbar">
+        <SegmentedControl className="cp-segmented cp-ledger-filter" label="Filter permissions" value={filter} onChange={(value) => setFilter(value as "all" | MandateTableStatus)}>
+          <SegmentedControlItem value="all" label="All" />
+          <SegmentedControlItem value="active" label="Active" />
+          <SegmentedControlItem value="paused" label="Paused" />
+          <SegmentedControlItem value="revoked" label="Revoked" />
+          <SegmentedControlItem value="expired" label="Expired" />
+        </SegmentedControl>
+        <div className="mandate-search-group cp-ledger-search"><TextInput label="Search permissions" isLabelHidden value={mandateSearch} onChange={setMandateSearch} onEnter={() => { if (searchedMandate && document.activeElement instanceof HTMLElement) openRecord(searchedMandate, document.activeElement); }} placeholder="Search by name, agent or address" />{searchedMandate && <Button type="button" variant="secondary" className="mandate-search-action" label="Inspect permission" isDisabled={false} onClick={(event) => openRecord(searchedMandate, event.currentTarget)} />}</div>
+      </div>
+      <div className="mandate-list-meta cp-ledger-meta" aria-live="polite">
         <span>Showing {visibleMandates.length} of {filteredMandates.length} {filter === "all" ? "permissions" : `${filter} permissions`}</span>
         {filteredMandates.length > visibleMandates.length && <span>Showing the first {MAX_MANDATES_VISIBLE}. Use the filters to narrow the list.</span>}
         {normalizedSearch && filteredMandates.length === 0 && <span>No permission matches “{mandateSearch}”.</span>}
       </div>
+      <MintMetadataNotice rawHint="Open a permission to see its exact raw units." unavailable={mandateMints.unavailable} onRetry={mandateMints.retryAll} symbolFor={(mint) => stablecoinOptions.find((option) => option.mint === mint)?.label ?? shortAddress(mint)} />
 
-      <div className="mandate-table-shell dashboard-card">
+      <div className="mandate-table-shell cp-surface cp-ledger">
         <div className="mandate-table-scroll">
           <Table className="mandate-table" density="balanced" dividers="rows" hasHover>
             <caption id="mandate-table-title" className="sr-only">Spending permissions</caption>
             <TableHeader>
               <TableRow isHeaderRow>
                 <TableHeaderCell scope="col">Permission</TableHeaderCell>
-                <TableHeaderCell scope="col">Created</TableHeaderCell>
-                <TableHeaderCell scope="col">Amount</TableHeaderCell>
+                <TableHeaderCell scope="col">Spent / limit / remaining</TableHeaderCell>
+                <TableHeaderCell scope="col">Expiry</TableHeaderCell>
                 <TableHeaderCell scope="col">Status</TableHeaderCell>
                 <TableHeaderCell scope="col" className="mandate-actions-heading"><span className="sr-only">Actions</span></TableHeaderCell>
               </TableRow>
@@ -1561,40 +1571,48 @@ export function MandatesPanel({
               {visibleMandates.length ? visibleMandates.map((value) => {
                 const status = mandateTableStatus(value.status);
                 const selectedAsset = stablecoinOptions.find((option) => option.mint === value.allowedMint);
-                const decimals = decimalsByMint[value.allowedMint];
-                const progress = value.totalLimit > 0n ? Math.min(100, Number((value.amountSpent * 100n) / value.totalLimit)) : 0;
+                const symbol = selectedAsset?.label ?? "tokens";
+                const remaining = value.totalLimit > value.amountSpent ? value.totalLimit - value.amountSpent : 0n;
                 const selected = mandate?.address === value.address;
-                const expiry = mandateExpiryLabel(value.expiresAtSlot, currentSlot, slotEstimate);
+                // A revoked permission can spend nothing: its leftover is "unspent", not
+                // "remaining" (Overview's word for what agents may still spend), and it
+                // has no expiry left to estimate. The exact amount is kept.
+                const revoked = status === "revoked";
+                const expiry = revoked ? null : ledgerExpiryLabel(value.expiresAtSlot, currentSlot, slotEstimate, { expired: status === "expired" });
+                const soon = slotEstimate && currentSlot !== null ? estimatedSlotsForDays(1, slotEstimate) : null;
+                const expiringSoon = status === "active" && soon !== null && currentSlot !== null && value.expiresAtSlot > currentSlot && value.expiresAtSlot - currentSlot <= soon;
                 return (
                   <TableRow key={value.address} className={selected ? "is-selected" : undefined} onClick={(event) => { openRecord(value, event.currentTarget); }} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openRecord(value, event.currentTarget); } }} tabIndex={0} aria-label={`Inspect spending permission ${value.address}`} aria-expanded={expandedMandateAddress === value.address}>
                     <TableCell data-label="Agent">
-                      <div className="mandate-agent-cell">
-                        <span className="mandate-agent-avatar">{value.approvedAgent.slice(0, 2)}</span>
-                        <span><strong>{mandateDisplayName(value, mandates, stablecoinOptions)}{selected ? " · Selected" : ""}</strong><small className="mono">Agent {shortAddress(value.approvedAgent)} · Mandate {shortAddress(value.address)}</small></span>
+                      <div className="cp-ledger-permission">
+                        <TokenIcon mint={value.allowedMint} size={28} />
+                        <span><strong>{mandateDisplayName(value, mandates, stablecoinOptions)}</strong><small>Agent <span className="mono">{shortAddress(value.approvedAgent)}</span></small></span>
                       </div>
                     </TableCell>
-                    <TableCell data-label="Date"><div className="mandate-date-cell"><strong>{mandateCreatedLabel(value)}</strong><small className="mono">{expiry}</small></div></TableCell>
                     <TableCell data-label="Amount" className="mandate-amount-cell">
-                      <div className="mandate-amount-line"><strong>{formatTokenAmount(value.amountSpent, decimals ?? null)}</strong><span>/ {formatTokenAmount(value.totalLimit, decimals ?? null)} {selectedAsset?.label ?? "tokens"}</span></div>
-                      <div className="mandate-spend-bar" aria-label={`${progress}% of mandate spend used`}><span style={{ width: `${progress}%` }} /></div>
-                      <small className="mandate-token-note">{selectedAsset?.detail ?? (value.tokenProgram === "token-2022" ? "Token-2022" : "Classic SPL Token")}</small>
+                      {mandateMints.states[value.allowedMint]?.status === "unavailable" ? <AmountsUnavailable showRaw={false} values={[["spent", value.amountSpent], ["limit", value.totalLimit], [revoked ? "unspent" : "remaining", remaining]]} /> : <div className="cp-ledger-amounts">
+                        <span className="cp-ledger-spent"><Amount baseUnits={value.amountSpent} mint={value.allowedMint} showRetry={false} /><span className="cp-ledger-of">of</span><Amount baseUnits={value.totalLimit} mint={value.allowedMint} symbol={symbol} showRetry={false} /></span>
+                        <span className="cp-ledger-remaining">{revoked ? "Unspent" : "Remaining"} <Amount baseUnits={remaining} mint={value.allowedMint} symbol={symbol} showRetry={false} /></span>
+                      </div>}
                     </TableCell>
-                    <TableCell data-label="Status"><span className={`mandate-table-status ${status}`}><span className="mandate-status-check">✓</span>{mandateStatusLabel(status)}</span></TableCell>
+                    <TableCell data-label="Expiry">{expiry === null ? <span className="cp-ledger-expiry is-none"><span aria-hidden="true">—</span><span className="sr-only">No expiry: revoked</span></span> : <span className="cp-ledger-expiry">{expiry}</span>}</TableCell>
+                    <TableCell data-label="Status"><Status {...mandateStatusProps(status, { expiringSoon })} /></TableCell>
                     <TableCell data-label="Actions" className="mandate-table-actions">
                       {(status === "active" || status === "paused") ? <>
                         <Button type="button" variant="secondary" label={status === "paused" ? "Resume" : "Pause"} isDisabled={actionInFlight !== null} onClick={(event) => { event.stopPropagation(); void handleMandateAction(status === "paused" ? "resume" : "pause", value); }} />
-                      </> : <span className="mandate-no-actions">—</span>}
+                      </> : <span className="mandate-no-actions" aria-label="No actions">—</span>}
                       {actionInFlight && actionAddress === value.address && <small role="status">Waiting for wallet or confirmation…</small>}
                     </TableCell>
                   </TableRow>
                 );
               }) : (
-                <TableRow className="mandate-empty-row"><TableCell colSpan={6}><div className="mandate-empty-state"><span className="empty-icon">◇</span><strong>{mandates.length ? `No ${filter} mandates` : "No mandates yet"}</strong><p>{mandates.length ? "Try another status filter." : "Create a mandate to give an agent bounded spending authority."}</p><Button type="button" variant="primary" label="＋ New mandate" isDisabled={false} onClick={() => onCreateOpenChange(true)} /></div></TableCell></TableRow>
+                <TableRow className="mandate-empty-row"><TableCell colSpan={5}><CollectionState state="empty" noun="permissions" title={normalizedSearch ? "No permission matches this search" : `No ${filter} permissions`} description="Try another filter or search." icon={ShieldCheck} /></TableCell></TableRow>
               )}
             </TableBody>
           </Table>
         </div>
       </div>
+      </>}
       </div>
       <RecordDetails open={Boolean(expandedMandateAddress)} fullPage={Boolean(fullDetailAddress)} title="Spending permission" onClose={closeRecord}
         fullPageHref={expandedMandate ? buildPath({ kind: "app", tab: "mandates", mandateDetail: expandedMandate.address }) : undefined} onOpenFullPage={openFullRecord}>
@@ -1602,23 +1620,23 @@ export function MandatesPanel({
       {expandedMandate && <article className="dashboard-card mandate-detail-card" aria-labelledby="mandate-detail-title">
         <div className="mandate-detail-heading">
           <div><span className="section-kicker">MANDATE DETAILS</span><h2 id="mandate-detail-title">{expandedMandateAsset?.label ?? "Selected mandate"}</h2><p>Review the current on-chain limits for this agent.</p></div>
-          <div className="mandate-detail-heading-actions"><span className={`mandate-table-status ${expandedMandateStatus}`}><span className="mandate-status-check">✓</span>{expandedMandate.status === "expired" ? "Expired" : mandateStatusLabel(expandedMandateStatus ?? "revoked")}</span></div>
+          <div className="mandate-detail-heading-actions"><Status {...mandateStatusProps(expandedMandateStatus ?? "unknown")} /></div>
         </div>
         <p className="cp-record-agent"><span>Approved agent</span><strong>{expandedMandate.approvedAgent}</strong></p>
-        {expandedMandateDecimals === undefined && <p className="cp-record-consequences">Showing exact base units until token decimals are available.</p>}
+        {expandedMandateDecimals === undefined && <p className="cp-record-consequences">Amounts appear once the token’s decimals are read. Exact raw units are in each amount’s details.</p>}
         <div className="cp-permission-summary">
-          <div><span>Per-payment limit</span><strong>{formatTokenAmount(expandedMandate.maxPerPayment, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
-          <div><span>Remaining allowance</span><strong>{formatTokenAmount(expandedMandate.totalLimit > expandedMandate.amountSpent ? expandedMandate.totalLimit - expandedMandate.amountSpent : 0n, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
+          <div><span>Per-payment limit</span><strong><Amount baseUnits={expandedMandate.maxPerPayment} mint={expandedMandate.allowedMint} symbol={expandedMandateAsset?.label ?? "tokens"} /></strong></div>
+          <div><span>{expandedMandateStatus === "revoked" ? "Unspent (not spendable)" : "Remaining allowance"}</span><strong><Amount baseUnits={expandedMandate.totalLimit > expandedMandate.amountSpent ? expandedMandate.totalLimit - expandedMandate.amountSpent : 0n} mint={expandedMandate.allowedMint} symbol={expandedMandateAsset?.label ?? "tokens"} showRetry={false} /></strong></div>
         </div>
-        {(expandedMandate.status === "active" || expandedMandate.status === "paused") && <div className="cp-delegate-status"><span className="section-kicker">SPL DELEGATE</span><p className="builder-intro">Token accounts have one current delegate. Repair approval replaces the delegated allowance with the mandate’s remaining allowance — it does not increment an existing approval and may displace another mandate’s delegate.</p>{delegateLoading ? <p role="status">Reading source token account…</p> : <><div className="mandate-detail-grid"><div><span>Current delegate</span><strong className="mono">{sourceDelegate ? shortAddress(sourceDelegate) : "None"}</strong></div><div><span>Remaining delegated amount</span><strong>{formatTokenAmount(sourceDelegatedAmount, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div></div>{(() => {
+        {(expandedMandate.status === "active" || expandedMandate.status === "paused") && <div className="cp-delegate-status"><span className="section-kicker">SPL DELEGATE</span><p className="builder-intro">Token accounts have one current delegate. Repair approval replaces the delegated allowance with the mandate’s remaining allowance — it does not increment an existing approval and may displace another mandate’s delegate.</p>{delegateLoading ? <p role="status">Reading source token account…</p> : <><div className="mandate-detail-grid"><div><span>Current delegate</span><strong className="mono">{sourceDelegate ? shortAddress(sourceDelegate) : "None"}</strong></div><div><span>Remaining delegated amount</span><strong><Amount baseUnits={sourceDelegatedAmount} mint={expandedMandate.allowedMint} symbol={expandedMandateAsset?.label ?? "tokens"} showRetry={false} /></strong></div></div>{(() => {
           const remainingAllowance = expandedMandate.totalLimit > expandedMandate.amountSpent ? expandedMandate.totalLimit - expandedMandate.amountSpent : 0n;
           const needsRepair = sourceDelegate !== expandedMandate.address || sourceDelegatedAmount < remainingAllowance;
-          return needsRepair ? <div className="mandate-detail-actions"><Button type="button" variant="secondary" label={actionInFlight === "update" ? "Waiting for wallet…" : "Repair approval"} isDisabled={actionInFlight !== null || remainingAllowance <= 0n} onClick={() => void repairDelegateApproval(expandedMandate)} /><span className="mandate-detail-note">Approves {formatTokenAmount(remainingAllowance, expandedMandateDecimals ?? null)} to this mandate PDA.</span></div> : <p className="mandate-detail-note">Source token account is delegated to this mandate with enough remaining allowance for future payments.</p>;
+          return needsRepair ? <div className="mandate-detail-actions"><Button type="button" variant="secondary" label={actionInFlight === "update" ? "Waiting for wallet…" : "Repair approval"} isDisabled={actionInFlight !== null || remainingAllowance <= 0n} onClick={() => void repairDelegateApproval(expandedMandate)} /><span className="mandate-detail-note">Approves <Amount baseUnits={remainingAllowance} mint={expandedMandate.allowedMint} symbol={expandedMandateAsset?.label ?? "tokens"} showRetry={false} /> to this mandate PDA.</span></div> : <p className="mandate-detail-note">Source token account is delegated to this mandate with enough remaining allowance for future payments.</p>;
         })()}</>}</div>}
         <div className="mandate-detail-grid">
-          <div><span>Maximum per payment</span><strong>{formatTokenAmount(expandedMandate.maxPerPayment, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
-          <div><span>Total spending limit</span><strong>{formatTokenAmount(expandedMandate.totalLimit, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
-          <div><span>Already spent</span><strong>{formatTokenAmount(expandedMandate.amountSpent, expandedMandateDecimals ?? null)} {expandedMandateAsset?.label ?? "tokens"}</strong></div>
+          <div><span>Maximum per payment</span><strong><Amount baseUnits={expandedMandate.maxPerPayment} mint={expandedMandate.allowedMint} symbol={expandedMandateAsset?.label ?? "tokens"} showRetry={false} /></strong></div>
+          <div><span>Total spending limit</span><strong><Amount baseUnits={expandedMandate.totalLimit} mint={expandedMandate.allowedMint} symbol={expandedMandateAsset?.label ?? "tokens"} showRetry={false} /></strong></div>
+          <div><span>Already spent</span><strong><Amount baseUnits={expandedMandate.amountSpent} mint={expandedMandate.allowedMint} symbol={expandedMandateAsset?.label ?? "tokens"} showRetry={false} /></strong></div>
           <div><span>Payment count</span><strong>{expandedMandate.paymentCount.toString()}{expandedMandate.maxPaymentCount === 0n ? " · No limit" : ` of ${expandedMandate.maxPaymentCount.toString()}`}</strong></div>
           <div><span>Cooldown</span><strong>{expandedMandate.cooldownSlots.toString()} slots<small>{expandedMandate.cooldownSlots === 0n ? "No cooldown" : "Minimum slots between payments"}</small></strong></div>
           <div><span>Expiry</span><strong>{expandedMandateExpiry}<small>Slot {expandedMandate.expiresAtSlot.toString()}</small></strong></div>
@@ -1642,8 +1660,9 @@ export function MandatesPanel({
             </>}
           </div>
         )}
-        <MandateStatement mandate={expandedMandate} decimals={expandedMandateDecimals ?? null} token={expandedMandateAsset?.label ?? "tokens"} expires={expandedMandateExpiry} />
+        <MandateStatement mandate={expandedMandate} decimals={expandedMandateDecimals ?? null} token={expandedMandateAsset?.label ?? "tokens"} expires={expandedMandateStatementExpiry} />
         <details className="cp-record-technical"><summary>Technical identifiers and source account</summary><div className="mandate-detail-grid">
+          <div><span>Created</span><strong>{mandateCreatedLabel(expandedMandate)}</strong></div>
           <div><span>Mandate address</span><button type="button" className="mandate-detail-value" onClick={() => copyValue(expandedMandate.address)} title="Copy mandate address">{expandedMandate.address} ⧉</button></div>
           <div><span>Approved agent</span><button type="button" className="mandate-detail-value" onClick={() => copyValue(expandedMandate.approvedAgent)} title="Copy approved agent">{expandedMandate.approvedAgent} ⧉</button></div>
           <div><span>Owner</span><button type="button" className="mandate-detail-value" onClick={() => copyValue(expandedMandate.owner)} title="Copy owner address">{expandedMandate.owner} ⧉</button></div>
@@ -2528,10 +2547,13 @@ type LedgerReceiptRow = {
   amountLabel: string;
   tokenLabel: string;
   mint: string;
+  /** Exact base units, for display through the shared metadata store. */
+  baseUnits: string;
 };
 
 function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, receiptDetail, onCallMcp }: { mandates: Mandate[]; stablecoinOptions: StablecoinOption[]; preparedReceiptAddresses?: Set<string>; receiptDetail?: string; onCallMcp: (name: string, args: Record<string, unknown>) => Promise<McpToolResponse> }) {
   const { navigate } = useRoute();
+  const mintMetadata = useMintMetadataStore();
   const [lookupMode, setLookupMode] = useState<"receipt" | "mandate">("receipt");
   const [receiptAddress, setReceiptAddress] = useState("");
   const [lookupMandate, setLookupMandate] = useState("");
@@ -2553,9 +2575,15 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
   const stablecoinKey = stablecoinOptions.map((item) => `${item.mint}:${item.label}`).join("|");
   const detailReceiptAddress = receiptDetail?.trim() ?? "";
   const selectedReceipt = detailReceiptAddress
-    ? onChainReceipts.find((item) => item.address === detailReceiptAddress) ?? { address: detailReceiptAddress, invoiceHash: "", recipientTokenAccount: "", executedAtSlot: "", settled: false, amountLabel: "Receipt", tokenLabel: "…", mint: "" }
+    ? onChainReceipts.find((item) => item.address === detailReceiptAddress) ?? { address: detailReceiptAddress, invoiceHash: "", recipientTokenAccount: "", executedAtSlot: "", settled: false, amountLabel: "Receipt", tokenLabel: "…", mint: "", baseUnits: "0" }
     : onChainReceipts.find((item) => item.address === selectedReceiptAddress) ?? null;
   const settledCount = onChainReceipts.filter((item) => item.settled).length;
+  // The settled count is shown only when every permission's history loaded.
+  const historyComplete = receiptLoadStatus === "ready" && !receiptLoadError;
+  const historyState = receiptLoadStatus === "loading" ? "loading" as const
+    : receiptLoadStatus === "error" && onChainReceipts.length === 0 ? "failed" as const
+    : receiptLoadError ? "partial" as const
+    : onChainReceipts.length === 0 ? "empty" as const : "loaded" as const;
 
   useEffect(() => {
     if (detailReceiptAddress) setSelectedReceiptAddress(detailReceiptAddress);
@@ -2590,12 +2618,12 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
           : left.executedAtSlot > right.executedAtSlot ? -1 : 1
       ));
       const mints = [...new Set(receipts.map((receipt) => receipt.mint))];
-      const decimalStates = await Promise.allSettled(
-        mints.map(async (mint) => [mint, await chainpayClient.getMintDecimals(mint)] as const),
-      );
+      // Shared, deduped metadata reads (the answer the rows display). retry() reuses a
+      // verified mint and reads an unavailable one again, so Refresh can recover.
+      const decimalStates = await Promise.all(mints.map(async (mint) => [mint, await mintMetadata.retry(mint)] as const));
       const decimalsByMint = new Map<string, number>();
-      for (const state of decimalStates) {
-        if (state.status === "fulfilled") decimalsByMint.set(state.value[0], state.value[1]);
+      for (const [mint, state] of decimalStates) {
+        if (state.status === "verified") decimalsByMint.set(mint, state.decimals);
       }
       const details = receipts.map((receipt) => {
         const view = receiptViewFromSettledPayment(receipt, decimalsByMint.get(receipt.mint) ?? null);
@@ -2608,6 +2636,7 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
           executedAtSlot: receipt.executedAtSlot.toString(),
           settled: Boolean(view),
           amountLabel: amountLabel(amount),
+          baseUnits: receipt.amount.toString(),
           tokenLabel: stablecoinOptions.find((option) => option.mint === receipt.mint)?.label ?? tokenLabelForMint(receipt.mint),
         };
       });
@@ -2702,19 +2731,33 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
   return <section className="receipt-page">
     {detailReceiptAddress && (
       <div className="mandate-create-toolbar">
-        <div><span className="section-kicker">RECEIPT DETAIL</span><h2>{selectedReceipt?.amountLabel ?? "Receipt"} {selectedReceipt?.tokenLabel ?? ""}</h2></div>
+        <div><span className="section-kicker">RECEIPT DETAIL</span><h2>{selectedReceipt?.mint ? <Amount baseUnits={selectedReceipt.baseUnits} mint={selectedReceipt.mint} symbol={selectedReceipt.tokenLabel} /> : "Receipt"}</h2></div>
         <Button type="button" variant="secondary" label="Back to payments" isDisabled={false} onClick={() => navigate({ kind: "app", tab: "receipts" }, { replace: true })} />
       </div>
     )}
-    <div className="dashboard-card onchain-receipts-card" hidden={Boolean(detailReceiptAddress)}>
-      <div className="dashboard-card-heading"><div><span className="section-kicker">ON-CHAIN RECEIPTS</span><h2>Payment history</h2></div><div className="receipt-ledger-heading-actions"><span className="chip chip-muted">{settledCount} settled</span><Button type="button" variant="secondary" className="receipt-export-button" label={exportStatus === "exporting" ? "Exporting…" : "Export CSV"} icon={<Download size={16} />} isDisabled={receiptLoadStatus === "loading" || exportStatus === "exporting" || ledgerSource.receipts.length === 0} onClick={() => void exportReceiptsCsv()} /><Button type="button" variant="secondary" className="refresh-button" label="Refresh" icon={<RefreshCw size={16} />} isDisabled={receiptLoadStatus === "loading"} onClick={() => setReceiptLoadVersion((value) => value + 1)} /></div></div>
-      <p className="builder-intro">Select a payment to view or share its receipt.</p>
-      {receiptLoadStatus === "loading" ? <div className="receipt-ledger-empty" aria-busy="true"><Skeleton width="100%" height={72} /><p>Reading Devnet receipts…</p></div> : receiptLoadStatus === "error" && onChainReceipts.length === 0 ? <div className="receipt-ledger-empty"><CircleAlert size={28} /><h3>Payment history is unavailable</h3><p>Refresh to try again. Your recorded payments are unchanged.</p></div> : onChainReceipts.length === 0 ? <div className="receipt-ledger-empty"><p>No receipts yet — one is written on chain for every settled payment.</p><SampleReceiptOutline /></div> : <Table className="receipt-ledger-table" density="compact" dividers="rows" hasHover>
+    <section className="cp-surface onchain-receipts-card" hidden={Boolean(detailReceiptAddress)} aria-labelledby="payment-history-title">
+      <SectionHeader id="payment-history-title" title="Payment history" description="Every settled payment has an on-chain receipt. Select one to view or share it." action={<div className="receipt-ledger-heading-actions">{historyComplete && onChainReceipts.length > 0 && <Status {...statusFor("settled", `${settledCount} settled`)} />}<span className="receipt-ledger-heading-buttons"><Button type="button" variant="secondary" className="receipt-export-button" label={exportStatus === "exporting" ? "Exporting…" : "Export CSV"} icon={<Download size={16} />} isDisabled={receiptLoadStatus === "loading" || exportStatus === "exporting" || ledgerSource.receipts.length === 0} onClick={() => void exportReceiptsCsv()} />{historyState !== "failed" && <Button type="button" variant="secondary" className="refresh-button" label="Refresh" icon={<RefreshCw size={16} />} isDisabled={receiptLoadStatus === "loading"} onClick={() => setReceiptLoadVersion((value) => value + 1)} />}</span></div>} />
+      {(() => {
+        // Every failure collapses into one recovery state: history, export or both.
+        const problems = [historyState === "partial" ? receiptLoadError : "", exportStatus === "error" ? exportMessage : ""].filter(Boolean);
+        return problems.length > 0 && historyState !== "failed" ? <div className="cp-collection-notice" role="status" data-state="partial"><CircleAlert size={16} aria-hidden="true" /><div><strong>{historyState === "partial" ? "Some payment history couldn’t be loaded" : "The CSV couldn’t be created"}</strong><p>{problems.join(" ")} Your recorded payments are unchanged.</p></div><Button type="button" variant="secondary" label="Try again" onClick={() => { if (exportStatus === "error") void exportReceiptsCsv(); if (historyState === "partial") setReceiptLoadVersion((value) => value + 1); }} /></div> : null;
+      })()}
+      <CollectionState
+        state={historyState === "partial" ? "loaded" : historyState}
+        noun="payments"
+        title={historyState === "failed" ? "Payment history is unavailable" : historyState === "empty" ? "No payments yet" : undefined}
+        description={historyState === "failed" ? (receiptLoadError || "Receipts couldn’t be read from Solana.") + " Your recorded payments are unchanged." : "A receipt is written on chain for every settled payment and will appear here."}
+        icon={historyState === "empty" ? ReceiptText : undefined}
+        onRetry={() => setReceiptLoadVersion((value) => value + 1)}
+        retryLabel="Refresh"
+      >
+        <Table className="receipt-ledger-table" density="compact" dividers="rows" hasHover>
         <TableHeader>
           <TableRow isHeaderRow>
-            <TableHeaderCell scope="col">Amount</TableHeaderCell>
+            <TableHeaderCell scope="col">Payment</TableHeaderCell>
+            <TableHeaderCell scope="col" className="cp-ledger-num">Amount</TableHeaderCell>
             <TableHeaderCell scope="col">Status</TableHeaderCell>
-            <TableHeaderCell scope="col">Actions</TableHeaderCell>
+            <TableHeaderCell scope="col"><span className="sr-only">Receipt</span></TableHeaderCell>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -2723,12 +2766,13 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
             return (
               <TableRow className={`receipt-ledger-row ${selected ? "is-selected" : ""}`} key={receipt.address}>
                 <TableCell>
-                  <button type="button" className="receipt-ledger-main" onClick={() => setSelectedReceiptAddress(receipt.address)} aria-label={`Preview ${receipt.tokenLabel} receipt ${receipt.address}`}>
+                  <button type="button" className="receipt-ledger-main" onClick={() => setSelectedReceiptAddress(receipt.address)} aria-label={`Preview ${receipt.tokenLabel} receipt ${receipt.address}`} aria-pressed={selected}>
                     <TokenIcon mint={receipt.mint} />
-                    <span className="receipt-ledger-payment"><strong>{receipt.amountLabel} {receipt.tokenLabel}</strong><small>Invoice {shortAddress(receipt.invoiceHash)} · to {shortAddress(receipt.recipientTokenAccount)}</small></span>
+                    <span className="receipt-ledger-payment"><strong>{receipt.tokenLabel} payment</strong><small>Invoice {shortAddress(receipt.invoiceHash)} · to {shortAddress(receipt.recipientTokenAccount)}</small></span>
                   </button>
                 </TableCell>
-                <TableCell><span className="receipt-ledger-status"><strong>{receipt.settled ? "Settled" : "Unsettled"}</strong><small>Slot {receipt.executedAtSlot}</small></span></TableCell>
+                <TableCell className="cp-ledger-num receipt-ledger-amount"><Amount baseUnits={receipt.baseUnits} mint={receipt.mint} symbol={receipt.tokenLabel} /></TableCell>
+                <TableCell><span className="receipt-ledger-status">{receipt.settled ? <Status {...statusFor("settled", "Settled")} /> : <Status {...statusFor("pending", "Not settled")} />}<small>Slot {receipt.executedAtSlot}</small></span></TableCell>
                 <TableCell>
                   <div className="receipt-ledger-actions">
                     <Button type="button" variant="ghost" href={buildPath({ kind: "app", tab: "receipts", receiptDetail: receipt.address })} label="Open receipt" icon={<ArrowUpRight size={18} />} />
@@ -2739,10 +2783,10 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
             );
           })}
         </TableBody>
-      </Table>}
-      {receiptLoadError && <small className={receiptLoadStatus === "error" ? "receipt-ledger-error" : "receipt-ledger-warning"}>{receiptLoadError}</small>}
-      {exportMessage && <small className={exportStatus === "error" ? "receipt-ledger-error" : "receipt-ledger-warning"} role="status">{exportMessage}</small>}
-    </div>
+      </Table>
+      </CollectionState>
+      {exportMessage && exportStatus !== "error" && <small className="receipt-ledger-warning" role="status">{exportMessage}</small>}
+    </section>
     {selectedReceipt && <div className="dashboard-card receipt-preview-card"><div className="dashboard-card-heading"><div><span className="section-kicker">{detailReceiptAddress ? "RECEIPT DETAIL" : "RECEIPT PREVIEW"}</span><h2 className="owner-token-heading"><TokenIcon mint={selectedReceipt.mint} />Payment receipt</h2></div>{!detailReceiptAddress && <Button type="button" variant="ghost" href={buildPath({ kind: "app", tab: "receipts", receiptDetail: selectedReceipt.address })} label="Open full page" isDisabled={false} />}</div><LoadedReceiptCard receiptPda={selectedReceipt.address} shareMode="dashboard" preparedInRequests={preparedReceiptAddresses?.has(selectedReceipt.address) ?? false} onShare={() => void sendReceipt(selectedReceipt)} /></div>}
     {shareMessage && <div className="receipt-share-message" role="status">{shareMessage}</div>}
     <details className="dashboard-card receipt-lookup"><summary className="owner-lookup-summary"><span className="owner-row-icon neutral"><Search /></span><span><strong>Find a receipt</strong><small>Advanced lookup by receipt address or payment reference</small></span><ChevronDown size={18} /></summary><div className="owner-lookup-intro"><h2>Verify a payment</h2><p>Find a receipt directly from the chain, even if it isn’t in your payment history.</p></div>
@@ -2766,7 +2810,9 @@ function ReceiptPanel({ mandates, stablecoinOptions, preparedReceiptAddresses, r
 }
 
 function AgentsTabPanel({
-  connectionStatus,
+  connectionState,
+  onSignIn,
+  onRetry,
   serverUrl,
   wallet,
   mandates,
@@ -2779,7 +2825,9 @@ function AgentsTabPanel({
   onCreateMandate,
   onOpenAssistant,
 }: {
-  connectionStatus: "idle" | "loading" | "ready" | "error";
+  connectionState: CollectionStateKind;
+  onSignIn: () => void;
+  onRetry: () => void;
   serverUrl: string;
   wallet: string;
   mandates: Mandate[];
@@ -2799,10 +2847,10 @@ function AgentsTabPanel({
 
   return (
     <section className="page-panel agents-tab-panel">
-      {connectionStatus === "error" && <p role="alert" className="builder-error">Agent connections could not be refreshed. Showing the last available records.</p>}
-      {connectionStatus === "loading" && <p role="status">Refreshing agent connections…</p>}
-
       <ConnectMcpPanel
+        connectionState={connectionState}
+        onSignIn={onSignIn}
+        onRetry={onRetry}
         serverUrl={serverUrl}
         wallet={wallet}
         mandates={mandates}
@@ -2827,6 +2875,38 @@ type PermissionRequestPanelProps = {
   onRetryLink: (record: PermissionRequestRecord) => void;
 };
 
+/** The amount a request is for, when it carries one in exact base units. */
+function requestAmount(item: AgentInboxItem): { baseUnits: string; mint: string } | null {
+  const payment = item.approval?.payment;
+  const amount = typeof payment?.amount === "string" && /^\d+$/.test(payment.amount) ? payment.amount : null;
+  const mint = typeof payment?.mint === "string" ? payment.mint : null;
+  return amount && mint ? { baseUnits: amount, mint } : null;
+}
+
+function inboxStatus(item: AgentInboxItem) {
+  if (item.source === "permission-request") {
+    const label = inboxStatusLabel(item);
+    if (item.permissionRequest?.mandateAddress) return item.permissionRequest.link === "linked" ? statusFor("settled", label) : statusFor("review", label);
+    if (item.archivedAt) return statusFor("revoked", label);
+    return item.stage === "blocked" ? statusFor("review", label) : statusFor("pending", label);
+  }
+  return requestStageStatus(item.stage, { blockedByCheckout: crossmintBlocksApproval(item.crossmint) });
+}
+
+function requestNextAction(item: AgentInboxItem, open: boolean): string {
+  if (open) return "Hide";
+  if (isInboxItemArchived(item)) return "View";
+  if (item.source === "permission-request") return item.permissionRequest?.mandateAddress ? "View" : "Review request";
+  if (crossmintBlocksApproval(item.crossmint)) return "See why";
+  switch (item.stage) {
+    case "waiting_for_approval": return "Review and approve";
+    case "needs_details": return "Add details";
+    case "blocked": return "See why";
+    case "receipt_ready": return "View receipt";
+    default: return "View";
+  }
+}
+
 function inboxStatusLabel(item: AgentInboxItem): string {
   if (item.source === "permission-request") {
     if (item.permissionRequest?.mandateAddress) return item.permissionRequest.link === "linked" ? "Permission created" : "Created · not linked";
@@ -2844,6 +2924,13 @@ function AgentRequirementChecklist({ requirements }: { requirements: AgentRequir
     {requirements.missing.length > 0 && <p className="agent-requirement-missing"><b>Please provide:</b> {requirements.missing.join(" · ")}</p>}
   </div>;
 }
+
+const REQUEST_TABS = [
+  { value: "attention", label: "Needs attention", short: "Attention" },
+  { value: "progress", label: "In progress", short: "In progress" },
+  { value: "completed", label: "Completed", short: "Done" },
+  { value: "archived", label: "Archived", short: "Archived" },
+] as const;
 
 function AgentInboxPanel({ inbox, approvalStatuses, approvalErrors, stablecoinOptions, mandateDecimals, mandate, onApprove, onArchive, onRestore, permissionRequests, onNewRequest }: { inbox: AgentInboxItem[]; approvalStatuses: Record<string, ApprovalStatus>; approvalErrors: Record<string, string>; stablecoinOptions: StablecoinOption[]; mandateDecimals: number | null; mandate: Mandate | null; onApprove: (id: string) => Promise<void>; onArchive: (id: string) => void; onRestore: (id: string) => void; onNewRequest?: () => void; permissionRequests?: PermissionRequestPanelProps }) {
   const [filter, setFilter] = useState("attention");
@@ -2867,11 +2954,16 @@ function AgentInboxPanel({ inbox, approvalStatuses, approvalErrors, stablecoinOp
     return filter === "completed" ? complete : filter === "attention" ? needsAction : !complete && !needsAction;
   };
   const visible = inbox.filter(matches);
-  return <section className="dashboard-card owner-inbox"><TabList role="tablist" value={filter} onChange={(value) => { setFilter(String(value)); setSelected(null); }} aria-label="Request status"><Tab value="attention" label="Needs attention" panelId="request-attention" /><Tab value="progress" label="In progress" panelId="request-progress" /><Tab value="completed" label="Completed" panelId="request-completed" /><Tab value="archived" label="Archived" panelId="request-archived" /></TabList><div id={`request-${filter}`} role="tabpanel" aria-label={filter === "attention" ? "Needs attention" : filter}>
-    {!visible.length && <div className="owner-small-empty"><Inbox /><h2>{filter === "attention" ? "Nothing needs your attention" : "No requests here yet"}</h2><p>{filter === "attention" ? "Requests that need your approval or more details will appear here." : "Track your requests as they move through payment and completion."}</p>{filter === "attention" && <p className="owner-caption">Permission requests from vendors and builders arrive as links. Open one and it lands here.</p>}</div>}
-    {visible.map((item) => <article className="owner-request-record" key={item.id}><button className="owner-request-summary" aria-expanded={selected === item.id} onClick={() => setSelected(selected === item.id ? null : item.id)}><span className="owner-row-icon neutral"><Inbox /></span><span><strong>{item.title || "Payment request"}</strong><small>{new Date(item.createdAt).toLocaleString()}</small></span><span className="owner-status">{crossmintBlocksApproval(item.crossmint) ? "Blocked" : inboxStatusLabel(item)}</span><ChevronDown size={16} /></button>{selected === item.id && item.source === "permission-request" && permissionRequests && <div className="owner-request-body"><PermissionRequestCard item={item} symbolFor={permissionRequests.symbolFor} retrying={permissionRequests.retryingHash === item.permissionRequest?.requestHash} onReview={permissionRequests.onReview} onDecline={() => permissionRequests.onDecline(item.id)} onRetryLink={permissionRequests.onRetryLink} />{isInboxItemArchived(item) && <Button label="Restore request" variant="secondary" onClick={() => onRestore(item.id)} />}</div>}{selected === item.id && item.source !== "permission-request" && <div className="owner-request-body"><PurchaseCard purchase={purchaseCardFromInboxItem(item, { stablecoinOptions, mandateDecimals, mandate, crossmint: CROSSMINT_ENABLED })} />{item.crossmint?.blockedReason === "closed" && onNewRequest && <div className="owner-request-next"><Button label="New request" variant="secondary" onClick={onNewRequest} /></div>}{item.crossmint?.blockedReason === "already_paid" && <div className="owner-request-next"><Button label="Show completed requests" variant="secondary" onClick={() => { setFilter("completed"); setSelected(null); }} /></div>}{item.attachments.length > 0 && <div className="agent-attachment-previews">{item.attachments.map((attachment) => <div className="agent-attachment-preview" key={attachment.name}>{attachment.previewUrl && <img src={attachment.previewUrl} alt="" />}<span>{attachment.name}</span></div>)}</div>}
+  const requestMints = useMintMetadataMany(visible.map((item) => requestAmount(item)?.mint).filter((mint): mint is string => Boolean(mint)));
+  // Phone width: short labels keep the four tabs on one row (the strip scrolls only below ~370px).
+  // A short label that is part of the full one keeps the full name for assistive tech (label in name).
+  const phone = usePhoneWidth();
+  return <section className="cp-surface owner-inbox"><TabList role="tablist" className="cp-request-tabs" value={filter} onChange={(value) => { setFilter(String(value)); setSelected(null); }} aria-label="Request status">{REQUEST_TABS.map((tab) => <Tab key={tab.value} value={tab.value} label={phone ? tab.short : tab.label} aria-label={phone && tab.label.toLowerCase().includes(tab.short.toLowerCase()) ? tab.label : undefined} panelId={`request-${tab.value}`} />)}</TabList><div id={`request-${filter}`} role="tabpanel" aria-label={filter === "attention" ? "Needs attention" : filter}>
+    {!visible.length && <CollectionState state="empty" noun="requests" compact title={filter === "attention" ? "Nothing in this browser needs your approval" : filter === "archived" ? "No archived requests" : filter === "completed" ? "No completed requests yet" : "No requests in progress"} description={filter === "attention" ? "Requests waiting for approval or more details appear here. Permission requests from vendors arrive as links and land here when opened." : "Requests move here as they’re paid and completed."} />}
+    {visible.length > 0 && <MintMetadataNotice unavailable={requestMints.unavailable} onRetry={requestMints.retryAll} symbolFor={(mint) => stablecoinOptions.find((option) => option.mint === mint)?.label ?? shortAddress(mint)} rawHint="Each request’s details keep its exact raw units." />}
+    {visible.map((item) => <article className="owner-request-record" key={item.id}><button className="owner-request-summary cp-request-row" aria-expanded={selected === item.id} onClick={() => setSelected(selected === item.id ? null : item.id)}><span className="cp-row-icon" aria-hidden="true"><Inbox size={18} /></span><span className="cp-row-main"><strong>{item.title || "Payment request"}</strong><small>{workspaceDateTime(item.createdAt) ?? "Date unavailable"}</small></span><span className="cp-request-amount">{(() => { const amount = requestAmount(item); if (!amount) return <span className="cp-request-noamount">No amount yet</span>; const symbol = stablecoinOptions.find((option) => option.mint === amount.mint)?.label ?? "tokens"; return requestMints.states[amount.mint]?.status === "unavailable" ? <span className="cp-amount-unavailable">Amount unavailable</span> : <Amount baseUnits={amount.baseUnits} mint={amount.mint} symbol={symbol} showRetry={false} />; })()}</span><Status {...inboxStatus(item)} /><span className="cp-request-next">{requestNextAction(item, selected === item.id)}<ChevronDown size={16} aria-hidden="true" /></span></button>{selected === item.id && item.source === "permission-request" && permissionRequests && <div className="owner-request-body"><PermissionRequestCard item={item} symbolFor={permissionRequests.symbolFor} retrying={permissionRequests.retryingHash === item.permissionRequest?.requestHash} onReview={permissionRequests.onReview} onDecline={() => permissionRequests.onDecline(item.id)} onRetryLink={permissionRequests.onRetryLink} />{isInboxItemArchived(item) && <Button label="Restore request" variant="secondary" onClick={() => onRestore(item.id)} />}</div>}{selected === item.id && item.source !== "permission-request" && <div className="owner-request-body"><PurchaseCard purchase={purchaseCardFromInboxItem(item, { stablecoinOptions, mandateDecimals, mandate, crossmint: CROSSMINT_ENABLED })} />{item.crossmint?.blockedReason === "closed" && onNewRequest && <div className="owner-request-next"><Button label="New request" variant="secondary" onClick={onNewRequest} /></div>}{item.crossmint?.blockedReason === "already_paid" && <div className="owner-request-next"><Button label="Show completed requests" variant="secondary" onClick={() => { setFilter("completed"); setSelected(null); }} /></div>}{item.attachments.length > 0 && <div className="agent-attachment-previews">{item.attachments.map((attachment) => <div className="agent-attachment-preview" key={attachment.name}>{attachment.previewUrl && <img src={attachment.previewUrl} alt="" />}<span>{attachment.name}</span></div>)}</div>}
       {item.requirements && item.requirements.status !== "ready" && <AgentRequirementChecklist requirements={item.requirements} />}
-      {item.approval && item.stage === "waiting_for_approval" && !crossmintBlocksApproval(item.crossmint) && <AgentApprovalCard approval={item.approval} status={approvalStatuses[item.id] ?? "idle"} error={approvalErrors[item.id] ?? item.error ?? ""} stablecoinOptions={stablecoinOptions} decimals={item.approval.payment?.mint === mandate?.allowedMint ? mandateDecimals : null} onApprove={() => onApprove(item.id)} />}
+      {item.approval && item.stage === "waiting_for_approval" && !crossmintBlocksApproval(item.crossmint) && <AgentApprovalCard approval={item.approval} status={approvalStatuses[item.id] ?? "idle"} error={approvalErrors[item.id] ?? item.error ?? ""} stablecoinOptions={stablecoinOptions} onApprove={() => onApprove(item.id)} />}
       {item.stage === "receipt_ready" && <InboxReceipt receiptAddress={item.outcome?.receiptAddress} preparedInRequests seller={CROSSMINT_ENABLED && item.crossmint ? crossmintSellerStatement(item.crossmint) : undefined} />}
       <details className="technical-details"><summary>Request details</summary><p>{item.prompt}</p>{CROSSMINT_ENABLED && item.crossmint && <dl className="purchase-card-facts"><div><dt>Crossmint order</dt><dd className="mono">{item.crossmint.orderId}</dd></div>{typeof item.approval?.payment?.recipient === "string" && <div><dt>Recipient token account</dt><dd className="mono">{item.approval.payment.recipient}</dd></div>}</dl>}<AssistantMessage value={item.response} className="agent-inbox-response" />{item.requirements?.status === "ready" && <AgentRequirementChecklist requirements={item.requirements} />}</details>
       {isInboxItemArchived(item) ? <Button label="Restore request" variant="secondary" onClick={() => onRestore(item.id)} /> : ["approved", "receipt_ready"].includes(item.stage) && <Button label="Archive request" variant="secondary" onClick={() => onArchive(item.id)} />}
@@ -2880,17 +2972,15 @@ function AgentInboxPanel({ inbox, approvalStatuses, approvalErrors, stablecoinOp
 
 }
 
-function AssistantPanel({ prompt, setPrompt, reply, thinking, listening, agentToolsUsed, inbox, approvalStatuses, approvalErrors, attachments, attachmentError, stablecoinOptions, mandateDecimals, mandate, sessionReady, onSignIn, onAsk, onVoice, onLoadDemoInvoice, onApprove, onAddAttachments, onRemoveAttachment, onArchive, onRestore, onCallMcp, permissionRequests }: { permissionRequests?: PermissionRequestPanelProps; prompt: string; setPrompt: (value: string) => void; reply: string; thinking: boolean; listening: boolean; agentToolsUsed: string[]; inbox: AgentInboxItem[]; approvalStatuses: Record<string, ApprovalStatus>; approvalErrors: Record<string, string>; attachments: AgentAttachment[]; attachmentError: string; stablecoinOptions: StablecoinOption[]; mandateDecimals: number | null; mandate: Mandate | null; sessionReady: boolean; onSignIn: () => void; onAsk: () => void; onVoice: () => void; onLoadDemoInvoice: () => void; onApprove: (id: string) => Promise<void>; onAddAttachments: (files: FileList | File[]) => Promise<void>; onRemoveAttachment: (name: string) => void; onArchive: (id: string) => void; onRestore: (id: string) => void; onCallMcp: (name: string, args: Record<string, unknown>) => Promise<McpToolResponse> }) {
-  const [composing, setComposing] = useState(false);
+function AssistantPanel({ composing, onComposingChange, prompt, setPrompt, reply, thinking, listening, agentToolsUsed, inbox, approvalStatuses, approvalErrors, attachments, attachmentError, stablecoinOptions, mandateDecimals, mandate, sessionReady, onSignIn, onAsk, onVoice, onLoadDemoInvoice, onApprove, onAddAttachments, onRemoveAttachment, onArchive, onRestore, onCallMcp, permissionRequests }: { composing: boolean; onComposingChange: (open: boolean) => void; permissionRequests?: PermissionRequestPanelProps; prompt: string; setPrompt: (value: string) => void; reply: string; thinking: boolean; listening: boolean; agentToolsUsed: string[]; inbox: AgentInboxItem[]; approvalStatuses: Record<string, ApprovalStatus>; approvalErrors: Record<string, string>; attachments: AgentAttachment[]; attachmentError: string; stablecoinOptions: StablecoinOption[]; mandateDecimals: number | null; mandate: Mandate | null; sessionReady: boolean; onSignIn: () => void; onAsk: () => void; onVoice: () => void; onLoadDemoInvoice: () => void; onApprove: (id: string) => Promise<void>; onAddAttachments: (files: FileList | File[]) => Promise<void>; onRemoveAttachment: (name: string) => void; onArchive: (id: string) => void; onRestore: (id: string) => void; onCallMcp: (name: string, args: Record<string, unknown>) => Promise<McpToolResponse> }) {
   return <section className="owner-requests">
-    <div className="owner-page-actions"><Button label={composing ? "Close composer" : "New request"} variant={composing ? "secondary" : "primary"} icon={composing ? <X size={18} /> : <Plus size={18} />} onClick={() => setComposing(!composing)} /></div>
-    <div hidden={!composing} className="dashboard-card assistant-card"><div className="dashboard-card-heading"><h2>What would you like to pay for?</h2></div><p className="owner-muted">Describe the payment or attach an invoice.</p><div className="assistant-attachments">{attachments.map((attachment) => <span className="assistant-attachment-chip" key={attachment.name}>{attachment.name}<IconButton variant="ghost" label={`Remove ${attachment.name}`} icon={<X size={16} />} onClick={() => onRemoveAttachment(attachment.name)} /></span>)}</div>{attachmentError && <p role="alert">{attachmentError}</p>}<div className="assistant-input"><TextInput label="Request" value={prompt} onChange={setPrompt} onEnter={onAsk} placeholder="Describe a payment or paste an invoice" /><FileInput label="Attach invoice" isMultiple accept="image/*,.pdf,.csv,.json,.txt,.md" value={null} onChange={(files) => { if (files) onAddAttachments(Array.isArray(files) ? files : [files]); }} /><Button label={thinking ? "Checking…" : "Send request"} variant="primary" isDisabled={thinking} onClick={onAsk} /></div><div className="owner-composer-options"><Button label={listening ? "Stop voice input" : "Use voice input"} variant="ghost" onClick={onVoice} /><details><summary>Try a Devnet request</summary><Button label="Create signed demo request" variant="secondary" isDisabled={thinking} onClick={onLoadDemoInvoice} /></details></div>{reply && <div className="assistant-log"><AssistantMessage value={reply} className="assistant-response" />{agentToolsUsed.length > 0 && <details><summary>Technical activity</summary>{agentToolsUsed.map((tool, index) => <span key={`${tool}-${index}`}>{tool} </span>)}</details>}</div>}</div>
-    <AgentInboxPanel inbox={inbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} mandate={mandate} onApprove={onApprove} onArchive={onArchive} onRestore={onRestore} permissionRequests={permissionRequests} onNewRequest={() => { setComposing(true); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
-    <details className="dashboard-card owner-service-requests"><summary><img className="owner-service-logo" src={x402Logo} alt="x402" />Paid API requests</summary><X402JobsPanel sessionReady={sessionReady} onSignIn={onSignIn} onCallMcp={onCallMcp} /></details>
+    <div hidden={!composing} className="cp-surface assistant-card"><SectionHeader title="What would you like to pay for?" description="Describe the payment or attach an invoice." /><div className="assistant-attachments">{attachments.map((attachment) => <span className="assistant-attachment-chip" key={attachment.name}>{attachment.name}<IconButton variant="ghost" label={`Remove ${attachment.name}`} icon={<X size={16} />} onClick={() => onRemoveAttachment(attachment.name)} /></span>)}</div>{attachmentError && <p role="alert">{attachmentError}</p>}<div className="assistant-input"><TextInput label="Request" value={prompt} onChange={setPrompt} onEnter={onAsk} placeholder="Describe a payment or paste an invoice" /><FileInput label="Attach invoice" isMultiple accept="image/*,.pdf,.csv,.json,.txt,.md" value={null} onChange={(files) => { if (files) onAddAttachments(Array.isArray(files) ? files : [files]); }} /><Button label={thinking ? "Checking…" : "Send request"} variant="primary" isDisabled={thinking} onClick={onAsk} /></div><div className="owner-composer-options"><Button label={listening ? "Stop voice input" : "Use voice input"} variant="ghost" onClick={onVoice} /><details><summary>Try a Devnet request</summary><Button label="Create signed demo request" variant="secondary" isDisabled={thinking} onClick={onLoadDemoInvoice} /></details></div>{reply && <div className="assistant-log"><AssistantMessage value={reply} className="assistant-response" />{agentToolsUsed.length > 0 && <details><summary>Technical activity</summary>{agentToolsUsed.map((tool, index) => <span key={`${tool}-${index}`}>{tool} </span>)}</details>}</div>}</div>
+    <AgentInboxPanel inbox={inbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} mandate={mandate} onApprove={onApprove} onArchive={onArchive} onRestore={onRestore} permissionRequests={permissionRequests} onNewRequest={() => { onComposingChange(true); window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); }} />
+    <details className="cp-secondary-surface owner-service-requests"><summary><img className="owner-service-logo" src={x402Logo} alt="x402" /><span><strong>Paid API requests</strong><small>Pay-per-call API jobs your agents run</small></span><ChevronDown size={18} aria-hidden="true" /></summary><X402JobsPanel sessionReady={sessionReady} onSignIn={onSignIn} onCallMcp={onCallMcp} /></details>
   </section>;
 }
 
-function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimals, onApprove }: { approval: AgentApproval; status: ApprovalStatus; error: string; stablecoinOptions: StablecoinOption[]; decimals: number | null; onApprove: () => Promise<void> }) {
+function AgentApprovalCard({ approval, status, error, stablecoinOptions, onApprove }: { approval: AgentApproval; status: ApprovalStatus; error: string; stablecoinOptions: StablecoinOption[]; onApprove: () => Promise<void> }) {
   const instructionNames = approval.transaction?.instructions?.map((instruction) => instruction.name).join(" + ") || "mandate transaction";
   const isPayment = approval.kind === "payment";
   const isTokenAccount = approval.kind === "token_account";
@@ -2898,17 +2988,7 @@ function AgentApprovalCard({ approval, status, error, stablecoinOptions, decimal
   const amount = typeof payment?.amount === "string" ? payment.amount : undefined;
   const tokenMint = typeof payment?.mint === "string" ? payment.mint : undefined;
   const tokenLabel = stablecoinOptions.find((option) => option.mint === tokenMint)?.label ?? "token";
-  let displayAmount = "See wallet";
-  if (amount) {
-    try {
-      displayAmount = decimals === null
-        ? `${amount} base units`
-        : `${formatTokenAmount(BigInt(amount), decimals)} ${tokenLabel}`;
-    } catch {
-      displayAmount = `${amount} base units`;
-    }
-  }
-  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Approve payment" : isTokenAccount ? "Create token account" : "Approve this mandate once"}</h3></div><span className={`state-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "pending" ? "Pending settlement" : status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "Review the amount, recipient, and policy checks below. Approve in your wallet to complete the payment." : isTokenAccount ? "The AI prepared one canonical token-account creation. Approving spends Devnet SOL for account rent; it does not fund the account or authorize payments." : "The AI prepared this spending policy. Approve it once; future policy-compliant payments can settle without another wallet prompt."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b><code>{displayAmount}</code></span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : isTokenAccount ? <><span><b>Mint</b>{approval.mint ? <code>{shortAddress(approval.mint)}</code> : "Enabled asset"}</span><span><b>Token account</b>{approval.tokenAccount ? <code>{shortAddress(approval.tokenAccount)}</code> : "Canonical ATA"}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<Button type="button" variant="primary" className="full-button" label={status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Approve payment in wallet" : isTokenAccount ? "Create account in wallet" : "Approve wallet once"} isDisabled={status === "signing" || status === "pending" || status === "success"} onClick={() => void onApprove()} /></div>;
+  return <div className="agent-approval-card"><div className="agent-approval-heading"><div><span className="section-kicker">WALLET APPROVAL</span><h3>{isPayment ? "Approve payment" : isTokenAccount ? "Create token account" : "Approve this mandate once"}</h3></div><span className={`state-pill ${status === "error" ? "failed" : status === "success" ? "ok" : ""}`}><i /> {status === "pending" ? "Pending settlement" : status === "signing" ? "Waiting" : status === "success" ? "Approved" : status === "error" ? "Needs attention" : "Ready"}</span></div><p>{isPayment ? "Review the amount, recipient, and policy checks below. Approve in your wallet to complete the payment." : isTokenAccount ? "The AI prepared one canonical token-account creation. Approving spends Devnet SOL for account rent; it does not fund the account or authorize payments." : "The AI prepared this spending policy. Approve it once; future policy-compliant payments can settle without another wallet prompt."}</p><div className="agent-approval-details">{isPayment ? <><span><b>Amount</b>{amount && tokenMint && /^\d+$/.test(amount) ? <Amount baseUnits={amount} mint={tokenMint} symbol={tokenLabel} /> : "See wallet"}</span><span><b>Recipient</b>{typeof payment?.recipient === "string" ? <code>{shortAddress(payment.recipient)}</code> : "See wallet"}</span><span><b>Receipt</b>{approval.receiptAddress && typeof approval.receiptAddress === "string" ? <code>{shortAddress(approval.receiptAddress)}</code> : "Prepared"}</span></> : isTokenAccount ? <><span><b>Mint</b>{approval.mint ? <code>{shortAddress(approval.mint)}</code> : "Enabled asset"}</span><span><b>Token account</b>{approval.tokenAccount ? <code>{shortAddress(approval.tokenAccount)}</code> : "Canonical ATA"}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></> : <><span><b>Mandate</b>{approval.mandateAddress ? <code>{shortAddress(approval.mandateAddress)}</code> : "New policy"}</span><span><b>Instructions</b>{instructionNames}</span><span><b>Wallet</b>{approval.transaction?.feePayer ? <code>{shortAddress(approval.transaction.feePayer)}</code> : "Connected owner"}</span></>}</div>{error && <div className="builder-error"><b>Approval blocked</b><span>{error}</span></div>}<Button type="button" variant="primary" className="full-button" label={status === "signing" ? "Waiting for wallet…" : status === "success" ? "Approved" : isPayment ? "Approve payment in wallet" : isTokenAccount ? "Create account in wallet" : "Approve wallet once"} isDisabled={status === "signing" || status === "pending" || status === "success"} onClick={() => void onApprove()} /></div>;
 }
 
 function ToolsPanel({ mcpTools }: { mcpTools: McpTool[] }) {
@@ -2979,7 +3059,7 @@ function ToolsPanel({ mcpTools }: { mcpTools: McpTool[] }) {
 }
 
 
-function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, connections, dialogOpen, onDialogOpenChange, onConnected, onRevoked, onCreateMandate }: { serverUrl: string; wallet: string; mandates: Mandate[]; stablecoinOptions: StablecoinOption[]; connections: AgentConnection[]; dialogOpen?: boolean; onDialogOpenChange?: (open: boolean) => void; onConnected: (connection: AgentConnection) => void; onRevoked: (id: string) => Promise<void>; onCreateMandate: () => void }) {
+function ConnectMcpPanel({ connectionState = "loaded", onSignIn, onRetry, serverUrl, wallet, mandates, stablecoinOptions, connections, dialogOpen, onDialogOpenChange, onConnected, onRevoked, onCreateMandate }: { connectionState?: CollectionStateKind; onSignIn?: () => void; onRetry?: () => void; serverUrl: string; wallet: string; mandates: Mandate[]; stablecoinOptions: StablecoinOption[]; connections: AgentConnection[]; dialogOpen?: boolean; onDialogOpenChange?: (open: boolean) => void; onConnected: (connection: AgentConnection) => void; onRevoked: (id: string) => Promise<void>; onCreateMandate: () => void }) {
   const ownedAddresses = ownedMandateAddresses(mandates, wallet);
   const ownedMandates = mandates.filter((mandate) => ownedAddresses.includes(mandate.address));
   const mandateOptions = mandates
@@ -3068,11 +3148,8 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
   }
 
   return <section className="page-panel connect-panel">
-    {connectionToken && connectionHandoff && <section className="dashboard-card connection-config-card">
-      <div className="dashboard-card-heading">
-        <h2>Finish connecting {connectionName}</h2>
-        <span className="owner-status">Ready to paste</span>
-      </div>
+    {connectionToken && connectionHandoff && <section className="cp-surface connection-config-card">
+      <SectionHeader title={`Finish connecting ${connectionName}`} action={<Status {...statusFor("pending", "Ready to paste")} />} />
       <p className="connection-handoff-intro">Paste the configuration into any MCP client, then send the first prompt so the agent inspects your permission before spending.</p>
       <div className="connection-handoff-scope">
         <span className="section-kicker">THIS CONNECTION</span>
@@ -3092,7 +3169,42 @@ function ConnectMcpPanel({ serverUrl, wallet, mandates, stablecoinOptions, conne
       <details className="technical-details"><summary>View first prompt</summary><pre className="schema-block connection-prompt-block">{firstPrompt}</pre></details>
       <p className="connection-safety-note" role="note"><ShieldCheck className="shield-icon" aria-hidden /> Never paste the connection token into chat, commits, or public prompts. Revoke and recreate if it leaks.</p>
     </section>}
-    <div className="dashboard-card connected-clients-card"><div className="dashboard-card-heading"><h2>Connected agents</h2><Button type="button" variant="primary" label="Connect agent" icon={<Plus size={18} />} onClick={() => { setAllowPayments(false); setDialogOpen(true); }} /></div>{connections.length ? <div className="connection-list">{connections.map((connection) => <article className="owner-connection" key={connection.id}><div className="owner-connection-heading"><span className="owner-row-icon neutral"><Bot /></span><div><h3>{connection.agentName}</h3><p>{connectionSeenLabel(connection.lastSeenAt)}</p></div><span className={`owner-status ${connectionIsLive(connection.lastSeenAt) ? "good" : ""}`}>{connectionIsLive(connection.lastSeenAt) ? "Connected" : "Configured"}</span><Button variant="ghost" label={`Revoke ${connection.agentName}`} onClick={() => setRevokeId(connection.id)} /></div><p>{connectionScopeDetails(connection.scope).label}</p><details className="technical-details"><summary>Connection details and activity</summary><p>Owner: {connection.wallet}</p><p>{connection.mandates} associated spending permission{connection.mandates === 1 ? "" : "s"}</p><div className="connection-tools">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span>No tool activity recorded.</span>}</div></details></article>)}</div> : <div className="owner-small-empty"><Bot /><h3>Your agents will appear here</h3><p>Connect an agent and choose the spending permission it can use.</p></div>}</div>
+    <section className="cp-surface connected-clients-card" aria-labelledby="connected-agents-title">
+      <SectionHeader id="connected-agents-title" title="Connected agents" description="Each agent connects through MCP and can use only the permission you assign." action={<Button type="button" variant="primary" label="Connect agent" icon={<Plus size={18} />} onClick={() => { setAllowPayments(false); setDialogOpen(true); }} />} />
+      <CollectionState
+        state={connectionState}
+        noun="agents"
+        title={connectionState === "empty" ? "No agents connected yet" : connectionState === "partial" ? "Agent connections couldn’t be refreshed" : undefined}
+        description={connectionState === "signed-out"
+          ? "Your agent connections load after you sign in. Signing in is not a spending approval."
+          : connectionState === "failed" ? "The connection list couldn’t be read. Nothing was changed."
+          : connectionState === "partial" ? "Showing the last records that loaded."
+          : "Name the agent, pick the spending permission it may use, then paste the configuration into your MCP client."}
+        action={connectionState === "signed-out" && onSignIn ? <Button type="button" variant="secondary" label="Sign in" onClick={onSignIn} /> : undefined}
+        icon={connectionState === "empty" ? Bot : undefined}
+        onRetry={onRetry}
+        rows={2}
+      >
+        <ul className="cp-agent-list">
+          {connections.map((connection) => (
+            <li className="owner-connection cp-agent-row" key={connection.id}>
+              <span className="cp-row-icon" aria-hidden="true"><Bot size={18} /></span>
+              <div className="cp-agent-main">
+                <h3>{connection.agentName}</h3>
+                <p>{connectionSeenLabel(connection.lastSeenAt)}</p>
+              </div>
+              <div className="cp-agent-scope">
+                <span className="cp-agent-label">Assigned</span>
+                <span>{connectionScopeDetails(connection.scope).label}</span>
+              </div>
+              <Status {...connectionStatusProps(connection)} />
+              <Button variant="destructive" className="owner-danger-action" label="Revoke" aria-label={`Revoke ${connection.agentName}`} onClick={() => setRevokeId(connection.id)} />
+              <details className="technical-details cp-agent-details"><summary>Connection details and activity</summary><p>Owner: <span className="mono">{connection.wallet}</span></p><p>{connection.mandates} associated spending permission{connection.mandates === 1 ? "" : "s"} · {connection.totalCalls} tool call{connection.totalCalls === 1 ? "" : "s"}</p><div className="connection-tools">{connection.toolsCalled.length ? connection.toolsCalled.map((tool) => <span className="tool-call-chip" key={tool.name}>{tool.name} <b>×{tool.count}</b></span>) : <span>No tool activity recorded.</span>}</div></details>
+            </li>
+          ))}
+        </ul>
+      </CollectionState>
+    </section>
     <Dialog isOpen={isDialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); else setDialogOpen(true); }} purpose="form" width={480}>
       <Layout
         height="auto"
@@ -3145,11 +3257,11 @@ function SettingsPanel({ advancedOpen, onAdvancedOpenChange, onAdvanced, wallet,
   const capability = walletCapabilities ?? null;
   const capabilityCopy = capability ? describeWalletCapabilities(capability) : null;
   return <section className="owner-settings">
-    <section className="dashboard-card owner-account-card"><div className="owner-settings-heading"><span className="owner-row-icon neutral"><Wallet /></span><div><h2>Wallet & account</h2><p>Your connected wallet is your workspace identity.</p></div></div><div className="owner-account-identity"><div className="owner-account-wallet"><WalletBrandMark name={walletName} icon={walletIcon} size={28} fallback /><div><strong>{walletName || "Solana wallet"}</strong><span>{shortAddress(wallet)}</span></div></div><Button label="Copy address" variant="secondary" icon={<Copy size={16} />} onClick={() => void copyValue(wallet)} /></div><div className="owner-settings-row"><div><strong>Connected wallet</strong><p className="owner-full-address">{wallet}</p></div><Button label="Change wallet" variant="secondary" onClick={onChangeWallet} /></div></section>
-    <section className="dashboard-card"><div className="owner-settings-heading"><span className="owner-row-icon neutral"><ShieldCheck /></span><div><h2>Network</h2><p>Where your permissions and payments are recorded.</p></div></div><div className="owner-settings-row"><div className="owner-token-heading"><img className="owner-network-logo" src={solWalletImage} alt="" /><div><strong>Solana Devnet</strong><p>Test network · Devnet tokens only</p></div></div><span className="owner-status">Current network</span></div></section>
+    <section className="cp-surface owner-account-card"><SectionHeader title="Wallet & account" description="Your connected wallet is your workspace identity." /><div className="owner-account-identity"><div className="owner-account-wallet"><WalletBrandMark name={walletName} icon={walletIcon} size={28} fallback /><div><strong>{walletName || "Solana wallet"}</strong><span>{shortAddress(wallet)}</span></div></div><Button label="Copy address" variant="secondary" icon={<Copy size={16} />} onClick={() => void copyValue(wallet)} /></div><div className="owner-settings-row"><div><strong>Connected wallet</strong><p className="owner-full-address">{wallet}</p></div><Button label="Change wallet" variant="secondary" onClick={onChangeWallet} /></div></section>
+    <section className="cp-surface"><SectionHeader title="Network" description="Where your permissions and payments are recorded." /><div className="owner-settings-row"><div className="owner-token-heading"><img className="owner-network-logo" src={solWalletImage} alt="" /><div><strong>Solana Devnet</strong><p>Test network · Devnet tokens only</p></div></div><Status {...statusFor("active", "Current network")} /></div></section>
     <TokenAddresses options={stablecoinOptions} wallet={wallet} />
-    <details className="dashboard-card owner-advanced-settings" open={advancedOpen} onToggle={(event) => onAdvancedOpenChange(event.currentTarget.open)}><summary className="owner-lookup-summary"><span className="owner-row-icon neutral"><Settings2 /></span><span><strong>Advanced settings</strong><small>Integration tools and wallet diagnostics</small></span><ChevronDown size={18} /></summary><div className="owner-settings-row owner-mcp-settings"><div><strong>MCP connection</strong><p>Connect an agent to your workspace using this server address.</p><code className="owner-mcp-endpoint">{MCP_URL}</code>{mcpCopyStatus && <p role="status">{mcpCopyStatus}</p>}</div><div className="owner-mcp-actions"><Button label={mcpCopyStatus === "Copied" ? "Copied" : "Copy MCP address"} variant="secondary" icon={<Copy size={16} />} onClick={() => void copyValue(MCP_URL).then((copied) => setMcpCopyStatus(copied ? "Copied" : "Could not copy. Select the server address to copy it manually."))} /><Button label="Connect agent" variant="secondary" onClick={() => onAdvanced("connect-mcp")} /></div></div><div className="owner-settings-row"><div><strong>Developer tools</strong><p>Inspect the tools available to agent integrations.</p></div><Button label="Developer tools" variant="secondary" onClick={() => onAdvanced("tools")} /></div><div className="owner-settings-row"><div><strong>Protocol administration</strong><p>Manage protocol configuration with the authority wallet.</p></div><Button label="Protocol administration" variant="secondary" onClick={() => onAdvanced("protocol")} /></div><details className="technical-details"><summary>Wallet compatibility details</summary><p>{capabilityCopy?.identity ?? walletName}</p><p>{capabilityCopy?.summary ?? "Wallet compatibility evidence was not recorded for this connection."}</p><p>Advertised versions: {capabilityCopy?.versionsLabel ?? "Not recorded"}. v1: {capabilityCopy?.v1Label ?? "Unverified"}. Devnet: {capabilityCopy?.chainLabel ?? "Unverified"}.</p></details></details>
-    <section className="dashboard-card owner-settings-danger"><div className="owner-settings-heading"><span className="owner-row-icon danger"><CircleAlert /></span><div><h2>Account actions</h2><p>Review these changes before continuing.</p></div></div><div className="owner-settings-row"><div><strong>Disconnect wallet</strong><p>Sign out of this workspace. Your spending permissions stay on-chain.</p></div><Button label="Disconnect" variant="destructive" icon={<LogOut size={18} />} className="owner-danger-action" onClick={() => setConfirmAction("disconnect")} /></div><div className="owner-settings-row"><div><strong>Revoke all spending permissions</strong><p>{activeMandateCount ? `${activeMandateCount} non-revoked permission${activeMandateCount === 1 ? "" : "s"}, including paused and expired. Requires wallet approval. Completed payments stay recorded.` : "No permissions need to be revoked."}</p></div><Button label="Revoke all" variant="destructive" icon={<ShieldCheck size={18} />} className="owner-danger-action" isDisabled={activeMandateCount === 0} onClick={() => setConfirmAction("revoke")} /></div>{dangerStatus && <p role="status">{dangerStatus}</p>}</section>
+    <details className="cp-surface owner-advanced-settings" open={advancedOpen} onToggle={(event) => onAdvancedOpenChange(event.currentTarget.open)}><summary className="owner-lookup-summary"><span className="owner-row-icon neutral"><Settings2 /></span><span><strong>Advanced settings</strong><small>Integration tools and wallet diagnostics</small></span><ChevronDown size={18} /></summary><div className="owner-settings-row owner-mcp-settings"><div><strong>MCP connection</strong><p>Connect an agent to your workspace using this server address.</p><code className="owner-mcp-endpoint">{MCP_URL}</code>{mcpCopyStatus && <p role="status">{mcpCopyStatus}</p>}</div><div className="owner-mcp-actions"><Button label={mcpCopyStatus === "Copied" ? "Copied" : "Copy MCP address"} variant="secondary" icon={<Copy size={16} />} onClick={() => void copyValue(MCP_URL).then((copied) => setMcpCopyStatus(copied ? "Copied" : "Could not copy. Select the server address to copy it manually."))} /><Button label="Connect agent" variant="secondary" onClick={() => onAdvanced("connect-mcp")} /></div></div><div className="owner-settings-row"><div><strong>Developer tools</strong><p>Inspect the tools available to agent integrations.</p></div><Button label="Developer tools" variant="secondary" onClick={() => onAdvanced("tools")} /></div><div className="owner-settings-row"><div><strong>Protocol administration</strong><p>Manage protocol configuration with the authority wallet.</p></div><Button label="Protocol administration" variant="secondary" onClick={() => onAdvanced("protocol")} /></div><details className="technical-details"><summary>Wallet compatibility details</summary><p>{capabilityCopy?.identity ?? walletName}</p><p>{capabilityCopy?.summary ?? "Wallet compatibility evidence was not recorded for this connection."}</p><p>Advertised versions: {capabilityCopy?.versionsLabel ?? "Not recorded"}. v1: {capabilityCopy?.v1Label ?? "Unverified"}. Devnet: {capabilityCopy?.chainLabel ?? "Unverified"}.</p></details></details>
+    <section className="cp-surface owner-settings-danger"><SectionHeader title="Account actions" description="Each of these asks you to confirm before anything changes." /><div className="owner-settings-row"><div><strong>Disconnect wallet</strong><p>Sign out of this workspace. Your spending permissions stay on-chain.</p></div><Button label="Disconnect" variant="destructive" icon={<LogOut size={18} />} className="owner-danger-action" onClick={() => setConfirmAction("disconnect")} /></div><div className="owner-settings-row"><div><strong>Revoke all spending permissions</strong><p>{activeMandateCount ? `${activeMandateCount} non-revoked permission${activeMandateCount === 1 ? "" : "s"}, including paused and expired. Requires wallet approval. Completed payments stay recorded.` : "No permissions need to be revoked."}</p></div><Button label="Revoke all" variant="destructive" icon={<ShieldCheck size={18} />} className="owner-danger-action" isDisabled={activeMandateCount === 0} onClick={() => setConfirmAction("revoke")} /></div>{dangerStatus && <p role="status">{dangerStatus}</p>}</section>
     <ConfirmDialog open={confirmAction === "revoke"} title="Revoke every non-revoked mandate?" description={`${activeMandateCount} mandate${activeMandateCount === 1 ? "" : "s"} that ${activeMandateCount === 1 ? "is" : "are"} not yet revoked — active, paused, or expired — will require a wallet-approved revoke transaction. Agents will not be able to request new payments until you create new mandates.`} confirmLabel="Revoke all mandates" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onRevokeAll(); }} />
     <ConfirmDialog open={confirmAction === "disconnect"} title="Disconnect this wallet?" description="You will leave the connected dashboard and return to the public site. Unsigned transactions will be discarded. Existing mandates stay on-chain." confirmLabel="Disconnect wallet" onClose={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); onDisconnect(); }} />
   </section>;
@@ -3914,6 +4026,24 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
 }
 
 
+
+/**
+ * True under 520px: the topbar wallet chip shows only the short address, and the
+ * Requests tabs use their short labels so all four fit on one row.
+ */
+function usePhoneWidth() {
+  const query = "(max-width: 520px)";
+  const [phone, setPhone] = useState(() => typeof window !== "undefined" && window.matchMedia?.(query).matches === true);
+  useEffect(() => {
+    const media = window.matchMedia?.(query);
+    if (!media) return;
+    const sync = () => setPhone(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+  return phone;
+}
 
 export default function DashboardRoute(props: DashboardProps) {
   return <Dashboard {...props} />;

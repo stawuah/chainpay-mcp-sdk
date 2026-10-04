@@ -221,9 +221,9 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
                     <div className="field-wide"><TextInput label="Card name" value={form.label} onChange={(value) => update("label", value)} placeholder="Data API credits" description="Up to 40 characters. It's how the card shows in your dashboard." /></div>
                     <TextInput label="Budget per period (USD)" value={form.budget} onChange={(value) => update("budget", value)} placeholder="500" description="The most it can spend each period." />
                     <TextInput label="Max per purchase (USD)" value={form.maxPurchase} onChange={(value) => update("maxPurchase", value)} placeholder="30" description="The most it can spend at once." />
-                    <Selector label="Period" value={form.periodDays} onChange={(value) => update("periodDays", value)} options={withValue(PERIOD_OPTIONS, form.periodDays, (days) => `Every ${days} day${days === "1" ? "" : "s"}`)} />
+                    <Selector className="cp-create-select" label="Period" value={form.periodDays} onChange={(value) => update("periodDays", value)} options={withValue(PERIOD_OPTIONS, form.periodDays, (days) => `Every ${days} day${days === "1" ? "" : "s"}`)} />
                     <TextInput label="Purchases per period" value={form.maxPurchases} onChange={(value) => update("maxPurchases", value)} description="0 means no count limit." />
-                    <Selector label="Card ends" value={form.endsInDays} onChange={(value) => update("endsInDays", value)} options={withValue(ENDS_OPTIONS, form.endsInDays, (days) => `In ${days} day${days === "1" ? "" : "s"}`)} />
+                    <Selector className="cp-create-select" label="Card ends" value={form.endsInDays} onChange={(value) => update("endsInDays", value)} options={withValue(ENDS_OPTIONS, form.endsInDays, (days) => `In ${days} day${days === "1" ? "" : "s"}`)} />
                   </div>
                 ) : (
                   <div className="cp-shop-pick">

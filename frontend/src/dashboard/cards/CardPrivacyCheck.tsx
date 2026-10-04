@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SectionHeader } from "../../ui/workspace/SectionHeader";
 import { Button } from "@astryxdesign/core/Button";
 import { CircleCheck, CircleHelp, CircleX, Cpu, Eye, EyeOff, Globe } from "lucide-react";
 import type { CardAttestationView, CardView } from "@chainpay/sdk";
@@ -126,14 +127,12 @@ export function CardPrivacyCheck({ source, card, unlocked, onUnlocked }: { sourc
   const strangerHidden = result?.stranger.reads.every((read) => read.state === "not_visible");
   return (
     <section className="cp-privacy" data-testid="privacy-check">
-      <div className="dashboard-card">
-        <div className="dashboard-card-heading">
-          <div>
-            <h2>Read as another wallet</h2>
-            <p className="owner-muted">Opens a brand-new wallet in this browser and asks for the same card. Run it as often as you like; nothing is saved.</p>
-          </div>
-          <Button type="button" variant="primary" label={busy ? "Checking…" : result ? "Run again" : "Run the check"} isDisabled={busy || !unlocked} onClick={() => void run()} />
-        </div>
+      <div className="cp-surface cp-cards-surface">
+        <SectionHeader
+          title="Read as another wallet"
+          description="Opens a brand-new wallet in this browser and asks for the same card. Run it as often as you like; nothing is saved."
+          action={<Button type="button" variant="primary" label={busy ? "Checking…" : result ? "Run again" : "Run the check"} isDisabled={busy || !unlocked} onClick={() => void run()} />}
+        />
         {!unlocked && <UnlockStrip source={source} onUnlocked={onUnlocked} compact />}
         {error && <div className="builder-error" role="alert"><b>The check didn't finish</b><span>{error}</span></div>}
         {result && (

@@ -9,13 +9,15 @@ await blockExternal(page);
 
 await page.goto(`${BASE_URL}/test/fixtures/live-purchase.html`);
 await page.getByTestId("pending-total").waitFor();
+await page.locator('.purchase-card [data-amount-state="verified"]').first().waitFor();
 
 assert.equal(await page.getByTestId("pending-total").textContent(), "2");
 assert.equal(await page.getByTestId("waiting").textContent(), "1");
 
 const body = await page.locator("body").innerText();
 assert.match(body, /Vendor invoice #42/);
-assert.match(body, /4500000 base units USDC|4\.5(\d*)? USDC/);
+assert.match(body, /4\.50*\s*USDC/);
+assert.doesNotMatch(body, /\bbase units\b/, "amounts go through the shared Amount, never raw base units");
 assert.match(body, /Waiting for wallet approval/i);
 assert.match(body, /Over-limit purchase/);
 assert.match(body, /exceeds this permission/i);

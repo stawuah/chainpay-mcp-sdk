@@ -217,8 +217,9 @@ try {
     await statement.locator('[data-pill="Matched"]').waitFor();
     const text = await statement.innerText();
     assert.match(text, /Statement/);
-    assert.match(text, /Budget 100 USDC · Spent 8\.25 USDC · Left 91\.75 USDC · 3 payments · expires at slot 400000000/);
-    assert.match(text, /2 USDC/);
+    // Workspace amount contract: grouped, at least two fraction digits.
+    assert.match(text, /Budget 100\.00 USDC · Spent 8\.25 USDC · Left 91\.75 USDC · 3 payments · expires at slot 400000000/);
+    assert.match(text, /2\.00 USDC/);
     await statement.scrollIntoViewIfNeeded();
     await noOverflow(`statement ${width}`);
     await shoot("statement", width);
