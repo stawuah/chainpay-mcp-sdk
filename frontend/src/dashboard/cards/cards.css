@@ -1,26 +1,28 @@
 /* Cards area (design ruling 2026-10-04). Dashboard tokens only; status hues from
    the status-page ruling, always paired with an icon and a word. App is light-only. */
 
-.cp-cards { --cp-good: #0a7a48; --cp-good-bg: #e9f7f0; --cp-warn: #8a5a00; --cp-warn-bg: #fff6df; --cp-bad: #b3141f; --cp-bad-bg: #fdecee; --cp-info: #0049df; --cp-info-bg: #edf3ff; display: grid; gap: 20px; min-width: 0; }
+/* Status hues are the workspace tokens (--ws-*); the fallbacks are the same values for pages outside the workspace (/verify/card). */
+.cp-cards { display: grid; gap: 20px; min-width: 0; }
 .cp-cards > * { min-width: 0; }
 .cp-cards .dashboard-heading { margin-bottom: 4px; }
 .cp-cards-illustrative { margin-bottom: 4px; }
 .cp-visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .cp-sub { color: var(--body); font-size: 12px; }
-.cp-inline-error { color: var(--cp-bad, #b3141f); font-size: 13px; margin-top: 6px; }
+.cp-inline-error { color: var(--ws-critical, #b91c1c); font-size: 13px; margin-top: 6px; }
 
-/* Pills: icon + word */
-.cp-card-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; font-weight: 500; line-height: 1.2; color: #3d4757; background: #fff; white-space: nowrap; }
-.cp-card-pill[data-tone="positive"] { color: var(--cp-good, #0a7a48); background: var(--cp-good-bg, #e9f7f0); border-color: #bfe5d1; }
-.cp-card-pill[data-tone="info"] { color: var(--cp-info, #0049df); background: var(--cp-info-bg, #edf3ff); border-color: #c9dafc; }
-.cp-card-pill[data-tone="warning"] { color: var(--cp-warn, #8a5a00); background: var(--cp-warn-bg, #fff6df); border-color: #f0d88f; }
-.cp-card-pill[data-tone="danger"] { color: var(--cp-bad, #b3141f); background: var(--cp-bad-bg, #fdecee); border-color: #f4c3c8; }
+/* Receipt pill: icon + word on the card receipt document (its own contract, also on /verify/card).
+   The workspace renders card states with the shared Status (.cp-status) instead. */
+.cp-card-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 3px 8px; border: 1px solid transparent; border-radius: 999px; font: 500 12px/16px Inter, sans-serif; white-space: nowrap; color: var(--ws-neutral, #4a5568); background: var(--ws-neutral-surface, #f1f3f7); }
+.cp-card-pill[data-tone="positive"] { color: var(--ws-positive, #166534); background: var(--ws-positive-surface, #dcfce7); box-shadow: inset 0 0 0 1px var(--ws-positive-border, #86efac); }
+.cp-card-pill[data-tone="info"] { color: var(--ws-info, #0047de); background: var(--ws-info-surface, #edf3ff); }
+.cp-card-pill[data-tone="warning"] { color: var(--ws-warning, #854d0e); background: var(--ws-warning-surface, #fef9c3); box-shadow: inset 0 0 0 1px var(--ws-warning-border, #fde047); }
+.cp-card-pill[data-tone="danger"] { color: var(--ws-critical, #b91c1c); background: var(--ws-critical-surface, #fee2e2); box-shadow: inset 0 0 0 1px var(--ws-critical-border, #fca5a5); }
 .cp-card-pill svg { flex-shrink: 0; }
 
 
 .cp-money { font-variant-numeric: tabular-nums; font-weight: 500; color: var(--ink); white-space: nowrap; }
 .cp-money.is-struck { color: var(--body); text-decoration: line-through; text-decoration-color: #9aa4b2; }
-.cp-money.is-credit { color: var(--cp-good, #0a7a48); }
+.cp-money.is-credit { color: var(--ws-positive, #166534); }
 .cp-money.is-credit::before { content: "−"; }
 .cp-private-value { display: inline-flex; align-items: center; gap: 4px; color: var(--body); font-size: 13px; }
 .cp-private-value.is-failed { color: #9a3412; }
@@ -33,18 +35,40 @@
 .cp-unlock-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: #fff; color: #0052ff; border: 1px solid #c9dafc; }
 .cp-unlock.is-compact { padding: 12px 16px; }
 
-/* List table */
-.cp-card-table-wrap { padding: 0 !important; overflow: hidden; }
+/* List: one surface, header padded, table edge to edge. The table scrolls inside
+   its own positioned wrapper at narrow widths and 200% zoom, never the page. */
+.cp-cards-list { padding: 0 !important; overflow: hidden; }
+.cp-cards-list > .cp-section-header { margin: 0; padding: 20px 20px 16px; }
+.cp-cards-list > .cp-collection-state { margin: 0 20px 20px; }
+.cp-card-table-scroll { position: relative; max-width: 100%; overflow-x: auto; border-top: 1px solid var(--ws-border, #dbe2ef); }
+.cp-card-table-scroll:focus-visible { outline: 2px solid #0052ff; outline-offset: -2px; }
 .cp-card-table { width: 100%; border-collapse: collapse; }
-.cp-card-table th { padding: 14px 20px; text-align: left; font-size: 13px; font-weight: 400; color: var(--body); border-bottom: 1px solid var(--line); }
-.cp-card-table td { padding: 16px 20px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; font-size: 14px; }
+/* The card list stacks by its own width, not the viewport's: at tablet width the
+   sidebar leaves it too narrow for every column, and the row actions slid out of
+   view inside the scroller. */
+.cp-card-table-scroll { container: card-list / inline-size; }
+@container card-list (max-width: 760px) {
+  .cp-card-table thead { display: none; }
+  .cp-card-table, .cp-card-table tbody, .cp-card-table tr, .cp-card-table td { display: block; width: 100%; max-width: none !important; }
+  .cp-card-table tr { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); }
+  .cp-card-table tr:last-child { border-bottom: 0; }
+  .cp-card-table td { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; border: 0; }
+  .cp-card-table td[data-label]:not([data-label="Card"])::before { content: attr(data-label); color: var(--body); font-size: 13px; }
+  .cp-card-table td:last-child { padding-top: 10px; }
+  .cp-card-table td:last-child .astryx-button { width: 100%; }
+}
+.cp-card-table th { height: 44px; padding: 0 20px; text-align: left; font: 500 12px/16px Inter, sans-serif; color: var(--ws-ink-secondary, #56647d); background: #fafbfd; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.cp-card-table td { padding: 16px 20px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; font: 400 14px/20px Inter, sans-serif; color: var(--ws-ink, #14213d); }
+.cp-card-table td:last-child { text-align: right; }
 .cp-card-table tr:last-child td { border-bottom: 0; }
-.cp-card-name { display: inline-flex; align-items: center; gap: 14px; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; color: var(--ink); }
-.cp-card-name b { display: block; font-weight: 500; }
-.cp-card-name small { display: block; color: var(--body); font-size: 12px; }
+.cp-card-name { display: inline-flex; align-items: center; gap: 14px; min-height: 44px; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; color: var(--ink); }
+.cp-card-name b { display: block; font: 500 14px/20px Inter, sans-serif; }
+.cp-card-name small { display: block; font: 400 13px/18px Inter, sans-serif; color: var(--ws-ink-secondary, #56647d); }
 .cp-card-name:hover b { color: #0049df; }
-.cp-row-action { text-align: right; }
-.cp-cards-empty .astryx-button { margin-top: 16px; }
+
+/* Create: the period and end-date pickers' trigger fills the 44px field. */
+.cp-create-select.astryx-selector { padding-block: 0; }
+.cp-create-select.astryx-selector > button { min-height: 44px; margin-block: -1px; }
 
 /* Create */
 .cp-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 20px; }
@@ -70,9 +94,9 @@
 .cp-create-steps { display: grid; gap: 4px; margin: 20px 0 0; padding: 0; list-style: none; }
 .cp-create-steps li { display: grid; grid-template-columns: 24px minmax(0,1fr); gap: 10px; padding: 10px 12px; border-radius: 8px; }
 .cp-create-steps li[data-state="active"] { background: #f5f8ff; }
-.cp-create-steps li[data-state="done"] .cp-step-mark { color: var(--cp-good, #0a7a48); }
+.cp-create-steps li[data-state="done"] .cp-step-mark { color: var(--ws-positive, #166534); }
 .cp-create-steps li[data-state="failed"] { background: #fdf3f4; }
-.cp-create-steps li[data-state="failed"] .cp-step-mark { color: var(--cp-bad, #b3141f); }
+.cp-create-steps li[data-state="failed"] .cp-step-mark { color: var(--ws-critical, #b91c1c); }
 .cp-create-steps li[data-state="active"] .cp-step-mark { color: #0052ff; }
 .cp-create-steps b { display: block; font-weight: 500; font-size: 14px; }
 .cp-create-steps small { color: var(--body); font-size: 13px; }
@@ -82,10 +106,10 @@
 /* Detail hero */
 .cp-freeze-lines { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
 .cp-freeze-lines li { display: flex; align-items: center; gap: 8px; color: var(--ink); }
-.cp-freeze-lines li[data-system="chainpay"] svg { color: var(--cp-good, #0a7a48); }
-.cp-freeze-lines li[data-issuer="pending_issuer_confirmation"] { color: var(--cp-warn, #8a5a00); }
-.cp-freeze-lines li[data-issuer="confirmed"] svg { color: var(--cp-good, #0a7a48); }
-.cp-freeze-lines li[data-issuer="failed"] { color: var(--cp-bad, #b3141f); }
+.cp-freeze-lines li[data-system="chainpay"] svg { color: var(--ws-positive, #166534); }
+.cp-freeze-lines li[data-issuer="pending_issuer_confirmation"] { color: var(--ws-warning, #854d0e); }
+.cp-freeze-lines li[data-issuer="confirmed"] svg { color: var(--ws-positive, #166534); }
+.cp-freeze-lines li[data-issuer="failed"] { color: var(--ws-critical, #b91c1c); }
 .cp-card-tabs { margin-top: 4px; }
 .cp-card-section { display: grid; gap: 16px; min-width: 0; }
 
@@ -123,7 +147,7 @@
 .cp-statement-lines th { text-align: left; font-weight: 400; color: var(--body); font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .cp-statement-lines td { padding: 10px 0; border-bottom: 1px solid var(--line-soft); font-variant-numeric: tabular-nums; }
 .cp-statement-lines :is(th, td):nth-child(n+3) { text-align: right; }
-.cp-statement-lines td.is-credit { color: var(--cp-good, #0a7a48); }
+.cp-statement-lines td.is-credit { color: var(--ws-positive, #166534); }
 .cp-line-flag { color: #8a5a00; }
 .cp-statement-totals { display: grid; gap: 6px; margin: 0; margin-left: auto; width: min(100%, 320px); font-size: 14px; }
 .cp-statement-totals > div { display: flex; justify-content: space-between; gap: 16px; }
@@ -137,8 +161,8 @@
 
 /* Sharing */
 .cp-sharing { display: grid; gap: 16px; }
-.cp-sharing .dashboard-card, .cp-privacy .dashboard-card { display: grid; gap: 16px; padding: 24px !important; }
-.cp-sharing .dashboard-card-heading h2, .cp-privacy .dashboard-card-heading h2 { display: inline-flex; align-items: center; gap: 8px; }
+.cp-cards-surface { display: grid; gap: 16px; }
+.cp-cards-surface > .cp-section-header { margin-bottom: 0; }
 .cp-members { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .cp-members li { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 14px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
 .cp-members li:last-child { border-bottom: 0; }
@@ -162,22 +186,22 @@
 .cp-privacy-grid li { display: grid; grid-template-columns: 16px minmax(0,1fr); gap: 8px; }
 .cp-privacy-grid li svg { margin-top: 3px; }
 .cp-privacy-grid li[data-read="visible"] svg { color: #0052ff; }
-.cp-privacy-grid li[data-read="not_visible"] svg { color: var(--cp-good, #0a7a48); }
+.cp-privacy-grid li[data-read="not_visible"] svg { color: var(--ws-positive, #166534); }
 .cp-privacy-grid b { display: block; font-weight: 500; font-size: 13px; }
 .cp-privacy-grid code { display: block; margin-top: 4px; padding: 4px 8px; border-radius: 6px; background: #f0f2f6; font: 12px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace; overflow-wrap: anywhere; }
 .cp-privacy-grid small { display: block; color: var(--body); font-size: 12px; overflow-wrap: anywhere; }
 .cp-null-note { margin: 0; font-size: 14px; font-weight: 500; }
 .cp-attestation { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 13px; color: #3d4757; }
 .cp-attestation svg { flex-shrink: 0; margin-top: 2px; }
-.cp-attestation[data-passed="true"] svg { color: var(--cp-good, #0a7a48); }
-.cp-attestation[data-hardware="failed"] svg, .cp-attestation[data-measurements="mismatch"] svg { color: var(--cp-bad, #b3141f); }
+.cp-attestation[data-passed="true"] svg { color: var(--ws-positive, #166534); }
+.cp-attestation[data-hardware="failed"] svg, .cp-attestation[data-measurements="mismatch"] svg { color: var(--ws-critical, #b91c1c); }
 .cp-attestation-source { display: block; margin-top: 2px; color: var(--body); font-size: 12px; }
 
 /* Recovery */
 .cp-recovery { display: grid; gap: 8px; }
 .cp-recovery-report { display: grid; gap: 14px; }
 .cp-recovery-steps { margin: 0; padding-left: 20px; font-size: 13px; color: var(--body); display: grid; gap: 4px; }
-.cp-recovery-steps li[data-done="yes"] { color: var(--cp-good, #0a7a48); }
+.cp-recovery-steps li[data-done="yes"] { color: var(--ws-positive, #166534); }
 
 
 /* Public card check */
@@ -203,20 +227,12 @@
 @media (max-width: 760px) {
   .cp-unlock { grid-template-columns: auto minmax(0,1fr); }
   .cp-unlock .astryx-button { grid-column: 1 / -1; width: 100%; }
-  .cp-card-table thead { display: none; }
-  .cp-card-table, .cp-card-table tbody, .cp-card-table tr, .cp-card-table td { display: block; width: 100%; max-width: none !important; }
-  .cp-card-table tr { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); }
-  .cp-card-table tr:last-child { border-bottom: 0; }
-  .cp-card-table td { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; border: 0; }
-  .cp-card-table td[data-label]:not([data-label="Card"])::before { content: attr(data-label); color: var(--body); font-size: 13px; }
-  .cp-card-table td.cp-row-action { padding-top: 10px; }
-  .cp-card-table td.cp-row-action .astryx-button { width: 100%; }
   .cp-form-grid { grid-template-columns: 1fr; }
         .cp-activity li { grid-template-columns: minmax(0,1fr) auto; padding: 14px 16px; gap: 10px; }
   .cp-activity-pills { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
   .cp-activity-amount { grid-column: 2; grid-row: 1; }
   .cp-activity-actions { grid-column: 1 / -1; justify-content: flex-start; min-width: 0; }
-  .cp-statement-card, .cp-sharing .dashboard-card, .cp-privacy .dashboard-card { padding: 18px !important; }
+  .cp-statement-card { padding: 18px !important; }
   .cp-statement-head { flex-direction: column; }
   .cp-statement-lines thead { display: none; }
   .cp-statement-lines, .cp-statement-lines tbody, .cp-statement-lines tr { display: block; width: 100%; }
@@ -232,8 +248,9 @@
   .cp-share-picker fieldset { grid-template-columns: 1fr; }
   .cp-members li { grid-template-columns: auto minmax(0,1fr); }
   .cp-members li .astryx-button { grid-column: 2; justify-self: start; }
-  .cp-sharing .dashboard-card-heading, .cp-privacy .dashboard-card-heading { flex-direction: column; align-items: stretch; gap: 12px; }
-  .cp-sharing .dashboard-card-heading .astryx-button, .cp-privacy .dashboard-card-heading .astryx-button { width: 100%; }
+  .cp-cards-surface > .cp-section-header { flex-direction: column; align-items: stretch; gap: 12px; }
+  .cp-cards-surface > .cp-section-header .cp-section-header-action { margin-block: 0; }
+  .cp-cards-surface > .cp-section-header .astryx-button { width: 100%; }
 }
 .cp-cards-illustrative { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px; border: 1px dashed #b6c3d8; border-radius: 10px; background: #fff; color: #3d4757; font-size: 13px; }
 .cp-cards-illustrative p { margin: 0; }
@@ -247,7 +264,7 @@
 
 /* ───────── Premium pass (ruling 2026-10-04-premium, P3–P11) ───────── */
 .cp-cards { --cp-elev: 0 1px 2px rgba(16,24,40,.04), 0 12px 32px -16px rgba(16,24,40,.12); --cp-radius: 16px; }
-.cp-cards .dashboard-card.cp-card-hero, .cp-cards .dashboard-card.cp-statement-card, .cp-cards .cp-card-table-wrap, .cp-cards .cp-activity { border-radius: var(--cp-radius); box-shadow: var(--cp-elev); }
+.cp-cards .dashboard-card.cp-card-hero, .cp-cards .dashboard-card.cp-statement-card, .cp-cards .cp-activity { border-radius: var(--cp-radius); box-shadow: var(--cp-elev); }
 
 /* Detail hero: the card + one number (P3) */
 .cp-card-hero { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 32px; align-items: center; padding: 28px !important; }
@@ -255,8 +272,8 @@
 .cp-card-hero-object { display: grid; gap: 10px; justify-items: center; min-width: 0; width: 100%; }
 .cp-card-number-reveal { display: grid; gap: 6px; justify-items: center; text-align: center; width: 100%; }
 .cp-card-number-reveal small { font-size: 12px; max-width: 320px; }
-.cp-link-button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 0; border-radius: 8px; background: none; color: var(--cp-info, #0049df); font: 500 13px/1.4 Inter, sans-serif; cursor: pointer; }
-.cp-link-button:hover:not(:disabled) { background: var(--cp-info-bg, #edf3ff); }
+.cp-link-button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 0; border-radius: 8px; background: none; color: var(--ws-info, #0047de); font: 500 13px/1.4 Inter, sans-serif; cursor: pointer; }
+.cp-link-button:hover:not(:disabled) { background: var(--ws-info-surface, #edf3ff); }
 .cp-link-button:focus-visible { outline: 2px solid #0052ff; outline-offset: 2px; }
 .cp-link-button:disabled { color: var(--body); cursor: default; }
 .cp-card-number-frame { width: 100%; max-width: 320px; height: 190px; border: 1px solid #e3e8f0; border-radius: 12px; background: #fff; }
@@ -297,15 +314,6 @@
 .cp-card-name { gap: 16px; border-radius: 8px; }
 .cp-card-name:focus-visible { outline: 2px solid #0052ff; outline-offset: 4px; }
 .cp-card-name b { font-size: 14px; }
-.cp-cards-empty-hero { display: grid; grid-template-columns: minmax(200px, 300px) minmax(0, 1fr); gap: 40px; align-items: center; padding: 40px !important; border-radius: var(--cp-radius); box-shadow: var(--cp-elev); }
-.cp-ghost-card { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 85.6 / 53.98; border: 1.5px dashed #b9c9ea; border-radius: 16px; background: radial-gradient(120% 90% at 10% 0%, #ffffff 0%, #f2f6ff 60%, #eaf0fd 100%); }
-.cp-ghost-card-plus { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: #fff; color: #0052ff; box-shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 18px -10px rgba(0, 60, 210, .45); }
-.cp-ghost-card-lines { position: absolute; left: 8%; right: 8%; bottom: 12%; display: flex; justify-content: space-between; }
-.cp-ghost-card-lines i { display: block; height: 7px; border-radius: 4px; background: #dce6fa; }
-.cp-ghost-card-lines i:first-child { width: 38%; }
-.cp-ghost-card-lines i:last-child { width: 22%; }
-.cp-cards .cp-cards-empty-hero .cp-cards-empty-copy h3 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.02em; color: var(--ink); }
-.cp-cards-empty-copy p { max-width: 46ch; margin: 8px 0 20px; color: var(--body); font-size: 15px; }
 
 /* Activity identity (P7) */
 .cp-activity li { grid-template-columns: 36px minmax(0,1fr) auto 110px auto; padding: 14px 20px; }
@@ -352,8 +360,6 @@
   .cp-card-hero-actions .astryx-button { width: 100%; }
   .cp-card-left-value { font-size: 30px; }
   .cp-card-numbers { grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .cp-cards-empty-hero { grid-template-columns: 1fr; gap: 24px; padding: 24px !important; }
-  .cp-cards-empty-hero .astryx-button { width: 100%; }
   .cp-activity li { grid-template-columns: 36px minmax(0,1fr) auto; }
   .cp-activity-pills { grid-column: 2 / -1; grid-row: 2; }
   .cp-activity-amount { grid-column: 3; grid-row: 1; }

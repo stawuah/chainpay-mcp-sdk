@@ -6,7 +6,10 @@ use crate::{
     errors::CardPolicyError,
     hashes::{append_ledger, LedgerEvent},
     instructions::common::*,
-    policy::{add, add_exposure, available, is_expired, reduce_exposure, sub},
+    policy::{
+        add, add_exposure, available, is_expired, reduce_exposure, require_billable,
+        require_refundable, sub,
+    },
     state::{reservation_state, CardPeriod, CardPolicy, Reservation},
 };
 use anchor_lang::prelude::*;
@@ -119,6 +122,11 @@ pub fn adjust_reservation(ctx: Context<ReservationEvent>, new_amount_cents: u64)
             add(new_amount_cents, a.reservation.captured_cents)? <= a.policy.max_purchase_cents,
             CardPolicyError::AmountExceedsMax
         );
+        // Nor past the checkout intent the agent was approved for.
+        require!(
+            add(new_amount_cents, a.reservation.captured_cents)? <= a.reservation.max_amount_cents,
+            CardPolicyError::AmountExceedsMax
+        );
         let delta = new_amount_cents - hold;
         require!(
             delta <= available(&a.policy, &a.period)?,
@@ -160,6 +168,14 @@ pub fn capture(
         !a.reservation.capture_ids.contains(&capture_id_hash),
         CardPolicyError::DuplicateCapture
     );
+    // Every capture id of the hold stays in the ring, so the duplicate check
+    // above is exact. A capture past the ring's size is refused, never
+    // allowed to overwrite an id a retry could still carry (Axum books it for
+    // review instead).
+    require!(
+        (a.reservation.capture_count as usize) < CAPTURE_RING,
+        CardPolicyError::CaptureLimit
+    );
 
     let state = a.reservation.state;
     if reservation_state::is_open(state) || state == reservation_state::CAPTURED {
@@ -185,13 +201,16 @@ pub fn capture(
         // counts as spend but never re-reserves.
         a.reservation.flags |= FLAG_LATE_CAPTURE;
     }
+    // After the hold release: a capture inside its hold always fits; any
+    // excess or late capture must fit the budget or is refused for review.
+    require_billable(&a.policy, &a.period, amount_cents)?;
     a.period.captured_cents = add(a.period.captured_cents, amount_cents)?;
     a.reservation.captured_cents = add(a.reservation.captured_cents, amount_cents)?;
     add_exposure(&mut a.policy, amount_cents)?;
 
-    let slot = (a.reservation.capture_count as usize) % CAPTURE_RING;
+    let slot = a.reservation.capture_count as usize;
     a.reservation.capture_ids[slot] = capture_id_hash;
-    a.reservation.capture_count = a.reservation.capture_count.wrapping_add(1);
+    a.reservation.capture_count += 1;
 
     let e = event(
         EV_CAPTURE,
@@ -230,7 +249,11 @@ pub fn reverse(
     let released = release_hold(&mut a.period, &mut a.reservation, amount_cents)?;
     a.reservation.reversed_cents = add(a.reservation.reversed_cents, released)?;
     if a.reservation.amount_reserved_cents == 0 {
-        a.reservation.state = if reason == REVERSE_EXPIRY {
+        // A hold that already captured money ends CAPTURED (as in
+        // `adjust_reservation`): only the remainder was released.
+        a.reservation.state = if a.reservation.captured_cents > 0 {
+            reservation_state::CAPTURED
+        } else if reason == REVERSE_EXPIRY {
             reservation_state::EXPIRED
         } else {
             reservation_state::REVERSED
@@ -259,6 +282,13 @@ pub fn refund(ctx: Context<CardEvent>, amount_cents: u64, event_id_hash: [u8; 32
     a.period.refunded_cents = add(a.period.refunded_cents, amount_cents)?;
     let mut state_after = 0;
     if let Some(reservation) = a.reservation.as_mut() {
+        // Never more back than the hold captured. Without a Reservation (a
+        // closed hold) Axum applies the same cap from its row before sending.
+        require_refundable(
+            reservation.captured_cents,
+            reservation.refunded_cents,
+            amount_cents,
+        )?;
         reservation.refunded_cents = add(reservation.refunded_cents, amount_cents)?;
         state_after = reservation.state;
     }
@@ -315,6 +345,7 @@ pub fn record_exception(
         EXC_LATE_CAPTURE => {
             // Only for a closed hold: an open Reservation takes `capture`.
             require!(a.reservation.is_none(), CardPolicyError::InvalidAccount);
+            require_billable(&a.policy, &a.period, amount_cents)?;
             a.period.captured_cents = add(a.period.captured_cents, amount_cents)?;
             add_exposure(&mut a.policy, amount_cents)?;
             let e = event(EV_EXCEPTION, None, event_id_hash, amount_cents, kind);
@@ -345,7 +376,9 @@ pub fn record_exception(
         }
         _ => {
             // Debits (forced capture, over-capture, correction debit, return
-            // reversal, unpaired capture) count as spend and as exposure.
+            // reversal, unpaired capture) count as spend and as exposure, and
+            // only while they fit the budget (review X1).
+            require_billable(&a.policy, &a.period, amount_cents)?;
             a.period.captured_cents = add(a.period.captured_cents, amount_cents)?;
             a.period.exception_cents = add(a.period.exception_cents, amount_cents)?;
             if let Some(reservation) = a.reservation.as_mut() {

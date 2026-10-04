@@ -86,6 +86,10 @@ fn err_code(name: &str) -> u32 {
         "DuplicateEvent",
         "EphemeralAccountsOpen",
         "ReservationNotFinal",
+        "CoSignerRequired",
+        "RefundExceedsCapture",
+        "CaptureLimit",
+        "BudgetBelowCommitted",
     ];
     6000 + NAMES.iter().position(|n| *n == name).expect("known error") as u32
 }
@@ -388,6 +392,19 @@ impl Card {
         self.set_policy_as(args, "owner")
     }
 
+    /// Owner + a co-signer passed as the first remaining account (signer).
+    fn set_policy_cosigned(&mut self, args: PolicyArgs, cosigner: &str) -> Result<(), u32> {
+        let mut ix = self.ix(
+            self.permissions_accounts(self.owner.pubkey()),
+            instruction::SetPolicy { args },
+        );
+        let co = self.signer(cosigner).insecure_clone();
+        ix.accounts
+            .push(AccountMeta::new_readonly(co.pubkey(), true));
+        let owner = self.owner.insecure_clone();
+        self.send_signed(vec![ix], &[&owner, &co])
+    }
+
     fn update_permission(&mut self, op: PermissionOp, who: &str) -> Result<(), u32> {
         let signer = self.signer(who).pubkey();
         let ix = self.ix(
@@ -663,7 +680,7 @@ fn init_card_publishes_only_zeroed_private_accounts() {
     assert_eq!(commitment.seq, 0);
     assert!(card.svm.get_account(&card.policy).unwrap().lamports >= MIN_PREFUND);
     // Published in contracts.md (changelog) for the SDK; changes with account sizes.
-    assert_eq!(MIN_PREFUND, 2_942_720);
+    assert_eq!(MIN_PREFUND, 2_959_104);
 }
 
 #[test]
@@ -794,7 +811,8 @@ fn authorizer_rotation_requires_a_frozen_card() {
         Err(err_code("AuthorizerChangeRequiresFreeze"))
     );
     card.freeze("owner", FREEZE_OWNER).unwrap();
-    card.set_policy(rotated.clone()).unwrap();
+    card.set_policy_cosigned(rotated.clone(), "authorizer")
+        .unwrap();
     let policy = card.policy();
     assert_eq!(policy.authorizer, rotated.authorizer);
     assert_eq!(policy.members[1], rotated.authorizer);
@@ -940,7 +958,7 @@ fn replay_duplicate_auth_or_capture_never_counts_twice() {
     let period = card.period();
     assert_eq!(period.captured_cents, 1_500);
     assert_eq!(period.reserved_cents, 500);
-    assert_eq!(card.policy().statement_outstanding_cents, 1_508); // + ceil(7.5)
+    assert_eq!(card.policy().statement_outstanding_cents, 1_507); // + floor(7.5)
 }
 
 #[test]
@@ -981,7 +999,7 @@ fn mcc_velocity_recurring_and_expiry_rules() {
     p.mccs = vec![5734];
     p.max_purchases_per_period = 1;
     p.expires_at = NOW + DAY;
-    card.set_policy(p).unwrap();
+    card.set_policy_cosigned(p, "authorizer").unwrap();
     card.open_intent(1, 1, 1_000).unwrap();
     let mut bad_mcc = card.auth_args(1, 1, 1_000);
     bad_mcc.mcc = 7995;
@@ -1062,7 +1080,9 @@ fn freeze_declines_new_auths_but_issuer_events_still_post() {
 #[test]
 fn adjust_reservation_increase_must_fit_and_never_while_frozen() {
     let mut card = Card::ready();
-    card.buy(1, 1, 2_000).unwrap();
+    // The intent allows more than the first hold, so increases test the budget.
+    card.open_intent(1, 1, 3_000).unwrap();
+    card.authorize(1, 1, 2_000).unwrap();
     let adjust = |card: &mut Card, amount: u64| {
         let ix = card.ix(
             card.res_accounts(1),
@@ -1097,7 +1117,7 @@ fn lifecycle_states_stay_distinct() {
     let mut p = card.default_policy();
     p.budget_cents = 20_000;
     p.max_purchase_cents = 5_000;
-    card.set_policy(p).unwrap();
+    card.set_policy_cosigned(p, "authorizer").unwrap();
 
     // Partial capture, then the rest of the hold is voided.
     card.buy(1, 1, 3_000).unwrap();
@@ -1108,22 +1128,28 @@ fn lifecycle_states_stay_distinct() {
     let r1 = card.reservation(1);
     assert_eq!(
         (r1.state, r1.captured_cents, r1.reversed_cents),
-        (rs::REVERSED, 1_000, 2_000)
+        // Money was captured, so the hold ends CAPTURED (review F5).
+        (rs::CAPTURED, 1_000, 2_000)
     );
 
-    // Late capture after reversal: counted, flagged, never re-reserved.
+    // A clearing above what the hold kept: counted, flagged, never re-reserved.
     card.capture(1, 500, 2).unwrap();
     let r1 = card.reservation(1);
-    assert_eq!(r1.state, rs::REVERSED);
-    assert_ne!(r1.flags & FLAG_LATE_CAPTURE, 0);
+    assert_eq!(r1.state, rs::CAPTURED);
+    assert_ne!(r1.flags & FLAG_OVER_CAPTURE, 0);
     assert_eq!(r1.amount_reserved_cents, 0);
     assert_eq!(card.period().reserved_cents, 0);
 
-    // Expiry reversal.
+    // Expiry reversal, then a late capture: counted, flagged, never re-reserved.
     card.buy(2, 2, 1_000).unwrap();
     card.reverse(2, 1_000, 1, 2).unwrap();
     assert_eq!(card.reservation(2).state, rs::EXPIRED);
     assert_eq!(card.reverse(2, 1, 0, 3), Err(err_code("ReservationClosed")));
+    card.capture(2, 300, 20).unwrap();
+    let r2 = card.reservation(2);
+    assert_eq!(r2.state, rs::EXPIRED);
+    assert_ne!(r2.flags & FLAG_LATE_CAPTURE, 0);
+    assert_eq!(card.period().reserved_cents, 0);
 
     // Full capture, refund, dispute.
     card.buy(3, 3, 2_000).unwrap();
@@ -1155,7 +1181,7 @@ fn lifecycle_states_stay_distinct() {
 
     // Refund does not restore the purchase allowance.
     let period = card.period();
-    assert_eq!(period.captured_cents, 1_000 + 500 + 2_000 + 700);
+    assert_eq!(period.captured_cents, 1_000 + 500 + 300 + 2_000 + 700);
     assert_eq!(period.refunded_cents, 2_000);
     assert_eq!(period.reserved_cents, 0);
 }
@@ -1182,7 +1208,7 @@ fn forced_capture_and_over_capture_are_flagged_never_approved() {
         "a force post is never an approved purchase"
     );
     assert_eq!(card.policy().exceptions_open, 2);
-    assert_eq!(card.policy().statement_outstanding_cents, 1_206 + 905);
+    assert_eq!(card.policy().statement_outstanding_cents, 1_206 + 904);
 
     // Over-hold needs a reservation; credits reduce exposure.
     assert_eq!(
@@ -1194,7 +1220,7 @@ fn forced_capture_and_over_capture_are_flagged_never_approved() {
         Err(err_code("InvalidPolicy"))
     );
     card.exception(None, EXC_CORRECTION_CREDIT, 100, 4).unwrap();
-    assert_eq!(card.policy().statement_outstanding_cents, 1_206 + 905 - 101);
+    assert_eq!(card.policy().statement_outstanding_cents, 1_206 + 904 - 100);
 
     // Unfreeze stays blocked until the owner reviews every exception.
     card.freeze("owner", FREEZE_OWNER).unwrap();
@@ -1576,7 +1602,7 @@ fn retried_issuer_events_never_apply_twice() {
     let mut p = card.default_policy();
     p.budget_cents = 20_000;
     p.max_purchase_cents = 5_000;
-    card.set_policy(p).unwrap();
+    card.set_policy_cosigned(p, "authorizer").unwrap();
     card.buy(1, 1, 3_000).unwrap();
     card.capture(1, 2_000, 1).unwrap();
 
@@ -1621,8 +1647,9 @@ fn adjust_increase_respects_max_purchase_and_expiry() {
     let mut card = Card::ready();
     let mut p = card.default_policy();
     p.expires_at = NOW + DAY;
-    card.set_policy(p).unwrap();
-    card.buy(1, 1, 1_000).unwrap();
+    card.set_policy_cosigned(p, "authorizer").unwrap();
+    card.open_intent(1, 1, 3_000).unwrap();
+    card.authorize(1, 1, 1_000).unwrap();
     let adjust = |card: &mut Card, amount: u64| {
         let ix = card.ix(
             card.res_accounts(1),
@@ -1882,7 +1909,7 @@ fn replay_window_is_exactly_guard_ring_later_closes() {
     let mut card = Card::ready();
     let mut policy = card.default_policy();
     policy.budget_cents = 1_000_000;
-    card.set_policy(policy).unwrap();
+    card.set_policy_cosigned(policy, "authorizer").unwrap();
     let cycle = |card: &mut Card, auth: u64| {
         card.buy(auth, 1, 1).unwrap();
         card.capture(auth, 1, auth).unwrap();
@@ -1954,7 +1981,7 @@ fn soak_1100_authorizations_on_one_card_without_running_out() {
     let mut card = Card::ready_with(Card::with_prefund(prefund));
     let mut policy = card.default_policy();
     policy.budget_cents = 1_000_000;
-    card.set_policy(policy).unwrap();
+    card.set_policy_cosigned(policy, "authorizer").unwrap();
     let mut steady = None;
     for auth in 0..1_100u64 {
         let id = 1 + (auth % 200) as u8;
@@ -2048,4 +2075,200 @@ fn late_capture_after_close_counts_without_review_and_needs_no_reservation() {
         card.exception(Some(3), EXC_LATE_CAPTURE, 500, 4),
         Err(err_code("InvalidAccount"))
     );
+}
+
+// ======================================================= review fixes (2026-10-04)
+
+fn repay_as(card: &mut Card, who: &str, digest: u64, amount: u64) -> Result<(), u32> {
+    let ix = card.ix(
+        card.freeze_accounts(who),
+        instruction::RecordRepayment {
+            statement_digest: hash("stmt", digest),
+            amount_cents: amount,
+        },
+    );
+    card.send_as(ix, who)
+}
+
+/// Review F1 / X4: the owner alone can't install a second wallet as authorizer
+/// (nor set its own fee or credit line) and then erase its debt.
+#[test]
+fn owner_alone_cannot_change_authorizer_fee_or_credit_terms() {
+    let mut card = Card::ready();
+    card.buy(1, 1, 3_000).unwrap();
+    card.capture(1, 3_000, 1).unwrap();
+    assert_eq!(card.policy().statement_outstanding_cents, 3_015);
+    card.freeze("owner", FREEZE_OWNER).unwrap();
+
+    let base = card.default_policy();
+    let mut rotated = base.clone();
+    rotated.authorizer = card.stranger.pubkey(); // a second wallet the owner holds
+    let mut zero_fee = base.clone();
+    zero_fee.fee_bps = 0;
+    let mut bigger = base.clone();
+    bigger.budget_cents = MAX_BUDGET_CENTS;
+    let mut faster = base.clone();
+    faster.period_seconds = DAY as u32;
+    for args in [&rotated, &zero_fee, &bigger, &faster] {
+        assert_eq!(
+            card.set_policy(args.clone()),
+            Err(err_code("CoSignerRequired"))
+        );
+        // A co-signature from anyone but the current authorizer doesn't count.
+        assert_eq!(
+            card.set_policy_cosigned(args.clone(), "stranger"),
+            Err(err_code("CoSignerRequired"))
+        );
+    }
+    card.unfreeze("owner").unwrap();
+    assert_eq!(card.policy().authorizer, card.authorizer.pubkey());
+    assert_eq!(
+        repay_as(&mut card, "stranger", 99, 3_015),
+        Err(err_code("Unauthorized"))
+    );
+    assert_eq!(card.policy().statement_outstanding_cents, 3_015);
+
+    // With ChainPay's current authorizer co-signing, the same changes apply.
+    card.freeze("owner", FREEZE_OWNER).unwrap();
+    card.set_policy_cosigned(rotated, "authorizer").unwrap();
+    assert_eq!(card.policy().authorizer, card.stranger.pubkey());
+}
+
+/// Review F1: rules that only tighten (lower budget, smaller cap) stay
+/// owner-only, but the budget never drops below what the period committed.
+#[test]
+fn owner_can_tighten_alone_but_not_below_committed_spend() {
+    let mut card = Card::ready();
+    card.buy(1, 1, 2_000).unwrap();
+    card.capture(1, 1_500, 1).unwrap(); // 1500 captured, 500 held
+    let mut lower = card.default_policy();
+    lower.budget_cents = 1_999;
+    lower.max_purchase_cents = 1_000;
+    assert_eq!(
+        card.set_policy(lower.clone()),
+        Err(err_code("BudgetBelowCommitted"))
+    );
+    lower.budget_cents = 2_000;
+    card.set_policy(lower).unwrap();
+    assert_eq!(card.policy().budget_cents, 2_000);
+}
+
+/// Review F2 / X6: refunds are capped at captured - refunded per hold, and
+/// split refunds never credit more than one refund of the same total.
+#[test]
+fn refunds_are_capped_per_hold_and_split_refunds_never_overcredit() {
+    let mut card = Card::ready(); // fee_bps = 50
+    card.buy(1, 1, 200).unwrap();
+    card.capture(1, 200, 1).unwrap(); // 200 + floor(1.0) = 201
+    card.buy(2, 2, 2_000).unwrap();
+    card.capture(2, 2_000, 2).unwrap(); // 2000 + 10
+    assert_eq!(card.policy().statement_outstanding_cents, 2_211);
+    for i in 0..20u64 {
+        card.refund(Some(1), 10, 10_000 + i).unwrap();
+    }
+    // One $2.00 refund would credit 201; twenty 10c pieces credit 200.
+    assert_eq!(card.policy().statement_outstanding_cents, 2_011);
+    assert_eq!(
+        card.refund(Some(1), 1, 50_000),
+        Err(err_code("RefundExceedsCapture"))
+    );
+    assert_eq!(
+        card.refund(Some(2), 1_000_000, 50_001),
+        Err(err_code("RefundExceedsCapture"))
+    );
+    card.refund(Some(2), 2_000, 50_002).unwrap();
+    assert_eq!(card.policy().statement_outstanding_cents, 1);
+    assert_eq!(card.reservation(1).refunded_cents, 200);
+}
+
+/// Review F3: every capture id of a hold is kept, so a retry can't double
+/// count; a capture past the ring is refused rather than evicting an id.
+#[test]
+fn capture_ids_are_never_evicted_so_a_retry_never_double_counts() {
+    let mut card = Card::ready();
+    card.buy(1, 1, 3_000).unwrap();
+    for c in 1..=CAPTURE_RING as u64 {
+        card.capture(1, 100, c).unwrap();
+    }
+    assert_eq!(
+        card.capture(1, 100, CAPTURE_RING as u64 + 1),
+        Err(err_code("CaptureLimit"))
+    );
+    assert_eq!(card.capture(1, 100, 1), Err(err_code("DuplicateCapture")));
+    assert_eq!(card.period().captured_cents, 100 * CAPTURE_RING as u64);
+}
+
+/// Review F4: an incremental hold can't grow past the intent the agent was
+/// approved for (Axum books the excess as `over_hold`).
+#[test]
+fn adjust_reservation_never_exceeds_the_checkout_intent() {
+    let mut card = Card::ready();
+    card.open_intent(1, 1, 1_000).unwrap();
+    card.authorize(1, 1, 800).unwrap();
+    assert_eq!(card.reservation(1).max_amount_cents, 1_000);
+    let adjust = |card: &mut Card, amount: u64| {
+        let ix = card.ix(
+            card.res_accounts(1),
+            instruction::AdjustReservation {
+                new_amount_cents: amount,
+            },
+        );
+        card.send_as(ix, "authorizer")
+    };
+    assert_eq!(adjust(&mut card, 3_000), Err(err_code("AmountExceedsMax")));
+    adjust(&mut card, 1_000).unwrap();
+    assert_eq!(card.reservation(1).amount_reserved_cents, 1_000);
+}
+
+/// Review F5: releasing the rest of a partly captured hold ends CAPTURED.
+#[test]
+fn reversing_the_rest_of_a_partly_captured_hold_ends_captured() {
+    let mut card = Card::ready();
+    card.buy(1, 1, 2_000).unwrap();
+    card.capture(1, 1_500, 1).unwrap();
+    card.reverse(1, 500, 0, 1).unwrap();
+    let r = card.reservation(1);
+    assert_eq!(
+        (r.state, r.captured_cents, r.reversed_cents),
+        (rs::CAPTURED, 1_500, 500)
+    );
+    card.buy(2, 2, 1_000).unwrap();
+    card.reverse(2, 1_000, 1, 2).unwrap();
+    assert_eq!(card.reservation(2).state, rs::EXPIRED);
+}
+
+/// Review X1 / X4: issuer debits without a hold (forced, late, unpaired) are
+/// billed only while they fit the budget, so the owner never owes more than
+/// budget + fee(budget) per period, whoever signs as authorizer.
+#[test]
+fn debits_without_a_hold_never_push_billed_spend_past_the_budget() {
+    let mut card = Card::ready(); // $50 budget, 50 bps
+    card.buy(1, 1, 3_000).unwrap();
+    card.capture(1, 3_000, 1).unwrap();
+    card.exception(None, EXC_FORCED_CAPTURE, 2_000, 1).unwrap(); // fits exactly
+    for (n, kind) in [
+        EXC_FORCED_CAPTURE,
+        EXC_UNPAIRED_CAPTURE,
+        EXC_LATE_CAPTURE,
+        EXC_CORRECTION_DEBIT,
+        EXC_RETURN_REVERSAL,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            card.exception(None, kind, 3_000, 10 + n as u64),
+            Err(err_code("BudgetExceeded")),
+            "kind {kind}"
+        );
+    }
+    assert_eq!(card.period().captured_cents, 5_000);
+    let max_owed = 5_000 + 25; // budget + fee(budget)
+    assert_eq!(card.policy().statement_outstanding_cents, max_owed);
+    // A capture above its hold is held to the same ceiling.
+    let mut card = Card::ready();
+    card.buy(1, 1, 3_000).unwrap();
+    assert_eq!(card.capture(1, 6_000, 1), Err(err_code("BudgetExceeded")));
+    card.capture(1, 5_000, 1).unwrap(); // 2000 over the hold, still in budget
+    assert!(card.policy().statement_outstanding_cents <= max_owed);
 }

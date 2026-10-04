@@ -9,7 +9,7 @@ import { cardStatus, ISSUER_FREEZE_COPY } from "./lifecycle";
 import { newOperationId, type CardPrivateRead, type CardStatements } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { UnlockStrip } from "./Unlock";
-import { Money, Pill, PrivateValue, readFailed } from "./ui";
+import { CardStatus, Money, PrivateValue, readFailed } from "./ui";
 import { AgentCard, frostFor } from "./AgentCard";
 import { CardActivity } from "./CardActivity";
 import { CardStatement } from "./CardStatement";
@@ -199,7 +199,7 @@ export function CardDetail(props: CardDetailProps) {
         <div className="cp-card-hero-body">
           <div className="cp-card-hero-top">
             <div className="cp-card-hero-text">
-              <Pill pill={status} />
+              <CardStatus pill={status} />
               {card.freeze.onChain && (
                 <ul className="cp-freeze-lines" data-testid="freeze-lines">
                   <li data-system="chainpay"><CircleCheck size={16} aria-hidden="true" /> Frozen on ChainPay. New purchases are declined.</li>

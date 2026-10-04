@@ -226,6 +226,39 @@ async function inViewport(page) {
   await context.close();
 }
 
+// 8b. Tour, frame by frame: smooth scrolling moves the page a frame before the
+//     browser's scroll event, so the leave check must follow the scroll engine.
+//     Sample every animation frame while crossing sections; never a stale line.
+{
+  const LINES = { 'spend-limits': 'allowance part', 'payment-review': '4.50 USDC', receipts: 'receipts.', 'stay-in-control': 'pause or revoke', developers: 'devs:', faq: 'good questions' };
+  const { page, context } = await open('/');
+  await page.locator('.cp-pet-body').waitFor({ timeout: 20000 });
+  await page.waitForTimeout(1200);
+  await page.evaluate((LINES) => {
+    window.__tourStale = [];
+    window.__tourSaid = 0;
+    const sample = () => {
+      const line = innerHeight * 0.45;
+      let at = null;
+      for (const id of Object.keys(LINES)) { const r = document.getElementById(id)?.getBoundingClientRect(); if (r && r.top <= line && r.bottom >= line) { at = id; break; } }
+      const text = document.querySelector('.cp-pet-speech')?.textContent ?? '';
+      const shownFor = Object.keys(LINES).find((id) => text.includes(LINES[id])) ?? null;
+      if (shownFor) window.__tourSaid += 1;
+      if (shownFor && shownFor !== at) window.__tourStale.push(`${shownFor} while reading ${at}`);
+      window.__tourFrame = requestAnimationFrame(sample);
+    };
+    sample();
+  }, LINES);
+  for (let step = 0; step < 12; step++) {
+    await page.mouse.wheel(0, 640);
+    await page.waitForTimeout(step % 2 ? 1800 : 400);
+  }
+  const { stale, said } = await page.evaluate(() => { cancelAnimationFrame(window.__tourFrame); return { stale: window.__tourStale, said: window.__tourSaid }; });
+  assert.ok(said > 0, 'he commented on at least one section while sampled');
+  assert.deepEqual(stale, [], `tour line outlived its section by a frame: ${stale.slice(0, 3).join('; ')}`);
+  await context.close();
+}
+
 // 9. Embeds live inside other people's pages: no robot.
 {
   const { page, context } = await open('/embed/overview');

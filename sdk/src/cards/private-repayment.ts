@@ -91,7 +91,10 @@ export function assertPayableAttempt(attempt: PrivateRepaymentAttempt): void {
     problems.push("transfer route");
   }
   if (!/^[1-9][0-9]{0,11}$/.test(attempt.clientRefId)) problems.push("reference");
-  if (!/^[1-9][0-9]{0,18}$/.test(attempt.amountBaseUnits)) problems.push("amount");
+  // The two amounts must be the same money: USDC has 6 decimals, so cents x 10 000.
+  // The disclosure shows amountCents; the wallet would sign amountBaseUnits.
+  if (!/^[1-9][0-9]{0,18}$/.test(attempt.amountBaseUnits) || !/^[1-9][0-9]{0,14}$/.test(attempt.amountCents ?? "") || BigInt(attempt.amountBaseUnits) !== BigInt(attempt.amountCents) * 10_000n) problems.push("amount");
+  if (!isAddress(attempt.recipientWallet)) problems.push("recipient");
   if (problems.length) {
     throw new PrivateRepaymentError(400, "attempt_not_payable", `This attempt can't be paid privately: ${problems.join(", ")}`);
   }
@@ -260,6 +263,164 @@ function checkBuilt(built: Built, owner: string, kind: string): void {
   }
 }
 
+// ------------------------------------------ what the owner is asked to sign
+
+const SYSTEM_PROGRAM = "11111111111111111111111111111111";
+const COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111111";
+const SPL_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+const DELEGATION_PROGRAM = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
+const PERMISSION_PROGRAM = "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1";
+const MAGIC_PROGRAM = "Magic11111111111111111111111111111111111111";
+/** Rent and fees only: a built transaction may move at most this much SOL. */
+const MAX_LAMPORTS = 50_000_000n;
+
+/**
+ * Ephemeral SPL Token instruction tags (magicblock-labs/ephemeral-spl-token,
+ * e-token-api/src/instruction.rs). Anything else in a built transaction is
+ * refused: withdrawals, shuttles to a cleartext destination, stealth pools.
+ */
+const ESPL = {
+  initializeEphemeralAta: 0,
+  initializeGlobalVault: 1,
+  depositSplTokens: 2,
+  delegateEphemeralAta: 4,
+  createEphemeralAtaPermission: 6,
+  delegateEphemeralAtaPermission: 7,
+  initializeShuttleEphemeralAta: 11,
+  delegateShuttleEphemeralAta: 13,
+  depositAndQueueTransfer: 16,
+  ensureTransferQueueCrank: 17,
+  depositAndDelegateShuttleWithMergeToEncryptedDestination: 34,
+} as const;
+const DEPOSIT_TAGS: readonly number[] = [0, 1, 2, 4, 6, 7, 11, 13, 34];
+const TRANSFER_TAGS: readonly number[] = [0, 16, 17];
+
+type DecodedInstruction = { programId: string; accounts: string[]; data: Uint8Array };
+type DecodedTransaction = { signers: string[]; instructions: DecodedInstruction[] };
+
+const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function base58Decode(text: string): Uint8Array | null {
+  let n = 0n;
+  for (const char of text) {
+    const digit = BASE58.indexOf(char);
+    if (digit < 0) return null;
+    n = n * 58n + BigInt(digit);
+  }
+  const bytes: number[] = [];
+  while (n > 0n) { bytes.unshift(Number(n % 256n)); n /= 256n; }
+  for (const char of text) { if (char !== "1") break; bytes.unshift(0); }
+  return Uint8Array.from(bytes);
+}
+
+function isAddress(value: unknown): boolean {
+  return typeof value === "string" && base58Decode(value)?.length === 32;
+}
+
+function fromBase64(text: string): Uint8Array {
+  const binary = globalThis.atob(text);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+function u64(data: Uint8Array, at: number): bigint {
+  if (data.length < at + 8) throw new Error("truncated");
+  let out = 0n;
+  for (let i = 7; i >= 0; i -= 1) out = (out << 8n) | BigInt(data[at + i]);
+  return out;
+}
+
+/**
+ * Decode a serialized legacy (or v0 without lookup tables) transaction: its
+ * signers and every instruction with resolved account keys. Lookup tables
+ * can't be checked offline, so they are refused.
+ */
+export function decodeBuiltTransaction(base64: string): DecodedTransaction {
+  const bytes = fromBase64(base64);
+  let at = 0;
+  const byte = () => { if (at >= bytes.length) throw new Error("truncated"); return bytes[at++]; };
+  const compact = () => { let value = 0; for (let shift = 0; shift < 21; shift += 7) { const b = byte(); value |= (b & 0x7f) << shift; if (!(b & 0x80)) return value; } throw new Error("bad length"); };
+  const take = (n: number) => { if (at + n > bytes.length) throw new Error("truncated"); const out = bytes.slice(at, at + n); at += n; return out; };
+  take(compact() * 64);
+  const versioned = (bytes[at] & 0x80) !== 0;
+  if (versioned && byte() !== 0x80) throw new Error("unsupported version");
+  const [required] = [byte(), byte(), byte()];
+  const keys = Array.from({ length: compact() }, () => base58(take(32)));
+  take(32); // recent blockhash
+  const instructions = Array.from({ length: compact() }, () => {
+    const program = keys[byte()];
+    const accounts = Array.from({ length: compact() }, () => keys[byte()]);
+    const data = take(compact());
+    if (!program || accounts.some((key) => key === undefined)) throw new Error("account index out of range");
+    return { programId: program, accounts, data };
+  });
+  if (versioned && compact() !== 0) throw new Error("address lookup tables can't be checked");
+  if (at !== bytes.length) throw new Error("trailing bytes");
+  return { signers: keys.slice(0, required), instructions };
+}
+
+function refuse(kind: string, why: string): never {
+  throw new PrivateRepaymentError(502, "unexpected_transaction", `MagicBlock's ${kind} transaction ${why}; nothing was signed`);
+}
+
+/**
+ * Before the owner signs a MagicBlock-built transaction, check it does
+ * exactly what the statement says (review F1): only the expected programs,
+ * the owner as the only signer, and the one amount-bearing instruction moving
+ * the expected amount of the attempt's mint (to the attempt's recipient, for
+ * the transfer).
+ */
+export function verifyBuiltTransaction(
+  built: Pick<Built, "transactionBase64">,
+  expect: { kind: "deposit" | "transfer"; owner: string; mint: string; amountBaseUnits: bigint; recipientWallet?: string; clientRefId?: string; minDelayMs?: string; maxDelayMs?: string },
+): void {
+  const { kind } = expect;
+  let tx: DecodedTransaction;
+  try { tx = decodeBuiltTransaction(built.transactionBase64); } catch { refuse(kind, "could not be read"); }
+  if (tx.signers.length !== 1 || tx.signers[0] !== expect.owner) refuse(kind, "asks for a signer other than your wallet");
+  const allowed = new Set([SYSTEM_PROGRAM, COMPUTE_BUDGET_PROGRAM, ASSOCIATED_TOKEN_PROGRAM, EPHEMERAL_SPL_PROGRAM, DELEGATION_PROGRAM, PERMISSION_PROGRAM, MAGIC_PROGRAM]);
+  const tags = kind === "deposit" ? DEPOSIT_TAGS : TRANSFER_TAGS;
+  let lamports = 0n;
+  const moves: DecodedInstruction[] = [];
+  for (const ix of tx.instructions) {
+    // SPL Token at the top level could transfer or approve anything: never.
+    if (!allowed.has(ix.programId)) refuse(kind, "calls a program ChainPay doesn't expect");
+    if (ix.programId === SYSTEM_PROGRAM && ix.data.length >= 12 && ix.data[0] === 2 && ix.data[1] === 0 && ix.data[2] === 0 && ix.data[3] === 0) lamports += u64(ix.data, 4);
+    if (ix.programId !== EPHEMERAL_SPL_PROGRAM) continue;
+    if (!ix.data.length || !tags.includes(ix.data[0])) refuse(kind, "includes a token instruction ChainPay doesn't expect");
+    if ([ESPL.depositSplTokens, ESPL.depositAndQueueTransfer, ESPL.depositAndDelegateShuttleWithMergeToEncryptedDestination].includes(ix.data[0] as 2)) moves.push(ix);
+  }
+  if (lamports > MAX_LAMPORTS) refuse(kind, "moves more SOL than rent needs");
+  if (moves.length !== 1) refuse(kind, "doesn't move exactly one amount");
+  const [move] = moves;
+  try {
+    if (move.data[0] === ESPL.depositSplTokens) {
+      // [tag][amount u64]; accounts: eata, vault, mint, source, vault token, authority, token program
+      if (move.data.length !== 9 || move.accounts[2] !== expect.mint || move.accounts[5] !== expect.owner) refuse(kind, "deposits from the wrong account or mint");
+      if (u64(move.data, 1) !== expect.amountBaseUnits) refuse(kind, "deposits a different amount");
+    } else if (move.data[0] === ESPL.depositAndDelegateShuttleWithMergeToEncryptedDestination) {
+      // [tag][shuttle u32][amount u64]...; accounts: payer .. shuttle owner(5) .. mint(13)
+      if (move.accounts[0] !== expect.owner || move.accounts[5] !== expect.owner || move.accounts[13] !== expect.mint) refuse(kind, "deposits from the wrong account or mint");
+      if (u64(move.data, 5) !== expect.amountBaseUnits) refuse(kind, "deposits a different amount");
+    } else {
+      // [tag][amount u64][group 3][min u64][max u64][split u32][flags u8?][clientRefId u64?]
+      // accounts: queue, vault, mint(2), source, vault token, destination owner(5), sender(6), ...
+      if (kind !== "transfer") refuse(kind, "is not a deposit");
+      if (move.accounts[2] !== expect.mint || move.accounts[5] !== expect.recipientWallet || move.accounts[6] !== expect.owner) refuse(kind, "pays a different recipient or mint");
+      if (u64(move.data, 1) !== expect.amountBaseUnits) refuse(kind, "pays a different amount");
+      const split = move.data[28] | (move.data[29] << 8) | (move.data[30] << 16) | (move.data[31] << 24);
+      if (split !== 1) refuse(kind, "splits the payment");
+      if (expect.minDelayMs !== undefined && u64(move.data, 12) !== BigInt(expect.minDelayMs)) refuse(kind, "uses a different delay");
+      if (expect.maxDelayMs !== undefined && u64(move.data, 20) !== BigInt(expect.maxDelayMs)) refuse(kind, "uses a different delay");
+      if (move.data.length !== 40 && move.data.length !== 41) refuse(kind, "carries no statement reference");
+      if (u64(move.data, move.data.length - 8).toString() !== expect.clientRefId) refuse(kind, "carries a different statement reference");
+    }
+  } catch (error) {
+    if (error instanceof PrivateRepaymentError) throw error;
+    refuse(kind, "could not be read");
+  }
+}
+
 export type PayStep =
   | { step: "login" }
   | { step: "balance"; privateBalance: string }
@@ -332,6 +493,7 @@ export async function payStatementPrivately(input: PayPrivatelyInput): Promise<{
       private: true,
     }, token);
     checkBuilt(built, owner, "deposit");
+    verifyBuiltTransaction(built, { kind: "deposit", owner, mint: attempt.mint, amountBaseUnits: shortfall });
     onStep?.({ step: "deposit", amountBaseUnits: shortfall.toString() });
     const signed = await signer.signTransaction(built.transactionBase64);
     depositSignature = built.sendTo === "base" && input.sendBase
@@ -369,6 +531,7 @@ export async function payStatementPrivately(input: PayPrivatelyInput): Promise<{
     legacy: true,
   }, token);
   checkBuilt(built, owner, "transfer");
+  verifyBuiltTransaction(built, { kind: "transfer", owner, mint: attempt.mint, amountBaseUnits: amount, recipientWallet: attempt.recipientWallet, clientRefId: attempt.clientRefId, minDelayMs: t.minDelayMs, maxDelayMs: t.maxDelayMs });
   if (built.fees && built.fees.tokens !== "0") {
     throw new PrivateRepaymentError(502, "unexpected_fee", "MagicBlock quoted a token fee for this transfer; nothing was signed");
   }

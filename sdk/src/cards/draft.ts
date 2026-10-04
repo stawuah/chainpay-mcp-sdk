@@ -1,5 +1,7 @@
 import { MAX_BUDGET_CENTS, MAX_FEE_BPS, MAX_MCCS, MAX_MERCHANTS } from "./constants.js";
 import { centsToString, maxObligationCents, parseCents } from "./math.js";
+import { cardMerchantByRef } from "./merchants.js";
+import { redactCardNumbersInInput } from "./redact.js";
 
 /*
  * A card draft is what an agent may propose: label, budget, cap, shops and
@@ -51,6 +53,10 @@ export function normalizeCardDraft(input: CardDraftInput, now = Date.now()): Car
   if (!Array.isArray(merchants) || !merchants.every((ref) => typeof ref === "string" && MERCHANT_REF.test(ref))) throw new Error("merchants must be a list of merchant references");
   if (!Array.isArray(mccs) || !mccs.every((mcc) => Number.isInteger(mcc) && mcc >= 0 && mcc <= 9_999)) throw new Error("mccs must be a list of 4-digit merchant category codes");
   if (merchants.length === 0 && mccs.length === 0) throw new Error("Pick at least one shop or merchant category");
+  // A shop ChainPay can't check out at would make the owner's review link dead
+  // on arrival, so the draft is never "ready" with one (review F8).
+  const unknown = (merchants as string[]).filter((ref) => !cardMerchantByRef(ref));
+  if (unknown.length) throw new Error(`${unknown.map((ref) => `"${redactCardNumbersInInput(ref)}"`).join(", ")} ${unknown.length === 1 ? "isn't a shop" : "aren't shops"} ChainPay can check out at`);
   if (merchants.length > MAX_MERCHANTS) throw new Error(`At most ${MAX_MERCHANTS} shops`);
   if (mccs.length > MAX_MCCS) throw new Error(`At most ${MAX_MCCS} merchant categories`);
   if (new Set(merchants).size !== merchants.length) throw new Error("A shop is listed twice");

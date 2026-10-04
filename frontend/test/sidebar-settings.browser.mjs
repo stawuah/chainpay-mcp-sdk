@@ -15,7 +15,7 @@ try {
       await page.getByRole('button', { name: 'Back to settings', exact: true }).click();
       assert.equal(await page.locator('.owner-advanced-settings').evaluate(el => el.open), true);
     }
-    assert.match(await page.locator('.owner-mcp-endpoint').innerText(), /\/mcp$/);
+    assert.match(await page.locator('.owner-advanced-settings .owner-mcp-endpoint').innerText(), /\/mcp$/);
     await page.getByRole('button', { name: 'Copy MCP address' }).waitFor();
     await page.getByRole('button', { name: 'Connect agent', exact: true }).click();
     await page.getByRole('dialog').waitFor();

@@ -1,15 +1,25 @@
 import {
-  AlarmClock, CircleCheck, Info, CircleDot, CircleHelp, CircleX, Clock3, Contrast, Dot, Flag, Hourglass, Lock, RotateCcw, Snowflake, TriangleAlert, Undo2, Wrench,
+  AlarmClock, CircleCheck, Info, CircleDot, CircleHelp, CircleX, Clock3, Contrast, Dot, Flag, Hourglass, Lock, RotateCcw, Snowflake, TriangleAlert, Undo2,
 } from "lucide-react";
 import { formatUsdCents } from "@chainpay/sdk";
-import type { PillIcon, StatePill } from "./lifecycle";
+import { Status } from "../../ui/workspace/Status";
+import { pillStatusProps, type PillIcon, type StatePill } from "./lifecycle";
 
 const ICONS: Record<PillIcon, typeof Clock3> = {
   clock: Clock3, hold: CircleDot, check: CircleCheck, half: Contrast, undo: Undo2, hourglass: Hourglass, late: AlarmClock,
-  refund: RotateCcw, flag: Flag, alert: TriangleAlert, x: CircleX, help: CircleHelp, snow: Snowflake, lock: Lock, wrench: Wrench, dot: Dot,
+  refund: RotateCcw, flag: Flag, alert: TriangleAlert, x: CircleX, help: CircleHelp, snow: Snowflake, lock: Lock, dot: Dot,
 };
 
-/** Icon + word, never color alone (ruling K8). */
+/**
+ * A card or activity state in the workspace: the shared Status (icon, word,
+ * tone), with the state's own label. `detailShown`: the detail is already on
+ * screen next to it, so it isn't repeated for screen readers.
+ */
+export function CardStatus({ pill, detailShown = false }: { pill: StatePill; detailShown?: boolean }) {
+  return <Status {...pillStatusProps(pill, !detailShown)} />;
+}
+
+/** Icon + word, never color alone (ruling K8). Receipt documents only (their own contract); the workspace uses CardStatus. */
 export function Pill({ pill, withDetail = false }: { pill: StatePill; withDetail?: boolean }) {
   const Icon = ICONS[pill.icon];
   return (

@@ -9,22 +9,29 @@
 // intercept every service request in memory. Amounts are fixture
 // base units, not balances.
 import "../../src/polyfills";
+// Global CSS first, as in main.tsx, so the workspace stylesheet (imported by
+// Dashboard) cascades after it exactly as it does in production.
+import "../../skill/assets/design-token.css";
+import "../../src/theme/astryx.css";
+import "../../src/styles.css";
 import { chainpayClient, publicReceiptClient } from "../../src/config/client";
 import { PublicKey, type Transaction } from "@solana/web3.js";
-import { setSessionWallet } from "../../src/session";
+import { ensureSessionReady, setSessionWallet } from "../../src/session";
+import { setMintMetadataFetcherOverride } from "../../src/ui/amount/useMintMetadata";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import Dashboard from "../../src/dashboard/Dashboard";
 import type { CardSection, DashboardTab } from "../../src/routing/paths";
 import { setCardsSourceOverride } from "../../src/dashboard/cards/source";
 import { createFixtureCardsSource, FIXTURE_CARD_IDS } from "../../src/dashboard/cards/fixtureSource";
+import { cardStatus } from "../../src/dashboard/cards/lifecycle";
+import { CARD_ATTENTION_KEYS } from "../../src/dashboard/overview/cardsSummary";
 import type { Mandate, PaymentReceipt } from "@chainpay/sdk";
 import { Router } from "../../src/routing/Router";
-import "../../skill/assets/design-token.css";
-import "../../src/theme/astryx.css";
-import "../../src/styles.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
 import crossmintInbox from "./inbox-crossmint.json";
+import waitingRequest from "./inbox-waiting.json";
+import blockedRequest from "./inbox-blocked.json";
 import { ownerReceiptRelay } from "../../src/receipts/owner";
 import purchase from "./receipt-purchase.json";
 import orders from "./mandate-request.json";
@@ -72,9 +79,46 @@ const MANDATES: Mandate[] = [
     totalLimit: 40_000_000n,
     amountSpent: 40_000_000n,
     paymentCount: 9n,
+    // Past the fixture's current slot (399,999,000), as an expired permission is.
+    expiresAtSlot: 398_500_000n,
     status: "expired",
   }),
 ];
+
+const QUERY = new URLSearchParams(location.search);
+
+// `?mints=multi`: a second token with its own permission, so per-token totals can
+// be seen apart. Not a real PYUSD balance; the mint is a fixture key.
+const PYUSD = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM";
+if (QUERY.get("mints") === "multi") {
+  MANDATES.push(mandate({
+    address: "MdT5eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    approvedAgent: "AgEnT5555555555555555555555555555555555555555",
+    allowedMint: PYUSD,
+    totalLimit: 1_000_000_000n,
+    amountSpent: 12_340_000n,
+    paymentCount: 4n,
+    expiresAtSlot: 420_000_000n,
+  }));
+}
+
+// `?clear=1`: nothing needs attention. No permission expires within a day and
+// the inbox is empty, so a checked Overview can say so.
+const CLEAR = QUERY.has("clear");
+if (CLEAR) MANDATES[0] = { ...MANDATES[0], expiresAtSlot: 420_000_000n };
+
+// `?revoked=1`: one revoked permission, for the revoked status.
+if (QUERY.has("revoked")) {
+  MANDATES.push(mandate({
+    address: "MdT6ffffffffffffffffffffffffffffffffffffffff",
+    approvedAgent: "AgEnT6666666666666666666666666666666666666666",
+    totalLimit: 60_000_000n,
+    amountSpent: 15_000_000n,
+    paymentCount: 2n,
+    status: "revoked",
+    revoked: true,
+  }));
+}
 
 const STABLECOINS = [{
   value: USDC,
@@ -82,7 +126,13 @@ const STABLECOINS = [{
   label: "USDC",
   detail: "Devnet fixture",
   tokenProgram: "spl-token" as const,
-}];
+}, ...(QUERY.get("mints") === "multi" ? [{
+  value: PYUSD,
+  mint: PYUSD,
+  label: "PYUSD",
+  detail: "Devnet fixture",
+  tokenProgram: "spl-token" as const,
+}] : [])];
 
 const TOOLS = [
   { name: "create_mandate", description: "Create an on-chain spending permission for an agent.", inputSchema: { type: "object", properties: { maxPerPayment: { type: "string" } } } },
@@ -114,6 +164,48 @@ if (new URLSearchParams(location.search).has("ready")) {
     data[108] = 1;
     return {data,owner:new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),executable:false,lamports:2039280,rentEpoch:0};
   };
+}
+
+// `?decimals=fixture` feeds the shared mint metadata store from fixture data, so
+// populated amounts can be reviewed while RPC stays blocked. Test-only: the
+// override exists for this harness and is never set by production code. Without
+// it, metadata is unavailable and amounts render "Amount unavailable".
+if (QUERY.get("decimals") === "fixture") {
+  setMintMetadataFetcherOverride(async (mint) => {
+    if (mint === USDC || mint === PYUSD) return 6;
+    throw new Error("No fixture decimals for this mint.");
+  });
+}
+// `?decimals=unavailable`: every metadata read fails, even where another fixture
+// (`receipts`) stubs the RPC decimals, so the unavailable state is seen on every tab.
+if (QUERY.get("decimals") === "unavailable") {
+  setMintMetadataFetcherOverride(async () => { throw new Error("Fixture: token details unavailable"); });
+}
+
+// `?slot=fixture`: a current slot and slot timing, so expiry can be checked.
+// The first fixture permission then expires within the hour.
+if (QUERY.get("slot") === "fixture") {
+  chainpayClient.getCurrentSlot = async () => 399_999_000n;
+  chainpayClient.connection.getRecentPerformanceSamples = async () => [{ slot: 399999000, numSlots: 150, numTransactions: 1, samplePeriodSecs: 60 }];
+}
+
+// `?fail=1`: every collection read fails (connections, receipts, cards, slot), to
+// prove the workspace never shows zero or "all clear" for data it could not read.
+const FAIL = QUERY.has("fail");
+if (FAIL) {
+  const refused = async () => { throw new Error("Fixture: read refused"); };
+  chainpayClient.getPaymentsByMandate = refused;
+  chainpayClient.getCurrentSlot = refused;
+}
+
+// `?inbox=fixture`: a request waiting for approval, a blocked one and a completed
+// one with its receipt, seeded into the real per-wallet inbox store.
+// The inbox store is per origin and outlives a page load: `empty` and `clear`
+// start from an empty inbox instead of whatever the previous fixture seeded.
+if (QUERY.has("empty") || CLEAR) localStorage.removeItem(`chainpay.ai-inbox.v1:${OWNER}`);
+if (QUERY.get("inbox") === "fixture") {
+  const completed = { ...(crossmintInbox[4] as Record<string, unknown>), id: "req-complete", title: "Market data API, October", crossmint: undefined };
+  localStorage.setItem(`chainpay.ai-inbox.v1:${OWNER}`, JSON.stringify([waitingRequest, blockedRequest, completed]));
 }
 
 // Crossmint prototype: every request state, seeded into the real inbox store.
@@ -264,14 +356,35 @@ if (FIXTURE_APPROVAL) {
 
 const EMPTY = new URLSearchParams(location.search).has("empty");
 
+// `?signed-in=fixture`: an owner session from an in-memory stand-in relay, with two
+// agent connections (none with `empty`, a 500 with `fail`). Nothing leaves the page.
+const SIGNED_IN = QUERY.get("signed-in") === "fixture";
+if (SIGNED_IN && !FIXTURE_APPROVAL) {
+  const now = Date.now();
+  const connections = EMPTY ? [] : [
+    { id: "conn-1", wallet: OWNER, agentName: "Invoice agent", scope: JSON.stringify({ mandates: [MANDATES[0].address], tools: ["get_mandate", "prepare_payment", "execute_payment"] }), connectedAt: new Date(now - 86_400_000 * 6).toISOString(), lastSeenAt: new Date(now - 4 * 60_000).toISOString(), totalCalls: 41, toolsCalled: [{ name: "prepare_payment", count: 12 }, { name: "execute_payment", count: 12 }] },
+    { id: "conn-2", wallet: OWNER, agentName: "Research assistant", scope: JSON.stringify({ mandates: [MANDATES[1].address], tools: ["get_mandate", "prepare_payment"] }), connectedAt: new Date(now - 86_400_000 * 2).toISOString(), lastSeenAt: null, totalCalls: 0, toolsCalled: [] },
+  ];
+  setSessionWallet({ address: OWNER, signMessage: async () => new Uint8Array(64) } as never);
+  window.fetch = async (input) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
+    const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+    if (url.pathname === "/v1/auth/challenge") return json({ challenge_id: "fixture", message: "Fixture sign-in" });
+    if (url.pathname === "/v1/auth/session") return json({ token: "fixture", wallet: OWNER, expires_at_ms: Date.now() + 3_600_000 });
+    if (url.pathname.endsWith("/connections")) return FAIL ? json({ error: "Fixture: connections unavailable" }, 500) : json({ connections });
+    return new Response("{}", { status: 404 });
+  };
+  void ensureSessionReady();
+}
+
 // Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1][&attest=verified|challenge_bound|mismatch|failed][&repay=unknown][&restore=tampered][&reads=unreadable]`.
 // ILLUSTRATIVE fixtures through the same CardsSource interface the live SDK
 // client implements. Nothing signs or reaches a network.
 const CARD_QUERY = new URLSearchParams(location.search);
 // Statement repayment needs a permission the owner signs: add one only for that view.
 if (CARD_QUERY.has("repay")) MANDATES.push(mandate({ address: "MdT4dddddddddddddddddddddddddddddddddddddddd", approvedAgent: OWNER, amountSpent: 0n, paymentCount: 0n }));
-setCardsSourceOverride(createFixtureCardsSource({
-  empty: CARD_QUERY.get("cards") === "empty",
+const fixtureCards = createFixtureCardsSource({
+  empty: CARD_QUERY.get("cards") === "empty" || (EMPTY && SIGNED_IN),
   unlocked: CARD_QUERY.get("cards") !== "locked",
   statement: (CARD_QUERY.get("statement") as never) ?? undefined,
   freezeAck: CARD_QUERY.has("ack"),
@@ -279,7 +392,15 @@ setCardsSourceOverride(createFixtureCardsSource({
   repay: (CARD_QUERY.get("repay") as never) ?? undefined,
   restore: (CARD_QUERY.get("restore") as never) ?? undefined,
   reads: (CARD_QUERY.get("reads") as never) ?? undefined,
-}));
+});
+// `?clear=1` keeps only cards that need nothing from the owner, so a checked Overview
+// can be clear; `?cards=fail` fails the card list alone (Overview must not call that clear).
+const CARDS_FAIL = FAIL || CARD_QUERY.get("cards") === "fail";
+setCardsSourceOverride(CARDS_FAIL
+  ? { ...fixtureCards, listCards: async () => { throw new Error("Fixture: cards unavailable"); } }
+  : CLEAR
+    ? { ...fixtureCards, listCards: async () => (await fixtureCards.listCards()).filter((card) => !(CARD_ATTENTION_KEYS as readonly string[]).includes(cardStatus(card).key)) }
+    : fixtureCards);
 const CARD_KEY = CARD_QUERY.get("card") as keyof typeof FIXTURE_CARD_IDS | null;
 type CardRoute = { cardsNew?: boolean; cardId?: string; cardSection?: CardSection };
 const noop = async () => {};

@@ -47,11 +47,16 @@ pub struct IntentArgs {
     pub expires_at: i64,
 }
 
-/// `fee(x) = ceil(x * fee_bps / 10_000)` in integer math (contracts.md §1.5).
+/// The one fee rule, for debits and credits alike:
+/// `fee(x) = floor(x * fee_bps / 10_000)` in integer math (contracts.md §1.5,
+/// changed from ceil in the 2026-10-04 review fixes). Rounding down means
+/// `Σ fee(pieces) <= fee(Σ pieces)`: split refunds never credit more than one
+/// refund of the same total, and a period's fees never pass `fee(budget)`.
+/// Axum `statements::fee_cents` and SDK `feeCents` mirror it; all three run
+/// `shared/cards/fee-vectors.json`.
 pub fn fee(amount_cents: u64, fee_bps: u16) -> Result<u64> {
     let numerator = (amount_cents as u128)
         .checked_mul(fee_bps as u128)
-        .and_then(|v| v.checked_add(BPS_DENOMINATOR as u128 - 1))
         .ok_or(error!(CardPolicyError::MathOverflow))?;
     u64::try_from(numerator / BPS_DENOMINATOR as u128)
         .map_err(|_| error!(CardPolicyError::MathOverflow))
@@ -62,6 +67,21 @@ pub fn with_fee(amount_cents: u64, fee_bps: u16) -> Result<u64> {
     amount_cents
         .checked_add(fee(amount_cents, fee_bps)?)
         .ok_or(error!(CardPolicyError::MathOverflow))
+}
+
+/// A debit the owner is billed for must fit the period budget next to what is
+/// already spent and held: `captured + reserved + amount <= budget`. Called
+/// after any hold release, so a capture inside its own hold always fits.
+/// Issuer debits that don't fit (forced posts, late or over captures) are
+/// refused with `BudgetExceeded`; Axum books them for review, never onto the
+/// owner's statement, so `budget + fee(budget)` is a real per-period ceiling.
+pub fn require_billable(policy: &CardPolicy, period: &CardPeriod, amount_cents: u64) -> Result<()> {
+    let used = add(period.captured_cents, period.reserved_cents)?;
+    require!(
+        add(used, amount_cents)? <= policy.budget_cents,
+        CardPolicyError::BudgetExceeded
+    );
+    Ok(())
 }
 
 /// `available = budget - (captured + reserved)`, never negative.
@@ -303,7 +323,23 @@ pub fn add_exposure(policy: &mut CardPolicy, amount_cents: u64) -> Result<()> {
     Ok(())
 }
 
-/// Credit: `outstanding -= min(amount + fee(amount), outstanding)`.
+/// A refund against a hold credits at most what that hold captured:
+/// `refunded + amount <= captured` (shared/cards/fee-vectors.json `holds`).
+pub fn require_refundable(
+    captured_cents: u64,
+    refunded_cents: u64,
+    amount_cents: u64,
+) -> Result<()> {
+    require!(
+        add(refunded_cents, amount_cents)? <= captured_cents,
+        CardPolicyError::RefundExceedsCapture
+    );
+    Ok(())
+}
+
+/// Credit: `outstanding -= min(amount + fee(amount), outstanding)`, the same
+/// floor rule as the debit, so a refund never credits more than its purchase
+/// added.
 pub fn reduce_exposure(policy: &mut CardPolicy, amount_cents: u64) -> Result<()> {
     let credit = with_fee(amount_cents, policy.fee_bps)?;
     policy.statement_outstanding_cents = policy
@@ -433,16 +469,85 @@ mod tests {
     }
 
     #[test]
-    fn fee_is_integer_ceiling() {
+    fn fee_is_integer_floor() {
         assert_eq!(fee(50_000, 50).unwrap(), 250); // $500 -> $2.50 (PLAN F example)
         assert_eq!(with_fee(50_000, 50).unwrap(), 50_250);
-        assert_eq!(fee(1, 50).unwrap(), 1); // ceil(0.005)
+        assert_eq!(fee(1, 50).unwrap(), 0); // floor(0.005)
         assert_eq!(fee(0, 50).unwrap(), 0);
-        assert_eq!(fee(199, 50).unwrap(), 1);
+        assert_eq!(fee(199, 50).unwrap(), 0);
         assert_eq!(fee(200, 50).unwrap(), 1);
-        assert_eq!(fee(201, 50).unwrap(), 2);
+        assert_eq!(fee(201, 50).unwrap(), 1);
         assert_eq!(fee(12_345, 0).unwrap(), 0);
-        assert_eq!(fee(u64::MAX, 1_000).unwrap(), u64::MAX / 10 + 1);
+        assert_eq!(fee(u64::MAX, 1_000).unwrap(), u64::MAX / 10);
+    }
+
+    /// The vectors Axum statements and the SDK run too (review X6).
+    #[test]
+    fn shared_fee_vectors_hold() {
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../../../shared/cards/fee-vectors.json")).unwrap();
+        let n = |x: &serde_json::Value| x.as_str().unwrap().parse::<u64>().unwrap();
+        for case in v["fee"].as_array().unwrap() {
+            let bps = case["feeBps"].as_u64().unwrap() as u16;
+            assert_eq!(
+                fee(n(&case["amountCents"]), bps).unwrap(),
+                n(&case["feeCents"]),
+                "{case}"
+            );
+        }
+        for case in v["holds"].as_array().unwrap() {
+            let mut p = policy();
+            p.fee_bps = case["feeBps"].as_u64().unwrap() as u16;
+            let captured = n(&case["capturedCents"]);
+            add_exposure(&mut p, captured).unwrap();
+            let mut refunded = 0u64;
+            let mut accepted = Vec::new();
+            for refund in case["refunds"].as_array().unwrap() {
+                let amount = n(refund);
+                if require_refundable(captured, refunded, amount).is_ok() {
+                    refunded += amount;
+                    reduce_exposure(&mut p, amount).unwrap();
+                    accepted.push(amount);
+                }
+            }
+            let want: Vec<u64> = case["accepted"].as_array().unwrap().iter().map(n).collect();
+            assert_eq!(accepted, want, "{}", case["name"]);
+            assert_eq!(
+                p.statement_outstanding_cents,
+                n(&case["outstandingCents"]),
+                "{}",
+                case["name"]
+            );
+            // Never more credit than one refund of the same total.
+            assert!(
+                p.statement_outstanding_cents
+                    >= with_fee(captured, p.fee_bps).unwrap()
+                        - with_fee(refunded, p.fee_bps).unwrap()
+            );
+        }
+        for case in v["statements"].as_array().unwrap() {
+            let bps = case["feeBps"].as_u64().unwrap() as u16;
+            let (mut fees, mut total) = (0i128, 0i128);
+            for line in case["lines"].as_array().unwrap() {
+                let amount = n(&line[1]) as i128;
+                let f = fee(amount as u64, bps).unwrap() as i128;
+                let sign = if line[0] == "purchase" { 1 } else { -1 };
+                fees += sign * f;
+                total += sign * (amount + f);
+            }
+            assert_eq!(
+                fees.to_string(),
+                case["feeCents"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+            assert_eq!(
+                total.to_string(),
+                case["totalCents"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
     }
 
     #[test]
@@ -706,8 +811,8 @@ mod tests {
         let mut p = policy();
         add_exposure(&mut p, 2_000).unwrap(); // 2_000 + 10
         assert_eq!(p.statement_outstanding_cents, 2_010);
-        reduce_exposure(&mut p, 500).unwrap(); // 500 + 3
-        assert_eq!(p.statement_outstanding_cents, 1_507);
+        reduce_exposure(&mut p, 500).unwrap(); // 500 + floor(2.5)
+        assert_eq!(p.statement_outstanding_cents, 1_508);
         reduce_exposure(&mut p, 10_000).unwrap();
         assert_eq!(p.statement_outstanding_cents, 0);
     }

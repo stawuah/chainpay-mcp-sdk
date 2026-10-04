@@ -318,7 +318,17 @@ export class CardsApiClient {
     if (text) {
       try { parsed = JSON.parse(text); } catch { parsed = undefined; }
     }
-    if (!response.ok) throw new CardsApiError(response.status, (parsed ?? {}) as Partial<CardsApiErrorBody>);
+    if (!response.ok) {
+      const body = (parsed ?? {}) as Partial<CardsApiErrorBody>;
+      // A gateway or proxy error (408/502/503/504, or any 5xx without Axum's
+      // JSON error body) says nothing about whether Axum acted: for a POST the
+      // outcome is unknown, exactly like a dropped connection (review F2).
+      const gateway = [408, 502, 503, 504].includes(response.status) || (response.status >= 500 && typeof body.code !== "string");
+      if (method === "POST" && gateway && typeof body.code !== "string") {
+        throw new CardsApiError(response.status, { code: "network_unknown", message: `Card API answered ${response.status} before confirming; the outcome is unknown`, retryable: true, evidenceState: "unknown" });
+      }
+      throw new CardsApiError(response.status, body);
+    }
     return parsed as T;
   }
 

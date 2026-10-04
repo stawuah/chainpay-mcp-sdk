@@ -1,4 +1,4 @@
-export type WalletBrand = "phantom" | "jupiter" | "solflare" | "metamask";
+export type WalletBrand = "phantom" | "jupiter" | "solflare" | "metamask" | "backpack";
 
 /**
  * Wallet names come from the browser extension, so any extension can call itself
@@ -13,6 +13,7 @@ const EXACT_NAMES: Record<string, WalletBrand> = {
   solflare: "solflare",
   metamask: "metamask",
   "meta mask": "metamask",
+  backpack: "backpack",
 };
 
 export function matchingWalletBrand(name: string): WalletBrand | undefined {

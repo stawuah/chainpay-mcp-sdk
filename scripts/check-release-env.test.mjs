@@ -28,4 +28,8 @@ test("card connector needs its secrets and never runs in production", () => {
   assert.throws(() => checkReleaseEnvironment("backend", {...cards, CRON_SECRET: "short"}), /16/);
   assert.throws(() => checkReleaseEnvironment("backend", {...cards, CARDS_CHECKOUT_RUNNER_SECRET: "short"}), /32/);
   assert.throws(() => checkReleaseEnvironment("backend", {...cards, VERCEL_ENV: "production", CHAINPAY_RELEASE_ENVIRONMENT: "production", CHAINPAY_CONVEX_DEPLOYMENT_TYPE: "prod"}), /sandbox-only/);
+  assert.throws(() => checkReleaseEnvironment("backend", {...cards, CARDS_TEE_ATTESTATION_MODE: "off"}), /enforce or report/);
+  assert.equal(checkReleaseEnvironment("backend", {...cards, CARDS_TEE_ATTESTATION_MODE: "report"}).service, "backend");
+  for (const url of ["https://api.lithic.com", "https://api.lithic.com.", "https://API.LITHIC.COM:443", "http://sandbox.lithic.com"]) assert.throws(() => checkReleaseEnvironment("backend", {...cards, LITHIC_API_URL: url}), /sandbox\.lithic\.com/, url);
+  assert.equal(checkReleaseEnvironment("backend", {...cards, LITHIC_API_URL: "https://sandbox.lithic.com."}).service, "backend");
 });

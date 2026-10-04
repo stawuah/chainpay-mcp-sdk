@@ -6,8 +6,13 @@
 //
 //   node scripts/card-sim/card-sim.mjs --url http://127.0.0.1:8080 \
 //     --scenario scripts/card-sim/scenarios/approve_decline_duplicate.json \
-//     --card-token <lithic card token> [--agent-token <mcp connection token>] \
+//     --card-token <lithic card token> [--agent-token <mcp connection token> --card-id <card id>] \
 //     [--truth-port 4010]
+//
+// An intent step opens a checkout intent but does not redeem it, and the relay
+// only approves against intents the checkout runner redeemed (review X7). So a
+// synthetic ASA after an intent step declines here; approvals are covered by
+// the Rust suite (whose harness redeems) and by the demo-merchant checkout.
 //
 // Secrets come from the environment only: LITHIC_ASA_SECRET and
 // LITHIC_EVENTS_SECRET (whsec_...). Nothing secret is printed. With
@@ -24,8 +29,14 @@ const MERCHANTS = {
 };
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, value, i, all) => (value.startsWith("--") ? [...pairs, [value.slice(2), all[i + 1] && !all[i + 1].startsWith("--") ? all[i + 1] : "true"]] : pairs), []));
+const usage = "usage: card-sim.mjs --url <relay> --scenario <file> --card-token <token> [--agent-token <t> --card-id <id>] [--truth-port <p>]";
 if (!args.url || !args.scenario || !args["card-token"]) {
-  console.error("usage: card-sim.mjs --url <relay> --scenario <file> --card-token <token> [--agent-token <t>] [--truth-port <p>]");
+  console.error(usage);
+  process.exit(2);
+}
+if (args["agent-token"] && !args["card-id"]) {
+  // Intent steps post to /v1/cards/<card id>/checkout-intents.
+  console.error(`--card-id is required with --agent-token\n${usage}`);
   process.exit(2);
 }
 
@@ -84,9 +95,12 @@ for (const [index, step] of scenario.steps.entries()) {
   const label = `${scenario.name}#${index}`;
   if (step.intent) {
     if (!args["agent-token"]) { console.log(`${label} skip intent (no --agent-token)`); continue; }
-    const cardId = args["card-id"];
+    const cardId = encodeURIComponent(args["card-id"]);
     const response = await fetch(`${args.url}/v1/cards/${cardId}/checkout-intents`, { method: "POST", headers: { authorization: `Bearer ${args["agent-token"]}`, "content-type": "application/json" }, body: JSON.stringify({ clientOperationId: `sim-${run}-${index}`, merchantRef: step.intent.merchant, amountCents: step.intent.amountCents, currency: "USD" }) });
-    console.log(`${label} intent ${response.status}`);
+    // An intent that was not opened is a failed step, not a log line.
+    const ok = step.expectStatus ? response.status === step.expectStatus : response.ok;
+    failures += ok ? 0 : 1;
+    console.log(`${label} intent ${response.status}${ok ? "" : " (failed)"}`);
   } else if (step.asa) {
     const token = tokenFor(step.asa.txn);
     const status = step.asa.status ?? "AUTHORIZATION";

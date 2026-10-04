@@ -134,7 +134,13 @@ pub struct Reservation {
     pub bump: u8,
     // ---- appended in Phase 1A (contracts.md changelog) ----
     pub capture_count: u8,
+    /// Every capture id of this hold: `capture` refuses one more than fits
+    /// (`CaptureLimit`), so a retried capture can never land twice.
     pub capture_ids: [[u8; 32]; CAPTURE_RING],
+    // ---- appended in review fixes (2026-10-04) ----
+    /// The checkout intent's `max_amount_cents`: an `adjust_reservation`
+    /// increase never takes the hold past what the agent was approved for.
+    pub max_amount_cents: u64,
 }
 
 /// PER-only ephemeral account, private. Created on the card's first
