@@ -32,14 +32,34 @@ export function centsToString(value: bigint): CentsString {
   return value.toString();
 }
 
-/** Platform fee on one amount: ceil(x · bps / 10 000), integer only (contracts.md §1.5). */
+/**
+ * Platform fee on one line: floor(x · bps / 10 000), integer only. The one
+ * rule for debits and credits alike, the same in card_policy and Axum
+ * statements (contracts.md §1.5, review fixes 2026-10-04). Rounding down means
+ * split refunds never credit more than one refund of the same total, and a
+ * period's fees never pass fee(budget). Vectors: shared/cards/fee-vectors.json.
+ */
 export function feeCents(amountCents: bigint, feeBps: number): bigint {
   assertBps(feeBps);
   if (amountCents < 0n) throw new Error("amount can't be negative");
-  return (amountCents * BigInt(feeBps) + (BPS_DENOMINATOR - 1n)) / BPS_DENOMINATOR;
+  return (amountCents * BigInt(feeBps)) / BPS_DENOMINATOR;
 }
 
-/** The most the owner can ever owe for one period: budget + fee(budget). $500 @ 50 bps → $502.50. */
+/**
+ * A refund on a hold returns at most what it captured and hasn't refunded:
+ * `refunded + amount <= captured`. Returns the amount when it fits, `null`
+ * when card_policy (or Axum, for a closed hold) sends it to review instead.
+ */
+export function refundableCents(capturedCents: bigint, refundedCents: bigint, amountCents: bigint): bigint | null {
+  return refundedCents + amountCents <= capturedCents ? amountCents : null;
+}
+
+/**
+ * The most the owner can owe for one period: budget + fee(budget). $500 @ 50 bps → $502.50.
+ * A hard limit: card_policy bills no debit (purchase, forced post, late capture)
+ * past the period budget, and floor fees sum to at most fee(budget). Issuer
+ * charges past it are booked for review, never onto the owner's statement.
+ */
 export function maxObligationCents(budgetCents: bigint, feeBps: number): bigint {
   return budgetCents + feeCents(budgetCents, feeBps);
 }
@@ -66,7 +86,7 @@ export type StatementLineInput = { kind: "purchase" | "refund" | "adjustment_deb
 export type StatementTotals = {
   purchasesCents: bigint;
   refundsCents: bigint;
-  /** Signed: refund fees are negative, using the same ceil formula. */
+  /** Signed: refund fees are negative, using the same floor formula. */
   feeCents: bigint;
   /** Signed: negative means the period ended in credit. */
   totalCents: bigint;

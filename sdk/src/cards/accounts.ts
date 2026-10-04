@@ -356,6 +356,8 @@ export type Reservation = {
   bump: number;
   /** Program-appended capture-id ring (replay guard for `capture`). Present only when the account is long enough. */
   captureIdHashes?: Uint8Array[];
+  /** Program-appended: the checkout intent's max; `adjust_reservation` never grows the hold past it. */
+  maxAmountCents?: bigint;
 };
 
 export const RESERVATION_LENGTH = 8 + 32 + 32 + 32 + 4 + 8 * 4 + 1 + 1 + 1 + 8 + 8 + 1;
@@ -381,11 +383,12 @@ export function decodeReservation(data: Uint8Array | Buffer): Reservation {
   };
 }
 
-function captureTail(r: BorshReader): { captureIdHashes?: Uint8Array[] } {
+function captureTail(r: BorshReader): { captureIdHashes?: Uint8Array[]; maxAmountCents?: bigint } {
   if (r.remaining() < 1 + 32 * CAPTURE_RING) return {};
   const count = Math.min(r.u8("captureCount"), CAPTURE_RING);
   const ring = Array.from({ length: CAPTURE_RING }, (_, i) => r.fixed(32, `captureIds[${i}]`));
-  return { captureIdHashes: ring.slice(0, count) };
+  if (r.remaining() < 8) return { captureIdHashes: ring.slice(0, count) };
+  return { captureIdHashes: ring.slice(0, count), maxAmountCents: r.u64("maxAmountCents") };
 }
 
 export function encodeReservation(value: Reservation): Uint8Array {

@@ -321,3 +321,53 @@ test("a connection can only be scoped to cards the owner session owns", async (t
   const bad = await fetch(`${base}/connections`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ agentName: "x", scope: JSON.stringify(agentScope(["freeze_agent_card"])) }) });
   assert.equal(bad.status, 403);
 });
+
+// ------------------------------------------------------- review fixes (2026-10-04)
+
+/** Review F2: a gateway 5xx after Axum may have acted is an unknown outcome with retry guidance. */
+test("gateway 502/503/504 on checkout or freeze reads as unknown, retry with the same operation id", async () => {
+  for (const status of [502, 503, 504]) {
+    await withFetch(() => new Response("<html>Gateway Timeout</html>", { status }), async () => {
+      const r = await callTool(context(agentScope()), "request_card_checkout", checkoutArgs());
+      assert.equal(r.isError, true);
+      assert.equal(r.structuredContent.outcome, "unknown", String(status));
+      assert.equal(r.structuredContent.retryable, true);
+      assert.match(r.content[0].text, /Outcome unknown/);
+      assert.match(r.content[0].text, /clientOperationId "op-checkout-1"/);
+      const f = await callTool(context(null), "freeze_agent_card", { cardId: CARD_A, reason: "lost", clientOperationId: "freeze-op-0001" });
+      assert.equal(f.structuredContent.outcome, "unknown", `freeze ${status}`);
+    });
+  }
+  // Axum's own "can't tell yet" is unknown too; a definitive refusal stays "not done".
+  await withFetch(() => Response.json({ code: "outcome_unknown", message: "waiting", retryable: true, evidenceState: "unknown" }, { status: 503 }), async () => {
+    assert.equal((await callTool(context(agentScope()), "request_card_checkout", checkoutArgs())).structuredContent.outcome, "unknown");
+  });
+  await withFetch(() => Response.json({ code: "checkout_disabled", message: "off", retryable: true, evidenceState: "none" }, { status: 503 }), async () => {
+    assert.equal((await callTool(context(agentScope()), "request_card_checkout", checkoutArgs())).structuredContent.outcome, "not_done");
+  });
+});
+
+/** Review F3 + F7: a card number in a key or value (spaces, dashes, dots, slashes) is refused and never echoed. */
+test("card numbers in argument keys or dotted values are refused without echoing them", async () => {
+  await withFetch(() => { throw new Error("must not fetch"); }, async (calls) => {
+    for (const key of ["4111 1111 1111 1111", "4111.1111.1111.1111"]) {
+      const error = await callTool(context(agentScope()), "prepare_agent_card", { label: "x", budgetCents: "100", maxPurchaseCents: "100", periodDays: 1, mccs: [5734], [key]: 1 }).then(() => null, (e) => e);
+      assert.ok(error, key);
+      assert.doesNotMatch(error.message, /4111/, key);
+    }
+    for (const description of ["use 4111.1111.1111.1111 exp 12/29", "4111/1111/1111/1111"]) {
+      const error = await callTool(context(agentScope()), "request_card_checkout", checkoutArgs({ description })).then(() => null, (e) => e);
+      assert.ok(error && /card number/.test(error.message), description);
+      assert.doesNotMatch(error.message, /4111/);
+    }
+    assert.equal(calls.length, 0, "nothing card-like reached Axum");
+  });
+});
+
+/** Review F8: a draft with a shop ChainPay can't check out at is refused, not "ready". */
+test("prepare_agent_card refuses a shop that isn't registered", async () => {
+  await assert.rejects(
+    callTool(context(agentScope()), "prepare_agent_card", { label: "x", budgetCents: "1000", maxPurchaseCents: "500", merchants: ["not-a-real-shop"], periodDays: 30 }),
+    /isn't a shop ChainPay can check out at/,
+  );
+});
