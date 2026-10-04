@@ -9,7 +9,7 @@ import { cardStatus, ISSUER_FREEZE_COPY } from "./lifecycle";
 import { newOperationId, type CardPrivateRead, type CardStatements } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { UnlockStrip } from "./Unlock";
-import { Money, Pill, PrivateValue } from "./ui";
+import { CardStatus, Money, PrivateValue, readFailed } from "./ui";
 import { AgentCard, frostFor } from "./AgentCard";
 import { CardActivity } from "./CardActivity";
 import { CardStatement } from "./CardStatement";
@@ -35,6 +35,7 @@ export function CardDetail(props: CardDetailProps) {
   const [card, setCard] = useState<CardView | null>(null);
   const [loadError, setLoadError] = useState("");
   const [read, setRead] = useState<CardPrivateRead | undefined>();
+  const [readError, setReadError] = useState("");
   const [activity, setActivity] = useState<CardActivityRow[] | null>(null);
   const [statements, setStatements] = useState<CardStatements | null>(null);
   const [busy, setBusy] = useState<"" | "freeze" | "unfreeze">("");
@@ -73,6 +74,7 @@ export function CardDetail(props: CardDetailProps) {
   useEffect(() => {
     setCard(null);
     setRead(undefined);
+    setReadError("");
     setActivity(null);
     setStatements(null);
     setLoadError("");
@@ -93,8 +95,15 @@ export function CardDetail(props: CardDetailProps) {
 
   const refreshPrivate = useCallback(async (target: CardView) => {
     if (!source.isUnlocked()) return;
-    const next = await source.readPrivate(target);
-    if (currentCard.current === target.cardId) setRead(next);
+    try {
+      const next = await source.readPrivate(target);
+      if (currentCard.current !== target.cardId) return;
+      setRead(next);
+      setReadError(readFailed(next) ? "The private rollup didn't answer for this card." : "");
+    } catch (error) {
+      // A failed read is an error with a retry, never "Private".
+      if (currentCard.current === target.cardId) setReadError(errorText(error));
+    }
   }, [source]);
 
   useEffect(() => {
@@ -185,12 +194,12 @@ export function CardDetail(props: CardDetailProps) {
       <section className="dashboard-card cp-card-hero" data-status={status.key}>
         <div className="cp-card-hero-object">
           <AgentCard className="cp-card-hero-card is-lift" label={card.label} lastFour={card.lastFour} frost={frostFor(card)} leftCents={left} />
-          <CardNumberReveal source={source} card={card} />
+          <CardNumberReveal source={source} card={card} closeKey={section} />
         </div>
         <div className="cp-card-hero-body">
           <div className="cp-card-hero-top">
             <div className="cp-card-hero-text">
-              <Pill pill={status} />
+              <CardStatus pill={status} />
               {card.freeze.onChain && (
                 <ul className="cp-freeze-lines" data-testid="freeze-lines">
                   <li data-system="chainpay"><CircleCheck size={16} aria-hidden="true" /> Frozen on ChainPay. New purchases are declined.</li>
@@ -216,18 +225,25 @@ export function CardDetail(props: CardDetailProps) {
           </div>
           <div className="cp-card-left" data-private={policy && period ? "no" : "yes"}>
             <span className="cp-card-left-label">Left this period</span>
-            <strong className="cp-card-left-value">{left !== null ? <Money cents={left} /> : <PrivateValue />}</strong>
-            <SpendMeter budget={policy ? BigInt(policy.budgetCents) : null} charged={period?.capturedCents ?? null} held={period?.reservedCents ?? null} left={left} />
+            <strong className="cp-card-left-value">{left !== null ? <Money cents={left} /> : <PrivateValue failed={Boolean(readError)} />}</strong>
+            <SpendMeter failed={Boolean(readError)} budget={policy ? BigInt(policy.budgetCents) : null} charged={period?.capturedCents ?? null} held={period?.reservedCents ?? null} left={left} />
           </div>
           <dl className="cp-card-numbers">
-            <div><dt>Owed on statement</dt><dd>{policy ? <Money cents={policy.statementOutstandingCents} /> : <PrivateValue />}</dd></div>
-            <div><dt>Budget per period</dt><dd>{policy ? <Money cents={policy.budgetCents} /> : <PrivateValue />}</dd></div>
-            <div><dt>Max per purchase</dt><dd>{policy ? <Money cents={policy.maxPurchaseCents} /> : <PrivateValue />}</dd></div>
+            <div><dt>Owed on statement</dt><dd>{policy ? <Money cents={policy.statementOutstandingCents} /> : <PrivateValue failed={Boolean(readError)} />}</dd></div>
+            <div><dt>Budget per period</dt><dd>{policy ? <Money cents={policy.budgetCents} /> : <PrivateValue failed={Boolean(readError)} />}</dd></div>
+            <div><dt>Max per purchase</dt><dd>{policy ? <Money cents={policy.maxPurchaseCents} /> : <PrivateValue failed={Boolean(readError)} />}</dd></div>
           </dl>
         </div>
         {actionError && <div className="builder-error cp-card-hero-error" role="alert"><b>Needs attention</b><span>{actionError}</span></div>}
       </section>
       {!unlocked && <UnlockStrip source={source} onUnlocked={onUnlocked} compact />}
+      {unlocked && readError && (
+        <div className="builder-error cp-read-failed" role="alert" data-testid="card-read-failed">
+          <b>Private details didn't load</b>
+          <span>{readError}</span>
+          <Button type="button" variant="secondary" label="Try again" onClick={() => void refreshPrivate(card)} />
+        </div>
+      )}
 
       <TabList className="cp-card-tabs" value={section} onChange={(value) => onNavigate({ cardId, cardSection: value as CardSection })} role="tablist" aria-label="Card sections">
         {CARD_SECTIONS.map((item) => <Tab key={item} value={item} label={SECTION_LABELS[item]} panelId={`card-section-${item}`} />)}
@@ -243,12 +259,12 @@ export function CardDetail(props: CardDetailProps) {
 }
 
 /** Charged · held · left, as exact shares of the budget. A hatched bar until the limits are readable (ruling P3, K3: never $0). */
-function SpendMeter({ budget, charged, held, left }: { budget: bigint | null; charged: string | bigint | null; held: string | bigint | null; left: string | bigint | null }) {
+function SpendMeter({ budget, charged, held, left, failed = false }: { budget: bigint | null; charged: string | bigint | null; held: string | bigint | null; left: string | bigint | null; failed?: boolean }) {
   const legend = (charged !== null || held !== null) && (
     <ul className="cp-meter-legend">
-      <li data-part="charged"><i aria-hidden="true" />Charged {charged !== null ? <Money cents={charged} /> : <PrivateValue />}</li>
-      <li data-part="held"><i aria-hidden="true" />Held {held !== null ? <Money cents={held} /> : <PrivateValue />}</li>
-      <li data-part="left"><i aria-hidden="true" />Left {left !== null ? <Money cents={left} /> : <PrivateValue />}</li>
+      <li data-part="charged"><i aria-hidden="true" />Charged {charged !== null ? <Money cents={charged} /> : <PrivateValue failed={failed} />}</li>
+      <li data-part="held"><i aria-hidden="true" />Held {held !== null ? <Money cents={held} /> : <PrivateValue failed={failed} />}</li>
+      <li data-part="left"><i aria-hidden="true" />Left {left !== null ? <Money cents={left} /> : <PrivateValue failed={failed} />}</li>
     </ul>
   );
   if (budget === null || charged === null || held === null) {

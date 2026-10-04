@@ -5,7 +5,7 @@ import type { Mandate, PaymentReceipt } from "@chainpay/sdk";
 import { chainpayClient } from "../config/client";
 import { buildPath } from "../routing/paths";
 import { receiptViewFromSettledPayment } from "../receipts/load";
-import { formatTokenUnits } from "../receipts/model";
+import { formatDisplayAmount } from "../ui/amount/formatDisplayAmount";
 import { buildReceiptsCsv, downloadTextFile, statementCsvFilename } from "../receipts/export";
 import { ownerOrderSummary, ownerReceiptRelay } from "../receipts/owner";
 import "../receipts/receipt-card.css";
@@ -27,17 +27,22 @@ export function expiresPhrase(label: string): string {
   return `expires ${label}`;
 }
 
-/** "Budget 50 USDC · Spent 12 USDC · Left 38 USDC · 3 payments · expires ≈ Nov 1, 2026". */
+/**
+ * "Budget 50.00 USDC · Spent 12.00 USDC · Left 38.00 USDC · 3 payments · expires ≈ Nov 1, 2026".
+ * Without verified decimals the amounts are left out (never shown as unscaled units);
+ * the caller shows the raw units in a technical disclosure.
+ */
 export function statementTotals(mandate: Pick<Mandate, "totalLimit" | "amountSpent" | "paymentCount">, decimals: number | null, token: string, expires: string): string {
   const left = mandate.totalLimit > mandate.amountSpent ? mandate.totalLimit - mandate.amountSpent : 0n;
   const count = mandate.paymentCount === 1n ? "1 payment" : `${mandate.paymentCount.toString()} payments`;
-  return [
-    `Budget ${formatTokenUnits(mandate.totalLimit.toString(), decimals, token)}`,
-    `Spent ${formatTokenUnits(mandate.amountSpent.toString(), decimals, token)}`,
-    `Left ${formatTokenUnits(left.toString(), decimals, token)}`,
-    count,
-    expiresPhrase(expires),
-  ].join(" · ");
+  const amounts = decimals === null
+    ? ["Amounts unavailable until the token’s decimals load"]
+    : [
+      `Budget ${formatDisplayAmount(mandate.totalLimit, decimals)} ${token}`,
+      `Spent ${formatDisplayAmount(mandate.amountSpent, decimals)} ${token}`,
+      `Left ${formatDisplayAmount(left, decimals)} ${token}`,
+    ];
+  return [...amounts, count, expiresPhrase(expires)].join(" · ");
 }
 
 /**
@@ -71,7 +76,7 @@ export function MandateStatement({
           .sort((left, right) => (left.executedAtSlot === right.executedAtSlot ? 0 : left.executedAtSlot > right.executedAtSlot ? -1 : 1));
         const cache = new Map<string, Promise<unknown>>();
         const next = await Promise.all(receipts.map(async (receipt): Promise<StatementRow> => {
-          const amount = formatTokenUnits(receipt.amount.toString(), decimals, token);
+          const amount = decimals === null ? "Amount unavailable" : `${formatDisplayAmount(receipt.amount, decimals)} ${token}`;
           const view = receiptViewFromSettledPayment(receipt, decimals);
           if (!view) return { receipt, amount };
           const summary = await ownerOrderSummary(view, cache).catch(() => ({} as Awaited<ReturnType<typeof ownerOrderSummary>>));
@@ -135,6 +140,12 @@ export function MandateStatement({
         />
       </div>
       <p className="mandate-statement-totals">{statementTotals(mandate, decimals, token, expires)}</p>
+      {decimals === null && (
+        <details className="cp-amount-raw">
+          <summary>raw units</summary>
+          <code>budget {mandate.totalLimit.toString()} · spent {mandate.amountSpent.toString()} · left {(mandate.totalLimit > mandate.amountSpent ? mandate.totalLimit - mandate.amountSpent : 0n).toString()}</code>
+        </details>
+      )}
       {status === "loading" && <p className="mandate-statement-note" aria-busy="true">Reading this permission’s receipts…</p>}
       {status === "error" && <p className="mandate-statement-note" role="alert">Receipts could not be read from Solana. Totals above are from the permission itself.</p>}
       {status === "ready" && rows.length === 0 && <p className="mandate-statement-note">No payments under this permission yet.</p>}

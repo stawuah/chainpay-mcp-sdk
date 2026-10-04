@@ -103,7 +103,7 @@ test("an unconfirmed send says don't pay again, and a mismatch keeps the stateme
   const { host } = await mount({
     prepare: async () => attempt,
     check: pending,
-    pay: async () => ({ transferOutcome: "unknown" }),
+    pay: async (_attempt, onSigned) => { onSigned("5igSignedTransfer"); return { transferOutcome: "unknown" }; },
     wait: () => new Promise((resolve) => { release = resolve; }),
   });
   await act(async () => host.querySelector('[data-testid="private-repay-agree"]').click());
@@ -138,7 +138,8 @@ test("after a reload, an attempt this browser already sent waits instead of payi
   const props = {
     prepare: async () => attempt,
     check: pending,
-    pay: async () => { calls.push("pay"); return { transferOutcome: "unknown" }; },
+    // The wallet returns the signed transfer, then the send's outcome is unknown.
+    pay: async (_attempt, onSigned) => { calls.push("pay"); onSigned("5igSignedTransfer1111111111111111111111111111111111111111111111"); return { transferOutcome: "unknown" }; },
     wait: () => new Promise(() => {}),
   };
   const first = await mount(props);
@@ -153,4 +154,65 @@ test("after a reload, an attempt this browser already sent waits instead of payi
   await flush();
   assert.deepEqual(calls, ["pay"], "not paid twice");
   assert.match(second.host.querySelector('[data-testid="private-repay-sent"]').textContent, /don't pay again/);
+});
+
+test("a wallet that cancels leaves the statement payable: no 'sent' marker, 'Not paid', and the next try pays", async () => {
+  let pays = 0;
+  const props = {
+    prepare: async () => attempt,
+    check: pending,
+    // Rejected in the wallet: onSigned never runs.
+    pay: async () => { pays += 1; throw new Error("User rejected the request."); },
+    wait: () => Promise.reject(Object.assign(new Error("Still waiting for the partner."), { code: "settlement_pending" })),
+  };
+  const first = await mount(props);
+  await act(async () => first.host.querySelector('[data-testid="private-repay-agree"]').click());
+  await act(async () => button(first.host, "privately").click());
+  await flush();
+  const error = first.host.querySelector('[data-testid="private-repay-error"]');
+  assert.match(error.textContent, /^Not paid/);
+  assert.match(error.textContent, /Nothing was sent/);
+  assert.doesNotMatch(error.textContent, /don't pay again/i);
+  assert.equal(Object.keys(window.localStorage).filter((k) => k.startsWith("cp-private-sent:")).length, 0, "no marker without a signature");
+  // Same attempt again (the reference is fixed per statement): pay is offered, not skipped.
+  await act(async () => button(first.host, "Try again").click());
+  await flush();
+  assert.equal(pays, 2);
+  const second = await mount(props);
+  await act(async () => second.host.querySelector('[data-testid="private-repay-agree"]').click());
+  await act(async () => button(second.host, "privately").click());
+  await flush();
+  assert.equal(pays, 3, "a reload still offers the payment");
+  assert.doesNotMatch(second.host.textContent, /don't pay again/i);
+});
+
+test("the 'sent' marker is the signature the wallet returned, and a failure after signing never reads as not paid", async () => {
+  const { host } = await mount({
+    prepare: async () => attempt,
+    check: pending,
+    pay: async (_attempt, onSigned) => { onSigned("SignedTransferSig"); throw new Error("Network error"); },
+    wait: () => new Promise(() => {}),
+  });
+  await act(async () => host.querySelector('[data-testid="private-repay-agree"]').click());
+  await act(async () => button(host, "privately").click());
+  await flush();
+  const stored = JSON.parse(window.localStorage.getItem(`cp-private-sent:${attempt.statementId}:${attempt.attemptId}`));
+  assert.equal(stored.signature, "SignedTransferSig");
+  assert.match(host.querySelector('[data-testid="private-repay-error"]').textContent, /Not confirmed yet/);
+  assert.match(host.textContent, /Don't pay again/);
+});
+
+test("an old marker without a signature (written before the wallet answered) doesn't block paying", async () => {
+  window.localStorage.setItem(`cp-private-sent:${attempt.statementId}:${attempt.attemptId}`, "2026-10-04T10:00:00.000Z");
+  let pays = 0;
+  const { host } = await mount({
+    prepare: async () => attempt,
+    check: pending,
+    pay: async (_attempt, onSigned) => { pays += 1; onSigned("Sig"); return { transferOutcome: "sent" }; },
+    wait: async () => ({ state: "discharged", statement: {} }),
+  });
+  await act(async () => host.querySelector('[data-testid="private-repay-agree"]').click());
+  await act(async () => button(host, "privately").click());
+  await flush();
+  assert.equal(pays, 1);
 });

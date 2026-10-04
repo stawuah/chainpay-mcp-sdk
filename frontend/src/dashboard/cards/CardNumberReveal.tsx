@@ -27,7 +27,11 @@ export function safeEmbedUrl(value: string): string | null {
   }
 }
 
-export function CardNumberReveal({ source, card }: { source: CardsSource; card: CardView }) {
+/**
+ * `closeKey`: anything that means the owner moved on (the card section on screen).
+ * The frame closes when it changes, when the browser tab is hidden or left, and on unmount.
+ */
+export function CardNumberReveal({ source, card, closeKey }: { source: CardsSource; card: CardView; closeKey?: string }) {
   const [state, setState] = useState<{ kind: "closed" } | { kind: "loading" } | { kind: "open"; url: string | null; closesAt: number } | { kind: "error"; message: string }>({ kind: "closed" });
 
   useEffect(() => {
@@ -42,7 +46,19 @@ export function CardNumberReveal({ source, card }: { source: CardsSource; card: 
     request.current += 1;
     setState({ kind: "closed" });
     return () => { request.current += 1; };
-  }, [card.cardId]);
+  }, [card.cardId, closeKey]);
+
+  // Hidden tab or leaving the page closes the frame (and drops a reply still on its way).
+  useEffect(() => {
+    const close = () => { request.current += 1; setState((current) => current.kind === "closed" ? current : { kind: "closed" }); };
+    const onVisibility = () => { if (document.visibilityState === "hidden") close(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", close);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", close);
+    };
+  }, []);
 
   async function open() {
     const mine = ++request.current;
@@ -84,7 +100,7 @@ export function CardNumberReveal({ source, card }: { source: CardsSource; card: 
             </div>
           )}
           <button type="button" className="cp-link-button" onClick={() => { request.current += 1; setState({ kind: "closed" }); }}><EyeOff size={14} aria-hidden="true" /> Hide card number</button>
-          <small className="owner-muted">Only you see this. It loads straight from the card network into this frame, ChainPay never receives it, and your agent never gets it.</small>
+          <small className="owner-muted">Shown in this browser only. It loads straight from the card network into this frame, ChainPay never receives it, and your agent never gets it.</small>
         </>
       ) : (
         <>

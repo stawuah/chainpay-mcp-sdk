@@ -103,18 +103,23 @@ export function compareMandatesByCreation(left: Mandate, right: Mandate) {
   return createdAtDifference || right.address.localeCompare(left.address);
 }
 
+/** The workspace's one date-and-time format: "Sep 15, 2026, 7:00 PM". Null for an invalid date. */
+export function workspaceDateTime(value: string | number | Date): string | null {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export function mandateCreatedLabel(mandate: Mandate) {
   if (mandate.createdAt !== undefined) {
-    const date = new Date(mandate.createdAt * 1_000);
-    if (!Number.isNaN(date.getTime())) {
-      return new Intl.DateTimeFormat(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(date);
-    }
+    const label = workspaceDateTime(mandate.createdAt * 1_000);
+    if (label) return label;
   }
   return mandate.createdAtSlot === undefined ? "Creation time unavailable" : `Created at slot ${mandate.createdAtSlot}`;
 }
@@ -350,7 +355,7 @@ export function connectionScopeDetails(scope: string) {
     const cards = parsed.cards?.length ?? 0;
     // Cards-only connection (agent card): checkout on the named cards, no mandates.
     if (!count && cards) return { count, label: `${cards} agent card${cards === 1 ? "" : "s"} · ${parsed.tools?.includes("request_card_checkout") ? "Card checkout permitted" : "Read only"}` };
-    return { count, label: `${count} mandate${count === 1 ? "" : "s"} · ${parsed.tools?.some(tool => ["execute_payment", "execute_x402_payment"].includes(tool)) ? "Payments permitted" : "Read and prepare"}` };
+    return { count, label: `${count} permission${count === 1 ? "" : "s"} · ${parsed.tools?.some(tool => ["execute_payment", "execute_x402_payment"].includes(tool)) ? "Payments permitted" : "Read and prepare"}` };
   } catch { return { count: 0, label: "Reconnect to select permissions" }; }
 }
 

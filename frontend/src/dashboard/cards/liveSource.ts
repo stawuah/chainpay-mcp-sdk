@@ -4,8 +4,6 @@ import {
   buildDisclosureBundle,
   buildInitPermissionInstruction,
   buildResolveExceptionInstruction,
-  buildRestoreInstruction,
-  decodeCardInstructionData,
   buildSetPolicyInstruction,
   buildUnfreezeInstruction,
   buildUpdatePermissionInstruction,
@@ -36,7 +34,6 @@ import {
   type ChainPayInstruction,
   type PolicyArgs,
   type PreparedCard,
-  type RestoreArgs,
   type TeeRead,
   type TeeSession,
 } from "@chainpay/sdk";
@@ -48,6 +45,8 @@ import { chainpayClient } from "../../config/client";
 import { sha256Hex, submitSignedTransaction } from "../../owner/runtime";
 import { checkTeeAttestation } from "./teeAttestation";
 import { statementAmountDue } from "./statementMath";
+import { assertCardSetupTransaction, assertCoSignedRestore, reviewedRestore, type ReviewedRestore } from "./signingGuards";
+import { lookupRepayment, recordRepaymentAttempt } from "./repaymentAttempts";
 import {
   CardsNotEnabledError,
   CARD_AGENT_TOOLS,
@@ -60,10 +59,13 @@ import {
   type PrivacyCheckResult,
   type ReaderMember,
   type ReadResult,
-  type RecoveryNumberKey,
   type RecoveryReport,
+  type RecoveryRules,
+  type RepaymentLookup,
   RECOVERY_NUMBER_KEYS,
 } from "./source";
+
+export { assertCoSignedRestore, assertRestoreMatchesReport, assertCardSetupTransaction } from "./signingGuards";
 
 /*
  * Live Cards source: Axum card routes through the SDK client (owner session
@@ -119,7 +121,6 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
   let session: TeeSession | null = null;
   /** Resumable create attempts: same Axum operation ids and skipped finished steps on "Try again". */
   const attempts = new Map<string, { prepared?: PreparedCard; baseDone: number; rulesDone: boolean; activated?: string }>();
-  const ALLOWED_BASE_PROGRAMS = new Set([programId, "11111111111111111111111111111111", DELEGATION_PROGRAM_ID, "ComputeBudget111111111111111111111111111111"]);
 
   const accounts = (cardId: string) => deriveCardAccounts(deps.wallet, cardIdFromHex(cardId), programId);
   const cardRef = (cardId: string) => ({ owner: deps.wallet, cardId: cardIdFromHex(cardId) });
@@ -164,10 +165,10 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
   }
 
   /** Owner co-signs an authorizer-signed PER transaction after checking it is exactly one card_policy `restore` with the reviewed values. */
-  async function sendCoSignedTee(step: string, encoded: string, report: RecoveryReport, cardId: string): Promise<string> {
+  async function sendCoSignedTee(step: string, encoded: string, report: RecoveryReport, reviewed: ReviewedRestore, cardId: string): Promise<string> {
     if (!deps.signTransaction) throw new Error("This wallet can't sign transactions.");
     const transaction = Transaction.from(Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0)));
-    assertCoSignedRestore(transaction, { ...cardRef(cardId), programId, report });
+    assertCoSignedRestore(transaction, { ...cardRef(cardId), programId, report, reviewed });
     const tee = await ensureSession();
     const signed = await deps.signTransaction(transaction);
     try {
@@ -179,10 +180,6 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
     } catch {
       throw teeError(step);
     }
-  }
-
-  function assertBaseTransaction(transaction: Transaction) {
-    assertBaseTransactionWith(ALLOWED_BASE_PROGRAMS, deps.wallet, transaction);
   }
 
   async function readRaw(cardId: string) {
@@ -294,7 +291,8 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
         // already on Solana instead of asking the wallet to sign it again.
         if (await baseStepDone(index, prepared)) { attempt.baseDone = index + 1; continue; }
         const transaction = Transaction.from(Uint8Array.from(atob(encodedTxs[index]), (char) => char.charCodeAt(0)));
-        assertBaseTransaction(transaction);
+        // Decoded against the exact setup instruction for THIS card; anything else is refused.
+        assertCardSetupTransaction(transaction, index, { owner: deps.wallet, prepared, programId });
         // Server-built, owner-only transactions: refresh the blockhash right before
         // signing so a slow wallet prompt can't push it past its lifetime.
         if (transaction.signatures.every((entry) => entry.publicKey.toBase58() === deps.wallet && !entry.signature)) {
@@ -388,8 +386,19 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       if (!prepared.preflight.valid) throw new Error(prepared.preflight.checks.filter((check) => !check.ok).map((check) => check.message).join(" · ") || "This spending permission can't pay the statement.");
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
       const signed = await deps.signTransaction(toWeb3Transaction(prepared.transaction, latest.blockhash));
+      // Signed: from here on the outcome can be unknown. Recorded per statement, so no other
+      // permission can pay it again until a receipt shows up or this blockhash expires.
+      recordRepaymentAttempt(statement.digest, { mandatePda: mandateAddress, receiptPda: prepared.receiptAddress, lastValidBlockHeight: latest.lastValidBlockHeight });
+      const unknown = (reason?: string) => ({
+        outcome: "unknown" as const,
+        receiptPda: prepared.receiptAddress,
+        mandatePda: mandateAddress,
+        reason: reason || "No clear answer came back after you signed, so this payment may have settled.",
+      });
       const hex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-      const result = await deps.onCallMcp("execute_payment", {
+      let result: McpResponse;
+      try {
+        result = await deps.onCallMcp("execute_payment", {
         mandate: prepared.request.mandate,
         agent: deps.wallet,
         invoiceHash: hex(prepared.request.invoiceHash),
@@ -402,11 +411,28 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
         ...(prepared.request.tokenProgram ? { tokenProgram: prepared.request.tokenProgram } : {}),
         signedTransaction: btoa(String.fromCharCode(...signed.serialize())),
       });
-      const body = result.structuredContent as { status?: string; signature?: string; receiptAddress?: string; error?: string } | undefined;
-      if (result.isError || body?.status !== "confirmed" || body.receiptAddress !== prepared.receiptAddress) {
-        throw new Error(body?.error ?? "The payment wasn't confirmed. Check Payments before trying again.");
+      } catch (error) {
+        return unknown(error instanceof Error ? error.message : undefined);
       }
-      return { receiptPda: prepared.receiptAddress, mandatePda: mandateAddress, signature: body.signature };
+      const body = result.structuredContent as { status?: string; signature?: string; receiptAddress?: string; error?: string } | undefined;
+      // Anything short of a confirmation for this exact receipt is unknown, never "not paid":
+      // the signed bytes reached the relay. The receipt check settles it.
+      if (result.isError || body?.status !== "confirmed" || body.receiptAddress !== prepared.receiptAddress) return unknown(body?.error);
+      return { outcome: "confirmed", receiptPda: prepared.receiptAddress, mandatePda: mandateAddress, signature: body.signature };
+    },
+
+    async repaymentStatus(statement, mandateAddresses): Promise<RepaymentLookup> {
+      if (!statement.digest) return { state: "none" };
+      const invoiceHash = hexBytes(statement.digest);
+      return lookupRepayment({
+        digest: statement.digest,
+        mandateAddresses,
+        getBlockHeight: () => chainpayClient.connection.getBlockHeight("confirmed"),
+        findReceipt: async (mandate) => {
+          const receipt = await chainpayClient.getPayment({ mandate, invoiceHash } as Parameters<typeof chainpayClient.getPayment>[0]);
+          return receipt ? String(receipt.address) : null;
+        },
+      });
     },
 
     privateRepay(card, statement) {
@@ -422,18 +448,23 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
         prepare: () => preparePrivateRepayment(routes, card.cardId, statement.statementId, attemptOp),
         check: (attempt) => submitPrivateRepayment(routes, card.cardId, statement.statementId, attempt.attemptId),
         wait: (attempt) => waitForPrivateRepayment(routes, card.cardId, statement.statementId, attempt.attemptId),
-        pay: async (attempt) => {
+        pay: async (attempt, onSigned) => {
           const signTransaction = deps.signTransaction;
           const signMessage = deps.signMessage;
           if (!signTransaction || !signMessage) throw new Error("This wallet can't sign the private payment.");
+          // The SDK announces a deposit before signing it; any other signature is the private transfer.
+          let signingDeposit = false;
           const result = await payStatementPrivately({
             attempt,
+            onStep: (step) => { if (step.step === "deposit") signingDeposit = !("signature" in step && step.signature); },
             signer: {
               publicKey: deps.wallet,
               signMessage,
               async signTransaction(b64) {
                 // MagicBlock builds legacy transactions on Devnet (no lookup tables).
                 const signed = await signTransaction(Transaction.from(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
+                // Only now, with the wallet's signature in hand, is the transfer "sent" for this browser.
+                if (!signingDeposit && signed.signature) onSigned(base58(signed.signature));
                 return btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
               },
             },
@@ -456,9 +487,19 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
 
     async restore(card, report) {
       // A restore that already landed (recovery_state 2) is never signed twice: go straight to replay.
-      const current = await ensureSession().then((tee) => readCardPolicy(tee, accounts(card.cardId).policy, programId)).catch(() => null);
+      const tee = await ensureSession();
+      const [current, currentPeriod] = await Promise.all([
+        readCardPolicy(tee, accounts(card.cardId).policy, programId).catch(() => null),
+        readCardPeriod(tee, accounts(card.cardId).period, programId).catch(() => null),
+      ]);
       const alreadyRestored = current?.state === "visible" && current.account.recoveryState === "restored_pending_reconcile";
       if (!alreadyRestored) {
+        // What the restore may write besides the 7 numbers: the card's own rules, read with the
+        // owner's session, and ChainPay's report must agree with them. Checked before asking Axum.
+        const reviewed = reviewedRestore(report, {
+          policy: current?.state === "visible" ? current.account : null,
+          period: currentPeriod?.state === "visible" ? currentPeriod.account : null,
+        });
         const prepared = await guard(() => api.prepareRestore(card.cardId, { clientOperationId: `card-restore-${report.digest.slice(0, 32)}`, reconReportDigest: report.digest }));
         if (prepared.state !== "ready_to_sign") {
           throw new Error("ChainPay's numbers changed since you reviewed them, so nothing was signed. Review the new numbers and try again.");
@@ -466,9 +507,9 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
         // card_policy requires owner + authorizer co-sign on restore, so there is no
         // owner-only path. Axum returns the PER transaction already signed by the
         // authorizer (`restoreTx`, nothing else is accepted); the owner checks it
-        // writes exactly the reviewed values, adds a signature and sends it.
+        // writes exactly the reviewed numbers and rules, adds a signature and sends it.
         if (typeof prepared.restoreTx !== "string" || !prepared.restoreTx) throw new Error("ChainPay didn't return the co-signed restore yet. Nothing was signed; try again in a moment.");
-        await sendCoSignedTee("Approve restore", prepared.restoreTx, report, card.cardId);
+        await sendCoSignedTee("Approve restore", prepared.restoreTx, report, reviewed, card.cardId);
       }
       // Replay issuer events ChainPay never applied; the card stays frozen.
       await guard(() => api.reconcileRecovery(card.cardId, `card-reconcile-${report.digest.slice(0, 32)}`));
@@ -563,7 +604,7 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
  * owner's `confirm_reconciled`. `restored` (confirmed) and no recovery are both normal.
  */
 export function recoveryView(card: CardView): CardRecoveryView {
-  const raw = card.recovery as { state?: unknown; report?: Partial<RecoveryReport> } | undefined;
+  const raw = card.recovery as { state?: unknown; report?: Partial<Omit<RecoveryReport, "rules">> & { rules?: unknown } } | undefined;
   const state: CardRecoveryView["state"] = raw?.state === "recovery_frozen" || raw?.state === "restore_prepared"
     ? "recovery_frozen"
     : raw?.state === "reconciled_pending_owner_confirm" || raw?.state === "restored_pending_reconcile"
@@ -583,7 +624,34 @@ export function recoveryView(card: CardView): CardRecoveryView {
       snapshotLedgerSeq: String(report.snapshotLedgerSeq ?? "0"),
       issuerEventsReplayed: typeof report.issuerEventsReplayed === "number" ? report.issuerEventsReplayed : 0,
       numbers: report.numbers as RecoveryReport["numbers"],
+      ...(parseRecoveryRules(report.rules) ? { rules: parseRecoveryRules(report.rules) } : {}),
     },
+  };
+}
+
+/** Axum's report `rules`, accepted only when every field has the exact type; anything else is dropped (and then can't vouch for a restore). */
+export function parseRecoveryRules(raw: unknown): RecoveryRules | undefined {
+  const r = raw as Partial<Record<keyof RecoveryRules, unknown>> | null | undefined;
+  if (!r || typeof r !== "object") return undefined;
+  const digits = (value: unknown) => typeof value === "string" && /^\d+$/.test(value);
+  const int = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  const ok = digits(r.maxPurchaseCents) && int(r.maxPurchasesPerPeriod) && int(r.periodSeconds) && typeof r.currency === "string"
+    && Array.isArray(r.merchantIdHashes) && r.merchantIdHashes.every((hash) => typeof hash === "string" && /^[0-9a-fA-F]{64}$/.test(hash))
+    && Array.isArray(r.mccs) && r.mccs.every(int) && digits(r.expiresAt) && typeof r.recurringAllowed === "boolean" && int(r.feeBps)
+    && typeof r.authorizer === "string" && (r.periodIndex === undefined || int(r.periodIndex));
+  if (!ok) return undefined;
+  return {
+    maxPurchaseCents: r.maxPurchaseCents as string,
+    maxPurchasesPerPeriod: r.maxPurchasesPerPeriod as number,
+    periodSeconds: r.periodSeconds as number,
+    currency: r.currency as string,
+    merchantIdHashes: (r.merchantIdHashes as string[]).map((hash) => hash.toLowerCase()),
+    mccs: [...(r.mccs as number[])],
+    expiresAt: r.expiresAt as string,
+    recurringAllowed: r.recurringAllowed as boolean,
+    feeBps: r.feeBps as number,
+    authorizer: r.authorizer as string,
+    ...(r.periodIndex !== undefined ? { periodIndex: r.periodIndex as number } : {}),
   };
 }
 
@@ -616,65 +684,12 @@ function normalizeStatement(statement: StatementView): StatementView {
   return statement.displayState === "overdue" ? { ...statement, state: "overdue" } : statement;
 }
 
-const RESTORE_MISMATCH = "The restore ChainPay prepared doesn't match the numbers you reviewed, so it wasn't signed.";
-
-/**
- * The co-signed restore must be exactly one card_policy `restore` for this card,
- * paid by the owner, already signed by an authorizer other than the owner, with
- * the account list the program expects, and every value it writes equal to a
- * number in the report the owner reviewed. Checks what will actually be signed.
- */
-export function assertCoSignedRestore(transaction: Transaction, input: { owner: string; cardId: Uint8Array; programId: string; report: RecoveryReport }): RestoreArgs {
-  const [only] = transaction.instructions;
-  if (transaction.instructions.length !== 1 || !only.programId.equals(new PublicKey(input.programId))) throw new Error(RESTORE_MISMATCH);
-  if (!transaction.feePayer || transaction.feePayer.toBase58() !== input.owner) throw new Error(RESTORE_MISMATCH);
-  let decoded: ReturnType<typeof decodeCardInstructionData>;
-  try {
-    decoded = decodeCardInstructionData(only.data);
-  } catch {
-    throw new Error(RESTORE_MISMATCH);
-  }
-  if (decoded.name !== "restore") throw new Error(RESTORE_MISMATCH);
-  const args = decoded.args.restore;
-  if (bytesToHexLower(args.reconDigest) !== input.report.digest) throw new Error(RESTORE_MISMATCH);
-  assertRestoreMatchesReport(args, input.report);
-  const authorizer = only.keys[1]?.pubkey.toBase58();
-  if (!authorizer || authorizer === input.owner) throw new Error(RESTORE_MISMATCH);
-  const want = buildRestoreInstruction({ owner: input.owner, cardId: input.cardId, authorizer, restore: args }, input.programId);
-  // A deserialized transaction marks the fee payer (the owner) writable, so the owner's
-  // writable flag is not compared; every other key must match exactly.
-  const sameKeys = only.keys.length === want.keys.length && want.keys.every((key, i) =>
-    only.keys[i].pubkey.toBase58() === key.address && only.keys[i].isSigner === key.isSigner && (key.address === input.owner || only.keys[i].isWritable === key.isWritable));
-  if (!sameKeys || !Buffer.from(only.data).equals(Buffer.from(want.data))) throw new Error(RESTORE_MISMATCH);
-  const authorizerSigned = transaction.signatures.some((entry) => entry.publicKey.toBase58() === authorizer && entry.signature !== null);
-  if (!authorizerSigned) throw new Error("ChainPay's half of the restore isn't signed yet, so it wasn't signed.");
-  return args;
-}
-
-function bytesToHexLower(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-/** Every value the restore writes must equal a number the owner was shown (report.numbers). */
-export function assertRestoreMatchesReport(args: RestoreArgs, report: RecoveryReport): void {
-  const shown = new Map(report.numbers.map((row) => [row.key, row.cents ?? (row.count === undefined ? undefined : String(row.count))]));
-  const signed: Record<RecoveryNumberKey, string> = {
-    budget: args.policy.budgetCents.toString(),
-    captured: args.capturedCents.toString(),
-    reserved: args.reservedCents.toString(),
-    refunded: args.refundedCents.toString(),
-    purchases: String(args.purchasesCount),
-    exceptions: args.exceptionCents.toString(),
-    outstanding: args.statementOutstandingCents.toString(),
-  };
-  for (const key of RECOVERY_NUMBER_KEYS) {
-    if (shown.get(key) !== signed[key]) throw new Error("The restore ChainPay prepared doesn't match the numbers you reviewed, so it wasn't signed.");
-  }
-}
-
-function assertBaseTransactionWith(allowed: Set<string>, owner: string, transaction: Transaction): void {
-  if (!transaction.feePayer || transaction.feePayer.toBase58() !== owner) throw new Error("ChainPay sent a card setup step paid by another wallet, so it wasn't signed.");
-  for (const instruction of transaction.instructions) {
-    if (!allowed.has(instruction.programId.toBase58())) throw new Error("ChainPay sent a card setup step for an unexpected program, so it wasn't signed.");
-  }
+const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function base58(bytes: Uint8Array): string {
+  let value = 0n;
+  for (const byte of bytes) value = value * 256n + BigInt(byte);
+  let out = "";
+  while (value > 0n) { out = BASE58[Number(value % 58n)] + out; value /= 58n; }
+  for (const byte of bytes) { if (byte !== 0) break; out = "1" + out; }
+  return out;
 }

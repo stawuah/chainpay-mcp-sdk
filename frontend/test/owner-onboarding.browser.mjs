@@ -66,7 +66,7 @@ try {
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("heading", { name: "Set your spending limits." }).waitFor();
   assert.equal(await page.evaluate(() => window.onboardingFixture.state.messages), 2);
-  await page.getByRole("button", { name: "Review mandate", exact: true }).click();
+  await page.getByRole("button", { name: "Review permission", exact: true }).click();
   await page.getByRole("heading", { name: "How should payments be approved?" }).waitFor();
   assert.equal(await page.evaluate(() => window.onboardingFixture.state.transactions), 0);
   assert.equal(requests.some(r => /transactions\/submit|managed-signers\/provision|payments\/execute/.test(r.path)), false);

@@ -26,8 +26,11 @@ export type PrivateRepayOptInProps = {
   prepare: () => Promise<PrivateRepaymentAttempt>;
   /** Ask ChainPay once (`submitPrivateRepayment`); throws `settlement_pending` until paid. */
   check: (attempt: PrivateRepaymentAttempt) => Promise<PrivateRepaymentResult>;
-  /** Wallet signs: deposit shortfall + private transfer (`payStatementPrivately`). */
-  pay: (attempt: PrivateRepaymentAttempt) => Promise<PayOutcome>;
+  /**
+   * Wallet signs: deposit shortfall + private transfer (`payStatementPrivately`). `onSigned`
+   * is called with the transfer's signature once the wallet returns it, before it is sent.
+   */
+  pay: (attempt: PrivateRepaymentAttempt, onSigned: (signature: string) => void) => Promise<PayOutcome>;
   /** Poll ChainPay until the settlement shows up (`waitForPrivateRepayment`). */
   wait: (attempt: PrivateRepaymentAttempt) => Promise<PrivateRepaymentResult>;
   onDone: (result: PrivateRepaymentResult) => void;
@@ -37,7 +40,7 @@ export type PrivateRepayOptInProps = {
 type Phase =
   | { kind: "explain" }
   | { kind: "working"; text: string }
-  | { kind: "sent"; attempt: PrivateRepaymentAttempt; unknown: boolean }
+  | { kind: "sent"; attempt: PrivateRepaymentAttempt; unknown: boolean; signature: string | null }
   | { kind: "done"; result: PrivateRepaymentResult }
   | { kind: "error"; text: string; attempt?: PrivateRepaymentAttempt; paid: boolean };
 
@@ -57,17 +60,26 @@ function message(cause: unknown): { code: string; text: string } {
  * Per-attempt "already sent" marker. A transfer whose outcome was unknown, or
  * that is still in MagicBlock's queue, looks exactly like an unpaid attempt to
  * ChainPay (settlement_pending). Without this, a reload would pay the same
- * reference twice. Browser storage is a convenience: when it is unavailable
- * the owner is asked, in words, before paying again.
+ * reference twice. It is written only once the wallet has returned the signed
+ * transfer, and it records that signature: a wallet that cancelled, or a step
+ * that failed before signing, leaves nothing behind and the owner can try again.
+ * Browser storage is a convenience: when it is unavailable the owner is asked,
+ * in words, before paying again.
  */
 function sentKey(attempt: PrivateRepaymentAttempt): string {
   return `cp-private-sent:${attempt.statementId}:${attempt.attemptId}`;
 }
-function markSent(attempt: PrivateRepaymentAttempt): void {
-  try { window.localStorage.setItem(sentKey(attempt), new Date().toISOString()); } catch { /* unavailable */ }
+function markSent(attempt: PrivateRepaymentAttempt, signature: string): void {
+  try { window.localStorage.setItem(sentKey(attempt), JSON.stringify({ signature, at: new Date().toISOString() })); } catch { /* unavailable */ }
 }
-function wasSent(attempt: PrivateRepaymentAttempt): boolean {
-  try { return window.localStorage.getItem(sentKey(attempt)) !== null; } catch { return false; }
+/** The signed transfer this browser handed off for this attempt, or null. A marker without a signature doesn't count. */
+function sentSignature(attempt: PrivateRepaymentAttempt): string | null {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(sentKey(attempt)) ?? "null") as { signature?: unknown } | null;
+    return typeof raw?.signature === "string" && raw.signature ? raw.signature : null;
+  } catch {
+    return null;
+  }
 }
 
 function dollars(cents: string): string {
@@ -80,8 +92,8 @@ export function PrivateRepayOptIn({ amountCents, prepare, check, pay, wait, onDo
   const [phase, setPhase] = useState<Phase>({ kind: "explain" });
   const lines = privateRepaymentDisclosure({ amountCents, amountBaseUnits: "" });
 
-  async function confirmPaid(attempt: PrivateRepaymentAttempt, unknown: boolean) {
-    setPhase({ kind: "sent", attempt, unknown });
+  async function confirmPaid(attempt: PrivateRepaymentAttempt, unknown: boolean, signature: string | null) {
+    setPhase({ kind: "sent", attempt, unknown, signature });
     try {
       const result = await wait(attempt);
       setPhase({ kind: "done", result });
@@ -106,17 +118,21 @@ export function PrivateRepayOptIn({ amountCents, prepare, check, pay, wait, onDo
       } catch (cause) {
         if (message(cause).code !== "settlement_pending") throw cause;
       }
-      if (wasSent(attempt)) {
-        // This browser already sent a payment for this reference: wait for it.
-        await confirmPaid(attempt, true);
+      const earlier = sentSignature(attempt);
+      if (earlier) {
+        // This browser already signed a payment for this reference: wait for it.
+        await confirmPaid(attempt, true, earlier);
         return;
       }
       setPhase({ kind: "working", text: "Check your wallet. You'll sign a deposit into the vault if needed, then the private payment." });
-      markSent(attempt);
-      const outcome = await pay(attempt);
-      await confirmPaid(attempt, outcome.transferOutcome === "unknown");
+      let signature: string | null = null;
+      const paying = attempt;
+      const outcome = await pay(paying, (signed) => { signature = signed; markSent(paying, signed); });
+      await confirmPaid(attempt, outcome.transferOutcome === "unknown", signature);
     } catch (cause) {
-      setPhase({ kind: "error", text: message(cause).text, attempt, paid: false });
+      // Signed and handed off: money may move, so never "not paid". Otherwise nothing was sent.
+      const signed = attempt ? sentSignature(attempt) !== null : false;
+      setPhase({ kind: "error", text: message(cause).text, attempt, paid: signed });
     }
   }
 
@@ -152,6 +168,7 @@ export function PrivateRepayOptIn({ amountCents, prepare, check, pay, wait, onDo
             ? "Your wallet signed, but the network didn't confirm the send. It may still have gone through, so don't pay again. Checking with the partner…"
             : "Sent. Waiting for MagicBlock to pay the partner from the vault. Usually a few seconds."}
         </p>
+        {phase.signature && <small className="cp-private-sig">Signed transfer <span className="mono">{phase.signature.slice(0, 8)}…{phase.signature.slice(-8)}</span></small>}
       </section>
     );
   }
@@ -184,11 +201,19 @@ export function PrivateRepayOptIn({ amountCents, prepare, check, pay, wait, onDo
         <>
           <p>Don't pay again. Check again in a minute; the same reference is still waiting.</p>
           <div className="cp-private-actions">
-            <Button type="button" variant="primary" label="Check again" onClick={() => void confirmPaid(phase.attempt!, false)} />
+            <Button type="button" variant="primary" label="Check again" onClick={() => void confirmPaid(phase.attempt!, false, sentSignature(phase.attempt!))} />
           </div>
         </>
       )}
-      {!phase.paid && <div className="cp-private-actions"><Button type="button" variant="secondary" label="Back" onClick={onBack} /></div>}
+      {!phase.paid && (
+        <>
+          <p>Nothing was sent, so you can try again.</p>
+          <div className="cp-private-actions">
+            <Button type="button" variant="secondary" label="Back" onClick={onBack} />
+            <Button type="button" variant="primary" label="Try again" onClick={() => void start()} />
+          </div>
+        </>
+      )}
     </section>
   );
 }

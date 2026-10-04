@@ -1,6 +1,7 @@
 import type { AgentCheck } from "../owner/runtime";
 import type { PurchaseCardView } from "../owner/purchaseCard";
 import crossmintMark from "../assets/brands/crossmint.svg";
+import { Amount } from "../ui/amount/Amount";
 
 function RequirementRow({ check }: { check: AgentCheck }) {
   const mark = check.status === "pass" ? "✓" : check.status === "fail" ? "×" : check.status === "missing" ? "!" : "·";
@@ -36,12 +37,14 @@ export function PurchaseCard({
         </span>
       </div>
       <dl className="purchase-card-facts">
-        <div><dt>Amount</dt><dd>{purchase.amountLabel} {purchase.tokenLabel}</dd></div>
+        <div><dt>Amount</dt><dd>{purchase.amount ? <Amount baseUnits={purchase.amount.baseUnits} mint={purchase.amount.mint} symbol={purchase.tokenLabel} /> : `${purchase.amountLabel} ${purchase.tokenLabel}`.trim()}</dd></div>
         <div><dt>Recipient</dt>{purchase.recipientBrand === "crossmint"
           ? <dd className="purchase-card-brand"><img src={crossmintMark} alt="Crossmint" /></dd>
           : <dd className="mono">{purchase.recipientLabel}</dd>}</div>
       </dl>
-      {purchase.limitDetail && (
+      {purchase.limit ? (
+        <div className="purchase-card-limit">This permission allows up to <Amount baseUnits={purchase.limit.perPayment} mint={purchase.limit.mint} symbol={purchase.limit.symbol} /> per payment and <Amount baseUnits={purchase.limit.total} mint={purchase.limit.mint} symbol={purchase.limit.symbol} /> total.</div>
+      ) : purchase.limitDetail && (
         <p className="purchase-card-limit">{purchase.limitDetail}</p>
       )}
       {purchase.showChecks && !compact && (
