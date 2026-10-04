@@ -391,6 +391,7 @@ export function renderDocsHtml(): string {
             ${navLink("#use-cases", NAV_ICONS.useCases, "Use cases")}
             ${navLink("#spending-limits", NAV_ICONS.policy, "Spending limits")}
             ${navLink("#assets", NAV_ICONS.assets, "Assets")}
+            ${navLink("#agent-cards", NAV_ICONS.shield, "Agent cards")}
           </div>
           <div class="nav-group">
             <div class="nav-label">Reference</div>
@@ -517,18 +518,29 @@ export function renderDocsHtml(): string {
             <div class="callout" style="margin-top: 16px"><strong>Important:</strong> amounts are unsigned base units. The protocol validates mint and token program before settlement.</div>
           </section>
 
+          <section class="section" id="agent-cards" aria-labelledby="agent-cards-title">
+            <div class="section-heading"><div><span class="section-index">8 · Agent cards</span><h2 id="agent-cards-title">Give your agent a card. Keep the limits to yourself.</h2><p>A private agent card lets an agent pay at regular checkouts. Its budget, per-purchase cap and shop list live in a private rollup on Solana Devnet that only the owner and wallets they approve can read. This runs on an issuer sandbox, and the monthly credit is a labelled simulation.</p></div></div>
+            <div class="split">
+              <article class="info-card"><div class="card-icon">${NAV_ICONS.policy}</div><h3>Agents draft, owners decide</h3><p><code>prepare_agent_card</code> turns a request like "$20 for Data API credits, $30 cap" into a review link. Nothing is created until the owner signs in their own wallet.</p><a href="#tool-prepare-agent-card">prepare_agent_card →</a></article>
+              <article class="info-card"><div class="card-icon">${NAV_ICONS.payments}</div><h3>One checkout at a time</h3><p><code>request_card_checkout</code> returns a single-use pass for one shop and one exact amount, valid for minutes. It is never a card number. The card still checks every rule when the shop charges it.</p><a href="#tool-request-card-checkout">request_card_checkout →</a></article>
+              <article class="info-card"><div class="card-icon">${NAV_ICONS.useCases}</div><h3>See what happened</h3><p><code>get_card_activity</code> shows approvals, declines with a plain reason, captures and refunds. <code>get_statement</code> shows the exact total and fee, marked simulated credit.</p><a href="#tool-get-card-activity">get_card_activity →</a></article>
+              <article class="info-card"><div class="card-icon">${NAV_ICONS.shield}</div><h3>Stop it fast</h3><p><code>freeze_agent_card</code> works from the owner's own session only. The issuer confirms separately, so a freeze shows as pending until it does.</p><a href="#tool-freeze-agent-card">freeze_agent_card →</a></article>
+            </div>
+            <div class="callout" style="margin-top: 16px"><strong>What agents can never do here:</strong> see a card number, CVV or expiry; raise a limit; grant credit; unfreeze a card; or approve a statement repayment. Those tools don't exist, and anything that looks like a card number is removed from every result. Amounts are whole US cents written as strings, so <code>"2000"</code> means $20.00.</div>
+          </section>
+
           <section class="section" id="tool-reference" aria-labelledby="tools-title">
-            <div class="section-heading"><div><span class="section-index">8 · Tools</span><h2 id="tools-title">Same catalog as <code>tools/list</code>.</h2><p>Generated from live definitions. Required fields shown for orchestration.</p></div><a class="button button-quiet" href="/tools">Open JSON catalog</a></div>
+            <div class="section-heading"><div><span class="section-index">9 · Tools</span><h2 id="tools-title">Same catalog as <code>tools/list</code>.</h2><p>Generated from live definitions. Required fields shown for orchestration.</p></div><a class="button button-quiet" href="/tools">Open JSON catalog</a></div>
             <div class="tool-grid">${renderToolReference()}</div>
           </section>
 
           <section class="section" id="mcp-protocol" aria-labelledby="mcp-protocol-title">
-            <div class="section-heading"><div><span class="section-index">9 · MCP protocol</span><h2 id="mcp-protocol-title">Tested subset, not blanket conformance.</h2><p>Dual-era JSON-RPC verified against the <a href="https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts">2026-07-28 schema</a>. Wallet sessions are app auth, not MCP OAuth.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">10 · MCP protocol</span><h2 id="mcp-protocol-title">Tested subset, not blanket conformance.</h2><p>Dual-era JSON-RPC verified against the <a href="https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts">2026-07-28 schema</a>. Wallet sessions are app auth, not MCP OAuth.</p></div></div>
             <div class="callout"><strong>Supported now:</strong> <code>server/discover</code>, <code>tools/list</code>, and <code>tools/call</code> on <code>2026-07-28</code> without initialize; legacy <code>2025-06-18</code> and <code>2024-11-05</code>; public discovery vs private owner tools on HTTP and stdio. GET/DELETE on <code>/mcp</code> returns 405 for current version. Capability metadata never authorizes a wallet.</div>
           </section>
 
           <section class="section" id="endpoints" aria-labelledby="endpoints-title">
-            <div class="section-heading"><div><span class="section-index">10 · HTTP</span><h2 id="endpoints-title">Small surface area.</h2><p>Use <code>/mcp</code> for agents. Use the read-only routes for humans and health checks.</p></div></div>
+            <div class="section-heading"><div><span class="section-index">11 · HTTP</span><h2 id="endpoints-title">Small surface area.</h2><p>Use <code>/mcp</code> for agents. Use the read-only routes for humans and health checks.</p></div></div>
             <div class="table-wrap">
               <a class="endpoint-card" href="/"><span class="method">GET</span><code>/</code><span>Documentation</span></a>
               <a class="endpoint-card" href="/mcp"><span class="method">POST</span><code>/mcp</code><span>Streamable HTTP JSON-RPC MCP transport</span></a>

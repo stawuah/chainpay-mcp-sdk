@@ -1,0 +1,38 @@
+name: Cards reconcile
+# Drives the card connector's reconcile job (contracts.md §3.4) where the
+# connector actually runs. Vercel crons fire only on Production deployments,
+# and the connector is refused in Production, so a Vercel cron never reached
+# it (and a */5 schedule fails a Hobby-plan deploy). This calls the same
+# route on the Preview relay instead.
+#
+# Off until configured. Needs, in the repository settings:
+#   variable CARDS_RECONCILE_URL   the Preview relay origin, e.g. https://relay-preview.example
+#   secret   CARDS_CRON_SECRET     the relay's CRON_SECRET (16+ characters)
+#   secret   VERCEL_AUTOMATION_BYPASS_SECRET  only if the Preview deployment is protected
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: cards-reconcile
+  cancel-in-progress: false
+jobs:
+  reconcile:
+    if: vars.CARDS_RECONCILE_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Run one reconcile pass
+        env:
+          RELAY: ${{ vars.CARDS_RECONCILE_URL }}
+          CRON_SECRET: ${{ secrets.CARDS_CRON_SECRET }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$CRON_SECRET" || { echo "CARDS_CRON_SECRET is not set"; exit 1; }
+          headers=(-H "authorization: Bearer $CRON_SECRET")
+          if [ -n "$BYPASS" ]; then headers+=(-H "x-vercel-protection-bypass: $BYPASS"); fi
+          # The report is counts only (no card data); print it for the run log.
+          curl -fsS --max-time 90 -X POST "${headers[@]}" "${RELAY%/}/internal/cron/cards/reconcile"
+          echo

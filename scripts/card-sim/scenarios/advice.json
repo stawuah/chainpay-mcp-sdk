@@ -1,0 +1,15 @@
+{
+  "name": "advice",
+  "description": "An incremental authorization advice that fits adjusts the hold; one that does not fit keeps the hold and flags an over-hold exception.",
+  "steps": [
+    {"intent": {"as": "i", "merchant": "demo-approved", "amountCents": "3000"}},
+    {"asa": {"txn": "t1", "amountCents": 2000, "merchant": "demo-approved"}, "expect": "APPROVED"},
+    {"event": {"txn": "t1", "id": "a1", "type": "AUTHORIZATION_ADVICE", "amountCents": 2500}},
+    {"deliver": {"txn": "t1", "webhookId": "w1"}},
+    {"expect": {"txn": "t1", "state": "reserved", "reservedCents": "2500"}},
+    {"event": {"txn": "t1", "id": "a2", "type": "AUTHORIZATION_ADVICE", "amountCents": 9000}},
+    {"deliver": {"txn": "t1", "webhookId": "w2"}},
+    {"expect": {"txn": "t1", "needsReview": true, "exception": "over_hold"}},
+    {"expectProgram": {"adjust_reservation": 2, "record_exception": 1}}
+  ]
+}

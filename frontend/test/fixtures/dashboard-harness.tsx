@@ -15,7 +15,9 @@ import { setSessionWallet } from "../../src/session";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import Dashboard from "../../src/dashboard/Dashboard";
-import type { DashboardTab } from "../../src/routing/paths";
+import type { CardSection, DashboardTab } from "../../src/routing/paths";
+import { setCardsSourceOverride } from "../../src/dashboard/cards/source";
+import { createFixtureCardsSource, FIXTURE_CARD_IDS } from "../../src/dashboard/cards/fixtureSource";
 import type { Mandate, PaymentReceipt } from "@chainpay/sdk";
 import { Router } from "../../src/routing/Router";
 import "../../skill/assets/design-token.css";
@@ -261,12 +263,31 @@ if (FIXTURE_APPROVAL) {
 }
 
 const EMPTY = new URLSearchParams(location.search).has("empty");
+
+// Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1][&attest=verified|challenge_bound|mismatch|failed]`.
+// ILLUSTRATIVE fixtures through the same CardsSource interface the live SDK
+// client implements. Nothing signs or reaches a network.
+const CARD_QUERY = new URLSearchParams(location.search);
+setCardsSourceOverride(createFixtureCardsSource({
+  empty: CARD_QUERY.get("cards") === "empty",
+  unlocked: CARD_QUERY.get("cards") !== "locked",
+  statement: (CARD_QUERY.get("statement") as never) ?? undefined,
+  freezeAck: CARD_QUERY.has("ack"),
+  attestation: (CARD_QUERY.get("attest") as never) ?? undefined,
+}));
+const CARD_KEY = CARD_QUERY.get("card") as keyof typeof FIXTURE_CARD_IDS | null;
+type CardRoute = { cardsNew?: boolean; cardId?: string; cardSection?: CardSection };
 const noop = async () => {};
 
 function Harness() {
   const [tab, setTab] = useState<DashboardTab>(
     (new URLSearchParams(location.search).get("tab") as DashboardTab) || "overview",
   );
+  const [cardRoute, setCardRoute] = useState<CardRoute>({
+    cardsNew: CARD_QUERY.has("new") || undefined,
+    cardId: CARD_KEY ? FIXTURE_CARD_IDS[CARD_KEY] : undefined,
+    cardSection: (CARD_QUERY.get("section") as CardSection) ?? undefined,
+  });
   return (
     <Dashboard
       wallet={OWNER}
@@ -285,7 +306,10 @@ function Harness() {
       switchingWalletAccount={false}
       tab={tab}
       permissionRequest={Boolean(PERMISSION)}
-      onTabChange={(next) => setTab(next)}
+      cardsNew={cardRoute.cardsNew}
+      cardId={cardRoute.cardId}
+      cardSection={cardRoute.cardSection}
+      onTabChange={(next, options) => { setTab(next); setCardRoute({ cardsNew: options?.cardsNew, cardId: options?.cardId, cardSection: options?.cardSection }); }}
       onNavigateHome={() => {}}
       onRefresh={noop}
       onSelectMandate={() => {}}

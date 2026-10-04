@@ -1,0 +1,19 @@
+{
+  "description": "MagicBlock Devnet TEE validator workload measurements. Source of truth for the SDK is sdk/src/cards/tee.ts (MAGICBLOCK_DEVNET_TEE_MEASUREMENTS); sdk/test/cards-attestation.test.mjs keeps this file equal. Axum: CARDS_TEE_MEASUREMENTS = JSON.stringify(allowlist) (backend parse_measurements reads mrtd/rtmr0-2 and ignores the other keys).",
+  "teeUrl": "https://devnet-tee.magicblock.app",
+  "validator": "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo",
+  "provenance": "confirmed by MagicBlock to ChainPay, 2026-10-04 (direct, unsigned)",
+  "observed": ["2026-10-03", "2026-10-04"],
+  "rotation": "On a validator upgrade: move the current entry to the end with label previous, pin the new values first with label current, drop previous once the old build is retired.",
+  "allowlist": [
+    {
+      "label": "current",
+      "mrtd": "c1ee9c16e3afc506cfe042c5b846a368528f3b37618eafb27469bc114cf914e9222c91618470e7f2b28ac360968270a5",
+      "rtmr0": "c1f1f2bff33b16d1469134987fcdf0ea3bd9707350cc70e73f086c635a5fc4e96e0d214a7f775608e64d251382f20564",
+      "rtmr1": "b4fe8751e5d96b726a0dabb86ba821783626d80638caf6ca0045f31f5e4c4e90e20aee96fca711421db5bdc60e5c91ed",
+      "rtmr2": "51c09b72276c8bcd0e274865a7e0a408ee956a6ccfae8b4edd43467d7585ff352bb89e28f5cb62105114cad7225e11ef",
+      "rtmr3": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "mrowner": "44eeaee2768dd9b3a52b41747367e5751b18f7653f087febd7de11bffabbd1d75d4ff353a68154541215863ee7fc2903"
+    }
+  ]
+}

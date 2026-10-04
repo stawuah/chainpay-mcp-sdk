@@ -24,11 +24,16 @@ let config;
 if (service === "backend") {
   await copy("backend");
   await copy("Cargo.lock");
+  // Pinned MagicBlock Devnet TEE measurements, compiled into the relay with include_str!.
+  await mkdir(path.join(target, "shared/cards"), { recursive: true });
+  await cp(path.join(root, "shared/cards/tee-measurements.json"), path.join(target, "shared/cards/tee-measurements.json"));
   await cp(path.join(root, "backend/migrations"), path.join(target, "migrations"), { recursive: true });
   // Backend is independently deployable; stage it as a standalone Rust package.
   const manifest = (await readFile(path.join(root, "backend/Cargo.toml"), "utf8"))
     .replace('path = "api/relay.rs"', 'path = "backend/api/relay.rs"')
     .replace('[features]', '[features]\ndefault = ["vercel"]')
+    // The vendored DCAP verifier is copied with backend/ (path dependency).
+    .replace('path = "vendor/dcap-qvl"', 'path = "backend/vendor/dcap-qvl"')
     + '\n[lib]\npath = "backend/src/lib.rs"\n\n[workspace]\n\n[profile.release]\noverflow-checks = true\nlto = "fat"\ncodegen-units = 1\n';
   // Vercel discovers Rust handlers under api/ while the library remains intact.
   await mkdir(path.join(target, "api"), { recursive: true });
@@ -37,6 +42,9 @@ if (service === "backend") {
   // The release guard is a build step, and Vercel then expects static output.
   await mkdir(path.join(target, "public"), { recursive: true });
   await writeFile(path.join(target, "public/robots.txt"), "User-agent: *\nDisallow: /\n");
+  // No Vercel cron: card reconciliation (contracts.md §3.4) only runs where the
+  // connector is on (Preview), and Vercel crons fire only on Production. The
+  // `Cards reconcile` GitHub workflow calls the route instead.
   config = { framework: null, rewrites: [{ source: "/(.*)", destination: "/api/relay" }], functions: { "api/relay.rs": { maxDuration: 300 } } };
 } else {
   for (const name of ["package.json", "package-lock.json", "sdk", "mcp-server", "demo-merchant", "app"]) await copy(name);

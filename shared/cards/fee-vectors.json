@@ -1,0 +1,71 @@
+{
+  "rule": "fee(x) = floor(x * feeBps / 10000) for every line, debit or credit. Exposure moves by x + fee(x). A refund against a hold may not exceed captured - refunded on that hold.",
+  "readBy": [
+    "programs/card_policy/src/policy.rs (fee, with_fee, reduce_exposure)",
+    "backend/src/connectors/card_issuer/statements.rs (fee_cents, totals)",
+    "sdk/src/cards/math.ts (feeCents, statementTotals, outstandingAfterRefund)"
+  ],
+  "fee": [
+    { "feeBps": 50, "amountCents": "0", "feeCents": "0" },
+    { "feeBps": 50, "amountCents": "1", "feeCents": "0" },
+    { "feeBps": 50, "amountCents": "199", "feeCents": "0" },
+    { "feeBps": 50, "amountCents": "200", "feeCents": "1" },
+    { "feeBps": 50, "amountCents": "201", "feeCents": "1" },
+    { "feeBps": 50, "amountCents": "2000", "feeCents": "10" },
+    { "feeBps": 50, "amountCents": "3000", "feeCents": "15" },
+    { "feeBps": 50, "amountCents": "50000", "feeCents": "250" },
+    { "feeBps": 75, "amountCents": "1333", "feeCents": "9" },
+    { "feeBps": 125, "amountCents": "999", "feeCents": "12" },
+    { "feeBps": 1000, "amountCents": "9", "feeCents": "0" },
+    { "feeBps": 1000, "amountCents": "10", "feeCents": "1" },
+    { "feeBps": 1000, "amountCents": "1000000", "feeCents": "100000" },
+    { "feeBps": 0, "amountCents": "12345", "feeCents": "0" }
+  ],
+  "holds": [
+    {
+      "name": "one refund of the whole purchase clears it",
+      "feeBps": 50, "capturedCents": "3000",
+      "refunds": ["3000"],
+      "accepted": ["3000"], "outstandingCents": "0"
+    },
+    {
+      "name": "three equal refunds clear it exactly",
+      "feeBps": 50, "capturedCents": "3000",
+      "refunds": ["1000", "1000", "1000"],
+      "accepted": ["1000", "1000", "1000"], "outstandingCents": "0"
+    },
+    {
+      "name": "twenty 10c refunds never credit more than one $2 refund",
+      "feeBps": 50, "capturedCents": "200",
+      "refunds": ["10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10"],
+      "accepted": ["10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10", "10"],
+      "outstandingCents": "1"
+    },
+    {
+      "name": "a refund past what the hold captured is refused",
+      "feeBps": 50, "capturedCents": "200",
+      "refunds": ["150", "51", "50"],
+      "accepted": ["150", "50"], "outstandingCents": "1"
+    }
+  ],
+  "statements": [
+    {
+      "name": "purchases and refunds with per-line floor fees",
+      "feeBps": 50,
+      "lines": [["purchase", "3000"], ["purchase", "199"], ["refund", "1000"], ["refund", "1"]],
+      "feeCents": "10", "totalCents": "2208"
+    },
+    {
+      "name": "split refunds credit less than or equal to one refund",
+      "feeBps": 50,
+      "lines": [["purchase", "200"], ["refund", "100"], ["refund", "100"]],
+      "feeCents": "1", "totalCents": "1"
+    },
+    {
+      "name": "the PLAN F example",
+      "feeBps": 50,
+      "lines": [["purchase", "50000"]],
+      "feeCents": "250", "totalCents": "50250"
+    }
+  ]
+}

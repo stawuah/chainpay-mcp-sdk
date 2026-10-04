@@ -1,0 +1,11 @@
+{
+  "name": "force_post",
+  "description": "A clearing with no authorization ChainPay reserved (force post) is recorded as an exception that needs review, never as approved spend. Not simulable at Lithic; card-sim only.",
+  "steps": [
+    {"forcePost": {"txn": "f1", "id": "fc1", "amountCents": 700, "merchant": "demo-unapproved"}},
+    {"deliver": {"txn": "f1", "webhookId": "wf1"}},
+    {"expect": {"txn": "f1", "state": "forced_capture", "capturedCents": "700", "needsReview": true, "exception": "forced_capture"}},
+    {"deliver": {"txn": "f1", "webhookId": "wf1-retry"}},
+    {"expectProgram": {"record_exception": 1}}
+  ]
+}
