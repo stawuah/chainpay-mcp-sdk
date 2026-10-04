@@ -16,6 +16,8 @@ export type UseCase = {
   cta: { label: string; href: string };
   imageAlt: string;
   featured?: boolean;
+  /** CTA band copy for a "soon" case that is not built yet. Defaults to the built-and-switched-off wording. */
+  soonNote?: { title: string; body: string };
 };
 
 export const AUDIENCES: readonly { id: Audience; label: string }[] = [
@@ -238,6 +240,30 @@ export const USE_CASES: readonly UseCase[] = [
     example: [["Action", "Revoke all"], ["Takes effect", "Next Solana block"]],
     cta: DASHBOARD,
     imageAlt: "A toggle switch with a pause symbol, switched off, with chips frozen beside it.",
+  },
+  {
+    slug: "private-agent-card",
+    audience: "business",
+    status: "soon",
+    title: "Give your agent a card",
+    summary: "Your agent pays at regular checkouts. Your limits stay yours, and nobody else can read them.",
+    steps: [
+      "Set a monthly budget and a per-purchase cap.",
+      "Pick the shops it can buy from.",
+      "Over the cap or off the list? Declined.",
+    ],
+    why: [
+      "Only you can see your limits.",
+      "Freeze it in one tap.",
+      "Every purchase lands as a receipt.",
+    ],
+    example: [["Bought", "Data API credits"], ["Paid", "$20"], ["Cap per purchase", "$30"]],
+    cta: DASHBOARD,
+    soonNote: {
+      title: "Coming soon.",
+      body: "We're building it now. Meanwhile, set up the limits your agent will use.",
+    },
+    imageAlt: "A white payment card with the ChainPay logo, half hidden behind frosted blue glass with a small lock, the ChainPay robot peeking over the top.",
   },
   {
     slug: "spend-overview-anywhere",

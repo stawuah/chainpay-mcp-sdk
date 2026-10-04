@@ -12,11 +12,12 @@ const VerifyPage = lazy(() => import("./verify/VerifyPage"));
 const CardVerifyPage = lazy(() => import("./verify/CardVerifyPage"));
 const CommunityRoom = lazy(() => import("./pet/shared/CommunityRoom"));
 const EmbedOverview = lazy(() => import("./embed/EmbedOverview"));
+const StatusPage = lazy(() => import("./status/StatusPage"));
 const UseCasesPage = lazy(() => import("./use-cases/UseCasesPage"));
 const UseCaseDetail = lazy(() => import("./use-cases/UseCaseDetail"));
 
 function isWalletlessRoute(kind: string) {
-  return kind === "pet" || kind === "verify" || kind === "verify-card" || kind === "embed-overview" || kind === "use-cases" || kind === "use-case";
+  return kind === "pet" || kind === "verify" || kind === "verify-card" || kind === "embed-overview" || kind === "status" || kind === "use-cases" || kind === "use-case";
 }
 
 function RouteFallback() {
@@ -47,6 +48,14 @@ function Routes() {
     return (
       <Suspense fallback={<RouteFallback />}>
         <CardVerifyPage />
+      </Suspense>
+    );
+  }
+
+  if (currentRoute.kind === "status") {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <StatusPage />
       </Suspense>
     );
   }

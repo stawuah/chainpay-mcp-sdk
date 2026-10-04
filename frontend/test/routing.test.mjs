@@ -77,6 +77,12 @@ test("owner destinations canonicalize legacy and advanced routes", () => {
  }
 });
 
+test("parses and builds the status path", () => {
+  assert.deepEqual(paths.parsePathname("/status"), { kind: "status" });
+  assert.deepEqual(paths.parsePathname("/status/"), { kind: "status" });
+  assert.equal(paths.buildPath({ kind: "status" }), "/status");
+});
+
 test("parses and builds use case paths", () => {
   assert.deepEqual(paths.parsePathname("/use-cases"), { kind: "use-cases" });
   assert.deepEqual(paths.parsePathname("/use-cases/"), { kind: "use-cases" });
