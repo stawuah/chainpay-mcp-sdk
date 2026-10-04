@@ -10,7 +10,7 @@ ChainPay lets you give an AI agent permission to make stablecoin payments on
 Solana within limits you approve. The on-chain program checks each payment
 and creates a receipt you can inspect and share.
 
-**[Try ChainPay](https://chainpay-web-kappa.vercel.app/)** ·
+**[Try ChainPay](https://www.chainpayai.app/)** ·
 [First payment walkthrough](docs/getting-started/try-chainpay.md) ·
 [Connect an agent](docs/guides/connect-an-agent.md) ·
 [Documentation](docs/README.md)
