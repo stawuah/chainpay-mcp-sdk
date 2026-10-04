@@ -1,4 +1,4 @@
-import { Ban, CalendarX, CircleCheck, CircleHelp, CircleX, Clock3, Pause, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Ban, CalendarX, CircleCheck, CircleHelp, CircleX, Clock3, OctagonX, Pause, TriangleAlert, type LucideIcon } from "lucide-react";
 
 /*
   One status vocabulary for the owner workspace (DESIGN.md, 2026-10-04).
@@ -9,7 +9,7 @@ import { Ban, CalendarX, CircleCheck, CircleHelp, CircleX, Clock3, Pause, Triang
   approval", "Settled"); only the appearance is shared.
 */
 export type StatusTone = "positive" | "info" | "neutral" | "warning" | "critical" | "unknown";
-export type StatusIcon = "check-circle" | "clock" | "pause" | "alert-triangle" | "calendar-x" | "x-circle" | "ban" | "help-circle";
+export type StatusIcon = "check-circle" | "clock" | "pause" | "alert-triangle" | "calendar-x" | "x-circle" | "octagon-x" | "ban" | "help-circle";
 
 const ICONS: Record<StatusIcon, LucideIcon> = {
   "check-circle": CircleCheck,
@@ -18,6 +18,7 @@ const ICONS: Record<StatusIcon, LucideIcon> = {
   "alert-triangle": TriangleAlert,
   "calendar-x": CalendarX,
   "x-circle": CircleX,
+  "octagon-x": OctagonX,
   ban: Ban,
   "help-circle": CircleHelp,
 };
@@ -53,6 +54,7 @@ export const STATUS_MEANINGS = {
   expired: { tone: "neutral", icon: "calendar-x" },
   revoked: { tone: "critical", icon: "ban" },
   failed: { tone: "critical", icon: "x-circle" },
+  blocked: { tone: "critical", icon: "octagon-x" },
   unknown: { tone: "unknown", icon: "help-circle" },
 } as const satisfies Record<string, { tone: StatusTone; icon: StatusIcon }>;
 

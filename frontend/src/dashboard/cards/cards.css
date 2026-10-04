@@ -8,21 +8,21 @@
 .cp-cards-illustrative { margin-bottom: 4px; }
 .cp-visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .cp-sub { color: var(--body); font-size: 12px; }
-.cp-inline-error { color: var(--ws-critical, #a3212f); font-size: 13px; margin-top: 6px; }
+.cp-inline-error { color: var(--ws-critical, #b91c1c); font-size: 13px; margin-top: 6px; }
 
 /* Receipt pill: icon + word on the card receipt document (its own contract, also on /verify/card).
    The workspace renders card states with the shared Status (.cp-status) instead. */
 .cp-card-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 3px 8px; border: 1px solid transparent; border-radius: 999px; font: 500 12px/16px Inter, sans-serif; white-space: nowrap; color: var(--ws-neutral, #4a5568); background: var(--ws-neutral-surface, #f1f3f7); }
-.cp-card-pill[data-tone="positive"] { color: var(--ws-positive, #19633f); background: var(--ws-positive-surface, #eaf5ef); }
+.cp-card-pill[data-tone="positive"] { color: var(--ws-positive, #166534); background: var(--ws-positive-surface, #dcfce7); box-shadow: inset 0 0 0 1px var(--ws-positive-border, #86efac); }
 .cp-card-pill[data-tone="info"] { color: var(--ws-info, #0047de); background: var(--ws-info-surface, #edf3ff); }
-.cp-card-pill[data-tone="warning"] { color: var(--ws-warning, #72500b); background: var(--ws-warning-surface, #fff4dc); }
-.cp-card-pill[data-tone="danger"] { color: var(--ws-critical, #a3212f); background: var(--ws-critical-surface, #fff1f2); }
+.cp-card-pill[data-tone="warning"] { color: var(--ws-warning, #854d0e); background: var(--ws-warning-surface, #fef9c3); box-shadow: inset 0 0 0 1px var(--ws-warning-border, #fde047); }
+.cp-card-pill[data-tone="danger"] { color: var(--ws-critical, #b91c1c); background: var(--ws-critical-surface, #fee2e2); box-shadow: inset 0 0 0 1px var(--ws-critical-border, #fca5a5); }
 .cp-card-pill svg { flex-shrink: 0; }
 
 
 .cp-money { font-variant-numeric: tabular-nums; font-weight: 500; color: var(--ink); white-space: nowrap; }
 .cp-money.is-struck { color: var(--body); text-decoration: line-through; text-decoration-color: #9aa4b2; }
-.cp-money.is-credit { color: var(--ws-positive, #19633f); }
+.cp-money.is-credit { color: var(--ws-positive, #166534); }
 .cp-money.is-credit::before { content: "−"; }
 .cp-private-value { display: inline-flex; align-items: center; gap: 4px; color: var(--body); font-size: 13px; }
 .cp-private-value.is-failed { color: #9a3412; }
@@ -94,9 +94,9 @@
 .cp-create-steps { display: grid; gap: 4px; margin: 20px 0 0; padding: 0; list-style: none; }
 .cp-create-steps li { display: grid; grid-template-columns: 24px minmax(0,1fr); gap: 10px; padding: 10px 12px; border-radius: 8px; }
 .cp-create-steps li[data-state="active"] { background: #f5f8ff; }
-.cp-create-steps li[data-state="done"] .cp-step-mark { color: var(--ws-positive, #19633f); }
+.cp-create-steps li[data-state="done"] .cp-step-mark { color: var(--ws-positive, #166534); }
 .cp-create-steps li[data-state="failed"] { background: #fdf3f4; }
-.cp-create-steps li[data-state="failed"] .cp-step-mark { color: var(--ws-critical, #a3212f); }
+.cp-create-steps li[data-state="failed"] .cp-step-mark { color: var(--ws-critical, #b91c1c); }
 .cp-create-steps li[data-state="active"] .cp-step-mark { color: #0052ff; }
 .cp-create-steps b { display: block; font-weight: 500; font-size: 14px; }
 .cp-create-steps small { color: var(--body); font-size: 13px; }
@@ -106,10 +106,10 @@
 /* Detail hero */
 .cp-freeze-lines { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
 .cp-freeze-lines li { display: flex; align-items: center; gap: 8px; color: var(--ink); }
-.cp-freeze-lines li[data-system="chainpay"] svg { color: var(--ws-positive, #19633f); }
-.cp-freeze-lines li[data-issuer="pending_issuer_confirmation"] { color: var(--ws-warning, #72500b); }
-.cp-freeze-lines li[data-issuer="confirmed"] svg { color: var(--ws-positive, #19633f); }
-.cp-freeze-lines li[data-issuer="failed"] { color: var(--ws-critical, #a3212f); }
+.cp-freeze-lines li[data-system="chainpay"] svg { color: var(--ws-positive, #166534); }
+.cp-freeze-lines li[data-issuer="pending_issuer_confirmation"] { color: var(--ws-warning, #854d0e); }
+.cp-freeze-lines li[data-issuer="confirmed"] svg { color: var(--ws-positive, #166534); }
+.cp-freeze-lines li[data-issuer="failed"] { color: var(--ws-critical, #b91c1c); }
 .cp-card-tabs { margin-top: 4px; }
 .cp-card-section { display: grid; gap: 16px; min-width: 0; }
 
@@ -147,7 +147,7 @@
 .cp-statement-lines th { text-align: left; font-weight: 400; color: var(--body); font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .cp-statement-lines td { padding: 10px 0; border-bottom: 1px solid var(--line-soft); font-variant-numeric: tabular-nums; }
 .cp-statement-lines :is(th, td):nth-child(n+3) { text-align: right; }
-.cp-statement-lines td.is-credit { color: var(--ws-positive, #19633f); }
+.cp-statement-lines td.is-credit { color: var(--ws-positive, #166534); }
 .cp-line-flag { color: #8a5a00; }
 .cp-statement-totals { display: grid; gap: 6px; margin: 0; margin-left: auto; width: min(100%, 320px); font-size: 14px; }
 .cp-statement-totals > div { display: flex; justify-content: space-between; gap: 16px; }
@@ -186,22 +186,22 @@
 .cp-privacy-grid li { display: grid; grid-template-columns: 16px minmax(0,1fr); gap: 8px; }
 .cp-privacy-grid li svg { margin-top: 3px; }
 .cp-privacy-grid li[data-read="visible"] svg { color: #0052ff; }
-.cp-privacy-grid li[data-read="not_visible"] svg { color: var(--ws-positive, #19633f); }
+.cp-privacy-grid li[data-read="not_visible"] svg { color: var(--ws-positive, #166534); }
 .cp-privacy-grid b { display: block; font-weight: 500; font-size: 13px; }
 .cp-privacy-grid code { display: block; margin-top: 4px; padding: 4px 8px; border-radius: 6px; background: #f0f2f6; font: 12px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace; overflow-wrap: anywhere; }
 .cp-privacy-grid small { display: block; color: var(--body); font-size: 12px; overflow-wrap: anywhere; }
 .cp-null-note { margin: 0; font-size: 14px; font-weight: 500; }
 .cp-attestation { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 13px; color: #3d4757; }
 .cp-attestation svg { flex-shrink: 0; margin-top: 2px; }
-.cp-attestation[data-passed="true"] svg { color: var(--ws-positive, #19633f); }
-.cp-attestation[data-hardware="failed"] svg, .cp-attestation[data-measurements="mismatch"] svg { color: var(--ws-critical, #a3212f); }
+.cp-attestation[data-passed="true"] svg { color: var(--ws-positive, #166534); }
+.cp-attestation[data-hardware="failed"] svg, .cp-attestation[data-measurements="mismatch"] svg { color: var(--ws-critical, #b91c1c); }
 .cp-attestation-source { display: block; margin-top: 2px; color: var(--body); font-size: 12px; }
 
 /* Recovery */
 .cp-recovery { display: grid; gap: 8px; }
 .cp-recovery-report { display: grid; gap: 14px; }
 .cp-recovery-steps { margin: 0; padding-left: 20px; font-size: 13px; color: var(--body); display: grid; gap: 4px; }
-.cp-recovery-steps li[data-done="yes"] { color: var(--ws-positive, #19633f); }
+.cp-recovery-steps li[data-done="yes"] { color: var(--ws-positive, #166534); }
 
 
 /* Public card check */

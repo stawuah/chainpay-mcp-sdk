@@ -84,14 +84,16 @@ export function OwnerOverview({ mandates, connections, connectionState, attentio
   ];
   const checksPending = expiryPending || cardCheck.status === "pending";
 
+  // The count badge takes the most serious tone in the list: red once anything is blocked or failed.
+  const attentionHasError = attention.some((item) => item.stage === "blocked") || cardItems.some((row) => row.tone === "critical");
   const attentionSection = attentionCount > 0 && (
     <section className="cp-surface cp-overview-attention" aria-labelledby="overview-attention-title">
-      <SectionHeader id="overview-attention-title" title="Needs your attention" action={<Status {...statusFor("review", `${attentionCount} ${attentionCount === 1 ? "item" : "items"}`)} />} />
+      <SectionHeader id="overview-attention-title" title="Needs your attention" action={<Status {...statusFor(attentionHasError ? "failed" : "review", `${attentionCount} ${attentionCount === 1 ? "item" : "items"}`)} />} />
       <ul className="cp-row-list">
         {attention.slice(0, 5).map((item) => (
           <li key={item.id}>
             <button type="button" className="cp-row" onClick={onRequests}>
-              <span className="cp-row-icon is-info" aria-hidden="true"><Inbox size={18} /></span>
+              <span className={`cp-row-icon ${item.stage === "blocked" ? "is-critical" : item.stage === "waiting_for_approval" ? "is-info" : "is-warning"}`} aria-hidden="true"><Inbox size={18} /></span>
               <span className="cp-row-main"><strong>{item.title || "Payment request"}</strong><small>{item.stage === "waiting_for_approval" ? "Ready for your review" : item.stage === "blocked" ? "Needs attention before it can continue" : "More details needed"}</small></span>
               <Status {...requestStageStatus(item.stage)} />
               <span className="cp-row-link">Review <ArrowRight size={16} aria-hidden="true" /></span>
@@ -111,7 +113,7 @@ export function OwnerOverview({ mandates, connections, connectionState, attentio
         {cardItems.map((row) => (
           <li key={`card:${row.key}`}>
             <button type="button" className="cp-row" onClick={onCards}>
-              <span className={`cp-row-icon ${row.tone === "info" ? "is-info" : "is-warning"}`} aria-hidden="true"><CreditCard size={18} /></span>
+              <span className={`cp-row-icon ${row.tone === "info" ? "is-info" : row.tone === "critical" ? "is-critical" : "is-warning"}`} aria-hidden="true"><CreditCard size={18} /></span>
               <span className="cp-row-main"><strong>{cardAttentionTitle(row)}</strong><small>{cardCheck.status === "checked" && cardCheck.illustrative ? "Illustrative · " : ""}{CARD_ATTENTION_DETAIL[row.key] ?? "Open Cards to check it."}</small></span>
               <Status tone={row.tone} icon={row.icon} label={row.label} />
               <span className="cp-row-link">Review <ArrowRight size={16} aria-hidden="true" /></span>

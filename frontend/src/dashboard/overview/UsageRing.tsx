@@ -26,7 +26,7 @@ export function UsageRing({ state, label }: { state: UsageRingState; label: stri
   const filled = CIRCUMFERENCE * state.fraction;
   const percentLabel = state.percent >= 10 || state.percent === 0 ? Math.floor(state.percent).toString() : state.percent.toFixed(1);
   return (
-    <div className={`cp-usage-ring${state.warning ? " is-warning" : ""}`} role="img" aria-label={label}>
+    <div className={`cp-usage-ring${state.kind === "exhausted" ? " is-critical" : state.warning ? " is-warning" : ""}`} role="img" aria-label={label}>
       <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} aria-hidden="true">
         <circle cx={SIZE / 2} cy={SIZE / 2} r={RADIUS} fill="none" strokeWidth={STROKE} className="cp-usage-ring-track" />
         {state.fraction > 0 && (

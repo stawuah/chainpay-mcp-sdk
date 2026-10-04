@@ -2888,7 +2888,7 @@ function inboxStatus(item: AgentInboxItem) {
     const label = inboxStatusLabel(item);
     if (item.permissionRequest?.mandateAddress) return item.permissionRequest.link === "linked" ? statusFor("settled", label) : statusFor("review", label);
     if (item.archivedAt) return statusFor("revoked", label);
-    return item.stage === "blocked" ? statusFor("review", label) : statusFor("pending", label);
+    return item.stage === "blocked" ? statusFor("blocked", label) : statusFor("pending", label);
   }
   return requestStageStatus(item.stage, { blockedByCheckout: crossmintBlocksApproval(item.crossmint) });
 }

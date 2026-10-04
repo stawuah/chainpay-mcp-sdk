@@ -7,11 +7,11 @@ import { connectionIsLive } from "../owner/purchaseCard";
   words; the tone and icon come from the one meaning table.
 */
 export function requestStageStatus(stage: string, options: { blockedByCheckout?: boolean } = {}): StatusProps {
-  if (options.blockedByCheckout) return statusFor("review", "Blocked");
+  if (options.blockedByCheckout) return statusFor("blocked", "Blocked");
   switch (stage) {
     case "waiting_for_approval": return statusFor("pending", "Waiting for approval");
     case "needs_details": return statusFor("review", "Details needed");
-    case "blocked": return statusFor("review", "Blocked");
+    case "blocked": return statusFor("blocked", "Blocked");
     case "approved": return statusFor("settled", "Approved");
     case "receipt_ready": return statusFor("settled", "Receipt ready");
     case "received":
