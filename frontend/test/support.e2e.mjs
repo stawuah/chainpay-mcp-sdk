@@ -1,7 +1,7 @@
 // End-to-end on a local validator: the real splitter program + the page's own
 // transaction builder. Not part of `npm test` (needs the Solana CLI).
 //
-//   make splitter-test        # builds target/deploy/support_splitter.so with test keys
+//   make splitter-test        # builds target/splitter-test/support_splitter.so with test keys
 //   node frontend/test/support.e2e.mjs
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -25,7 +25,7 @@ const PROGRAM = "D1DvnVq37696mcFB5JeVWZy22wjxZ5xPJmZazbfPK7BH";
 const TOKEN = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const RPC = "http://127.0.0.1:8899";
-const so = new URL("../../target/deploy/support_splitter.so", import.meta.url).pathname;
+const so = new URL("../../target/splitter-test/support_splitter.so", import.meta.url).pathname;
 
 // Test-config keys (same seeds as the LiteSVM suite).
 const A = Keypair.fromSeed(new Uint8Array(32).fill(11));
