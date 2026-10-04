@@ -16,6 +16,7 @@ export type DashboardTab = (typeof DASHBOARD_TABS)[number];
 export type AppRoute =
   | { kind: "landing" }
   | { kind: "pet" }
+  | { kind: "status" }
   | { kind: "use-cases" }
   | { kind: "support" }
   | { kind: "use-case"; slug: string }
@@ -41,6 +42,7 @@ export function parsePathname(pathname: string): AppRoute {
   const normalized = pathname.replace(/\/+$/, "") || "/";
   if (normalized === "/pet") return { kind: "pet" };
   if (normalized === "/") return { kind: "landing" };
+  if (normalized === "/status") return { kind: "status" };
   if (normalized === "/use-cases") return { kind: "use-cases" };
   if (normalized === "/support") return { kind: "support" };
   if (/^\/use-cases\/[a-z0-9-]+$/.test(normalized)) return { kind: "use-case", slug: normalized.slice("/use-cases/".length) };
@@ -105,6 +107,7 @@ export function parsePathname(pathname: string): AppRoute {
 export function buildPath(route: AppRoute): string {
   if (route.kind === "pet") return "/pet";
   if (route.kind === "landing") return "/";
+  if (route.kind === "status") return "/status";
   if (route.kind === "use-cases") return "/use-cases";
   if (route.kind === "support") return "/support";
   if (route.kind === "use-case") return `/use-cases/${route.slug}`;
