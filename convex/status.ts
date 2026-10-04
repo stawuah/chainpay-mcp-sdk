@@ -39,6 +39,9 @@ async function healthz(base: string) {
   if (body.status !== "ok") throw new Error(`status ${String(body.status)}`);
 }
 
+/** The check could not get an answer, so it says nothing about the component itself. */
+class NoAnswer extends Error {}
+
 // Each check throws on failure; timing and retry live in `measure`.
 const CHECKS: Record<ComponentId, (u: ReturnType<typeof urls>) => Promise<void>> = {
   web: async (u) => {
@@ -50,26 +53,39 @@ const CHECKS: Record<ComponentId, (u: ReturnType<typeof urls>) => Promise<void>>
   solana: async (u) => {
     if (await rpc(u.rpc, "getHealth", []) !== "ok") throw new Error("node unhealthy");
   },
+  // Shares the devnet RPC with `solana`: an RPC outage is solana's, not the program's.
+  // Only an RPC answer saying the account is missing or not executable marks it down.
   program: async (u) => {
-    const result = await rpc(u.rpc, "getAccountInfo", [u.program, { encoding: "base64", dataSlice: { offset: 0, length: 0 } }]) as { value?: { executable?: boolean } | null };
+    let result: { value?: { executable?: boolean } | null };
+    try {
+      result = await rpc(u.rpc, "getAccountInfo", [u.program, { encoding: "base64", dataSlice: { offset: 0, length: 0 } }]) as typeof result;
+    } catch (error) {
+      throw new NoAnswer(error instanceof Error ? error.message : "RPC unreachable");
+    }
     if (!result?.value?.executable) throw new Error("program account missing or not executable");
   },
 };
 
-async function measure(id: ComponentId, u: ReturnType<typeof urls>): Promise<{ component: ComponentId; state: CheckState; latencyMs: number; detail?: string }> {
+type Result = { component: ComponentId; state: CheckState; latencyMs: number; detail?: string };
+
+/** `null` when the check got no answer about this component: no row, so the page shows a gap, not up or down. */
+async function measure(id: ComponentId, u: ReturnType<typeof urls>): Promise<Result | null> {
   let detail = "";
+  let unanswered = false;
+  // Latency includes a failed first attempt, so a timeout then a retry reads as slow, not fast.
+  const started = Date.now();
   // One retry so a single dropped request or cold start doesn't paint a red bar.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const started = Date.now();
     try {
       await CHECKS[id](u);
       const latencyMs = Date.now() - started;
       return { component: id, state: latencyMs > SLOW_MS ? "degraded" : "up", latencyMs };
     } catch (error) {
       detail = error instanceof Error ? error.message.slice(0, 200) : "check failed";
+      unanswered = error instanceof NoAnswer;
     }
   }
-  return { component: id, state: "down", latencyMs: TIMEOUT_MS, detail };
+  return unanswered ? null : { component: id, state: "down", latencyMs: TIMEOUT_MS, detail };
 }
 
 export const probe = internalAction({
@@ -77,7 +93,7 @@ export const probe = internalAction({
   handler: async (ctx) => {
     if (process.env.CHAINPAY_MAINTENANCE === "true") return null;
     const u = urls();
-    const results = await Promise.all(STATUS_COMPONENTS.map((c) => measure(c.id, u)));
+    const results = (await Promise.all(STATUS_COMPONENTS.map((c) => measure(c.id, u)))).filter((r): r is Result => r !== null);
     await ctx.runMutation(internal.status.record, { at: Date.now(), results });
     return null;
   },
@@ -119,8 +135,10 @@ export const summary = internalQuery({
         days: history.map(({ day, total, up, degraded, down }) => ({ day, total, up, degraded, down })),
       };
     }));
-    const incidents = (await ctx.db.query("status_incidents").withIndex("by_started").order("desc").take(20))
-      .filter((i) => i.resolvedAt === null || now - i.resolvedAt < 14 * DAY_MS)
+    // Open incidents are always shown, however many newer ones exist; resolved ones for 14 days.
+    const open = await ctx.db.query("status_incidents").withIndex("by_resolved", (q) => q.eq("resolvedAt", null)).collect();
+    const recent = await ctx.db.query("status_incidents").withIndex("by_resolved", (q) => q.gt("resolvedAt", now - 14 * DAY_MS)).order("desc").take(20);
+    const incidents = [...open, ...recent].sort((a, b) => b.startedAt - a.startedAt)
       .map(({ _id, title, impact, components, updates, startedAt, resolvedAt }) => ({ id: _id, title, impact, components, updates, startedAt, resolvedAt }));
     return { generatedAt: now, components, incidents };
   },
@@ -142,7 +160,7 @@ export const updateIncident = internalMutation({
     const incident = await ctx.db.get(id);
     if (!incident) throw new Error("Incident not found");
     const at = Date.now();
-    await ctx.db.patch(id, { updates: [...incident.updates, { at, state, message }], resolvedAt: state === "resolved" ? at : incident.resolvedAt });
+    await ctx.db.patch(id, { updates: [...incident.updates, { at, state, message }], resolvedAt: state === "resolved" ? at : null });
     return null;
   },
 });
