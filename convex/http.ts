@@ -14,6 +14,12 @@ async function matches(token: string, secret: string | undefined): Promise<boole
   let difference = 0; for (let i = 0; i < left.length; i++) difference |= left[i] ^ right[i]; return difference === 0;
 }
 const http = httpRouter();
+// Public, read-only, no secrets: what /status on the web app renders.
+// Served from Convex so the page still loads when the relay it reports on is down.
+http.route({ path: "/status/v1", method: "GET", handler: httpAction(async (ctx) => {
+  const body = await ctx.runQuery(internal.status.summary, { now: Date.now() });
+  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30", "Access-Control-Allow-Origin": "*" } });
+}) });
 http.route({ path: "/internal/storage/v1", method: "POST", handler: httpAction(async (ctx, req) => {
   const auth = req.headers.get("authorization") ?? "";
   if (!auth.startsWith("Bearer ")) return response({ error: { code: "unauthorized", message: "Service authentication required" } }, 401);
