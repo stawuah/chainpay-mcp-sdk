@@ -21,6 +21,7 @@ export * from "./types.js";
 export * from "./x402.js";
 export * from "./x402-challenge.js";
 export * from "./x402-adapt.js";
+export * from "./cards/index.js";
 
 export { decodeSupportedTransaction } from "./transaction-reader.js";
 export {

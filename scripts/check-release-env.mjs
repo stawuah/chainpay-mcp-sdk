@@ -26,6 +26,21 @@ export function checkReleaseEnvironment(service, env) {
       if (parsed.origin !== value.trim() || parsed.protocol !== "https:" || value.includes("*")) throw new Error("Allowed origins must be exact HTTPS origins");
     }
     origin("CHAINPAY_RPC_URL");
+    if (service === "backend" && env.CARDS_CONNECTOR_ENABLED === "true") {
+      // Private agent cards run on the Lithic sandbox only, never in production.
+      if (context === "production") throw new Error("CARDS_CONNECTOR_ENABLED is sandbox-only and refused in production");
+      if (!env.LITHIC_SANDBOX_API_KEY && !env.LITHIC_API_KEY) throw new Error("LITHIC_SANDBOX_API_KEY is required for the card connector");
+      for (const key of ["CARDS_AUTHORIZER_KEY", "CARDS_RECORD_KID", "LITHIC_ASA_SECRET", "LITHIC_EVENTS_SECRET", "CRON_SECRET"]) required(key);
+      if (!env[`CARDS_RECORD_KEY_${env.CARDS_RECORD_KID}`]) throw new Error("CARDS_RECORD_KEY_<CARDS_RECORD_KID> is required for the card connector");
+      if (env.CRON_SECRET.length < 16) throw new Error("CRON_SECRET must have at least 16 characters");
+      if (env.CARDS_CHECKOUT_RUNNER_SECRET && env.CARDS_CHECKOUT_RUNNER_SECRET.length < 32) throw new Error("CARDS_CHECKOUT_RUNNER_SECRET must have at least 32 characters");
+      // Unset means enforce: TEE attestation gates every approval. `report` is an explicit opt-out.
+      if (env.CARDS_TEE_ATTESTATION_MODE && !["enforce", "report"].includes(env.CARDS_TEE_ATTESTATION_MODE)) throw new Error("CARDS_TEE_ATTESTATION_MODE must be enforce or report");
+      if (env.LITHIC_API_URL) {
+        const lithic = new URL(env.LITHIC_API_URL);
+        if (lithic.protocol !== "https:" || lithic.username || lithic.password || lithic.hostname.replace(/\.$/, "").toLowerCase() !== "sandbox.lithic.com") throw new Error("LITHIC_API_URL must be https://sandbox.lithic.com");
+      }
+    }
     if (env.CHAINPAY_CROSSMINT_ENABLED === "true") {
       if (required("CHAINPAY_CROSSMINT_AUTH_SECRET").length < 32) throw new Error("Crossmint authorization secret must have at least 32 characters");
       required("CROSSMINT_API_KEY");

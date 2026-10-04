@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod catalog;
+pub mod connectors;
 pub mod delivery;
 pub mod mandate_request;
 pub mod receipts;

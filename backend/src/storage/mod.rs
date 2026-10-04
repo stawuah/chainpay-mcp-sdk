@@ -4,7 +4,9 @@
 //! deterministic unit tests; the backend process refuses to start without a
 //! `DATABASE_URL`.
 
+mod cards;
 mod convex;
+pub use cards::{CardIndex, CardKind, CardPut, StoredCardRecord};
 pub(crate) use convex::PetStoreError;
 use convex::{ConvexStore, decode, encode};
 use serde_json::json;
@@ -54,6 +56,7 @@ struct MemoryState {
     receipt_requests: HashMap<String, ReceiptRequestRecord>,
     observed_policies: HashMap<String, ObservedPolicyRecord>,
     mandate_requests: HashMap<String, serde_json::Value>,
+    card_records: HashMap<(CardKind, String), StoredCardRecord>,
 }
 
 /// Outcome of a first-write-wins keyed record put. The caller decides whether
@@ -345,7 +348,13 @@ impl StatusStore {
             StorageBackend::Convex(client) => {
                 client.call("auth_connection", json!({"hash":hash})).await
             }
-            StorageBackend::Memory(_) => Ok(None),
+            // Unit tests register connections as `connection:<hash>` auth rows.
+            StorageBackend::Memory(state) => Ok(state
+                .read()
+                .await
+                .auth
+                .get(&format!("connection:{hash}"))
+                .map(|(value, _)| value.clone())),
             StorageBackend::Postgres(pool) => {
                 let row = sqlx::query("SELECT wallet_address, scope FROM agent_connections WHERE token_hash=$1 AND revoked_at IS NULL")
                     .bind(hash).fetch_optional(pool).await?;

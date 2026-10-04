@@ -77,6 +77,12 @@ test("owner destinations canonicalize legacy and advanced routes", () => {
  }
 });
 
+test("parses and builds the status path", () => {
+  assert.deepEqual(paths.parsePathname("/status"), { kind: "status" });
+  assert.deepEqual(paths.parsePathname("/status/"), { kind: "status" });
+  assert.equal(paths.buildPath({ kind: "status" }), "/status");
+});
+
 test("parses and builds use case paths", () => {
   assert.deepEqual(paths.parsePathname("/use-cases"), { kind: "use-cases" });
   assert.deepEqual(paths.parsePathname("/use-cases/"), { kind: "use-cases" });
@@ -85,4 +91,25 @@ test("parses and builds use case paths", () => {
   assert.deepEqual(paths.parsePathname("/use-cases/Upper"), { kind: "public-not-found", path: "/use-cases/Upper" });
   assert.equal(paths.buildPath({ kind: "use-cases" }), "/use-cases");
   assert.equal(paths.buildPath({ kind: "use-case", slug: "one-tap-stop" }), "/use-cases/one-tap-stop");
+});
+
+test("card routes: list, new (draft intake), detail sections, and the public card check", () => {
+  const id = "ab".repeat(32);
+  assert.deepEqual(paths.parsePathname("/app/cards"), { kind: "app", tab: "cards" });
+  assert.deepEqual(paths.parsePathname("/app/cards/new"), { kind: "app", tab: "cards", cardsNew: true });
+  assert.deepEqual(paths.parsePathname(`/app/cards/${id}`), { kind: "app", tab: "cards", cardId: id });
+  for (const section of paths.CARD_SECTIONS) {
+    const route = paths.parsePathname(`/app/cards/${id}/${section}`);
+    assert.deepEqual(route, { kind: "app", tab: "cards", cardId: id, cardSection: section });
+    assert.equal(paths.parsePathname(paths.buildPath(route)).cardId, id);
+  }
+  assert.equal(paths.buildPath({ kind: "app", tab: "cards", cardId: id, cardSection: "activity" }), `/app/cards/${id}`);
+  assert.equal(paths.buildPath({ kind: "app", tab: "cards", cardId: id, cardSection: "privacy" }), `/app/cards/${id}/privacy`);
+  assert.equal(paths.buildPath({ kind: "app", tab: "cards", cardsNew: true }), "/app/cards/new");
+  assert.equal(paths.buildPath({ kind: "app", tab: "cards" }), "/app/cards");
+  for (const bad of ["/app/cards/XYZ", `/app/cards/${id}/nope`, `/app/cards/${id}/privacy/extra`, `/app/cards/${id.toUpperCase()}`]) {
+    assert.equal(paths.parsePathname(bad).kind, "app-not-found", bad);
+  }
+  assert.deepEqual(paths.parsePathname("/verify/card"), { kind: "verify-card" });
+  assert.equal(paths.buildPath({ kind: "verify-card" }), "/verify/card");
 });

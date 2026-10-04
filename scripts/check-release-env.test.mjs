@@ -21,3 +21,15 @@ test("production cannot relabel a dev database or use unpaired service origins",
   assert.equal(checkReleaseEnvironment("mcp",mcp).service,"mcp");
   assert.throws(()=>checkReleaseEnvironment("mcp",{...mcp,CHAINPAY_BACKEND_URL:"https://wrong.example.com",CHAINPAY_RPC_URL:"https://wrong.example.com/rpc"}),/reviewed production/);
 });
+test("card connector needs its secrets and never runs in production", () => {
+  const cards = {...env, CARDS_CONNECTOR_ENABLED: "true", LITHIC_SANDBOX_API_KEY: "k", CARDS_AUTHORIZER_KEY: "a", CARDS_RECORD_KID: "k1", CARDS_RECORD_KEY_k1: "x", LITHIC_ASA_SECRET: "whsec_x", LITHIC_EVENTS_SECRET: "whsec_y", CRON_SECRET: "c".repeat(16)};
+  assert.equal(checkReleaseEnvironment("backend", cards).service, "backend");
+  for (const key of ["CARDS_AUTHORIZER_KEY", "LITHIC_ASA_SECRET", "CARDS_RECORD_KEY_k1", "CRON_SECRET"]) assert.throws(() => checkReleaseEnvironment("backend", {...cards, [key]: ""}));
+  assert.throws(() => checkReleaseEnvironment("backend", {...cards, CRON_SECRET: "short"}), /16/);
+  assert.throws(() => checkReleaseEnvironment("backend", {...cards, CARDS_CHECKOUT_RUNNER_SECRET: "short"}), /32/);
+  assert.throws(() => checkReleaseEnvironment("backend", {...cards, VERCEL_ENV: "production", CHAINPAY_RELEASE_ENVIRONMENT: "production", CHAINPAY_CONVEX_DEPLOYMENT_TYPE: "prod"}), /sandbox-only/);
+  assert.throws(() => checkReleaseEnvironment("backend", {...cards, CARDS_TEE_ATTESTATION_MODE: "off"}), /enforce or report/);
+  assert.equal(checkReleaseEnvironment("backend", {...cards, CARDS_TEE_ATTESTATION_MODE: "report"}).service, "backend");
+  for (const url of ["https://api.lithic.com", "https://api.lithic.com.", "https://API.LITHIC.COM:443", "http://sandbox.lithic.com"]) assert.throws(() => checkReleaseEnvironment("backend", {...cards, LITHIC_API_URL: url}), /sandbox\.lithic\.com/, url);
+  assert.equal(checkReleaseEnvironment("backend", {...cards, LITHIC_API_URL: "https://sandbox.lithic.com."}).service, "backend");
+});

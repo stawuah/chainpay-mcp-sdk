@@ -2,6 +2,7 @@ import { BrandLogo } from "../brand/Brand";
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { PROGRAM_ID } from "../config/public";
+import { AgentCardTeaser } from "./AgentCardTeaser";
 import { PaymentStory, PermissionExample } from "./PaymentStory";
 import { SupportedAssets } from "./SupportedAssets";
 import { useLandingMotion } from "./useLandingMotion";
@@ -129,6 +130,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
 
         <SupportedAssets />
         <PaymentStory onOpenDashboard={onOpenDashboard} />
+        <AgentCardTeaser />
 
         <section className="landing-section page-width" id="developers" aria-labelledby="landing-dev-heading">
           <p className="section-kicker">DEVELOPERS</p>
@@ -190,6 +192,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
           <a href={PROGRAM_EXPLORER_URL} target="_blank" rel="noreferrer">Program on Explorer</a>
           <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">GitHub</a>
           <a href={MCP_DOCS_URL} target="_blank" rel="noreferrer">MCP docs</a>
+          <a href="/status">Status</a>
         </div>
       </footer>
     </div>

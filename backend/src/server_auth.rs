@@ -178,10 +178,31 @@ pub(super) async fn logout(
     Ok(Json(json!({"revoked":true})))
 }
 
+/// Token hash of the bearer credential, used only as an opaque connection id.
+pub(super) fn connection_hash(headers: &HeaderMap) -> Option<String> {
+    bearer(headers).ok().map(token_hash)
+}
+
 fn valid_scope(scope: &Value) -> bool {
+    // `cards` (optional, additive): up to 20 card ids an agent connection may
+    // act on. A cards-only connection (no mandates) is valid.
+    let cards = &scope["cards"];
+    let cards_valid = cards.is_null()
+        || cards.as_array().is_some_and(|values| {
+            values.len() <= 20
+                && values.iter().all(|v| {
+                    v.as_str().is_some_and(|id| {
+                        id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                    })
+                })
+        });
+    let has_cards = cards.as_array().is_some_and(|values| !values.is_empty());
     scope["version"] == 1
+        && cards_valid
         && scope["mandates"].as_array().is_some_and(|values| {
-            !values.is_empty() && values.len() <= 20 && values.iter().all(|v| v.as_str().is_some())
+            (has_cards || !values.is_empty())
+                && values.len() <= 20
+                && values.iter().all(|v| v.as_str().is_some())
         })
         && scope["tools"].as_array().is_some_and(|values| {
             !values.is_empty() && values.len() <= 30 && values.iter().all(|v| v.as_str().is_some())

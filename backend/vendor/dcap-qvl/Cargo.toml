@@ -1,0 +1,76 @@
+# Vendored from dcap-qvl 0.6.5 (MIT, Phala Network, https://github.com/Phala-Network/dcap-qvl).
+# ChainPay changes (see README.md): serde_json without `preserve_order` (upstream's
+# `std` feature forced it on the whole backend, reordering JSON keys everywhere),
+# collateral responses read as raw signed bytes (`RawValue`) instead of
+# re-serialized `Value`s, the reqwest/python/go/js transports removed (Axum
+# supplies its own `HttpClient`), and the ring backend dropped (rustcrypto only).
+[package]
+name = "dcap-qvl"
+version = "0.6.5"
+edition = "2021"
+license = "MIT"
+description = "Vendored DCAP quote verifier (dcap-qvl 0.6.5) for ChainPay's Axum backend"
+publish = false
+
+[lib]
+name = "dcap_qvl"
+path = "src/lib.rs"
+# Upstream's doc examples use the reqwest constructors this copy removes.
+doctest = false
+
+[features]
+default = ["std", "rustcrypto", "default-x509", "collateral"]
+std = [
+    "serde/std",
+    "scale/std",
+    "scale-info/std",
+    "pem/std",
+    "asn1_der/std",
+    "der/std",
+    "dep:serde_json",
+    "dep:urlencoding",
+]
+collateral = ["std", "default-x509"]
+default-x509 = ["dep:der", "dep:x509-cert"]
+rustcrypto = [
+    "dep:sha2",
+    "dep:p256",
+    "dep:signature",
+    "dcap-qvl-webpki/rustcrypto",
+    "_anycrypto",
+]
+_anycrypto = []
+danger-allow-tcb-override = []
+
+[dependencies]
+anyhow = { version = "1.0.102", default-features = false }
+asn1_der = { version = "0.7", default-features = false, features = ["native_types"] }
+base64 = { version = "0.23.1", default-features = false, features = ["alloc"] }
+byteorder = { version = "1.5.0", default-features = false }
+chrono = { version = "0.4.44", default-features = false, features = ["alloc", "serde"] }
+const-oid = { version = "0.10.2", default-features = false }
+dcap-qvl-webpki = { version = "=0.103.15", features = ["alloc"] }
+der = { version = "0.8.1", default-features = false, features = ["alloc"], optional = true }
+derive_more = { version = "2.1.1", features = ["display"] }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+log = { version = "0.4.29", default-features = false }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa"], optional = true }
+pem = { version = "4", default-features = false }
+rustls-pki-types = { version = "1.14", default-features = false }
+scale = { package = "parity-scale-codec", version = "3.7.5", default-features = false, features = ["derive"] }
+scale-info = { version = "2.11.6", default-features = false, features = ["derive"] }
+serde = { version = "1.0.228", default-features = false, features = ["derive"] }
+serde_bytes = { package = "serde-human-bytes", version = "0.1" }
+# No `preserve_order`: that feature would unify into every crate of the backend.
+serde_json = { version = "1.0.149", optional = true, features = ["raw_value"] }
+sha2 = { version = "0.11", default-features = false, optional = true }
+signature = { version = "3.0", default-features = false, optional = true }
+urlencoding = { version = "2", optional = true }
+x509-cert = { version = "0.3.0", default-features = false, optional = true }
+
+[dev-dependencies]
+hex-literal = "1.1.0"
+
+[lints.rust]
+# Upstream cfgs for features this copy does not ship (python, go, js, borsh, ring).
+unexpected_cfgs = "allow"

@@ -84,7 +84,13 @@ export function useLandingMotion(root: RefObject<HTMLDivElement | null>) {
       // Lenis is the only smooth-scroll engine. Touch and reduced motion stay native.
       media.add("(min-width: 961px) and (pointer: fine) and (prefers-reduced-motion: no-preference)", () => {
         const lenis = new Lenis({ anchors: true, duration: 0.8 });
-        lenis.on("scroll", ScrollTrigger.update);
+        // Lenis moves the page a frame before the browser's own scroll event.
+        // Announce each move as it happens so the pet's tour drops a line the
+        // moment its section leaves the reading line (see pet/play/hooks.ts).
+        lenis.on("scroll", () => {
+          ScrollTrigger.update();
+          window.dispatchEvent(new Event("chainpay:smooth-scroll"));
+        });
         const tick = (seconds: number) => lenis.raf(seconds * 1000);
         gsap.ticker.add(tick);
         return () => { gsap.ticker.remove(tick); lenis.destroy(); };
