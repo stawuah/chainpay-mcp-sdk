@@ -82,7 +82,7 @@ export function Ledger({ data, failed, vault }: { data: TrackerData | null; fail
 
       {vault ? (
         <p className="ledger-foot">
-          Tips are held by an open-source program on Solana.{" "}
+          Tips are held by an open-source program on Solana that splits each one 50/50 between the two maintainers' personal wallets.{" "}
           <a href={explorerAddress(vault)} target="_blank" rel="noreferrer">Verify on-chain ↗</a>
         </p>
       ) : null}

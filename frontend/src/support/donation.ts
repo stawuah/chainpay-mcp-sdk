@@ -1,7 +1,9 @@
 // Builds the instructions for a contribution and reads the vault ledger.
 //
-// A contribution is exactly three instructions, and the watchdog checks for
-// exactly this shape:
+// A SOL or USDC contribution is exactly three instructions (an "Other" token
+// tip is built in swap.ts instead: compute budget, setup, one Jupiter swap, then
+// the same memo + allocate_usdc). The optional watchdog, which lives outside this
+// repo, compares the live page's transactions against these shapes:
 //   1. transfer SOL (System) or USDC (transferChecked) from the donor to the vault
 //   2. memo "chainpay-support:v1[ anon=1][ note=<text>]"
 //   3. allocate_sol / allocate_usdc on the splitter
