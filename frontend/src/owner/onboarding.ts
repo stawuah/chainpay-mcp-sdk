@@ -1,4 +1,4 @@
-export const FIRST_MANDATE_TITLE = "Set up your first mandate";
+export const FIRST_MANDATE_TITLE = "Set up your first spending permission";
 
 export const OWNER_SETUP_STEPS = [
   {
@@ -9,28 +9,28 @@ export const OWNER_SETUP_STEPS = [
   {
     key: "signin",
     label: "Sign in",
-    detail: "A login message proves this browser session. It does not approve a payment or create a mandate.",
+    detail: "A login message proves this browser session. It does not approve a payment or create a permission.",
   },
   {
     key: "review",
-    label: "Review mandate",
+    label: "Review permission",
     detail: "Check the exact amount, mint, agent, and expiry slot before anything is signed.",
   },
   {
     key: "approve",
     label: "Approve in wallet",
-    detail: "The wallet transaction creates the on-chain mandate. That is the financial approval.",
+    detail: "The wallet transaction creates the on-chain spending permission. That is the financial approval.",
   },
   {
     key: "connect-agent",
     label: "Connect an agent",
-    detail: "Pair an MCP client or use the dashboard assistant. The mandate sets the spend limit; pairing controls who may call payment tools.",
+    detail: "Pair an MCP client or use the dashboard assistant. The permission sets the spend limit; pairing controls who may call payment tools.",
   },
 ] as const;
 
-export const OWNER_SETUP_PATH_SUMMARY = "Connect wallet → Sign in → Review mandate → Approve in wallet → Connect an agent.";
+export const OWNER_SETUP_PATH_SUMMARY = "Connect wallet → Sign in → Review permission → Approve in wallet → Connect an agent.";
 
-export const LOGIN_VS_APPROVAL = "Sign in is a login message. Mandate approval is a separate wallet transaction.";
+export const LOGIN_VS_APPROVAL = "Sign in is a login message. Approving a spending permission is a separate wallet transaction.";
 
 export const EMPTY_OWNER_ACTIVITY = "No payments for this wallet yet.";
 

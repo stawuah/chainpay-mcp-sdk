@@ -25,6 +25,10 @@ export type PurchaseCardView = {
   status: PurchaseAttentionStage;
   statusLabel: string;
   limitDetail?: string;
+  /** The exact amount for display through the shared Amount (mint metadata decides the decimals). */
+  amount?: { baseUnits: string; mint: string };
+  /** The permission's limits for display, when limitDetail describes them rather than a failed check. */
+  limit?: { mint: string; symbol: string; perPayment: string; total: string };
   checks: AgentCheck[];
   showChecks: boolean;
 };
@@ -70,6 +74,11 @@ function formatPaymentAmount(
   } catch {
     return `${amount} base units`;
   }
+}
+
+function failedLimitDetail(item: AgentInboxItem): boolean {
+  const limitsCheck = item.requirements?.checks.find((check) => check.key === "limits");
+  return limitsCheck?.status === "fail" && Boolean(limitsCheck.detail);
 }
 
 function limitDetailFromRequirements(
@@ -199,6 +208,8 @@ export function purchaseCardFromInboxItem(
     status,
     statusLabel: purchaseStatusLabel(status),
     limitDetail: limitDetailFromRequirements(item, options.mandate, options.mandateDecimals, options.stablecoinOptions),
+    ...(amount && mint && /^\d+$/.test(amount) ? { amount: { baseUnits: amount, mint } } : {}),
+    ...(options.mandate && !failedLimitDetail(item) ? { limit: { mint: options.mandate.allowedMint, symbol: tokenLabelForMint(options.mandate.allowedMint, options.stablecoinOptions), perPayment: options.mandate.maxPerPayment.toString(), total: options.mandate.totalLimit.toString() } } : {}),
     checks,
     showChecks: checks.length > 0,
   };

@@ -2,7 +2,7 @@ import { Wallet } from "lucide-react";
 import { BrandLogo } from "../brand/Brand";
 import { useWallet } from "../wallet/context";
 import { WalletChoices } from "../ui/WalletChoices";
-import "../dashboard/owner-dashboard.css";
+import "../dashboard/workspace.css";
 
 export function OwnerWelcome() {
   const { walletOptions, connecting, connectWallet, walletConnectionError, refreshWalletOptions } = useWallet();

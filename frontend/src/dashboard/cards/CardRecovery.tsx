@@ -4,9 +4,9 @@ import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { formatUsdCents, type CardView } from "@chainpay/sdk";
-import type { CardRecoveryView, CardsSource } from "./source";
+import type { CardRecoveryView, CardsSource, RecoveryRules } from "./source";
 import { errorText } from "./shared";
-import { formatWhen } from "./ui";
+import { formatWhen, shortKey } from "./ui";
 
 /** Owner-assisted recovery (contracts §8, ruling K12). Never a reset; the card stays frozen until the owner unfreezes. */
 export function RecoveryBanner({ source, card, recovery, onChanged }: { source: CardsSource; card: CardView; recovery: CardRecoveryView; onChanged: () => void }) {
@@ -74,6 +74,9 @@ export function RecoveryBanner({ source, card, recovery, onChanged }: { source: 
                   <div className="mandate-summary">
                     {report.numbers.map((row) => <div key={row.key ?? row.label}><span>{row.label}</span><strong>{row.cents !== undefined ? formatUsdCents(row.cents) : row.count}</strong></div>)}
                   </div>
+                  {report.rules ? <RulesReview rules={report.rules} /> : (
+                    <p className="owner-muted" data-testid="recovery-rules-note">The restore keeps this card's rules exactly as your private records hold them: limits, shops, categories, fee and ChainPay's approver. Your browser checks that before you sign and refuses anything else.</p>
+                  )}
                   <p className="owner-muted">Rebuilt from your encrypted backup at log position {report.snapshotLedgerSeq}, plus {report.issuerEventsReplayed} card network event{report.issuerEventsReplayed === 1 ? "" : "s"} since. Report fingerprint <code>{report.digest.slice(0, 12)}</code>.</p>
                   <ol className="cp-recovery-steps">
                     <li data-done={restored ? "yes" : "no"}>Approve the restore in your wallet</li>
@@ -94,6 +97,24 @@ export function RecoveryBanner({ source, card, recovery, onChanged }: { source: 
           }
         />
       </Dialog>
+    </div>
+  );
+}
+
+/** The rules the restore writes, shown so the owner reviews them too; the browser refuses a restore that differs. */
+function RulesReview({ rules }: { rules: RecoveryRules }) {
+  const ends = rules.expiresAt === "0" ? "No end date" : new Date(Number(rules.expiresAt) * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return (
+    <div className="mandate-summary" data-testid="recovery-rules">
+      <div><span>Max per purchase</span><strong>{formatUsdCents(rules.maxPurchaseCents)}</strong></div>
+      <div><span>Purchases per period</span><strong>{rules.maxPurchasesPerPeriod === 0 ? "No count limit" : rules.maxPurchasesPerPeriod}</strong></div>
+      <div><span>Period</span><strong>Every {Math.round(rules.periodSeconds / 86_400)} days</strong></div>
+      <div><span>Shops</span><strong>{rules.merchantIdHashes.length === 0 ? "Any shop in the categories" : `${rules.merchantIdHashes.length} shop${rules.merchantIdHashes.length === 1 ? "" : "s"}`}</strong></div>
+      <div><span>Categories</span><strong>{rules.mccs.length ? rules.mccs.join(", ") : "Only the shops"}</strong></div>
+      <div><span>Repeat charges</span><strong>{rules.recurringAllowed ? "Allowed" : "Not allowed"}</strong></div>
+      <div><span>ChainPay fee</span><strong>{(rules.feeBps / 100).toFixed(2)}%</strong></div>
+      <div><span>Card ends</span><strong>{ends}</strong></div>
+      <div><span>ChainPay approver</span><strong className="mono">{shortKey(rules.authorizer)}</strong></div>
     </div>
   );
 }

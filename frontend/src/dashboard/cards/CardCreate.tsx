@@ -19,11 +19,12 @@ import type { CardShop, CreateCardInput, CreateStepId, CreateStepState } from ".
 import { errorText, type CardsShared } from "./shared";
 import { centsToDollarInput, dollarsToCents } from "./amounts";
 import { AgentCard } from "./AgentCard";
+import { PRIVACY_COPY, PRIVACY_SHORT } from "./privacyCopy";
 
 export const CREATE_STEPS: { id: CreateStepId; label: string; detail: string }[] = [
   { id: "prepare", label: "Get a card number ready", detail: "ChainPay asks the card network for a paused card." },
   { id: "base", label: "Create the card on Solana", detail: "3 approvals in your wallet. These only set up the card's accounts." },
-  { id: "session", label: "Open your private session", detail: "1 message. It only lets you read and write your card's private rules." },
+  { id: "session", label: "Open your private session", detail: "1 message. It opens your private session, which reads and writes your card's private rules. It doesn't move money." },
   { id: "rules", label: "Save the limits privately", detail: "1 approval. Your limits go into the private rollup, not the public chain." },
   { id: "activate", label: "Turn the card on", detail: "ChainPay copies the limits to the card network and opens the card." },
 ];
@@ -213,16 +214,16 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
                 <div className="owner-form-heading">
                   <span className="owner-caption">Step {step + 1} of 3</span>
                   <h2 ref={heading} tabIndex={-1}>{step === 0 ? "Set the limits" : "Pick where it can pay"}</h2>
-                  <p>{step === 0 ? "Your agent can only spend inside these. Nobody else can read them." : "Purchases anywhere else are declined."}</p>
+                  <p>{step === 0 ? `Your agent can only spend inside these. ${PRIVACY_COPY}` : "Purchases anywhere else are declined."}</p>
                 </div>
                 {step === 0 ? (
                   <div className="cp-form-grid">
-                    <div className="field-wide"><TextInput label="Card name" value={form.label} onChange={(value) => update("label", value)} placeholder="Data API credits" description="Up to 40 characters. Only you see it." /></div>
+                    <div className="field-wide"><TextInput label="Card name" value={form.label} onChange={(value) => update("label", value)} placeholder="Data API credits" description="Up to 40 characters. It's how the card shows in your dashboard." /></div>
                     <TextInput label="Budget per period (USD)" value={form.budget} onChange={(value) => update("budget", value)} placeholder="500" description="The most it can spend each period." />
                     <TextInput label="Max per purchase (USD)" value={form.maxPurchase} onChange={(value) => update("maxPurchase", value)} placeholder="30" description="The most it can spend at once." />
-                    <Selector label="Period" value={form.periodDays} onChange={(value) => update("periodDays", value)} options={withValue(PERIOD_OPTIONS, form.periodDays, (days) => `Every ${days} day${days === "1" ? "" : "s"}`)} />
+                    <Selector className="cp-create-select" label="Period" value={form.periodDays} onChange={(value) => update("periodDays", value)} options={withValue(PERIOD_OPTIONS, form.periodDays, (days) => `Every ${days} day${days === "1" ? "" : "s"}`)} />
                     <TextInput label="Purchases per period" value={form.maxPurchases} onChange={(value) => update("maxPurchases", value)} description="0 means no count limit." />
-                    <Selector label="Card ends" value={form.endsInDays} onChange={(value) => update("endsInDays", value)} options={withValue(ENDS_OPTIONS, form.endsInDays, (days) => `In ${days} day${days === "1" ? "" : "s"}`)} />
+                    <Selector className="cp-create-select" label="Card ends" value={form.endsInDays} onChange={(value) => update("endsInDays", value)} options={withValue(ENDS_OPTIONS, form.endsInDays, (days) => `In ${days} day${days === "1" ? "" : "s"}`)} />
                   </div>
                 ) : (
                   <div className="cp-shop-pick">
@@ -277,7 +278,7 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
                       <div><span>Categories</span><strong>{review.input.mccs.length ? review.input.mccs.map(mccLabel).join(", ") : "Only the shops above"}</strong></div>
                       <div><span>Repeat charges</span><strong>{review.input.recurringAllowed ? "Allowed" : "Not allowed"}</strong></div>
                       <div><span>Card ends</span><strong>{review.input.expiresAt ? new Date(review.input.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "No end date"}</strong></div>
-                      <div><span>Who can read the limits</span><strong>You, and ChainPay's approver (it can't change them)</strong></div>
+                      <div><span>Who can read the limits</span><strong>You, ChainPay's approver (it can't change them), readers you add and the card issuer. {PRIVACY_SHORT}</strong></div>
                     </div>
                   </>
                 ) : (
@@ -312,7 +313,7 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
           <aside className="owner-wizard-aside cp-preview-aside" aria-label="Card preview">
             <AgentCard label={form.label.trim()} pendingNote={step === 2 ? (running ? "Approving" : "Waiting for you") : "Private"} />
             <p className="cp-preview-caption">{step === 2 ? "This is the card your agent gets once you approve." : "Your card, as you set it up."} The last four arrive from the card network when it's issued.</p>
-            <ul><li>Only you see the limits</li><li>Freeze it in one tap</li><li>Every purchase lands as a receipt</li></ul>
+            <ul><li>Limits hidden from the public chain</li><li>Freeze it in one tap</li><li>Every purchase lands as a receipt</li></ul>
           </aside>
         </div>
       </section>

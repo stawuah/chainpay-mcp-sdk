@@ -58,7 +58,8 @@ export function PetMount({ routeKind, routeKey }: { routeKind: string; routeKey:
   }, []);
 
   // Embeds live inside someone else's page; he stays home for those.
-  if (DISABLED || !ready || routeKind === "embed-overview" || routeKind === "pet") return null;
+  // /support stars the robot in its hero, and the floating pet covered the tip card on phones (support-v2 ruling P13).
+  if (DISABLED || !ready || routeKind === "embed-overview" || routeKind === "pet" || routeKind === "support") return null;
 
   const Layer = SHARED ? CommunityCompanion : PetLayer;
   return (

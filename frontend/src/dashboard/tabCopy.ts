@@ -37,7 +37,7 @@ const STATIC: Record<Exclude<DashboardTab, "overview" | "mandates">, TabCopy> = 
   cards: {
     kicker: "AGENT CARDS",
     title: "Cards",
-    subtitle: "Give an agent a card. Only you see its limits.",
+    subtitle: "Give an agent a card. Its limits stay hidden from the public chain.",
   },
   payments: {
     kicker: "SETTLEMENT",

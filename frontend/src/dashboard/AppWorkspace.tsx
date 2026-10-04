@@ -3,7 +3,7 @@ import { clearJustSignedIn, useJustSignedIn } from "../owner/signInMoment";
 import { hasReadySession } from "../session";
 import { OwnerEntry } from "../owner/OwnerEntry";
 import { useOwnerSignIn } from "../owner/useOwnerSignIn";
-import "./owner-dashboard.css";
+import "./workspace.css";
 import { useRoute } from "../routing/useRoute";
 import { useWallet } from "../wallet/context";
 import { OwnerWelcome } from "../owner/OwnerWelcome";

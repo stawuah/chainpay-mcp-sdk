@@ -1,6 +1,9 @@
-import { PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import {
   buildDisclosureBundle,
+  buildRestoreInstruction,
+  cardIdFromHex,
+  CARD_POLICY_PROGRAM_ID,
   CARD_SANDBOX_MERCHANTS,
   cardPolicyView,
   commitmentRoot,
@@ -13,9 +16,11 @@ import {
   type CardPeriod,
   type CardPolicy,
   type CardView,
+  type RestoreArgs,
   type StatementView,
 } from "@chainpay/sdk";
-import { CARD_AGENT_TOOLS, type CardPrivateRead, type CardRecoveryView, type CardsSource, type CreateCardInput, type PrivacyCheckResult, type ReaderMember, type RecoveryReport } from "./source";
+import { CARD_AGENT_TOOLS, type CardPrivateRead, type CardRecoveryView, type CardsSource, type CreateCardInput, type PrivacyCheckResult, type ReaderMember, type RecoveryReport, type RepaymentLookup } from "./source";
+import { assertCoSignedRestore, reviewedRestore } from "./signingGuards";
 
 /*
  * ILLUSTRATIVE fixture source for the design harness and tests. Never imported
@@ -35,6 +40,12 @@ export type CardsFixtureOptions = {
   delayMs?: number;
   /** Privacy-check attestation outcome to show (default: what the live Devnet check returned on 2026-10-04). */
   attestation?: "verified" | "challenge_bound" | "mismatch" | "failed";
+  /** `unknown`: a statement repayment is signed but no answer comes back. */
+  repay?: "unknown";
+  /** `tampered`: ChainPay's co-signed restore changes rules the owner never reviewed (the real guard refuses it). */
+  restore?: "tampered";
+  /** `unreadable`: private reads fail with an RPC error. */
+  reads?: "unreadable";
 };
 
 const FIXTURE_PROVENANCE = MAGICBLOCK_DEVNET_TEE_MEASUREMENTS.provenance;
@@ -47,7 +58,9 @@ const FIXTURE_ATTESTATION: Record<NonNullable<CardsFixtureOptions["attestation"]
 
 const key = (fill: number) => new PublicKey(new Uint8Array(32).fill(fill)).toBase58();
 export const FIXTURE_OWNER = "7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q";
-const AUTHORIZER = key(31);
+// A real keypair, so the fixture restore can be co-signed and run through the real guard.
+const AUTHORIZER_KEYPAIR = Keypair.fromSeed(new Uint8Array(32).fill(31));
+const AUTHORIZER = AUTHORIZER_KEYPAIR.publicKey.toBase58();
 const READER = key(33);
 const STRANGER = key(77);
 const SALT = new Uint8Array(32).fill(42);
@@ -92,6 +105,8 @@ function buildCards(options: CardsFixtureOptions): FixtureCard[] {
         freeze: { onChain: false, issuer: "confirmed" },
         commitment: { seq: "5", root: "", slot: "412883104" },
         recovery: { state: "normal" },
+        // Axum's own check, as it serves it (`match`, report mode by default).
+        attestation: { mode: "report", hardware: "verified", measurements: "match", checkedAt: "2026-10-04T10:12:00Z", label: "Genuine TDX hardware and allowlisted workload verified" },
       },
       policy: policyFor(data, {}),
       period: periodFor({}),
@@ -232,6 +247,7 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
     if (!card) throw new Error("No card with that id in this workspace");
     return card;
   };
+  const repayments = new Map<string, RepaymentLookup>();
   const commitments = new Map<string, Promise<CardCommitment>>();
   const commitmentFor = async (binding: string): Promise<CardCommitment | null> => {
     const card = cards.find((item) => item.binding === binding);
@@ -282,6 +298,7 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
     isUnlocked() { return unlocked; },
     async readPrivate(card): Promise<CardPrivateRead> {
       const found = find(card.cardId);
+      if (options.reads === "unreadable") { await wait(delay / 3); throw new Error("The private rollup didn't answer. Nothing was changed."); }
       if (!unlocked) return { policy: { state: "not_visible", slot: null }, period: { state: "not_visible", slot: null } };
       return {
         policy: { state: "visible", slot: 412_883_200n, account: cardPolicyView(found.policy) },
@@ -342,9 +359,18 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
     repaymentTarget() {
       return { recipientTokenAccount: "SimPartnerUsdc11111111111111111111111111111", mint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", decimals: 6, cluster: "devnet" };
     },
-    async payStatement(_card, _statement, mandateAddress) {
+    async payStatement(_card, statement, mandateAddress) {
       await wait(delay * 2);
-      return { receiptPda: "4RcptStatementFixture11111111111111111111", mandatePda: mandateAddress, signature: "FixtureRepaymentSignature" };
+      const receiptPda = "4RcptStatementFixture11111111111111111111";
+      if (options.repay === "unknown") {
+        repayments.set(statement.digest ?? statement.statementId, { state: "unknown", receiptPda, mandatePda: mandateAddress });
+        return { outcome: "unknown", receiptPda, mandatePda: mandateAddress, reason: "No response from the relay (timed out after 90s), so this payment may have settled or may never have been sent." };
+      }
+      return { outcome: "confirmed", receiptPda, mandatePda: mandateAddress, signature: "FixtureRepaymentSignature" };
+    },
+    async repaymentStatus(statement) {
+      await wait(delay / 3);
+      return repayments.get(statement.digest ?? statement.statementId) ?? { state: "none" };
     },
     privateRepay() { return null; },
     async submitRepayment(cardId, statementId) {
@@ -353,9 +379,26 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
       statements.set(cardId, list.map((item) => item.statementId === statementId ? { ...item, state: "repayment_observed", repayment: { receiptPda: "4RcptStatementFixture11111111111111111111", mandatePda: "MdT1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", verifiedAt: new Date().toISOString() } } : item));
       return { state: "repayment_observed" };
     },
-    async restore(card) {
+    async restore(card, report) {
       const found = find(card.cardId);
       await wait(delay);
+      // The same owner-side check the live source runs, on a co-signed restore built here.
+      const reviewed = reviewedRestore(report, { policy: cardPolicyView(found.policy), period: found.period });
+      const cardId = cardIdFromHex(card.cardId);
+      const number = (k: string) => { const row = report.numbers.find((item) => item.key === k); return BigInt(row?.cents ?? String(row?.count ?? 0)); };
+      const p = found.policy;
+      const args: RestoreArgs = {
+        policy: { budgetCents: number("budget"), maxPurchaseCents: p.maxPurchaseCents, maxPurchasesPerPeriod: p.maxPurchasesPerPeriod, periodSeconds: p.periodSeconds, currency: p.currency, merchantIdHashes: p.merchantIdHashes, mccs: p.mccs, expiresAt: p.expiresAt, recurringAllowed: p.recurringAllowed, feeBps: p.feeBps, authorizer: p.authorizer },
+        periodIndex: found.period.periodIndex, capturedCents: number("captured"), reservedCents: number("reserved"), refundedCents: number("refunded"), purchasesCount: Number(number("purchases")),
+        exceptionCents: number("exceptions"), statementOutstandingCents: number("outstanding"), ledgerHead: new Uint8Array(32).fill(9), ledgerSeq: BigInt(report.snapshotLedgerSeq) + 2n,
+        reconDigest: Uint8Array.from(report.digest.match(/../g)!, (pair) => parseInt(pair, 16)),
+      };
+      if (options.restore === "tampered") args.policy = { ...args.policy, maxPurchaseCents: 500_000n, feeBps: 1_000, merchantIdHashes: [] };
+      const ix = buildRestoreInstruction({ owner: FIXTURE_OWNER, cardId, authorizer: AUTHORIZER, restore: args }, CARD_POLICY_PROGRAM_ID);
+      const tx = new Transaction({ feePayer: new PublicKey(FIXTURE_OWNER), recentBlockhash: "11111111111111111111111111111111" })
+        .add(new TransactionInstruction({ programId: new PublicKey(ix.programId), keys: ix.keys.map((k) => ({ pubkey: new PublicKey(k.address), isSigner: k.isSigner, isWritable: k.isWritable })), data: Buffer.from(ix.data) }));
+      tx.partialSign(AUTHORIZER_KEYPAIR);
+      assertCoSignedRestore(Transaction.from(tx.serialize({ requireAllSignatures: false, verifySignatures: false })), { owner: FIXTURE_OWNER, cardId, programId: CARD_POLICY_PROGRAM_ID, report, reviewed });
       found.view = { ...found.view, recovery: { state: "restored_pending_reconcile" } };
     },
     async confirmReconciled(card) {

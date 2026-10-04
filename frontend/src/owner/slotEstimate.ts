@@ -76,6 +76,37 @@ export function mandateExpiryLabel(
   return date ? `Estimated ${date} · slot ${slot}` : `Estimated slot ${slot}`;
 }
 
+/** An estimated date in the past for a slot that has already passed, or null. */
+export function estimatedPastDate(expiresAtSlot: bigint, currentSlot: bigint, secondsPerSlot: number) {
+  if (expiresAtSlot > currentSlot) return null;
+  const secondsSinceExpiry = Number(currentSlot - expiresAtSlot) * secondsPerSlot;
+  if (!Number.isFinite(secondsSinceExpiry) || secondsSinceExpiry < 0) return null;
+  const expiry = new Date(Date.now() - secondsSinceExpiry * 1000);
+  if (Number.isNaN(expiry.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(expiry);
+}
+
+/**
+ * Expiry for a permissions ledger row: a human date only. The protocol slot
+ * stays in the permission's details (EXPERIENCE.md, 2026-10-04). An expired
+ * permission reads in the past tense; without slot timing nothing is invented.
+ */
+export function ledgerExpiryLabel(
+  expiresAtSlot: bigint,
+  currentSlot: bigint | null,
+  estimate: SlotDurationEstimate | null,
+  options: { expired?: boolean } = {},
+) {
+  if (currentSlot !== null && expiresAtSlot <= currentSlot) {
+    const date = estimate ? estimatedPastDate(expiresAtSlot, currentSlot, estimate.secondsPerSlot) : null;
+    return date ? `Expired ${date}` : "Expired";
+  }
+  if (options.expired) return "Expired";
+  if (currentSlot === null || !estimate) return "Date not estimated";
+  const date = estimatedExpiryDate(expiresAtSlot, currentSlot, estimate.secondsPerSlot);
+  return date ? `Estimated ${date}` : "Date not estimated";
+}
+
 export function sampleFromRpcResult(samples: unknown): PerformanceSample | null {
   if (!Array.isArray(samples) || samples.length === 0) return null;
   const first = samples[0] as { numSlots?: unknown; samplePeriodSecs?: unknown };
