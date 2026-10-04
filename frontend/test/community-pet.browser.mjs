@@ -65,15 +65,15 @@ for (const [width, noWebGL, reducedMotion] of [[390,true,'reduce'],[768,false,'r
   await page.route('https://**/*',r=>r.abort());
   await page.route('**/v1/pet/**',r=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({needs:{battery:80,joy:80,cleanliness:80},revision:1,serverTime:Date.now(),lowPower:false,sleeping:false,mood:'bright',nextNapAt:Date.now()+3600000,napUntil:null,favorite:null,props:[],recentMemories:[],suggestedAction:'charge'})}));
   await page.goto(BASE+'/verify');
-  const robot=page.getByRole('button',{name:'Community robot',exact:true}); await robot.waitFor({timeout:20000});
+  const robot=page.getByRole('button',{name:'Open Bam Bam',exact:true}); await robot.waitFor({timeout:20000});
   await robot.focus();await page.keyboard.press('Enter');
-  const panel=page.getByRole('dialog',{name:'Community robot'});await panel.waitFor();
+  const panel=page.getByRole('dialog',{name:'Bam Bam'});await panel.waitFor();
   const box=await panel.boundingBox();assert.ok(box.y>=0&&box.y+box.height<=500,'short-screen panel stays visible');
   await page.getByRole('button',{name:'Pin here',exact:true}).click();
   assert.ok(await page.evaluate(()=>localStorage.getItem('chainpay.pet.pin')));
   await page.keyboard.press('Escape'); assert.equal(await robot.evaluate(el=>el===document.activeElement),true);
   await robot.click();await page.getByRole('button',{name:'Hide',exact:true}).click();
-  const restore=page.getByRole('button',{name:'Bring the robot back'});await restore.waitFor();
+  const restore=page.getByRole('button',{name:'Bam Bam',exact:true});await restore.waitFor();
   assert.equal(await restore.evaluate(el=>el===document.activeElement),true);
   await page.reload();await restore.waitFor({timeout:20000});await restore.click();await robot.waitFor();
   assert.equal(await page.locator('.community-companion').getAttribute('data-mode'),'pinned');
