@@ -148,6 +148,10 @@ async fn private_repayment_discharges_only_after_settlement_and_partner_confirm(
     let (status, paid) = h.submit_private(&stmt, "p1").await;
     assert_eq!(status, 200, "{paid}");
     assert_eq!(paid["state"], "discharged", "{paid}");
+    // No ChainPay receipt exists for a private payment: PER records it as
+    // authorizer-attested, never through the receipt-checked instruction.
+    assert_eq!(h.program_count("record_private_repayment"), 1);
+    assert_eq!(h.program_count("record_repayment"), 0);
     let s = &paid["statement"];
     assert_eq!(s["repayment"]["method"], METHOD);
     assert_eq!(s["repayment"]["payerVerified"], false);

@@ -135,10 +135,11 @@ fn account_disc(name: &str) -> [u8; 8] {
         .unwrap()
 }
 
-const NAMES: [&str; 19] = [
+const NAMES: [&str; 20] = [
     "close_reservation",
     "roll_period",
     "record_repayment",
+    "record_private_repayment",
     "confirm_reconciled",
     "resolve_exception",
     "open_checkout_intent",
@@ -739,7 +740,9 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
             ledger(card, 7, card.period.reserved);
             Ok(())
         }
-        "record_repayment" => {
+        // The fake has no base chain to clone the receipt from; the real
+        // program's receipt checks are covered by the LiteSVM suite.
+        "record_repayment" | "record_private_repayment" => {
             if !is_authorizer {
                 return err(6000);
             }

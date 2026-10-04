@@ -1107,12 +1107,15 @@ pub fn statement_view(cards: &CardsConnector, row: &StoredCardRecord) -> Value {
         let cfg = &cards.config.repayment;
         view["payWith"] = json!({
             "method": "chainpay_execute_payment",
+            // ChainPay's execute_payment, signed by the card's repay agent PDA
+            // inside card_policy `repay_statement` (contracts.md §7.2).
+            "via": "card_policy_repay_statement",
             "cluster": "devnet",
             "mint": cfg.mint,
             "recipientTokenAccount": cfg.partner_token_account,
             "invoiceHash": r["digest"],
             "amountCents": cents(amount_due),
-            "note": "Pay from your own spending permission; ChainPay never pays a statement by itself.",
+            "note": "Pay from your own spending permission for this card's repay agent; ChainPay never pays a statement by itself.",
         });
         // Opt-in alternative (contracts.md §7.3): the owner's client must show
         // the vault model before preparing an attempt.
@@ -1346,6 +1349,9 @@ pub struct ExpectedRepayment {
     pub owner: String,
     pub mint: String,
     pub recipient: String,
+    /// The card's repay agent PDA (`program::repay_agent(binding)`): the only
+    /// agent whose receipts `record_repayment` accepts.
+    pub agent: String,
     pub amount_cents: u64,
 }
 
@@ -1421,6 +1427,11 @@ pub async fn verify_receipt(base: &BaseChain, expected: &ExpectedRepayment) -> V
     if !key_bytes(&expected.recipient).is_some_and(|r| data[168..200] == r) {
         mismatch.push("recipient");
     }
+    // Paid through this card's `repay_statement` (the repay agent signed), so
+    // `record_repayment` on PER will accept the same receipt.
+    if !key_bytes(&expected.agent).is_some_and(|a| data[208..240] == a) {
+        mismatch.push("agent");
+    }
     if data[280] != 1 {
         mismatch.push("receipt_status");
     }
@@ -1469,10 +1480,10 @@ pub async fn verify_receipt(base: &BaseChain, expected: &ExpectedRepayment) -> V
         mandate: expected.mandate.clone(),
         invoice_hash: program::hex(&expected.digest),
         receipt_address: Some(expected.receipt.clone()),
-        agent: None,
         mint: Some(expected.mint.clone()),
         recipient: Some(expected.recipient.clone()),
         amount: want,
+        agent: Some(expected.agent.clone()),
         token_program: None,
         signing_mode: crate::status::SigningMode::Human,
         signature: None,
@@ -1604,6 +1615,11 @@ fn expected_for(
         owner: card.index.owner.clone().unwrap_or_default(),
         mint: cfg.mint.clone(),
         recipient,
+        agent: card.record["bindingPda"]
+            .as_str()
+            .and_then(|b| b.parse::<Address>().ok())
+            .map(|b| program::repay_agent(&b).to_string())
+            .ok_or_else(CardsError::internal)?,
         amount_cents: parse_cents(statement.record["amountDueCents"].as_str().unwrap_or(""))
             .ok_or_else(CardsError::internal)?,
     })
@@ -1956,6 +1972,22 @@ async fn save_plan(
     }
 }
 
+/// Whole cents the verified receipt paid (`amountBaseUnits` / 10^(decimals−2)).
+fn paid_cents(row: &StoredCardRecord) -> u64 {
+    let repayment = &row.record["repayment"];
+    let units = repayment["amountBaseUnits"]
+        .as_str()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    let decimals = repayment["decimals"].as_u64().unwrap_or(0);
+    if decimals < 2 {
+        return 0;
+    }
+    10u64
+        .checked_pow(decimals as u32 - 2)
+        .map_or(0, |per_cent| units / per_cent)
+}
+
 async fn discharge(
     cards: &Arc<CardsConnector>,
     card: &StoredCardRecord,
@@ -1981,6 +2013,7 @@ async fn discharge(
     };
     let total = parse_signed(&row.record["totalCents"]);
     let seq = row.record["statementSeq"].as_u64().unwrap_or(0);
+    let private = row.record["repayment"]["method"] == super::private_repay::METHOD;
     // The amount is fixed once, before the first submit, so a retry after an
     // unknown outcome records (and later reports) exactly the same number.
     let planned = row.record["dischargePlan"]["amountCents"]
@@ -2000,19 +2033,47 @@ async fn discharge(
                 amount
             }
         };
+        // The program records no more than the receipt paid (in whole cents).
+        let amount = if private {
+            amount
+        } else {
+            amount.min(paid_cents(row))
+        };
         if amount > 0 {
+            let record = if private {
+                program::record_private_repayment(
+                    &cards.authorizer(),
+                    &policy_pda,
+                    &period_pda,
+                    &digest,
+                    amount,
+                )
+            } else {
+                let key = |field: &str| {
+                    row.record["repayment"][field]
+                        .as_str()
+                        .and_then(|v| v.parse::<Address>().ok())
+                };
+                let (Some(receipt), Some(recipient), Some(mint)) =
+                    (key("receiptPda"), key("recipient"), key("mint"))
+                else {
+                    cards.metrics.count("repayment_discrepancies");
+                    return Ok(None);
+                };
+                program::record_repayment(
+                    &cards.authorizer(),
+                    &policy_pda,
+                    &period_pda,
+                    &receipt,
+                    &recipient,
+                    &mint,
+                    &digest,
+                    amount,
+                )
+            };
             let outcome = cards
                 .per
-                .submit(
-                    vec![program::record_repayment(
-                        &cards.authorizer(),
-                        &policy_pda,
-                        &period_pda,
-                        &digest,
-                        amount,
-                    )],
-                    Instant::now() + Duration::from_secs(8),
-                )
+                .submit(vec![record], Instant::now() + Duration::from_secs(8))
                 .await;
             match &outcome {
                 TxOutcome::Confirmed { signature } => {

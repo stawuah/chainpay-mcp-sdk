@@ -570,9 +570,96 @@ pub fn roll_period(
     ix("roll_period", accounts, &[])
 }
 
+/// The card's repay agent: the lamport-only PDA `["repay_agent", binding]`
+/// that signs ChainPay `execute_payment` inside `repay_statement`. The owner's
+/// repayment mandate names it as `approved_agent`; every repayment receipt for
+/// this card names it as `agent`.
+pub fn repay_agent(binding: &Address) -> Address {
+    pda(&[b"repay_agent", binding.as_ref()], &program_id())
+}
+
+/// Accounts of the ChainPay payment `repay_statement` makes by CPI.
+#[derive(Debug, Clone)]
+pub struct RepayStatementAccounts {
+    pub owner: Address,
+    pub binding: Address,
+    pub chainpay_program: Address,
+    pub mandate: Address,
+    pub mint: Address,
+    pub source_token_account: Address,
+    pub recipient_token_account: Address,
+    pub token_program: Address,
+}
+
+/// `repay_statement` (owner, base layer). Built unsigned for the owner's
+/// wallet; ChainPay creates the receipt `["receipt", mandate, digest]`.
+pub fn repay_statement(
+    a: &RepayStatementAccounts,
+    statement_digest: &[u8; 32],
+    amount_base_units: u64,
+) -> Instruction {
+    let chainpay = a.chainpay_program;
+    let mut args = statement_digest.to_vec();
+    args.extend_from_slice(&amount_base_units.to_le_bytes());
+    ix(
+        "repay_statement",
+        vec![
+            signer_w(a.owner),
+            r(a.binding),
+            w(repay_agent(&a.binding)),
+            r(pda(&[b"config"], &chainpay)),
+            r(pda(&[b"asset", a.mint.as_ref()], &chainpay)),
+            w(a.mandate),
+            w(pda(
+                &[b"receipt", a.mandate.as_ref(), statement_digest],
+                &chainpay,
+            )),
+            r(a.mint),
+            w(a.source_token_account),
+            w(a.recipient_token_account),
+            r(a.token_program),
+            r(addr(SYSTEM_PROGRAM)),
+            r(chainpay),
+        ],
+        &args,
+    )
+}
+
 /// `record_repayment` (authorizer, contracts.md §1.3 #27). Only after the
-/// statement is `partner_confirmed`; the digest is single use on-chain.
+/// statement is `partner_confirmed`; the digest is single use on-chain. The
+/// program re-checks the ChainPay receipt (read-only clone on PER): owner,
+/// seeds, settled, made by this card's repay agent, paid `recipient`, and
+/// `amount_cents` no more than it paid.
+#[allow(clippy::too_many_arguments)]
 pub fn record_repayment(
+    authorizer: &Address,
+    policy: &Address,
+    period: &Address,
+    receipt: &Address,
+    recipient_token_account: &Address,
+    mint: &Address,
+    statement_digest: &[u8; 32],
+    amount_cents: u64,
+) -> Instruction {
+    let mut args = statement_digest.to_vec();
+    args.extend_from_slice(&amount_cents.to_le_bytes());
+    ix(
+        "record_repayment",
+        vec![
+            signer(*authorizer),
+            w(*policy),
+            r(*period),
+            r(*receipt),
+            r(*recipient_token_account),
+            r(*mint),
+        ],
+        &args,
+    )
+}
+
+/// `record_private_repayment` (authorizer). The MagicBlock private payment
+/// path has no ChainPay receipt; the ledger marks it authorizer-attested.
+pub fn record_private_repayment(
     authorizer: &Address,
     policy: &Address,
     period: &Address,
@@ -582,7 +669,7 @@ pub fn record_repayment(
     let mut args = statement_digest.to_vec();
     args.extend_from_slice(&amount_cents.to_le_bytes());
     ix(
-        "record_repayment",
+        "record_private_repayment",
         vec![signer(*authorizer), w(*policy), r(*period)],
         &args,
     )
@@ -1189,7 +1276,7 @@ pub fn decode_commitment(data: &[u8]) -> Result<CommitmentAccount, DecodeError> 
 
 // ------------------------------------------------------------------ errors
 
-pub const ERRORS: [&str; 50] = [
+pub const ERRORS: [&str; 54] = [
     "Unauthorized",
     "ValidatorNotAllowed",
     "PolicyNotSet",
@@ -1240,6 +1327,10 @@ pub const ERRORS: [&str; 50] = [
     "RefundExceedsCapture",
     "CaptureLimit",
     "BudgetBelowCommitted",
+    "InvalidRepaymentReceipt",
+    "RepaymentRecipientMismatch",
+    "RepaymentExceedsReceipt",
+    "InvalidRepaymentMandate",
 ];
 
 pub fn error_name(code: u32) -> Option<&'static str> {
@@ -1473,7 +1564,28 @@ mod tests {
             ("roll_period", roll_period(&a, &policy, &period, &[])),
             (
                 "record_repayment",
-                record_repayment(&a, &policy, &period, &[1; 32], 1),
+                record_repayment(&a, &policy, &period, &res, &res, &res, &[1; 32], 1),
+            ),
+            (
+                "record_private_repayment",
+                record_private_repayment(&a, &policy, &period, &[1; 32], 1),
+            ),
+            (
+                "repay_statement",
+                repay_statement(
+                    &RepayStatementAccounts {
+                        owner: a,
+                        binding: res,
+                        chainpay_program: addr("3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4"),
+                        mandate: res,
+                        mint: res,
+                        source_token_account: res,
+                        recipient_token_account: res,
+                        token_program: res,
+                    },
+                    &[1; 32],
+                    1,
+                ),
             ),
             (
                 "confirm_reconciled",
