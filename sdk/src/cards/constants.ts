@@ -37,6 +37,8 @@ export const CARD_SEEDS = {
   commitment: "card_commit",
   /** Per-card replay guard for closed reservations (PER only). */
   authGuard: "auth_guard",
+  /** Lamport-only base PDA: the `approved_agent` of the owner's repayment mandate. */
+  repayAgent: "repay_agent",
 } as const;
 
 export const MAX_MERCHANTS = 8;
@@ -91,6 +93,10 @@ export const CARD_POLICY_DISCRIMINATORS = {
   closeCard: Uint8Array.from([142, 206, 170, 182, 227, 204, 185, 115]),
   recordRepayment: Uint8Array.from([193, 155, 76, 246, 27, 189, 147, 102]),
   closeReservation: Uint8Array.from([171, 96, 8, 85, 100, 252, 173, 204]),
+  /** Base layer: the card's repay agent pays a statement by ChainPay `execute_payment` CPI. */
+  repayStatement: Uint8Array.from([56, 158, 212, 137, 146, 226, 174, 82]),
+  /** PER: MagicBlock private payment, authorizer-attested (no ChainPay receipt). */
+  recordPrivateRepayment: Uint8Array.from([91, 51, 18, 9, 7, 33, 77, 147]),
 } as const;
 
 export type CardPolicyInstructionName = keyof typeof CARD_POLICY_DISCRIMINATORS;
@@ -160,6 +166,11 @@ export const CARD_POLICY_ERRORS = {
   6047: "RefundExceedsCapture",
   6048: "CaptureLimit",
   6049: "BudgetBelowCommitted",
+  // Appended for the ChainPay repayment CPI (2026-10-04).
+  6050: "InvalidRepaymentReceipt",
+  6051: "RepaymentRecipientMismatch",
+  6052: "RepaymentExceedsReceipt",
+  6053: "InvalidRepaymentMandate",
 } as const;
 
 export type CardPolicyErrorCode = keyof typeof CARD_POLICY_ERRORS;

@@ -96,7 +96,8 @@ test("instruction and account discriminators are Anchor sha256 prefixes", () => 
   for (const [name, disc] of Object.entries(CARD_ACCOUNT_DISCRIMINATORS)) {
     assert.deepEqual([...disc], sha8(`account:${name[0].toUpperCase()}${name.slice(1)}`), name);
   }
-  assert.equal(Object.keys(CARD_POLICY_DISCRIMINATORS).length, 29);
+  assert.equal(Object.keys(CARD_POLICY_DISCRIMINATORS).length, 31);
+  assert.equal(cardPolicyErrorName(6050), "InvalidRepaymentReceipt");
   assert.equal(cardPolicyErrorName(6044), "EphemeralAccountsOpen");
   assert.equal(cardPolicyErrorName(6045), "ReservationNotFinal");
   assert.equal(cardPolicyErrorName(6016), "BudgetExceeded");
@@ -245,6 +246,8 @@ test("every instruction's data round-trips with exact Borsh sizes", () => {
     closeCard: [{}, 8],
     closeReservation: [{}, 8],
     recordRepayment: [{ statementDigest: h(11), amountCents: 50_250n }, 48],
+    repayStatement: [{ statementDigest: h(12), amount: 502_500_000n }, 48],
+    recordPrivateRepayment: [{ statementDigest: h(13), amountCents: 50_250n }, 48],
   };
   assert.deepEqual(Object.keys(samples).sort(), Object.keys(CARD_POLICY_DISCRIMINATORS).sort());
   for (const [name, [args, size]] of Object.entries(samples)) {

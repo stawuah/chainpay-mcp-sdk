@@ -22,6 +22,8 @@ import {
   buildCloseCheckoutIntentInstruction,
   buildCloseReservationInstruction,
   buildConfirmReconciledInstruction,
+  buildRepayStatementInstruction,
+  deriveRepayAgentAddress,
   buildDelegateCardInstruction,
   buildFreezeInstruction,
   buildInitCardInstruction,
@@ -239,6 +241,34 @@ test("owner event builders match the IDL", () => {
   assert.equal(resolved.resolution, 1);
   assertMatchesIdl("confirm_reconciled", buildConfirmReconciledInstruction({ owner, cardId, reconDigest: new Uint8Array(32).fill(3) }, PROGRAM), ctx());
   assertMatchesIdl("close_card", buildCloseCardInstruction({ owner, cardId }, PROGRAM), ctx());
+});
+
+test("repay_statement pays through ChainPay as the card's repay agent", () => {
+  const key = () => Keypair.generate().publicKey.toBase58();
+  const [mandate, mint, source, partner] = [key(), key(), key(), key()];
+  const digest = new Uint8Array(32).fill(5);
+  const chainpay = IDL.instructions.find((ix) => ix.name === "repay_statement").accounts.find((x) => x.name === "chainpay_program").address;
+  const built = buildRepayStatementInstruction({ owner, cardId, mandate, mint, sourceTokenAccount: source, recipientTokenAccount: partner, statementDigest: digest, amount: 20_100_000n }, PROGRAM);
+  const pda = (seeds) => PublicKey.findProgramAddressSync(seeds, new PublicKey(chainpay))[0].toBase58();
+  const receipt = pda([Buffer.from("receipt"), new PublicKey(mandate).toBytes(), digest]);
+  assert.equal(built.receipt, receipt);
+  assert.equal(built.repayAgent, deriveRepayAgentAddress(a.binding, PROGRAM));
+  const args = assertMatchesIdl("repay_statement", built.instruction, ctx({
+    accounts: {
+      binding: a.binding,
+      chainpay_config: pda([Buffer.from("config")]),
+      asset_registry: pda([Buffer.from("asset"), new PublicKey(mint).toBytes()]),
+      mandate,
+      receipt,
+      allowed_mint: mint,
+      source_token_account: source,
+      recipient_token_account: partner,
+      token_program: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    },
+  }));
+  assert.equal(args.amount, 20_100_000n);
+  assert.deepEqual(Array.from(args.statement_digest), Array.from(digest));
+  assert.throws(() => buildRepayStatementInstruction({ owner, cardId, mandate, mint, sourceTokenAccount: source, recipientTokenAccount: partner, statementDigest: digest, amount: 0n }, PROGRAM), /positive/);
 });
 
 test("restore is co-signed and carries exception_cents in IDL order", async () => {
