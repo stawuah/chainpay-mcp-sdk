@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { setPetPerch } from "../../pet-presence";
 
 // Where the robot hangs out. He picks a new spot every 8 to 20 seconds: perched
 // on a heading marked `data-pet-perch`, leaning in from a side edge, wandering
@@ -205,6 +206,12 @@ export function useRoamer({ size, roam, pin }: { size: number; roam: boolean; pi
     if (!pin) schedule(roam ? 3_000 : 60_000);
     return () => window.clearTimeout(timer.current);
   }, [roam, size, pin, home, schedule]);
+
+  // Tell the page which heading he is sitting on (cleared when he leaves or unmounts).
+  useEffect(() => {
+    setPetPerch(position.mode === "perch" ? perch.current?.element ?? null : null);
+  }, [position]);
+  useEffect(() => () => setPetPerch(null), []);
 
   // Keep a perch glued to its heading while the page scrolls; leave once the
   // heading is gone.

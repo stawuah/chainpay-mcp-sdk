@@ -31,8 +31,7 @@ export function useLandingMotion(root: RefObject<HTMLDivElement | null>) {
       gsap.registerPlugin(ScrollTrigger);
       media = gsap.matchMedia();
       media.add("(prefers-reduced-motion: no-preference)", () => {
-        gsap.from(".landing-hero-visual .story-document", { y: 24, rotation: -2, duration: 0.8, ease: "power3.out" });
-        gsap.from(".hero-payment-slip", { x: 24, duration: 0.8, delay: 0.08, ease: "power3.out" });
+        // No hero entrance: the hero's motion lane is its one autonomous motion (landing-brand ruling B9).
         gsap.to(".landing-hero-visual", { y: -60, scale: 0.96, ease: "none",
           scrollTrigger: { trigger: ".landing-hero", start: "top top", end: "bottom top", scrub: true } });
         [".story-intro", "#developers", ".landing-faq"].forEach((selector) => {

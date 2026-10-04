@@ -28,4 +28,5 @@ get-paid-by-agents get-paid-by-agents
 purchase-order-link send-a-purchase-order-link
 prove-you-delivered prove-you-delivered
 agent-shopping-checkout agent-shopping
+paypal-invoices paypal-invoices
 MAP

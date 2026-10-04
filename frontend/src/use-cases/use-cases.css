@@ -349,6 +349,11 @@
   .use-cases .uc-grid > .uc-card:last-child:nth-child(3n+1):not(:first-child) { grid-column: 1 / -1; flex-direction: row; align-items: stretch; }
   .use-cases .uc-grid > .uc-card:last-child:nth-child(3n+1):not(:first-child) .uc-card-media { flex: none; width: calc((100% - 48px) / 3); }
   .use-cases .uc-grid > .uc-card:last-child:nth-child(3n+1):not(:first-child) .uc-card-body { justify-content: center; padding: 32px 40px; max-width: 40rem; }
+  /* Trailing pair: a last row of two cards closes with the second one spanning two columns.
+     Ruling B15: _bmad-output/design-council/landing-brand-ruling-2026-10-04.md */
+  .use-cases .uc-grid > .uc-card:last-child:nth-child(3n+2):not(:nth-child(2)) { grid-column: span 2; flex-direction: row; align-items: stretch; }
+  .use-cases .uc-grid > .uc-card:last-child:nth-child(3n+2):not(:nth-child(2)) .uc-card-media { flex: none; width: calc((100% - 24px) / 2); }
+  .use-cases .uc-grid > .uc-card:last-child:nth-child(3n+2):not(:nth-child(2)) .uc-card-body { justify-content: center; padding: 28px 32px; }
 }
 @media (min-width: 640px) and (max-width: 1079px) {
   .use-cases .uc-grid-featured > .uc-card:last-child:nth-child(even),

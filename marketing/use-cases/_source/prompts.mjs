@@ -5,7 +5,7 @@ const ROBOT = `ROBOT: copy the robot from image 2 exactly — white soft-3D body
 const NEG = `CONSTRAINTS: no headline text. Render only the labels specified, spelled exactly; otherwise no words, no fake UI text, no numbers. No people, no hands, no faces, no coins with dollar signs, no rockets, no sparkles, no collage, no watermark. Never place a logo, badge or lockup in a corner of the frame.`;
 
 const p = (subject, robot) => `SUBJECT: ${subject}\n${STYLE}\n${robot ? ROBOT + "\n" : ""}${NEG}`;
-const a = (id, subject, robot = false) => ({ id, aspect: "4:3", robot, prompt: p(subject, robot) });
+const a = (id, subject, robot = false, extra = "") => ({ id, aspect: "4:3", robot, prompt: p(subject, robot) + (extra ? `\n${extra}` : "") });
 
 export default [
   a("sponsor-funds-agent", "a white soft-3D gift box with a ChainPay blue ribbon, lid lifted, releasing a glossy blue allowance chip labelled \"500 USDC\" that floats toward the small robot standing to the right; the robot looks up at it. Wide, calm composition", true),
@@ -24,4 +24,7 @@ export default [
   a("purchase-order-link", "a white envelope opened at an angle with a blue link chain icon card sliding out of it, the card shows a small blue chip labelled \"PO\""),
   a("prove-you-delivered", "a white rounded parcel box with a blue seal on top that has a check mark, next to a small white certificate card with a blue ribbon"),
   a("agent-shopping-checkout", "a soft-3D white shopping bag with the ChainPay logo tile from image 1 on it, beside a small white product card with a blue price chip; the small robot stands behind the bag, only its head visible", true),
+  // Landing brand ruling 2026-10-04 (B6): object-only, no PayPal mark or colors.
+  a("paypal-invoices", "a white soft-3D invoice sheet standing upright at a slight angle, with a plain deep ink #14213D header band and soft grey placeholder lines, no words and no logo on it; a small blue #0052FF paper tab is clipped over its top edge, showing a white check mark. In front of the invoice and overlapping its lower left corner stands a smaller crisp white receipt slip with a zigzag bottom edge, stamped with the ChainPay logo from image 1 like an ink stamp. The invoice and the receipt are separate pieces of paper: no line, link, chain or glow joins them. The two papers overlap in depth, not side by side", false,
+    "No robot. No PayPal logo, no letter P monogram, no PayPal colors such as #003087, #009CDE or #FFC439, and no brand mark other than the ChainPay logo from image 1. No currency symbols. No bank cards or credit cards."),
 ];

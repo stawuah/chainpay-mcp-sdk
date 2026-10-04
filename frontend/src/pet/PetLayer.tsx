@@ -24,6 +24,7 @@ import {
 } from "./play/lines";
 import type { Expression, Motion } from "./RobotModel";
 import { setPetSuppressed } from "../pet-prefs";
+import { setPetGreeting, setPetSpeaking } from "../pet-presence";
 import "./pet.css";
 
 const RobotCanvas = lazy(() => import("./RobotCanvas"));
@@ -281,6 +282,8 @@ export default function PetLayer({ onHide, routeKey, routeKind, quiet = false }:
     // A hello is volunteered speech, which R5 allows on the landing only. Turning
     // him on with the toggle is not an arrival at all.
     if (quietArrival.current || routeKindAtMount.current !== "landing") return;
+    // The hero clip waits on its poster while he says hello (landing-brand ruling B12).
+    setPetGreeting(true);
     void arrive().then(greeting => {
       if (cancelled) return;
       if (greeting !== "same-day") {
@@ -302,12 +305,14 @@ export default function PetLayer({ onHide, routeKey, routeKind, quiet = false }:
       } else if (greeting === "back") {
         later(1_400, () => petStore.say(GREETINGS.back, 4_000, "volunteer"));
       }
+      const helloEnds = { first: 9_200, streak: 6_400, back: 5_400 }[greeting as "first" | "streak" | "back"] ?? 0;
+      later(helloEnds, () => setPetGreeting(false));
       // Once greeted, hiding and un-hiding him does not replay the hello.
       later(4_300, () => {
         arrival = Promise.resolve("same-day");
       });
     });
-    return () => { cancelled = true; timers.forEach((timer) => window.clearTimeout(timer)); };
+    return () => { cancelled = true; timers.forEach((timer) => window.clearTimeout(timer)); setPetGreeting(false); };
   }, []);
 
   // ---- Panel ---------------------------------------------------------------
@@ -348,6 +353,11 @@ export default function PetLayer({ onHide, routeKey, routeKind, quiet = false }:
 
   const speaking = speech && now - speech.at < speech.ms ? speech.text : null;
   const line = speaking ?? MOOD_LINES[mood];
+
+  // The page may pause for him while a bubble is actually on screen (B14).
+  const bubbleShown = Boolean(speaking) && !open && !tossing;
+  useEffect(() => { setPetSpeaking(bubbleShown); }, [bubbleShown]);
+  useEffect(() => () => setPetSpeaking(false), []);
 
   // ---- Combos and secrets ---------------------------------------------------
   const secret = async (name: string, line: string, kind: ReactionKind) => {
@@ -604,7 +614,7 @@ export default function PetLayer({ onHide, routeKey, routeKind, quiet = false }:
         {calls.calling ? <span className="cp-pet-call" aria-hidden="true">!</span> : null}
       </div>
 
-      {speaking && !open && !tossing ? <SpeechBubble key={speech!.at} text={speaking} anchor={{ x: position.x, y: position.y, size }} /> : null}
+      {bubbleShown ? <SpeechBubble key={speech!.at} text={speaking!} anchor={{ x: position.x, y: position.y, size }} /> : null}
       {tossing ? <CoinToss onToss={onToss} onCancel={cancelToss} viaKeyboard={tossByKeyboard} /> : null}
       {coin ? <LandedCoin x={coin.x} y={coin.y} /> : null}
       <DustLayer specks={specks} onSweep={onSweep} />

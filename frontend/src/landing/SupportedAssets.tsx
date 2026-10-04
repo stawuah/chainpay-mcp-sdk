@@ -26,7 +26,7 @@ export function SupportedAssets() {
     return () => observer.disconnect();
   }, []);
   return <section ref={ref} className="asset-strip page-width" aria-label="Supported network and tokens">
-    <div className="asset-strip-heading"><p>Built on Solana. Payments in USDC, PYUSD, EURC and USDG.</p><button className="asset-strip-pause" type="button" aria-pressed={paused} onClick={() => setPaused(!paused)}>{paused ? "Play strip" : "Pause strip"}</button></div>
+    <div className="asset-strip-heading"><p>Built on Solana. Payments in USDC, PYUSD, EURC and USDG.</p><button className="asset-strip-pause" type="button" onClick={() => setPaused(!paused)}>{paused ? "Play strip" : "Pause strip"}</button></div>
     <div className="asset-strip-window"><div className={`asset-strip-track${paused || !visible ? " is-paused" : ""}`}>
       {[0, 1].map(copy => <div className="asset-strip-group" key={copy} aria-hidden={copy === 1 ? true : undefined}>{assets.map(asset => <div className="asset-strip-item" key={asset.name}><AssetMark asset={asset.name} /><div><strong>{asset.name}</strong><span>{asset.role}</span></div></div>)}</div>)}
     </div></div>

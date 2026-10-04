@@ -12,6 +12,7 @@
     "test:permission-browser": "node test/permission-details.browser.mjs",
     "test:landing-browser": "node test/landing.browser.mjs",
     "test:landing-motion-browser": "node test/landing-motion.browser.mjs",
+    "test:landing-brand-browser": "node test/landing-brand.browser.mjs",
     "test:verify-public-browser": "node test/verify-public.browser.mjs",
     "test:dashboard-nav-browser": "node test/dashboard-nav.browser.mjs",
     "test:live-purchase-browser": "node test/live-purchase.browser.mjs",
