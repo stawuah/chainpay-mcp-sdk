@@ -2,7 +2,7 @@
 // swapped to USDC by Jupiter inside the same transaction (swap.ts).
 import { useEffect, useRef, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
-import { SUPPORT_PROGRAM_ID, SWAP_ENABLED, USDC_DECIMALS, USDC_MINT, explorerTx } from "./config";
+import { SOL_DECIMALS, SUPPORT_PROGRAM_ID, SWAP_ENABLED, USDC_DECIMALS, USDC_MINT, explorerTx } from "./config";
 import {
   NOTE_MAX,
   cleanNote,
@@ -16,7 +16,18 @@ import {
 } from "./donation";
 import { usdHint, useSolUsd } from "./price";
 import { checkBalance, friendlyError, sendSigned, signForSupport, type SendOutcome } from "./send";
-import { SLIPPAGE_BPS, buildSwapTip, quoteToUsdc, signVersionedForSupport, type SwapQuote, type SwapToken } from "./swap";
+import {
+  BASE_FEE_LAMPORTS,
+  SLIPPAGE_BPS,
+  buildSwapTip,
+  existingAccounts,
+  quoteToUsdc,
+  signVersionedForSupport,
+  worseThanShown,
+  type PreparedSwap,
+  type SwapQuote,
+  type SwapToken,
+} from "./swap";
 import { TokenIcon, TokenPicker } from "./TokenPicker";
 import type { SupportWalletState } from "./useSupportWallet";
 import { WalletGrid } from "./WalletGrid";
@@ -28,6 +39,9 @@ type Step = "amount" | "wallet" | "review" | "done";
 type Pending = "" | "checking" | "quoting" | "signing" | "sending";
 
 const STEP_INDEX: Record<Step, number> = { amount: 0, wallet: 1, review: 2, done: 3 };
+// A swap prepared longer ago than this is rebuilt before signing, and only signed
+// as-is if it's at least as good as what the card showed.
+const SWAP_FRESH_MS = 20_000;
 
 function useSwapQuote(token: SwapToken | null, units: bigint | null) {
   const [quote, setQuote] = useState<SwapQuote | null>(null);
@@ -57,6 +71,11 @@ function useSwapQuote(token: SwapToken | null, units: bigint | null) {
   return { quote, state };
 }
 
+function swapError(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : "";
+  return /^Swap |^Jupiter |^Unexpected /.test(message) ? `${message} Nothing was sent.` : friendlyError(cause);
+}
+
 export function TipCard({ walletState, onSent }: { walletState: SupportWalletState; onSent: () => void }) {
   const { wallet } = walletState;
   const [step, setStep] = useState<Step>("amount");
@@ -69,6 +88,7 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
   const [pending, setPending] = useState<Pending>("");
   const [error, setError] = useState("");
   const [outcome, setOutcome] = useState<SendOutcome | null>(null);
+  const [prepared, setPrepared] = useState<PreparedSwap | null>(null);
   const solUsd = useSolUsd();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const amountRef = useRef<HTMLInputElement>(null);
@@ -80,7 +100,12 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
   const amountLabel = units ? `${formatUnits(units, decimals)} ${symbol}` : "";
   const { quote, state: quoteState } = useSwapQuote(swapping ? token : null, units);
   const arrives = quote ? `${formatUnits(BigInt(quote.outAmount), USDC_DECIMALS)} USDC` : null;
-  const minimum = quote ? `${formatUnits(BigInt(quote.otherAmountThreshold), USDC_DECIMALS)} USDC` : null;
+  // The review card shows the swap that will be signed: the prepared one.
+  const shownQuote = prepared?.quote ?? null;
+  const shownArrives = shownQuote ? `${formatUnits(BigInt(shownQuote.outAmount), USDC_DECIMALS)} USDC` : null;
+  const minimum = shownQuote ? `${formatUnits(BigInt(shownQuote.otherAmountThreshold), USDC_DECIMALS)} USDC` : null;
+  const feeLamports = swapping ? prepared?.feeLamports ?? null : BASE_FEE_LAMPORTS;
+  const feeUsd = feeLamports !== null ? usdHint("SOL", feeLamports, solUsd) : null;
   const hint = swapping
     ? quoteState === "loading" ? "Getting a price…" : quoteState === "none" ? "No swap route for this amount." : arrives ? `≈ ${arrives} arrives` : null
     : usdHint(mode, units, solUsd);
@@ -101,6 +126,20 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
     setError("");
     setStep(next);
   };
+
+  // Build the swap when the review opens, so the card can show its real minimum and fee.
+  const walletAddress = wallet?.address ?? null;
+  useEffect(() => {
+    setPrepared(null);
+    if (step !== "review" || !swapping || !walletAddress || !quote) return;
+    let alive = true;
+    buildSwapTip({ donor: new PublicKey(walletAddress), quote, note, hideAddress, accounts: supportAccounts(SUPPORT_PROGRAM_ID, USDC_MINT), existingAccounts })
+      .then((built) => alive && setPrepared(built))
+      .catch((cause) => alive && setError(swapError(cause)));
+    return () => {
+      alive = false;
+    };
+  }, [step, swapping, walletAddress, quote, note, hideAddress]);
 
   const switchMode = (next: Mode) => {
     setMode(next);
@@ -136,24 +175,35 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
     const accounts = supportAccounts(SUPPORT_PROGRAM_ID, USDC_MINT);
     const owner = new PublicKey(wallet.address);
     try {
+      let plan = prepared;
+      if (swapping && token && plan && Date.now() - plan.preparedAt > SWAP_FRESH_MS) {
+        setPending("quoting");
+        const freshQuote = await quoteToUsdc(token.mint, units, USDC_MINT);
+        if (!freshQuote) {
+          setError("The swap price isn't available right now. Nothing was sent.");
+          return;
+        }
+        const fresh = await buildSwapTip({ donor: owner, quote: freshQuote, note, hideAddress, accounts, existingAccounts });
+        const worse = worseThanShown(plan, fresh);
+        setPrepared(fresh);
+        if (worse) {
+          setError(`${worse} Check the new amounts, then press Send again. Nothing was sent.`);
+          return;
+        }
+        plan = fresh;
+      }
+      if (swapping && !plan) return;
       setPending("checking");
-      const problem = await checkBalance(owner, swapping ? "SOL" : mode, swapping ? 0n : units, accounts);
+      // A swap's SOL cost is its fee (plus any token-account rent); the token itself is checked by the wallet.
+      const problem = await checkBalance(owner, swapping ? "SOL" : mode, swapping ? plan!.feeLamports : units, accounts);
       if (problem) {
         setError(problem);
         return;
       }
       let signed;
-      if (swapping && token) {
-        setPending("quoting");
-        // Fresh quote right before signing, so the review isn't stale.
-        const fresh = await quoteToUsdc(token.mint, units, USDC_MINT);
-        if (!fresh) {
-          setError("The swap price isn't available right now. Nothing was sent.");
-          return;
-        }
-        const built = await buildSwapTip({ donor: owner, quote: fresh, note, hideAddress, accounts });
+      if (swapping && plan) {
         setPending("signing");
-        signed = await signVersionedForSupport(wallet, built, accounts);
+        signed = await signVersionedForSupport(wallet, plan, accounts);
       } else {
         setPending("signing");
         signed = await signForSupport(
@@ -171,8 +221,7 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
         setError(result.message);
       }
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "";
-      setError(/^Swap |^Jupiter |^Unexpected /.test(message) ? `${message} Nothing was sent.` : friendlyError(cause));
+      setError(swapError(cause));
     } finally {
       setPending("");
     }
@@ -320,10 +369,17 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
                 <span className="tip-mono">{shortAddress(wallet.address)}</span>
                 <button type="button" className="tip-link-button" disabled={busy} onClick={() => { walletState.disconnect(); go("wallet"); }}>Change</button>
               </dd></div>
-              {swapping && minimum ? (
-                <div><dt>Arrives</dt><dd className="tip-stack">{arrives}<span className="tip-mono-soft">at least {minimum}</span></dd></div>
+              {swapping ? (
+                <div><dt>Arrives</dt><dd className="tip-stack">{minimum ? <>{shownArrives}<span className="tip-mono-soft">at least {minimum}</span></> : error ? "—" : "Getting the latest price…"}</dd></div>
               ) : null}
-              <div><dt>Network fee</dt><dd>{"< $0.01"}</dd></div>
+              <div><dt>Network fee</dt><dd className="tip-stack">
+                {feeLamports !== null ? <>≈ {formatUnits(feeLamports, SOL_DECIMALS)} SOL{feeUsd ? ` (${feeUsd.replace(/^≈ /, "")})` : ""}</> : error ? "—" : "…"}
+                {prepared && prepared.rentLamports > 0n ? (
+                  <span className="tip-mono-soft">
+                    includes {formatUnits(prepared.rentLamports, SOL_DECIMALS)} SOL to open {prepared.newAccounts === 1 ? "a token account" : `${prepared.newAccounts} token accounts`} in your wallet
+                  </span>
+                ) : null}
+              </dd></div>
               {cleanNote(note) ? <div><dt>Note</dt><dd className="tip-note-value">{cleanNote(note)}</dd></div> : null}
               <div><dt>Shown as</dt><dd>{hideAddress ? "Anonymous supporter" : shortAddress(wallet.address)}</dd></div>
             </dl>
@@ -336,7 +392,7 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
                 </p>
               ) : null}
             </div>
-            <button type="button" className="tip-primary" disabled={busy || outcome?.status === "unknown"} onClick={() => void send()}>
+            <button type="button" className="tip-primary" disabled={busy || outcome?.status === "unknown" || (swapping && !prepared)} onClick={() => void send()}>
               {busy ? <span className="tip-spinner" aria-hidden="true" /> : null}
               {sendLabel}
             </button>

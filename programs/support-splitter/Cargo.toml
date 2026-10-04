@@ -14,7 +14,8 @@ no-entrypoint = []
 cpi = ["no-entrypoint"]
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# anchor-spl's IDL support refers to token_interface, which needs token_2022.
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build", "anchor-spl/token_2022"]
 # Devnet USDC mint instead of Circle's mainnet mint. Recipients are the same keys.
 devnet = []
 # Throwaway keys and mint derived from fixed seeds. Never deploy a build with this.

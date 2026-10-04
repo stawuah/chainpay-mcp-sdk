@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { RATE_LIMITS } from "./supportRpc";
 import { advanceCursor, parseSupportTx, planPage, summarize, type RpcTransaction, type SignatureInfo, type StoredEvent, type SupportCursor } from "./supportParse";
 
 // Reads the support vault's history from a mainnet RPC every few minutes.
@@ -78,4 +79,26 @@ export const publicSummary = internalQuery({ args: {}, handler: async (ctx) => {
   const rows = await ctx.db.query("support_events").withIndex("by_slot").collect();
   const events: StoredEvent[] = rows.map(({ signature, slot, blockTime, kind, asset, amount, donor, note, side }) => ({ signature, slot, blockTime, kind, asset, amount, donor, note, side }));
   return summarize(events, process.env.SUPPORT_LIVE === "true" && config() !== null);
+} });
+
+/**
+ * Counts one /support/rpc call against the per-IP and global buckets in
+ * rate_limits. Returns false when any bucket is full (the call is not counted then).
+ */
+export const relayAllowed = internalMutation({ args: { client: v.string(), send: v.boolean() }, handler: async (ctx, { client, send }) => {
+  const now = Date.now();
+  const window = 60_000;
+  const slot = Math.floor(now / window);
+  const buckets = [
+    { key: `support-rpc:all:${slot}`, max: RATE_LIMITS.globalPerMinute },
+    { key: `support-rpc:ip:${client}:${slot}`, max: RATE_LIMITS.ipPerMinute },
+    ...(send ? [{ key: `support-rpc:send:${client}:${slot}`, max: RATE_LIMITS.ipSendsPerMinute }] : []),
+  ];
+  const rows = await Promise.all(buckets.map((b) => ctx.db.query("rate_limits").withIndex("by_key", q => q.eq("key", b.key)).unique()));
+  if (rows.some((row, i) => (row?.count ?? 0) >= buckets[i].max)) return false;
+  for (const [i, row] of rows.entries()) {
+    if (row) await ctx.db.patch(row._id, { count: row.count + 1 });
+    else await ctx.db.insert("rate_limits", { key: buckets[i].key, count: 1, expires: (slot + 1) * window });
+  }
+  return true;
 } });

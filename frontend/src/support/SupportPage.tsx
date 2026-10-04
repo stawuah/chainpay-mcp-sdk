@@ -1,7 +1,7 @@
 // /support — council ruling P1–P12: _bmad-output/design-council/support-v2-ruling-2026-10-03.md
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { UseCaseChrome } from "../use-cases/UseCaseChrome";
-import { SUPPORT_CLUSTER, SUPPORT_PROGRAM_ID, SUPPORT_TRACKER_URL, USDC_MINT, supportReady } from "./config";
+import { MAINTAINER_LABELS, SUPPORT_CLUSTER, SUPPORT_PROGRAM_ID, SUPPORT_TRACKER_URL, USDC_MINT, supportReady } from "./config";
 import { decodeVault, supportAccounts, type VaultView } from "./donation";
 import { Ledger, amountLabel, type TrackerData } from "./Ledger";
 import { PayoutPanel } from "./PayoutPanel";
@@ -79,7 +79,10 @@ export default function SupportPage() {
           <div className="s2-hero-copy">
             <p className="s2-eyebrow">Support ChainPay</p>
             <h1 className="s2-h1">Like ChainPay? Buy us a coffee.</h1>
-            <p className="s2-lede">Tips keep ChainPay free, open source and shipping.</p>
+            <p className="s2-lede">
+              Tips keep ChainPay free, open source and shipping. Every tip is split 50/50 on-chain and paid to{" "}
+              {MAINTAINER_LABELS[0]}'s and {MAINTAINER_LABELS[1]}'s personal wallets.
+            </p>
             {live && raised ? <p className="s2-raised">{raised}</p> : null}
           </div>
           <div className="s2-hero-art">

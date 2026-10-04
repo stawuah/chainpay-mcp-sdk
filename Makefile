@@ -1,4 +1,4 @@
-.PHONY: check fmt cargo-check test build start-backend sdk-typecheck mcp-typecheck app-typecheck frontend-typecheck frontend-build app-dev frontend-dev contract-check contract-build contract-idl contract-smoke card-policy-build card-policy-test splitter-test
+.PHONY: check fmt cargo-check test build start-backend sdk-typecheck mcp-typecheck app-typecheck frontend-typecheck frontend-build app-dev frontend-dev contract-check contract-build contract-idl contract-smoke card-policy-build card-policy-test splitter-test splitter-release-check
 
 ANCHOR ?= anchor
 
@@ -62,7 +62,14 @@ card-policy-test:
 	cd programs/card_policy && cargo build-sbf --features litesvm-mock --sbf-out-dir target/mock && cargo test --locked
 
 # Builds the splitter with throwaway test keys, then runs the adversarial suite.
-# The .so this leaves in target/deploy is a TEST build: never deploy it.
+# The test .so goes to target/splitter-test, never target/deploy, so it can't be
+# mistaken for a release build. scripts/check-release.mjs refuses it anyway.
+SPLITTER_TEST_OUT := target/splitter-test
 splitter-test:
-	cargo build-sbf --manifest-path programs/support-splitter/Cargo.toml --features test-config
+	cargo build-sbf --manifest-path programs/support-splitter/Cargo.toml --features test-config --sbf-out-dir $(SPLITTER_TEST_OUT)
 	cargo test -p support-splitter --features splitter-tests
+
+# Run before any splitter deploy: refuses a .so built with the test keys or
+# for the wrong cluster. Usage: make splitter-release-check SO=path/to.so [DEVNET=1]
+splitter-release-check:
+	node programs/support-splitter/scripts/check-release.mjs $(SO) $(if $(DEVNET),--devnet)

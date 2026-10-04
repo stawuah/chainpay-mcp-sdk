@@ -10,6 +10,12 @@ exclude = ["programs/card_policy"]
 resolution = true
 skip-lint = false
 
+# Only ChainPay is built by `anchor build`. The support splitter has its own build
+# (make splitter-test, and DEPLOY.md for real builds); including it here would also
+# let `anchor build` rewrite its declare_id.
+[workspace]
+members = ["programs/chainpay"]
+
 [programs.devnet]
 chainpay = "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4"
 

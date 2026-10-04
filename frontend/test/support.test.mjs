@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { build } from "esbuild";
 
@@ -170,46 +171,196 @@ test("maintainer panel only matches an exact on-chain recipient", () => {
 });
 
 // ---- swap safety (any token -> USDC) ----
+// Real swap-instructions captured from Jupiter's API (test/fixtures/jupiter/capture.mjs),
+// plus forged variants of them. Each forged one must be refused before signing.
 const swapMod = await bundle("../src/support/swap.ts", "swap");
 const DONOR = donor.toBase58();
 const JUPITER = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
-const goodSwap = () => ({
-  computeBudgetInstructions: [{ programId: "ComputeBudget111111111111111111111111111111", accounts: [], data: "AsBcAQA=" }],
-  setupInstructions: [{ programId: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", accounts: [{ pubkey: DONOR, isSigner: true, isWritable: true }, { pubkey: "AtaX", isSigner: false, isWritable: true }, { pubkey: DONOR, isSigner: false, isWritable: false }], data: "AQ==" }],
-  swapInstruction: { programId: JUPITER, accounts: [
-    { pubkey: TOKEN, isSigner: false, isWritable: false },
-    { pubkey: DONOR, isSigner: true, isWritable: false },
-    { pubkey: accounts.vaultUsdc.toBase58(), isSigner: false, isWritable: true },
-    { pubkey: USDC, isSigner: false, isWritable: false },
-  ], data: "AA==" },
-  cleanupInstruction: null,
-  otherInstructions: [],
-});
+const THIEF = "6TcyBfPdBt1kjsvDZLzmBFnuMaLWiTaAt4RjUr9VA5YD";
+const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/jupiter/${name}.json`, import.meta.url), "utf8"));
+const FIXTURES = ["usdt-shared", "bonk-shared", "jup-route"];
+const quoteOf = (f) => ({ inputMint: f.quote.inputMint, inAmount: f.quote.inAmount, outAmount: f.quote.outAmount, otherAmountThreshold: f.quote.otherAmountThreshold, raw: f.quote });
+const check = (f, response = f.swapInstructions) => swapMod.assertSafeSwap(response, DONOR, accounts, quoteOf(f));
 
-test("swap safety: a normal Jupiter route into the vault passes", () => {
-  assert.doesNotThrow(() => swapMod.assertSafeSwap(goodSwap(), DONOR, accounts));
-});
+// Route args end with in_amount u64 | quoted_out_amount u64 | slippage_bps u16 | platform_fee_bps u8.
+const withArgs = (f, { inAmount, outAmount, slippage, fee, suffix = Buffer.alloc(0) }) => {
+  const s = structuredClone(f.swapInstructions);
+  const data = Buffer.from(s.swapInstruction.data, "base64");
+  const tail = data.length - 19;
+  if (inAmount !== undefined) data.writeBigUInt64LE(inAmount, tail);
+  if (outAmount !== undefined) data.writeBigUInt64LE(outAmount, tail + 8);
+  if (slippage !== undefined) data.writeUInt16LE(slippage, tail + 16);
+  if (fee !== undefined) data.writeUInt8(fee, tail + 18);
+  s.swapInstruction.data = Buffer.concat([data, suffix]).toString("base64");
+  return s;
+};
+const destinationIndex = (s) => s.swapInstruction.accounts.findIndex((a) => a.pubkey === accounts.vaultUsdc.toBase58());
+const computePrice = (microLamports) => { const d = Buffer.alloc(9); d[0] = 3; d.writeBigUInt64LE(microLamports, 1); return d.toString("base64"); };
 
-test("swap safety: anything that could misdirect funds is refused before signing", () => {
-  const cases = [
-    [(s) => { s.swapInstruction.programId = "Fake1111111111111111111111111111111111111111"; }, /isn't routed through Jupiter/],
-    [(s) => { s.swapInstruction.accounts[2].pubkey = "Thief111111111111111111111111111111111111111"; }, /doesn't deliver to the support vault/],
-    [(s) => { s.swapInstruction.accounts[2].isWritable = false; }, /doesn't deliver to the support vault/],
-    [(s) => { s.swapInstruction.accounts[3].pubkey = "OtherMint11111111111111111111111111111111111"; }, /doesn't output USDC/],
-    [(s) => { s.swapInstruction.accounts.push({ pubkey: "Extra1111111111111111111111111111111111111111", isSigner: true, isWritable: true }); }, /unexpected signer/],
-    [(s) => { s.setupInstructions[0].accounts[2].pubkey = "Someone11111111111111111111111111111111111111"; }, /isn't yours/],
-    [(s) => { s.setupInstructions[0].programId = TOKEN; }, /isn't yours/],
-    [(s) => { s.otherInstructions = [{ programId: TOKEN, accounts: [], data: "" }]; }, /extra instructions/],
-    [(s) => { s.computeBudgetInstructions[0].programId = TOKEN; }, /compute instruction/],
-    [(s) => { s.tokenLedgerInstruction = { programId: JUPITER, accounts: [], data: "" }; }, /token-ledger/],
-    [(s) => { s.cleanupInstruction = { programId: TOKEN, accounts: [{ pubkey: "W" }, { pubkey: "Thief111111111111111111111111111111111111111" }, { pubkey: DONOR }], data: Buffer.from([9]).toString("base64") }; }, /cleanup/],
-    [(s) => { s.error = "no route"; }, /couldn't build/],
-  ];
-  for (const [mutate, reason] of cases) {
-    const swap = goodSwap();
-    mutate(swap);
-    assert.throws(() => swapMod.assertSafeSwap(swap, DONOR, accounts), reason);
+test("swap safety: real Jupiter routes into the vault pass, and report their fee", () => {
+  for (const name of FIXTURES) {
+    const f = fixture(name);
+    const plan = check(f);
+    assert.ok(plan.priorityFeeLamports <= swapMod.MAX_PRIORITY_FEE_LAMPORTS, name);
+    // Jupiter creates the donor's USDC account in setup; that's rent the card must show.
+    assert.ok(plan.createsAccounts.some((a) => a.rentLamports === 2_039_280n), name);
   }
+});
+
+test("swap safety: the reviewer's forged route is refused (thief destination, 100% slippage, fee, huge price)", () => {
+  const f = fixture("jup-route");
+  const s = withArgs(f, { inAmount: 10n ** 12n, outAmount: 1n, slippage: 10_000, fee: 255 });
+  const dest = destinationIndex(s);
+  s.swapInstruction.accounts[dest] = { pubkey: THIEF, isSigner: false, isWritable: true };
+  s.swapInstruction.accounts[6] = { pubkey: THIEF, isSigner: false, isWritable: true }; // platform_fee_account
+  s.swapInstruction.accounts.push({ pubkey: accounts.vaultUsdc.toBase58(), isSigner: false, isWritable: true });
+  s.computeBudgetInstructions = [{ programId: "ComputeBudget111111111111111111111111111111", accounts: [], data: computePrice(2n ** 62n) }];
+  assert.throws(() => check(f, s));
+});
+
+test("swap safety: each forged field is refused on its own", () => {
+  const cases = [
+    ["destination is someone else, vault only as a remaining account", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.swapInstruction.accounts[destinationIndex(s)].pubkey = THIEF;
+      s.swapInstruction.accounts.push({ pubkey: accounts.vaultUsdc.toBase58(), isSigner: false, isWritable: true });
+      return s;
+    }, /doesn't deliver to the support vault/],
+    ["route destination is someone else", "jup-route", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.swapInstruction.accounts[4].pubkey = THIEF;
+      s.swapInstruction.accounts.push({ pubkey: accounts.vaultUsdc.toBase58(), isSigner: false, isWritable: true });
+      return s;
+    }, /doesn't deliver to the support vault/],
+    ["in_amount above the quote", "usdt-shared", (f) => withArgs(f, { inAmount: 10n ** 12n }), /different amount/],
+    ["quoted_out_amount below the quote", "bonk-shared", (f) => withArgs(f, { outAmount: 1n }), /price you saw/],
+    ["slippage 100%", "jup-route", (f) => withArgs(f, { slippage: 10_000 }), /slippage/],
+    ["platform fee bps", "usdt-shared", (f) => withArgs(f, { fee: 255 }), /platform fee/],
+    ["platform fee account", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.swapInstruction.accounts[9].pubkey = THIEF;
+      return s;
+    }, /platform fee/],
+    ["good-looking args appended after forged ones", "usdt-shared", (f) => {
+      const good = Buffer.from(f.swapInstructions.swapInstruction.data, "base64").subarray(-19);
+      return withArgs(f, { inAmount: 10n ** 12n, slippage: 10_000, suffix: good });
+    }, /extra bytes/],
+    ["unknown Jupiter instruction (exact-out)", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      const data = Buffer.from(s.swapInstruction.data, "base64");
+      Buffer.from(createHash("sha256").update("global:shared_accounts_exact_out_route").digest().subarray(0, 8)).copy(data);
+      s.swapInstruction.data = data.toString("base64");
+      return s;
+    }, /doesn't allow/],
+    ["a DEX missing from the IDL", "jup-route", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      const data = Buffer.from(s.swapInstruction.data, "base64");
+      data[12] = 250; // first route step's DEX variant
+      s.swapInstruction.data = data.toString("base64");
+      return s;
+    }, /doesn't recognise/],
+    ["priority fee 2^62 micro-lamports", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.computeBudgetInstructions[1].data = computePrice(2n ** 62n);
+      return s;
+    }, /priority fee/],
+    ["priority fee just over the lamport cap", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.computeBudgetInstructions[1].data = computePrice(200_000n);
+      return s;
+    }, /priority fee/],
+    ["other compute budget instruction (heap frame)", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.computeBudgetInstructions.push({ programId: "ComputeBudget111111111111111111111111111111", accounts: [], data: Buffer.from([1, 0, 0, 4, 0]).toString("base64") });
+      return s;
+    }, /compute instruction/],
+    ["compute budget from another program", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.computeBudgetInstructions[0].programId = TOKEN;
+      return s;
+    }, /compute instruction/],
+    ["setup creates an account that isn't the donor's ATA", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.setupInstructions[0].accounts[1].pubkey = THIEF;
+      return s;
+    }, /isn't yours/],
+    ["setup owner isn't the donor", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.setupInstructions[0].accounts[2].pubkey = THIEF;
+      return s;
+    }, /isn't yours/],
+    ["setup from another program", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.setupInstructions[0].programId = TOKEN;
+      return s;
+    }, /isn't yours/],
+    ["not Jupiter", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.swapInstruction.programId = THIEF;
+      return s;
+    }, /isn't routed through Jupiter/],
+    ["outputs another mint", "jup-route", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.swapInstruction.accounts[5].pubkey = THIEF;
+      return s;
+    }, /doesn't output USDC/],
+    ["extra signer", "usdt-shared", (f) => {
+      const s = structuredClone(f.swapInstructions);
+      s.swapInstruction.accounts.push({ pubkey: THIEF, isSigner: true, isWritable: true });
+      return s;
+    }, /unexpected signer/],
+    ["extra instructions", "usdt-shared", (f) => ({ ...structuredClone(f.swapInstructions), otherInstructions: [{ programId: TOKEN, accounts: [], data: "" }] }), /extra instructions/],
+    ["token ledger mode", "usdt-shared", (f) => ({ ...structuredClone(f.swapInstructions), tokenLedgerInstruction: { programId: JUPITER, accounts: [], data: "" } }), /token-ledger/],
+    ["cleanup pays someone else", "usdt-shared", (f) => ({ ...structuredClone(f.swapInstructions), cleanupInstruction: { programId: TOKEN, accounts: [{ pubkey: "W" }, { pubkey: THIEF }, { pubkey: DONOR }], data: Buffer.from([9]).toString("base64") } }), /cleanup/],
+    ["Jupiter error", "usdt-shared", (f) => ({ ...structuredClone(f.swapInstructions), error: "no route" }), /couldn't build/],
+  ];
+  for (const [label, name, forge, reason] of cases) {
+    const f = fixture(name);
+    assert.throws(() => check(f, forge(f)), reason, label);
+  }
+});
+
+test("swap quote: refuses quotes that don't match what the card shows", async () => {
+  const f = fixture("usdt-shared");
+  const answer = (patch) => async () => ({ ok: true, json: async () => ({ ...f.quote, ...patch }) });
+  const amount = BigInt(f.quote.inAmount);
+  assert.ok(await swapMod.quoteToUsdc(f.quote.inputMint, amount, USDC, answer({})));
+  for (const patch of [{ slippageBps: 10_000 }, { swapMode: "ExactOut" }, { platformFee: { amount: "5", feeBps: 50 } }, { inAmount: "1" }, { otherAmountThreshold: "1" }, { inputMint: THIEF }]) {
+    assert.equal(await swapMod.quoteToUsdc(f.quote.inputMint, amount, USDC, answer(patch)), null, JSON.stringify(patch));
+  }
+});
+
+test("swap fee: the card shows rent for a new token account, and a worse fresh quote stops the send", async () => {
+  const f = fixture("jup-route");
+  const fetcher = async () => ({ ok: true, json: async () => structuredClone(f.swapInstructions) });
+  const none = async () => new Set();
+  const prepared = await swapMod.buildSwapTip({ donor, quote: quoteOf(f), note: "", hideAddress: false, accounts, fetcher, existingAccounts: none });
+  assert.ok(prepared.rentLamports >= 2_039_280n, "the donor's USDC account would be created");
+  assert.ok(prepared.feeLamports > 2_000_000n, "≈0.002 SOL, not '< $0.01'");
+  const all = async (addresses) => new Set(addresses);
+  const funded = await swapMod.buildSwapTip({ donor, quote: quoteOf(f), note: "", hideAddress: false, accounts, fetcher, existingAccounts: all });
+  assert.equal(funded.rentLamports, 0n);
+
+  // Shared routes don't touch the donor's own USDC account, so it isn't created.
+  const shared = fixture("usdt-shared");
+  const sharedFetcher = async () => ({ ok: true, json: async () => structuredClone(shared.swapInstructions) });
+  const sharedTip = await swapMod.buildSwapTip({ donor, quote: quoteOf(shared), note: "", hideAddress: false, accounts, fetcher: sharedFetcher, existingAccounts: none });
+  assert.equal(sharedTip.rentLamports, 0n);
+  assert.ok(!sharedTip.instructions.some((ix) => ix.programId.toBase58() === "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"));
+
+  const shown = { quote: quoteOf(f), feeLamports: funded.feeLamports };
+  assert.equal(swapMod.worseThanShown(shown, shown), null);
+  assert.match(swapMod.worseThanShown(shown, { ...shown, quote: { ...shown.quote, otherAmountThreshold: (BigInt(shown.quote.otherAmountThreshold) - 1n).toString() } }), /price moved/);
+  assert.match(swapMod.worseThanShown(shown, { ...shown, feeLamports: shown.feeLamports + 1n }), /fee went up/);
+});
+
+test("token search leaves out SOL and USDC, which have their own buttons", async () => {
+  const fake = async () => ({ ok: true, json: async () => ([
+    { id: "So11111111111111111111111111111111111111112", symbol: "SOL", name: "Wrapped SOL", decimals: 9, isVerified: true },
+    { id: USDC, symbol: "USDC", name: "USD Coin", decimals: 6, isVerified: true },
+    { id: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", symbol: "USDT", name: "USDT", decimals: 6, isVerified: true },
+  ]) });
+  assert.deepEqual((await swapMod.searchTokens("sol", fake)).map((t) => t.symbol), ["USDT"]);
 });
 
 test("token search keeps verified tokens only", async () => {

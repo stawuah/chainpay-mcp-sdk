@@ -1,5 +1,5 @@
 //! Adversarial tests for the support splitter. Build the test program first:
-//!   cargo build-sbf --manifest-path programs/support-splitter/Cargo.toml --features test-config
+//!   cargo build-sbf --manifest-path programs/support-splitter/Cargo.toml --features test-config --sbf-out-dir target/splitter-test
 //! then run:
 //!   cargo test -p support-splitter --features splitter-tests --test splitter
 
@@ -35,7 +35,7 @@ fn usdc_mint_keypair() -> Keypair {
 }
 
 fn program_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/deploy/support_splitter.so")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/splitter-test/support_splitter.so")
 }
 
 fn vault_pda() -> Pubkey {
@@ -275,6 +275,7 @@ impl Env {
             program_id: support_splitter::ID,
             accounts: accounts::RotateRecipient {
                 current,
+                incoming: new_recipient,
                 vault: vault_pda(),
                 vault_usdc: vault_usdc(),
             }
@@ -285,6 +286,25 @@ impl Env {
             }
             .data(),
         }
+    }
+
+    /// A rotation whose new-recipient account is passed without a signature,
+    /// as it would have to be for a PDA or a mistyped address.
+    fn rotate_ix_unsigned(
+        &self,
+        current: Pubkey,
+        side: Side,
+        new_recipient: Pubkey,
+    ) -> Instruction {
+        let mut ix = self.rotate_ix(current, side, new_recipient);
+        for meta in ix
+            .accounts
+            .iter_mut()
+            .filter(|m| m.pubkey == new_recipient && m.pubkey != current)
+        {
+            meta.is_signer = false;
+        }
+        ix
     }
 
     /// Anyone can crank: a fresh stranger pays the fee and gets nothing back.
@@ -762,32 +782,50 @@ fn only_the_current_side_key_can_rotate_and_owed_balance_follows() {
 
     // Bad targets.
     expect_err(
-        env.send(&[env.rotate_ix(RECIPIENT_A, Side::A, RECIPIENT_B)], &[&a]),
+        env.send(
+            &[env.rotate_ix(RECIPIENT_A, Side::A, RECIPIENT_B)],
+            &[&a, &b],
+        ),
         "DuplicateRecipient",
     );
-    expect_err(
-        env.send(&[env.rotate_ix(RECIPIENT_A, Side::A, vault_pda())], &[&a]),
-        "InvalidRecipient",
-    );
-    expect_err(
-        env.send(&[env.rotate_ix(RECIPIENT_A, Side::A, vault_usdc())], &[&a]),
-        "InvalidRecipient",
-    );
-    expect_err(
-        env.send(
-            &[env.rotate_ix(RECIPIENT_A, Side::A, Pubkey::default())],
-            &[&a],
-        ),
-        "InvalidRecipient",
-    );
+    // The vault, its token account, the zero key, a PDA or a typo can't sign,
+    // so none of them can become a recipient (review F7).
+    let pda = Pubkey::find_program_address(&[b"anything"], &support_splitter::ID).0;
+    for target in [
+        vault_pda(),
+        vault_usdc(),
+        Pubkey::default(),
+        pda,
+        Pubkey::new_unique(),
+    ] {
+        expect_err(
+            env.send(
+                &[env.rotate_ix_unsigned(RECIPIENT_A, Side::A, target)],
+                &[&a],
+            ),
+            "AccountNotSigner",
+        );
+    }
     expect_err(
         env.send(&[env.rotate_ix(RECIPIENT_A, Side::A, RECIPIENT_A)], &[&a]),
         "SameRecipient",
     );
+    // The signing new wallet must be the one named in the instruction.
+    let mut swapped = env.rotate_ix(RECIPIENT_A, Side::A, Pubkey::new_unique());
+    swapped.accounts[1] = AccountMeta::new_readonly(new_a.pubkey(), true);
+    expect_err(env.send(&[swapped], &[&a, &new_a]), "NewRecipientMustSign");
+    // The new wallet alone can't take a side either.
+    expect_err(
+        env.send(
+            &[env.rotate_ix_unsigned(RECIPIENT_A, Side::A, new_a.pubkey())],
+            &[&a],
+        ),
+        "AccountNotSigner",
+    );
 
     env.send(
         &[env.rotate_ix(RECIPIENT_A, Side::A, new_a.pubkey())],
-        &[&a],
+        &[&a, &new_a],
     )
     .unwrap();
     let v = env.vault();

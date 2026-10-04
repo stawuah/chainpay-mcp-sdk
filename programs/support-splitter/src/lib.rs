@@ -8,7 +8,8 @@
 //! There is no admin, no withdraw, no delegate, no authority change and no close
 //! instruction. Each side is paid independently, so a broken destination for one
 //! side leaves the other side's payout untouched. Only the current key for a side
-//! can rotate that side, and rotation never touches the other side.
+//! can rotate that side, the new wallet must co-sign, and rotation never touches
+//! the other side.
 
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::{self, AssociatedToken};
@@ -209,8 +210,9 @@ pub mod support_splitter {
         Ok(())
     }
 
-    /// Moves one side to a new wallet. Only that side's current key can sign,
-    /// and the side keeps its owed balances.
+    /// Moves one side to a new wallet. That side's current key and the new
+    /// wallet must both sign (so a typo or an address nobody controls can't
+    /// become a recipient), and the side keeps its owed balances.
     pub fn rotate_recipient(
         ctx: Context<RotateRecipient>,
         side: Side,
@@ -422,10 +424,13 @@ pub struct PayUsdc<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(side: Side)]
+#[instruction(side: Side, new_recipient: Pubkey)]
 pub struct RotateRecipient<'info> {
     #[account(address = vault.recipients[side.index()] @ SplitterError::Unauthorized)]
     pub current: Signer<'info>,
+    /// The new wallet proves it can sign, so payouts never go to a key nobody holds.
+    #[account(address = new_recipient @ SplitterError::NewRecipientMustSign)]
+    pub incoming: Signer<'info>,
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
     /// CHECK: only its address is used, to stop a side rotating to it.
@@ -484,6 +489,8 @@ pub enum SplitterError {
     WrongDestination,
     #[msg("Ledger invariant broken: vault holds less than it owes")]
     LedgerInvariant,
+    #[msg("The new recipient wallet must sign the rotation")]
+    NewRecipientMustSign,
 }
 
 #[cfg(test)]

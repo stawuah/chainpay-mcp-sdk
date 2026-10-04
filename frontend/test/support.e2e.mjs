@@ -1,7 +1,7 @@
 // End-to-end on a local validator: the real splitter program + the page's own
 // transaction builder. Not part of `npm test` (needs the Solana CLI).
 //
-//   make splitter-test        # builds target/deploy/support_splitter.so with test keys
+//   make splitter-test        # builds target/splitter-test/support_splitter.so with test keys
 //   node frontend/test/support.e2e.mjs
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -25,7 +25,7 @@ const PROGRAM = "D1DvnVq37696mcFB5JeVWZy22wjxZ5xPJmZazbfPK7BH";
 const TOKEN = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const RPC = "http://127.0.0.1:8899";
-const so = new URL("../../target/deploy/support_splitter.so", import.meta.url).pathname;
+const so = new URL("../../target/splitter-test/support_splitter.so", import.meta.url).pathname;
 
 // Test-config keys (same seeds as the LiteSVM suite).
 const A = Keypair.fromSeed(new Uint8Array(32).fill(11));
@@ -185,20 +185,23 @@ try {
 
   // Rent case the LiteSVM suite can't cover: A rotates to an empty wallet and
   // is owed less than rent-exempt minimum. Only A's payout may fail.
-  const empty = Keypair.generate().publicKey;
+  // The new wallet co-signs the rotation; it holds no SOL, so A pays the fee.
+  const emptyKey = Keypair.generate();
+  const empty = emptyKey.publicKey;
   await send(
     [
       new TransactionInstruction({
         programId: accounts.programId,
         keys: [
           { pubkey: A.publicKey, isSigner: true, isWritable: false },
+          { pubkey: empty, isSigner: true, isWritable: false },
           { pubkey: accounts.vault, isSigner: false, isWritable: true },
           { pubkey: accounts.vaultUsdc, isSigner: false, isWritable: false },
         ],
         data: Buffer.concat([disc("rotate_recipient"), Buffer.from([0]), empty.toBuffer()]),
       }),
     ],
-    [A],
+    [A, emptyKey],
   );
   await send(support.contributionInstructions({ donor: donor.publicKey, asset: "SOL", amount: 1_000n, note: "", hideAddress: false, accounts }), [donor]);
   await assert.rejects(

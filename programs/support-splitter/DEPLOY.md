@@ -14,28 +14,41 @@ The splitter becomes permanent once its upgrade authority is removed: nobody can
 
 `initialize` refuses to run while the recipients are still all-zero placeholders.
 
+## What is enforced, what is detected, and what is trusted
+
+| Claim | Status |
+|---|---|
+| Neither maintainer can take, block or redirect the other's half | **Enforced on-chain.** No admin, withdraw, delegate, authority-change or close instruction. Each side is paid by its own instruction, only to that side's wallet. |
+| Each side controls only its own wallet | **Enforced on-chain.** Rotating a side needs that side's current key **and** the new wallet's signature, and anything owed moves with it. |
+| The program can't be changed later | Only **after** gate 4 (upgrade authority removed). |
+| The website can't redirect donations | **Not enforced, and not detected by anything in this repo.** Whoever deploys the site controls what it asks a wallet to sign. An optional watchdog exists on the fork branch `tantshirt:dre/support-watchdog`; it is not part of this repo, has no tests yet, and detects only once someone turns it on. It can never undo a swap. |
+| "Other token" tips arrive in the vault | **Checked in the browser, then enforced by Jupiter's program.** Jupiter's API builds the swap. Before the wallet signs, the page decodes it (`frontend/src/support/swap.ts`) and refuses it unless the output goes to the vault's USDC account, the input amount and quoted output match the quote shown, slippage is at most 0.5%, there is no platform fee, the donor is the only signer, the priority fee is at most 0.0002 SOL, and no other program or instruction is added. Jupiter's on-chain program then enforces the minimum output. Trusted: Jupiter's program (upgradeable by Jupiter) and the website serving this check unmodified. |
+| The RPC relay can't move funds | **True; it only carries signed bytes.** The browser trusts the relay (`/support/rpc`) for the blockhash, balances, confirmation status and swap lookup tables. A lying relay can make a tip fail or look unconfirmed. It can't redirect one: the vault, its USDC account, the program and the memo must be literal keys in the message, never lookup-table entries. |
+| USDC can't be frozen | **No.** Circle keeps issuer controls. |
+| Money only pays for hosting | **No.** Each half lands in a maintainer's personal wallet; the page says so. |
+
 ## Gate 1: tests + independent review
 
-1. `make splitter-test` is green. This builds a **test** `.so` with throwaway keys; never deploy that file.
+1. `make splitter-test` is green. This builds a **test** `.so` with throwaway keys into `target/splitter-test/`; never deploy that file. `make splitter-release-check` refuses it.
 2. Someone who did not write the program reviews `src/lib.rs`, then posts a `<!-- support-gate:v1 -->` comment with `gate: 1` and their sign-off.
 
 ## Gate 2: devnet rehearsal
 
 1. Run `read-setup.mjs <pr> --apply`. Both partners check the diff.
-2. Build with `cargo build-sbf --manifest-path programs/support-splitter/Cargo.toml --features devnet`, then deploy to devnet.
+2. Build with `cargo build-sbf --manifest-path programs/support-splitter/Cargo.toml --features devnet`, run `make splitter-release-check SO=target/deploy/support_splitter.so DEVNET=1`, then deploy to devnet.
 3. Initialize. Both recipients must sign the same transaction. Because the two partners are in different time zones, use a **durable nonce** so the transaction doesn't expire:
    1. Partner A signs and posts the partially signed transaction (base64) as a PR comment. This is safe to share, because the signature only works for that exact transaction.
    2. Partner B checks it, signs, and sends it.
 4. Run the full flow from the `/support` page with devnet config: donate SOL and USDC, call `allocate`, then pay A and pay B.
 5. Run the attack checks on real devnet:
-   - A single-signer rotate fails.
+   - A single-signer rotate fails, and so does a rotate the new wallet didn't sign.
    - A pay to the wrong destination fails.
    - **The rent case:** rotate A to an empty wallet, donate 1,000 lamports, and allocate. `pay_sol(A)` must fail, `pay_sol(B)` must still succeed, and A's half must stay owed.
-6. Point the watchdog at a preview deploy that requests a malicious transaction. Email and Telegram must both fire.
+6. Optional, and outside this repo: if you turn on the fork's watchdog (`tantshirt:dre/support-watchdog`), point it at a preview deploy that requests a malicious transaction and confirm its alerts fire. If you don't, record in the gate comment that tampering with the live page is **not detected**.
 
 ## Gate 3: mainnet deploy + independent verification
 
-1. Make a verifiable build with `solana-verify build --library-name support_splitter`. Install it with `cargo install solana-verify` and check `--help` for current flags.
+1. Make a verifiable build with `solana-verify build --library-name support_splitter`. Install it with `cargo install solana-verify` and check `--help` for current flags. Run `make splitter-release-check SO=<the built .so>`; it must print `OK`.
 2. Deploy to mainnet. This costs about 1–2 SOL of rent, paid by the deployer.
 3. Both partners, **separately on their own machines**, confirm:
    - The commit SHA matches the PR head.
@@ -53,7 +66,8 @@ The splitter becomes permanent once its upgrade authority is removed: nobody can
 ## Gate 5: go live
 
 1. **Convex prod env** (server-side; the RPC key never reaches the browser):
-   - `SUPPORT_RPC_URL`: mainnet RPC
+   - `SUPPORT_RPC_URL`: mainnet RPC for the tracker
+   - `SUPPORT_RELAY_RPC_URL`: a **separate** mainnet RPC key for the browser relay, so relay traffic can't use up the tracker's quota. The relay stays off (503) until `SUPPORT_LIVE=true`, and is rate-limited per IP and overall.
    - `SUPPORT_PROGRAM_ID`, `SUPPORT_VAULT`, `SUPPORT_VAULT_USDC`
    - `SUPPORT_LIVE=true`
 2. **Vercel env for the web app** (all public values):
@@ -68,5 +82,6 @@ Post each gate's proof as a `<!-- support-gate:v1 -->` comment: a link, a hash, 
 
 - If a recipient loses their key, their half keeps accruing and can never be claimed. Use a hardware wallet with an offline seed backup.
 - USDC has issuer controls, and Circle can freeze accounts.
-- Whoever deploys the website can change the address it shows. The program cannot prevent that; the watchdog only detects it.
+- Whoever deploys the website can change the address it shows or the transaction it asks you to sign. The program cannot prevent that, and nothing in this repo detects it. The fork's optional watchdog can detect it once turned on; it can't undo it.
+- "Other token" tips depend on Jupiter's API and program, and on the RPC relay (see the table above).
 - When the vault PDA was pre-funded before `initialize`, part of that SOL became the vault's rent.

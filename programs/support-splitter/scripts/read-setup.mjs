@@ -9,6 +9,12 @@
 //   - its ed25519 signature verifies for the posted address over the exact
 //     message, which includes this PR number (so it can't be replayed).
 //
+// To fix a mistake, a maintainer posts a new signed comment: for each side the
+// newest valid comment wins, and every address it replaced is listed under
+// "superseded" so the second-channel check (setup step 4) sees the change.
+// Two valid comments with different addresses posted at the same second are a
+// conflict, and nothing is applied for that side.
+//
 // Usage:
 //   node programs/support-splitter/scripts/read-setup.mjs <pr-number> [--apply]
 // --apply writes the verified keys into programs/support-splitter/src/lib.rs.
@@ -119,7 +125,7 @@ export function checkComment(comment, pr) {
 }
 
 export function resolve(comments, pr) {
-  const verified = {};
+  const valid = { A: [], B: [] };
   const rejected = [];
   for (const comment of comments) {
     const result = checkComment(comment, pr);
@@ -128,12 +134,20 @@ export function resolve(comments, pr) {
       rejected.push({ url: comment.html_url, author: comment.user?.login, reason: result.reason });
       continue;
     }
-    const previous = verified[result.side];
-    if (previous && previous.address !== result.address) {
-      // Two different valid addresses for one side: refuse to guess.
-      verified[result.side] = { conflict: true, addresses: [previous.address, result.address] };
-    } else if (!previous) {
-      verified[result.side] = { address: result.address, url: comment.html_url };
+    valid[result.side].push({ address: result.address, url: comment.html_url, at: Date.parse(comment.created_at) });
+  }
+  const verified = {};
+  for (const side of ["A", "B"]) {
+    if (!valid[side].length) continue;
+    const ordered = valid[side].sort((x, y) => x.at - y.at);
+    const newest = ordered.at(-1);
+    const tied = new Set(ordered.filter((c) => c.at === newest.at).map((c) => c.address));
+    const superseded = [...new Set(ordered.filter((c) => c.at < newest.at && c.address !== newest.address).map((c) => c.address))];
+    if (Number.isNaN(newest.at) || tied.size > 1) {
+      // Can't tell which one is newest: refuse to guess.
+      verified[side] = { conflict: true, addresses: [...new Set(ordered.map((c) => c.address))] };
+    } else {
+      verified[side] = { address: newest.address, url: newest.url, ...(superseded.length ? { superseded } : {}) };
     }
   }
   if (verified.A?.address && verified.A.address === verified.B?.address) {
@@ -172,6 +186,11 @@ function main() {
   const { verified, rejected } = resolve(comments, pr);
   console.log(JSON.stringify({ pr: Number(pr), verified, rejected }, null, 2));
 
+  for (const side of ["A", "B"]) {
+    if (verified[side]?.superseded) {
+      console.error(`\nSide ${side} replaced an earlier address. Confirm ${verified[side].address} over a second channel before applying.`);
+    }
+  }
   const ready = ["A", "B"].every((side) => verified[side]?.address);
   if (!ready) {
     console.error("\nNot ready: both sides need one verified setup comment.");
