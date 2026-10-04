@@ -156,6 +156,10 @@ export const CARD_POLICY_ERRORS = {
   6043: "DuplicateEvent",
   6044: "EphemeralAccountsOpen",
   6045: "ReservationNotFinal",
+  6046: "CoSignerRequired",
+  6047: "RefundExceedsCapture",
+  6048: "CaptureLimit",
+  6049: "BudgetBelowCommitted",
 } as const;
 
 export type CardPolicyErrorCode = keyof typeof CARD_POLICY_ERRORS;

@@ -190,6 +190,8 @@ pub const ACCOUNT_NOT_INITIALIZED: u32 = 3012;
 /// Size of the guard ring (`card_policy::constants::GUARD_RING`): a duplicate
 /// auth id is refused on-chain for this many later closes on the same card.
 pub const GUARD_RING: u64 = 256;
+/// Capture ids a Reservation keeps; `capture` refuses one more (`CaptureLimit`).
+pub const CAPTURE_RING: usize = 8;
 
 pub fn permission_pda(account: &Address) -> Address {
     pda(
@@ -1187,7 +1189,7 @@ pub fn decode_commitment(data: &[u8]) -> Result<CommitmentAccount, DecodeError> 
 
 // ------------------------------------------------------------------ errors
 
-pub const ERRORS: [&str; 46] = [
+pub const ERRORS: [&str; 50] = [
     "Unauthorized",
     "ValidatorNotAllowed",
     "PolicyNotSet",
@@ -1234,6 +1236,10 @@ pub const ERRORS: [&str; 46] = [
     "DuplicateEvent",
     "EphemeralAccountsOpen",
     "ReservationNotFinal",
+    "CoSignerRequired",
+    "RefundExceedsCapture",
+    "CaptureLimit",
+    "BudgetBelowCommitted",
 ];
 
 pub fn error_name(code: u32) -> Option<&'static str> {

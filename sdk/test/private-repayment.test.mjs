@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getAddressEncoder } from "@solana/addresses";
 import {
   PRIVATE_REPAYMENT_DEVNET_USDC,
   PRIVATE_REPAYMENT_METHOD,
@@ -39,12 +40,49 @@ function attempt(overrides = {}) {
   };
 }
 
+// ---- MagicBlock-shaped transactions (ephemeral-spl-token instruction layouts)
+const ESPL = "SPLxh1LVZzEkX99H6rqYizhytLWPZVV296zyYDPagv2";
+const SPL_TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const MAGIC = "Magic11111111111111111111111111111111111111";
+const FILLER = ["SysvarRent111111111111111111111111111111111", "SysvarC1ock11111111111111111111111111111111", "So11111111111111111111111111111111111111112", "Stake11111111111111111111111111111111111111", "Vote111111111111111111111111111111111111111", "Config1111111111111111111111111111111111111"];
+const addressBytes = (a) => Uint8Array.from(getAddressEncoder().encode(a));
+const le = (value, bytes) => Array.from({ length: bytes }, (_, i) => Number((BigInt(value) >> BigInt(8 * i)) & 0xffn));
+const compact = (n) => { const out = []; do { let b = n & 0x7f; n >>= 7; if (n) b |= 0x80; out.push(b); } while (n); return out; };
+
+/** A legacy transaction with one signer (the fee payer) and zeroed signature. */
+function legacyTx(signer, instructions) {
+  const keys = [signer];
+  for (const ix of instructions) for (const k of [...ix.accounts, ix.program]) if (!keys.includes(k)) keys.push(k);
+  const out = [...compact(1), ...new Array(64).fill(0), 1, 0, 0, ...compact(keys.length)];
+  for (const k of keys) out.push(...addressBytes(k));
+  out.push(...new Array(32).fill(1), ...compact(instructions.length));
+  for (const ix of instructions) {
+    out.push(keys.indexOf(ix.program), ...compact(ix.accounts.length), ...ix.accounts.map((k) => keys.indexOf(k)), ...compact(ix.data.length), ...ix.data);
+  }
+  return Buffer.from(out).toString("base64");
+}
+
+function depositTx({ owner = OWNER, amount, mint = PRIVATE_REPAYMENT_DEVNET_USDC, extra = [] }) {
+  return legacyTx(owner, [
+    ...extra,
+    { program: ESPL, accounts: [FILLER[0], FILLER[1], mint, FILLER[2], FILLER[3], owner, SPL_TOKEN], data: [2, ...le(amount, 8)] },
+  ]);
+}
+
+function transferTx({ owner = OWNER, amount, to = PARTNER, mint = PRIVATE_REPAYMENT_DEVNET_USDC, ref = "418273645512", split = 1, extra = [] }) {
+  const data = [16, ...le(amount, 8), 0, 0, 0, ...le(0, 8), ...le(0, 8), ...le(split, 4), 0, ...le(ref, 8)];
+  return legacyTx(owner, [
+    ...extra,
+    { program: ESPL, accounts: [FILLER[0], FILLER[1], mint, FILLER[2], FILLER[3], to, owner, SPL_TOKEN, FILLER[4], FILLER[5], FILLER[1], MAGIC], data },
+  ]);
+}
+
 function json(status, body) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-/** Fake MagicBlock API: records calls, serves balances and builders. */
-function fakeMagicBlock({ balances }) {
+/** Fake MagicBlock API: records calls, serves balances and honest builders (or `tamper`ed ones). */
+function fakeMagicBlock({ balances, tamper = {} }) {
   const calls = [];
   let i = 0;
   const f = async (url, init = {}) => {
@@ -55,8 +93,8 @@ function fakeMagicBlock({ balances }) {
       case "/v1/spl/challenge": return json(200, { challenge: "sign-me" });
       case "/v1/spl/login": return json(200, { token: TOKEN });
       case "/v1/spl/private-balance": return json(200, { balance: String(balances[Math.min(i++, balances.length - 1)]), location: "ephemeral" });
-      case "/v1/spl/deposit": return json(200, { kind: "deposit", transactionBase64: "ZGVw", sendTo: "base", recentBlockhash: "bh", lastValidBlockHeight: 1, requiredSigners: [OWNER] });
-      case "/v1/spl/transfer": return json(200, { kind: "transfer", transactionBase64: "dHg=", sendTo: "ephemeral", sendRpcEndpoint: "https://devnet-tee.magicblock.app", recentBlockhash: "bh", lastValidBlockHeight: 1, requiredSigners: [OWNER], fees: { lamports: "0", tokens: "0" } });
+      case "/v1/spl/deposit": return json(200, { kind: "deposit", transactionBase64: depositTx({ amount: body.amount, ...tamper.deposit }), sendTo: "base", recentBlockhash: "bh", lastValidBlockHeight: 1, requiredSigners: [OWNER] });
+      case "/v1/spl/transfer": return json(200, { kind: "transfer", transactionBase64: transferTx({ amount: body.amount, to: body.to, ref: body.clientRefId, ...tamper.transfer }), sendTo: "ephemeral", sendRpcEndpoint: "https://devnet-tee.magicblock.app", recentBlockhash: "bh", lastValidBlockHeight: 1, requiredSigners: [OWNER], fees: { lamports: "0", tokens: "0" } });
       case "/v1/transaction/send": return json(200, { signature: "sig-transfer", confirmed: true });
       default: return json(404, { error: { code: "NOT_FOUND", message: "no" } });
     }
@@ -118,7 +156,7 @@ test("deposits only the shortfall, then one private transfer tagged with the ref
   assert.equal(transfer.body.to, PARTNER);
   assert.equal(transfer.body.amount, 10_050_000);
   assert.equal(transfer.body.memo, undefined, "no public memo");
-  assert.deepEqual(sent, ["signed:ZGVw"]);
+  assert.deepEqual(sent, [`signed:${depositTx({ amount: 10_000_000 })}`]);
   assert.deepEqual(steps, ["login", "balance", "deposit", "deposit", "transfer"]);
   // The MagicBlock token goes to MagicBlock only, never into results.
   assert.ok(!JSON.stringify(out).includes(TOKEN));
@@ -143,6 +181,41 @@ test("a builder asking for another signer is refused before signing", async () =
     (e) => e.code === "unexpected_transaction",
   );
   assert.equal(signed, 0);
+});
+
+/** Review F1: the owner never signs a built transaction that disagrees with the statement. */
+test("a MagicBlock transaction that moves the wrong amount, recipient, mint or reference is never signed", async () => {
+  const cases = {
+    "transfer amount": { transfer: { amount: 999_999_990_000 } },
+    "transfer recipient": { transfer: { to: OWNER } },
+    "transfer mint": { transfer: { mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" } },
+    "transfer reference": { transfer: { ref: "1" } },
+    "transfer split": { transfer: { split: 3 } },
+    "top-level token transfer": { transfer: { extra: [{ program: SPL_TOKEN, accounts: [FILLER[2], PARTNER, OWNER], data: [3, ...le(5_000_000, 8)] }] } },
+    "withdrawal": { transfer: { extra: [{ program: ESPL, accounts: [FILLER[0]], data: [3, ...le(1, 8)] }] } },
+    "deposit amount": { deposit: { amount: 99_000_000 } },
+    "deposit mint": { deposit: { mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" } },
+    "SOL drain": { deposit: { extra: [{ program: "11111111111111111111111111111111", accounts: [OWNER, PARTNER], data: [2, 0, 0, 0, ...le(1_000_000_000, 8)] }] } },
+  };
+  for (const [name, tamper] of Object.entries(cases)) {
+    // Fix every builder field honestly except the tampered one.
+    const honest = { deposit: { amount: 10_000_000 }, transfer: { amount: 10_050_000, to: PARTNER, ref: "418273645512" } };
+    const mb = fakeMagicBlock({ balances: [50_000, 50_000, 10_050_000], tamper: { deposit: { ...honest.deposit, ...tamper.deposit }, transfer: { ...honest.transfer, ...tamper.transfer } } });
+    let signed = 0;
+    await assert.rejects(
+      payStatementPrivately({ attempt: attempt(), signer: { ...signer, signTransaction: async (b64) => { signed++; return `signed:${b64}`; } }, magicblock: { fetch: mb.fetch }, sendBase: async () => "sig", sleep: async () => {} }),
+      (e) => e.code === "unexpected_transaction",
+      name,
+    );
+    // A tampered deposit is refused before any signature; a tampered transfer after the honest deposit only.
+    assert.equal(signed, tamper.deposit ? 0 : 1, name);
+  }
+});
+
+test("an attempt whose two amounts disagree, or with a bad recipient, is not payable", () => {
+  assert.throws(() => assertPayableAttempt(attempt({ amountBaseUnits: "999999990000" })), /amount/);
+  assert.throws(() => assertPayableAttempt(attempt({ amountCents: "1006" })), /amount/);
+  assert.throws(() => assertPayableAttempt(attempt({ recipientWallet: "not-a-wallet" })), /recipient/);
 });
 
 test("ChainPay routes: prepare, submit, and polling past settlement_pending", async () => {

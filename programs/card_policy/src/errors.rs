@@ -98,4 +98,15 @@ pub enum CardPolicyError {
     EphemeralAccountsOpen, // 6044
     #[msg("Reservation is not final yet")]
     ReservationNotFinal, // 6045
+    // ---- appended in review fixes (2026-10-04) ----
+    #[msg(
+        "Changing the authorizer, fee or credit terms needs the current authorizer's co-signature"
+    )]
+    CoSignerRequired, // 6046
+    #[msg("Refund is more than this hold captured")]
+    RefundExceedsCapture, // 6047
+    #[msg("This hold has reached its capture limit")]
+    CaptureLimit, // 6048
+    #[msg("Budget can't go below what this period already spent or holds")]
+    BudgetBelowCommitted, // 6049
 }

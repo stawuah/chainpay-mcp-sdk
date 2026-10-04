@@ -1,5 +1,5 @@
-import { authorizeTool } from "./authorization.js";
-import { ChainPayClient, isDuplicateInvoiceError, publicKey } from "@chainpay/sdk";
+import { CARD_TOOLS, authorizeTool } from "./authorization.js";
+import { ChainPayClient, isDuplicateInvoiceError, publicKey, redactCardNumbers, redactCardNumbersInInput } from "@chainpay/sdk";
 import { createMandate } from "./tools/create_mandate.js";
 import { checkPaymentRequirements } from "./tools/check_payment_requirements.js";
 import { createDemoPaymentRequest } from "./tools/demo-payment-request.js";
@@ -108,6 +108,10 @@ export async function callTool(
         message: error.message,
         receiptAddress: error.receiptAddress,
       }, true);
+    }
+    // Card tools never echo anything card-like, whatever threw (review F3).
+    if (CARD_TOOLS.has(name) && error instanceof Error) {
+      error.message = redactCardNumbersInInput(redactCardNumbers(error.message));
     }
     throw error;
   }

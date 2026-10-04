@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash, randomBytes } from "node:crypto";
 import { inspect } from "node:util";
+import { readFileSync } from "node:fs";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import {
   CARD_ACCOUNT_DISCRIMINATORS,
@@ -50,6 +51,10 @@ import {
   encodeReservation,
   feeCents,
   findCardNumberLike,
+  findCardNumberLikeInInput,
+  normalizeCardDraft,
+  redactCardNumbersInInput,
+  refundableCents,
   formatFeeBps,
   formatUsdCents,
   getTeeSession,
@@ -286,17 +291,17 @@ test("write_commitment keeps the contract's fixed account order", () => {
 test("budget and statement math is exact integer cents", () => {
   assert.equal(maxObligationCents(50_000n, 50), 50_250n);
   assert.equal(formatUsdCents(maxObligationCents(50_000n, 50)), "$502.50");
-  assert.equal(feeCents(1n, 50), 1n); // ceil, never rounds down to free
+  assert.equal(feeCents(1n, 50), 0n); // floor: the one rule for debits and credits
   assert.equal(feeCents(0n, 50), 0n);
-  assert.equal(feeCents(19_999n, 50), 100n);
-  assert.equal(feeCents(20_001n, 50), 101n);
+  assert.equal(feeCents(19_999n, 50), 99n);
+  assert.equal(feeCents(20_001n, 50), 100n);
   assert.equal(availableCents(50_000n, 49_000n, 2_000n), 0n);
   assert.equal(availableCents(50_000n, 10_000n, 2_000n), 38_000n);
   assert.equal(outstandingAfterCapture(0n, 2_000n, 50), 2_010n);
   assert.equal(outstandingAfterRefund(2_010n, 2_000n, 50), 0n);
   assert.equal(outstandingAfterRefund(5_000n, 1_000n, 50), 3_995n);
   const totals = statementTotals([{ kind: "purchase", amountCents: 2_000n }, { kind: "purchase", amountCents: 1n }, { kind: "refund", amountCents: 500n }], 50);
-  assert.deepEqual(totals, { purchasesCents: 2_001n, refundsCents: 500n, feeCents: 10n + 1n - 3n, totalCents: 2_001n - 500n + 8n });
+  assert.deepEqual(totals, { purchasesCents: 2_001n, refundsCents: 500n, feeCents: 10n + 0n - 2n, totalCents: 2_001n - 500n + 8n });
   assert.equal(statementTotals([{ kind: "refund", amountCents: 100n }], 0).totalCents, -100n);
   assert.equal(formatUsdCents("123456789"), "$1,234,567.89");
   assert.equal(formatUsdCents(5n), "$0.05");
@@ -575,4 +580,73 @@ test("review fixes: identifiers survive redaction, enforce fails closed, credits
   const ix = buildWipeCardInstruction({ owner, cardId: bytes(32, 1), ephemeralAccounts: eph }, PROGRAM);
   assert.equal(ix.keys.length, 9 + 4);
   assert.deepEqual(ix.keys.slice(9).map((k) => k.address), [eph[0], derivePermissionAddress(eph[0]), eph[1], derivePermissionAddress(eph[1])]);
+});
+
+// ------------------------------------------------------- review fixes (2026-10-04)
+
+/** Review X6: the same vectors card_policy and Axum statements run. */
+test("fee and refund math matches the shared vectors", () => {
+  const v = JSON.parse(readFileSync(new URL("../../shared/cards/fee-vectors.json", import.meta.url), "utf8"));
+  for (const c of v.fee) assert.equal(feeCents(BigInt(c.amountCents), c.feeBps), BigInt(c.feeCents), JSON.stringify(c));
+  for (const c of v.statements) {
+    const t = statementTotals(c.lines.map(([kind, amount]) => ({ kind, amountCents: BigInt(amount) })), c.feeBps);
+    assert.equal(t.feeCents, BigInt(c.feeCents), c.name);
+    assert.equal(t.totalCents, BigInt(c.totalCents), c.name);
+  }
+  for (const c of v.holds) {
+    const captured = BigInt(c.capturedCents);
+    let outstanding = outstandingAfterCapture(0n, captured, c.feeBps);
+    let refunded = 0n;
+    const accepted = [];
+    for (const r of c.refunds) {
+      const amount = refundableCents(captured, refunded, BigInt(r));
+      if (amount === null) continue;
+      refunded += amount;
+      outstanding = outstandingAfterRefund(outstanding, amount, c.feeBps);
+      accepted.push(amount.toString());
+    }
+    assert.deepEqual(accepted, c.accepted, c.name);
+    assert.equal(outstanding, BigInt(c.outstandingCents), c.name);
+  }
+});
+
+/** Review F5: the owner can never be the authorizer; credit-term changes carry the co-signer. */
+test("set_policy refuses the owner as authorizer and appends the authorizer co-signer", () => {
+  const owner = key();
+  const cardId = bytes(32, 7);
+  assert.throws(() => buildSetPolicyInstruction({ owner, cardId, policy: policyArgs({ authorizer: owner }) }, PROGRAM), /authorizer can't be the owner/);
+  const authorizer = key();
+  assert.throws(() => buildSetPolicyInstruction({ owner, cardId, policy: policyArgs({ authorizer }), coSigner: owner }, PROGRAM), /co-signer/);
+  const plain = buildSetPolicyInstruction({ owner, cardId, policy: policyArgs({ authorizer }) }, PROGRAM);
+  const cosigned = buildSetPolicyInstruction({ owner, cardId, policy: policyArgs({ authorizer }), coSigner: authorizer }, PROGRAM);
+  assert.equal(cosigned.keys.length, plain.keys.length + 1);
+  assert.deepEqual(cosigned.keys.at(-1), { ...cosigned.keys.at(-1), address: authorizer, isSigner: true, isWritable: false });
+});
+
+/** Review F7: dotted or slashed card numbers are caught on the way in. */
+test("input scanning catches dotted and slashed card numbers", () => {
+  for (const text of ["use 4111.1111.1111.1111 exp 12/29", "4111/1111/1111/1111", "4111 1111 1111 1111", "4111-1111-1111-1111"]) {
+    assert.ok(findCardNumberLikeInInput(text).length, text);
+    assert.ok(!/4111/.test(redactCardNumbersInInput(text)), text);
+  }
+  for (const safe of ["2026-10-04T00:00:01.000Z", "$20.10", "demo-approved", "card:000001", "v1.2.3"]) assert.deepEqual(findCardNumberLikeInInput(safe), [], safe);
+});
+
+/** Review F8: a draft naming a shop ChainPay can't check out at is never "ready". */
+test("a card draft with an unregistered shop is refused", () => {
+  const base = { label: "Data", budgetCents: "5000", maxPurchaseCents: "2000", periodDays: 30 };
+  assert.throws(() => normalizeCardDraft({ ...base, merchants: ["not-a-real-shop"] }), /isn't a shop ChainPay can check out at/);
+  assert.throws(() => normalizeCardDraft({ ...base, merchants: ["4111.1111.1111.1111"] }), (e) => !/4111/.test(e.message));
+  assert.equal(normalizeCardDraft({ ...base, merchants: ["demo-approved"] }).merchants[0], "demo-approved");
+});
+
+/** Review F2: a gateway 5xx on a POST is an unknown outcome, not "not done". */
+test("gateway errors on card writes report an unknown outcome", async () => {
+  for (const status of [502, 503, 504, 500]) {
+    const api = new CardsApiClient({ baseUrl: "https://relay.test", authToken: "t", fetch: async () => new Response("<html>gateway</html>", { status }) });
+    await assert.rejects(api.freezeCard("c".repeat(64), "lost", "freeze-op-1"), (e) => e instanceof CardsApiError && e.code === "network_unknown" && e.retryable && e.evidenceState === "unknown", String(status));
+  }
+  // Axum's own refusal keeps its code: that one is definitive.
+  const refusing = new CardsApiClient({ baseUrl: "https://relay.test", authToken: "t", fetch: async () => new Response(JSON.stringify({ code: "checkout_disabled", message: "off", retryable: true, evidenceState: "none" }), { status: 503 }) });
+  await assert.rejects(refusing.freezeCard("c".repeat(64), "lost", "freeze-op-2"), (e) => e.code === "checkout_disabled");
 });

@@ -7,6 +7,12 @@ use crate::{
 };
 use anchor_lang::prelude::*;
 
+/// Owner-signed. Once the policy is set, a change to the credit terms (the
+/// authorizer, the fee, a larger budget or a shorter period) also needs the
+/// **current** authorizer's signature, passed as a signer in the first
+/// remaining account: otherwise an owner could install a second wallet as
+/// authorizer and then rewrite its own debt (review F1). Lowering the budget
+/// stays owner-only, but never below what the period already spent or holds.
 pub fn set_policy(ctx: Context<CardPermissions>, args: PolicyArgs) -> Result<()> {
     let now = now()?;
     let owner = ctx.accounts.owner.key();
@@ -22,6 +28,41 @@ pub fn set_policy(ctx: Context<CardPermissions>, args: PolicyArgs) -> Result<()>
         );
     }
     validate_policy_args(&args, &owner, now)?;
+    {
+        let policy = &ctx.accounts.policy;
+        let period = &ctx.accounts.period;
+        if policy.is_set() {
+            if policy.authorizer != args.authorizer {
+                require!(
+                    policy.frozen,
+                    CardPolicyError::AuthorizerChangeRequiresFreeze
+                );
+            }
+            let credit_terms_change = args.authorizer != policy.authorizer
+                || args.fee_bps != policy.fee_bps
+                || args.budget_cents > policy.budget_cents
+                || args.period_seconds < policy.period_seconds;
+            if credit_terms_change {
+                let current = policy.authorizer;
+                require!(
+                    ctx.remaining_accounts
+                        .first()
+                        .is_some_and(|a| a.is_signer && a.key() == current),
+                    CardPolicyError::CoSignerRequired
+                );
+            }
+            if args.budget_cents < policy.budget_cents {
+                let committed = period
+                    .captured_cents
+                    .checked_add(period.reserved_cents)
+                    .ok_or(error!(CardPolicyError::MathOverflow))?;
+                require!(
+                    args.budget_cents >= committed,
+                    CardPolicyError::BudgetBelowCommitted
+                );
+            }
+        }
+    }
 
     let policy = &mut ctx.accounts.policy;
     let membership_changes = policy.members[1] != args.authorizer;

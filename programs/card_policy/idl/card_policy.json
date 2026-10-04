@@ -4599,6 +4599,26 @@
       "code": 6045,
       "name": "ReservationNotFinal",
       "msg": "Reservation is not final yet"
+    },
+    {
+      "code": 6046,
+      "name": "CoSignerRequired",
+      "msg": "Changing the authorizer, fee or credit terms needs the current authorizer's co-signature"
+    },
+    {
+      "code": 6047,
+      "name": "RefundExceedsCapture",
+      "msg": "Refund is more than this hold captured"
+    },
+    {
+      "code": 6048,
+      "name": "CaptureLimit",
+      "msg": "This hold has reached its capture limit"
+    },
+    {
+      "code": 6049,
+      "name": "BudgetBelowCommitted",
+      "msg": "Budget can't go below what this period already spent or holds"
     }
   ],
   "types": [
@@ -5338,6 +5358,10 @@
           },
           {
             "name": "capture_ids",
+            "docs": [
+              "Every capture id of this hold: `capture` refuses one more than fits",
+              "(`CaptureLimit`), so a retried capture can never land twice."
+            ],
             "type": {
               "array": [
                 {
@@ -5349,6 +5373,14 @@
                 8
               ]
             }
+          },
+          {
+            "name": "max_amount_cents",
+            "docs": [
+              "The checkout intent's `max_amount_cents`: an `adjust_reservation`",
+              "increase never takes the hold past what the agent was approved for."
+            ],
+            "type": "u64"
           }
         ]
       }

@@ -2,7 +2,7 @@
   "name": "advice",
   "description": "An incremental authorization advice that fits adjusts the hold; one that does not fit keeps the hold and flags an over-hold exception.",
   "steps": [
-    {"intent": {"as": "i", "merchant": "demo-approved", "amountCents": "2000"}},
+    {"intent": {"as": "i", "merchant": "demo-approved", "amountCents": "3000"}},
     {"asa": {"txn": "t1", "amountCents": 2000, "merchant": "demo-approved"}, "expect": "APPROVED"},
     {"event": {"txn": "t1", "id": "a1", "type": "AUTHORIZATION_ADVICE", "amountCents": 2500}},
     {"deliver": {"txn": "t1", "webhookId": "w1"}},
