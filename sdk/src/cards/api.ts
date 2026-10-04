@@ -51,6 +51,15 @@ export type PreparedCard = {
 
 export type IssuerFreezeState = "pending_issuer_confirmation" | "confirmed" | "failed";
 
+/** Axum's own attestation of the TEE it authorizes against (challenge-bound quote + measurement allowlist). */
+export type CardAttestationView = {
+  mode: "report" | "enforce" | string;
+  hardware: "challenge_bound" | "failed" | "unchecked" | string;
+  measurements: "match" | "mismatch" | "pending" | string;
+  checkedAt?: string | null;
+  label: string;
+};
+
 /** No policy values: the owner reads those from the TEE with their own token. */
 export type CardView = {
   cardId: string;
@@ -59,9 +68,20 @@ export type CardView = {
   issuerState: string;
   mirror: { state: string; acknowledgedAt?: string; policyVersionMirrored?: number };
   freeze: { onChain: boolean; issuer: IssuerFreezeState };
+  accounts?: CardAccountsView;
   commitment?: { seq: string; root: string; slot: string };
+  /**
+   * Axum recovery states: `recovery_frozen` → `restore_prepared` (co-signed restore handed out)
+   * → `reconciled_pending_owner_confirm` (issuer events replayed) → `restored`.
+   */
   recovery?: { state: string; [key: string]: unknown };
+  attestation?: CardAttestationView;
+  billing?: { label: string; lastStatementSeq?: number | null; carriedCreditCents: string };
+  simulatedCredit?: true;
 };
+
+/** Sandbox shop registry served by Axum (`GET /v1/cards/merchants`): the source of truth for allowlist hashes. */
+export type CardMerchantListing = { merchantRef: string; displayName: string; merchantIdHash: string; mcc: number };
 
 export type CardActivityKind =
   | "authorization"
@@ -96,31 +116,79 @@ export type CardActivityRow = {
 
 export type Page<T> = { rows: T[]; nextCursor?: string | null };
 
+/** Amounts are signed cent strings: credits (refunds, correction credits) are negative, and so are their fees. */
 export type StatementLine = {
+  lineId?: string;
   kind: "purchase" | "refund" | "adjustment_debit" | "adjustment_credit";
   amountCents: string;
   feeCents: string;
-  at: string;
-  merchant?: CardMerchantView;
+  /** Posting time (Axum). */
+  postedAt?: string;
+  /** Older fixtures used `at`. */
+  at?: string;
+  merchant?: { displayName: string; mcc?: string };
   exception?: string;
+  needsReview?: boolean;
+};
+
+/** Where and how much to repay (only while the statement is payable). */
+export type StatementPayWith = {
+  method: "chainpay_execute_payment";
+  cluster: "devnet";
+  mint: string;
+  recipientTokenAccount: string | null;
+  invoiceHash: string;
+  amountCents: string;
+  note?: string;
 };
 
 export type StatementView = {
   statementId: string;
   cardId: string;
+  statementSeq?: number;
   periodIndex: number;
+  closeKind?: "period_end" | "interim";
   state: StatementState;
+  /** `overdue` while a closed statement is past due (display only), else `state`. */
+  displayState?: StatementState;
+  overdue?: boolean;
   closedAt?: string;
   dueAt?: string;
+  purchasesCents?: string;
+  refundsCents?: string;
   totalCents: string;
   feeCents: string;
+  carriedCreditCents?: string;
+  /** max(0, total − carried credit): the exact amount a repayment must carry. */
+  amountDueCents?: string;
+  creditForwardCents?: string;
   digest?: string;
   lines: StatementLine[];
   repayment?: { receiptPda?: string; mandatePda?: string; verifiedAt?: string; mismatch?: string[] };
   partner?: { confirmedAt?: string; ref?: string };
+  payWith?: StatementPayWith;
+  history?: { state: string; at: string }[];
   /** Always true: the credit facility is a labelled simulation. */
   simulatedCredit: true;
 };
+
+/** The running (not yet closed) statement: never a due amount. */
+export type OpenStatementView = {
+  lineCount: number;
+  purchasesCents: string;
+  refundsCents: string;
+  feeCents: string;
+  runningTotalCents: string;
+  carriedCreditCents: string;
+  lines: StatementLine[];
+};
+
+export type StatementList = { statements: StatementView[]; open?: OpenStatementView | null };
+
+/** `POST /v1/cards/{cardId}/recovery/restore`: a review first, then the authorizer-co-signed transaction. */
+export type PreparedRestore =
+  | { state: "review_required"; reconReport: unknown; reconReportDigest: string }
+  | { state: "ready_to_sign"; reconReportDigest: string; restoreTx: string; coSignedBy: string; restoreArgs: Record<string, unknown> };
 
 export type CheckoutCapabilityResponse = {
   capability: string;
@@ -188,6 +256,19 @@ export function parseCheckoutCapabilityResponse(body: unknown): CheckoutCapabili
     intentId: value.intentId,
     status: "ready",
   };
+}
+
+/** Validate Axum's merchant registry before any hash reaches a policy the owner signs. */
+export function parseMerchantListings(value: unknown): CardMerchantListing[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 64) throw new Error("Card merchant list is missing");
+  return value.map((entry) => {
+    const item = entry as Partial<CardMerchantListing> | null;
+    if (!item || typeof item.merchantRef !== "string" || !/^[A-Za-z0-9_.:-]{1,64}$/.test(item.merchantRef)) throw new Error("Card merchant has an unexpected reference");
+    if (typeof item.displayName !== "string" || !item.displayName.trim() || item.displayName.length > 80) throw new Error("Card merchant has no name");
+    if (typeof item.merchantIdHash !== "string" || !/^[0-9a-f]{64}$/.test(item.merchantIdHash)) throw new Error("Card merchant hash must be 32 bytes of hex");
+    if (typeof item.mcc !== "number" || !Number.isInteger(item.mcc) || item.mcc < 0 || item.mcc > 9999) throw new Error("Card merchant category is invalid");
+    return { merchantRef: item.merchantRef, displayName: item.displayName, merchantIdHash: item.merchantIdHash, mcc: item.mcc };
+  });
 }
 
 export class CardsApiClient {
@@ -278,8 +359,19 @@ export class CardsApiClient {
     return this.request("GET", `/v1/cards/${assertCardId(cardId)}/activity${query ? `?${query}` : ""}`);
   }
 
-  async listStatements(cardId: string): Promise<{ statements: StatementView[] }> {
+  async listStatements(cardId: string): Promise<StatementList> {
     return this.request("GET", `/v1/cards/${assertCardId(cardId)}/statements`);
+  }
+
+  /** Owner session only: close the running statement now (interim close; the budget period is untouched). */
+  async closeStatement(cardId: string, clientOperationId: string): Promise<StatementView> {
+    return this.request("POST", `/v1/cards/${assertCardId(cardId)}/statements/close`, { clientOperationId: assertClientOperationId(clientOperationId) });
+  }
+
+  /** The sandbox shop registry with the allowlist hash for each shop. */
+  async listMerchants(): Promise<CardMerchantListing[]> {
+    const body = await this.request<{ merchants?: unknown }>("GET", "/v1/cards/merchants");
+    return parseMerchantListings(body?.merchants);
   }
 
   async getStatement(cardId: string, statementId: string): Promise<StatementView> {
@@ -307,8 +399,29 @@ export class CardsApiClient {
     return parseCheckoutCapabilityResponse(body);
   }
 
-  /** Owner session only. Returns the prepared `restore` args for the owner to review and sign. */
-  async prepareRestore(cardId: string, input: { clientOperationId: string; reconReportDigest: string }): Promise<Record<string, unknown>> {
-    return this.request("POST", `/v1/cards/${assertCardId(cardId)}/recovery/restore`, { clientOperationId: assertClientOperationId(input.clientOperationId), reconReportDigest: input.reconReportDigest });
+  /**
+   * Owner session only. Without a digest (or with a stale one) Axum answers `review_required` and refreshes the
+   * report on the card; with the reviewed digest it returns the authorizer-co-signed `restoreTx` to check and sign.
+   */
+  async prepareRestore(cardId: string, input: { clientOperationId: string; reconReportDigest?: string }): Promise<PreparedRestore> {
+    if (input.reconReportDigest !== undefined && !/^[0-9a-f]{64}$/.test(input.reconReportDigest)) throw new Error("reconReportDigest must be 64 lowercase hex characters");
+    return this.request("POST", `/v1/cards/${assertCardId(cardId)}/recovery/restore`, {
+      clientOperationId: assertClientOperationId(input.clientOperationId),
+      ...(input.reconReportDigest === undefined ? {} : { reconReportDigest: input.reconReportDigest }),
+    });
+  }
+
+  /**
+   * Owner session only, after the co-signed restore landed on PER: Axum replays issuer events it never applied and
+   * returns an unsigned `confirm_reconciled` for the reviewed digest. The card stays frozen.
+   */
+  async reconcileRecovery(cardId: string, clientOperationId: string): Promise<{ state: string; issuerEventsReplayed: number; reconDigest: string; confirmReconciledTx: string }> {
+    return this.request("POST", `/v1/cards/${assertCardId(cardId)}/recovery/reconcile`, { clientOperationId: assertClientOperationId(clientOperationId) });
+  }
+
+  /** Owner session only: the checkpoint's master salt, for a field-picker disclosure. */
+  async disclosureSalt(cardId: string, seq?: string): Promise<{ cardId: string; seq: string; masterSalt: string; commitment: { state: "current" | "superseded" | "pending"; onChainSeq?: string | null } }> {
+    if (seq !== undefined && !/^[1-9][0-9]{0,19}$/.test(seq)) throw new Error("seq must be a positive integer");
+    return this.request("GET", `/v1/cards/${assertCardId(cardId)}/disclosure-salt${seq === undefined ? "" : `?seq=${seq}`}`);
   }
 }

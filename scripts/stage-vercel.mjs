@@ -24,6 +24,9 @@ let config;
 if (service === "backend") {
   await copy("backend");
   await copy("Cargo.lock");
+  // Pinned MagicBlock Devnet TEE measurements, compiled into the relay with include_str!.
+  await mkdir(path.join(target, "shared/cards"), { recursive: true });
+  await cp(path.join(root, "shared/cards/tee-measurements.json"), path.join(target, "shared/cards/tee-measurements.json"));
   await cp(path.join(root, "backend/migrations"), path.join(target, "migrations"), { recursive: true });
   // Backend is independently deployable; stage it as a standalone Rust package.
   const manifest = (await readFile(path.join(root, "backend/Cargo.toml"), "utf8"))

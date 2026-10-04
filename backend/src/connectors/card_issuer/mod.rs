@@ -223,10 +223,8 @@ impl CardsConnector {
             asa_verifier: verifier("LITHIC_ASA_SECRET")?,
             events_verifier: verifier("LITHIC_EVENTS_SECRET")?,
             attestation_mode,
-            measurements: tee::parse_measurements(
-                &env("CARDS_TEE_MEASUREMENTS").unwrap_or_default(),
-            )
-            .map_err(invalid)?,
+            measurements: tee::measurements_for(env("CARDS_TEE_MEASUREMENTS").as_deref(), &tee_url)
+                .map_err(invalid)?,
             tee_url,
             pccs_url: env("CARDS_TEE_PCCS_URL")
                 .unwrap_or_else(|| "https://pccs.phala.network".into()),

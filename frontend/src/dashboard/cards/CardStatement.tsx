@@ -1,15 +1,16 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { Selector } from "@astryxdesign/core/Selector";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { Check, FileText, Receipt, TriangleAlert } from "lucide-react";
-import { centsToTokenBaseUnits, formatUsdCents, parseSignedCents, type CardView, type StatementView } from "@chainpay/sdk";
+import { centsToTokenBaseUnits, formatUsdCents, parseSignedCents, type CardView, type OpenStatementView, type StatementLine, type StatementView } from "@chainpay/sdk";
 import { CardEvidenceCard } from "../../receipts/CardEvidenceCard";
 import { statementEvidence } from "./evidence";
 import { MISMATCH_COPY, STATEMENT_STATE_LABEL, STATEMENT_STEPS } from "./lifecycle";
-import type { CardsSource } from "./source";
+import { newOperationId, type CardStatements, type CardsSource } from "./source";
+import { statementAmountDue } from "./statementMath";
 import { errorText } from "./shared";
 import { formatDay, shortKey } from "./ui";
 
@@ -24,15 +25,20 @@ const LINE_LABEL: Record<StatementView["lines"][number]["kind"], string> = {
 
 export const SIMULATED_CREDIT_LABEL = "Simulated credit — no credit extended";
 
-/** Purchases − refunds + Σ line fees, exact integers (contracts §7.1). */
-export function statementLineTotals(statement: StatementView) {
+/** Credits (refunds, correction credits) arrive as negative cents; their size is what the statement subtracts. */
+const abs = (value: bigint) => (value < 0n ? -value : value);
+const isCredit = (line: StatementLine) => line.kind === "refund" || line.kind === "adjustment_credit";
+const lineDate = (line: StatementLine) => line.postedAt ?? line.at ?? "";
+
+/** Purchases − refunds + Σ line fees, exact integers (contracts §7.1). Amounts are signed cent strings. */
+export function statementLineTotals(statement: Pick<StatementView, "lines" | "totalCents" | "feeCents">) {
   let purchases = 0n;
   let refunds = 0n;
   let fees = 0n;
   for (const line of statement.lines) {
-    const amount = BigInt(line.amountCents);
-    if (line.kind === "purchase" || line.kind === "adjustment_debit") purchases += amount;
-    else refunds += amount;
+    const amount = abs(parseSignedCents(line.amountCents));
+    if (isCredit(line)) refunds += amount;
+    else purchases += amount;
     fees += parseSignedCents(line.feeCents);
   }
   const total = purchases - refunds + fees;
@@ -40,23 +46,85 @@ export function statementLineTotals(statement: StatementView) {
 }
 
 function payable(statement: StatementView): boolean {
-  return ["closed", "repayment_mismatch", "overdue"].includes(statement.state) && parseSignedCents(statement.totalCents) > 0n;
+  return ["closed", "repayment_mismatch", "overdue"].includes(statement.state) && statementAmountDue(statement) > 0n;
 }
 
-export function CardStatement({ source, card, statements, mandates, wallet, onChanged }: { source: CardsSource; card: CardView; statements: StatementView[] | null; mandates: MandateOption[]; wallet: string; onChanged: () => void }) {
+const signedMoney = (cents: string) => {
+  const value = parseSignedCents(cents);
+  return value < 0n ? `−${formatUsdCents(-value)}` : formatUsdCents(value);
+};
+
+function StatementLines({ lines }: { lines: StatementLine[] }) {
+  return (
+    <table className="cp-statement-lines">
+      <thead><tr><th scope="col">Date</th><th scope="col">What</th><th scope="col">Amount</th><th scope="col">Fee</th></tr></thead>
+      <tbody>
+        {lines.map((line, index) => (
+          <tr key={line.lineId ?? `${lineDate(line)}-${index}`} data-kind={line.kind}>
+            <td data-label="Date">{formatDay(lineDate(line))}</td>
+            <td data-label="What">{LINE_LABEL[line.kind]}{line.merchant ? ` · ${line.merchant.displayName}` : ""}{line.exception && <span className="cp-line-flag"> · flagged for review</span>}</td>
+            <td data-label="Amount" className={isCredit(line) ? "is-credit" : ""}>{isCredit(line) ? `−${formatUsdCents(abs(parseSignedCents(line.amountCents)))}` : formatUsdCents(abs(parseSignedCents(line.amountCents)))}</td>
+            <td data-label="Fee">{signedMoney(line.feeCents)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** What posted since the last close. Never a due amount; the owner can close it now (interim close). */
+function RunningStatement({ source, card, open, onChanged }: { source: CardsSource; card: CardView; open: OpenStatementView; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const op = useRef<string | null>(null);
+  async function close() {
+    setBusy(true);
+    setError("");
+    try {
+      op.current ??= newOperationId("statement-close");
+      await source.closeStatement(card.cardId, op.current);
+      op.current = null;
+      onChanged();
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="dashboard-card cp-statement-card cp-statement-running" data-testid="running-statement">
+      <div className="cp-statement-head">
+        <div>
+          <span className="owner-caption">Running statement · not closed yet</span>
+          <h2>{signedMoney(open.runningTotalCents)} <small>so far, fees included</small></h2>
+        </div>
+        {open.lineCount > 0 && <Button type="button" variant="secondary" label={busy ? "Closing…" : "Close statement now"} isDisabled={busy} onClick={() => void close()} />}
+      </div>
+      {open.lineCount > 0 ? <StatementLines lines={open.lines} /> : <p className="owner-muted">Nothing has posted since the last statement.</p>}
+      <p className="owner-muted">It closes by itself at the end of the period. Closing it now fixes the amount and due date so you can repay early; the budget period doesn't change.</p>
+      {error && <div className="builder-error" role="alert"><b>Not closed</b><span>{error}</span></div>}
+    </div>
+  );
+}
+
+export function CardStatement({ source, card, statements, mandates, wallet, onChanged }: { source: CardsSource; card: CardView; statements: CardStatements | null; mandates: MandateOption[]; wallet: string; onChanged: () => void }) {
   const [selected, setSelected] = useState(0);
   const [paying, setPaying] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   if (statements === null) return <p className="owner-muted" aria-busy="true">Loading statements…</p>;
-  if (statements.length === 0) {
+  const closed = statements.closed;
+  const running = statements.open && statements.open.lineCount > 0 ? <RunningStatement source={source} card={card} open={statements.open} onChanged={onChanged} /> : null;
+  if (closed.length === 0) {
     return (
       <>
         <p className="cp-sim-strip" data-testid="sim-strip">{SIMULATED_CREDIT_LABEL}</p>
-        <div className="owner-small-empty"><FileText /><h3>No statement yet</h3><p>A statement closes at the end of each period with every charge, refund and fee, to the cent.</p></div>
+        {running}
+        {!running && <div className="owner-small-empty"><FileText /><h3>No statement yet</h3><p>A statement closes at the end of each period with every charge, refund and fee, to the cent.</p></div>}
       </>
     );
   }
-  const statement = statements[Math.min(selected, statements.length - 1)];
+  const statement = closed[Math.min(selected, closed.length - 1)];
+  const due = statementAmountDue(statement);
   const totals = statementLineTotals(statement);
   const stepIndex = STATEMENT_STEPS.findIndex((step) => step.key === statement.state);
   const evidence = statementEvidence(statement);
@@ -64,15 +132,16 @@ export function CardStatement({ source, card, statements, mandates, wallet, onCh
   return (
     <section className="cp-statement" data-state={statement.state} data-testid="card-statement">
       <p className="cp-sim-strip" data-testid="sim-strip">{SIMULATED_CREDIT_LABEL}</p>
+      {running}
       <div className="dashboard-card cp-statement-card">
         <div className="cp-statement-head">
           <div>
-            <span className="owner-caption">Period {statement.periodIndex}{statement.closedAt ? ` · closed ${formatDay(statement.closedAt)}` : ""}</span>
+            <span className="owner-caption">{statementName(statement)}{statement.closedAt ? ` · closed ${formatDay(statement.closedAt)}` : ""}</span>
             <h2>{formatUsdCents(statement.totalCents)} <small>{statement.state === "discharged" ? "paid off" : statement.dueAt ? `due ${formatDay(statement.dueAt)}` : ""}</small></h2>
             {statement.state === "discharged" && <span className="cp-paid-stamp" aria-hidden="true">Paid off</span>}
           </div>
-          {statements.length > 1 && (
-            <Selector label="Statement" isLabelHidden value={String(selected)} onChange={(value) => setSelected(Number(value))} options={statements.map((item, index) => ({ value: String(index), label: `Period ${item.periodIndex}` }))} />
+          {closed.length > 1 && (
+            <Selector label="Statement" isLabelHidden value={String(selected)} onChange={(value) => setSelected(Number(value))} options={closed.map((item, index) => ({ value: String(index), label: statementName(item) }))} />
           )}
         </div>
 
@@ -95,32 +164,19 @@ export function CardStatement({ source, card, statements, mandates, wallet, onCh
           </div>
         )}
 
-        <table className="cp-statement-lines">
-          <thead><tr><th scope="col">Date</th><th scope="col">What</th><th scope="col">Amount</th><th scope="col">Fee</th></tr></thead>
-          <tbody>
-            {statement.lines.map((line, index) => {
-              const credit = line.kind === "refund" || line.kind === "adjustment_credit";
-              return (
-                <tr key={`${line.at}-${index}`} data-kind={line.kind}>
-                  <td data-label="Date">{formatDay(line.at)}</td>
-                  <td data-label="What">{LINE_LABEL[line.kind]}{line.merchant ? ` · ${line.merchant.displayName}` : ""}{line.exception && <span className="cp-line-flag"> · flagged for review</span>}</td>
-                  <td data-label="Amount" className={credit ? "is-credit" : ""}>{credit ? `−${formatUsdCents(line.amountCents)}` : formatUsdCents(line.amountCents)}</td>
-                  <td data-label="Fee">{parseSignedCents(line.feeCents) < 0n ? `−${formatUsdCents(line.feeCents.slice(1))}` : formatUsdCents(line.feeCents)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <StatementLines lines={statement.lines} />
         <dl className="cp-statement-totals">
           <div><dt>Purchases</dt><dd>{formatUsdCents(totals.purchases)}</dd></div>
           <div><dt>Refunds</dt><dd>−{formatUsdCents(totals.refunds)}</dd></div>
-          <div><dt>ChainPay fees</dt><dd>{formatUsdCents(statement.feeCents)}</dd></div>
-          <div className="is-total"><dt>Total</dt><dd>{formatUsdCents(statement.totalCents)}</dd></div>
+          <div><dt>ChainPay fees</dt><dd>{signedMoney(statement.feeCents)}</dd></div>
+          <div className="is-total"><dt>Total</dt><dd>{signedMoney(statement.totalCents)}</dd></div>
+          {statement.carriedCreditCents && parseSignedCents(statement.carriedCreditCents) > 0n && <div><dt>Credit carried in</dt><dd>−{formatUsdCents(statement.carriedCreditCents)}</dd></div>}
+          {statement.amountDueCents !== undefined && statement.amountDueCents !== statement.totalCents && <div className="is-total"><dt>Amount due</dt><dd>{formatUsdCents(due)}</dd></div>}
         </dl>
         {!totals.matches && <p className="cp-inline-error" role="alert">These lines don't add up to the total ChainPay sent, so this statement can't be paid here until it's corrected.</p>}
 
         <div className="cp-statement-actions">
-          {payable(statement) && totals.matches && <Button type="button" variant="primary" label={`Pay ${formatUsdCents(statement.totalCents)}`} onClick={() => setPaying(true)} />}
+          {payable(statement) && totals.matches && <Button type="button" variant="primary" label={`Pay ${formatUsdCents(due)}`} onClick={() => setPaying(true)} />}
           {evidence && <Button type="button" variant="secondary" label="Repayment receipt" icon={<Receipt size={16} />} onClick={() => setReceiptOpen(true)} />}
           {statement.partner?.ref && <small className="owner-muted">Simulated partner reference {statement.partner.ref}</small>}
         </div>
@@ -142,8 +198,13 @@ export function CardStatement({ source, card, statements, mandates, wallet, onCh
   );
 }
 
+function statementName(statement: StatementView): string {
+  if (statement.statementSeq) return `Statement ${statement.statementSeq}${statement.closeKind === "interim" ? " (closed early)" : ""}`;
+  return `Period ${statement.periodIndex}`;
+}
+
 function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, onDone }: { source: CardsSource; card: CardView; statement: StatementView; mandates: MandateOption[]; wallet: string; onClose: () => void; onDone: () => void }) {
-  const target = source.repaymentTarget();
+  const target = source.repaymentTarget(statement);
   const eligible = useMemo(() => mandates.filter((mandate) => mandate.status === "active" && mandate.approvedAgent === wallet && mandate.allowedMint === target.mint), [mandates, wallet, target.mint]);
   const [mandate, setMandate] = useState(eligible[0]?.address ?? "");
   const [receiptPda, setReceiptPda] = useState("");
@@ -152,7 +213,7 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
   // Once money moved, keep the receipt: a failed confirmation must never read as "not paid".
   const [paid, setPaid] = useState<{ receiptPda: string; mandatePda: string; signature?: string } | null>(null);
   const [error, setError] = useState("");
-  const total = BigInt(statement.totalCents);
+  const total = statementAmountDue(statement);
   const baseUnits = centsToTokenBaseUnits(total, target.decimals);
 
   async function pay() {
@@ -216,6 +277,7 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
                   <span>Receipt <span className="mono">{paid.receiptPda}</span>. Don't pay again: use “Check my receipt” to retry the confirmation.</span>
                 </div>
               )}
+              {target.conflict && <div className="builder-error" role="alert"><b>Can't pay here</b><span>{target.conflict}</span></div>}
               {error && <div className="builder-error" role="alert"><b>{paid ? "Not confirmed yet" : "Not paid"}</b><span>{error}</span></div>}
             </div>
           </LayoutContent>
@@ -224,7 +286,7 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
           <LayoutFooter>
             <div className="cp-dialog-footer">
             <Button type="button" variant="secondary" label={busy === "check" ? "Checking…" : "Check my receipt"} isDisabled={Boolean(busy) || !receiptPda.trim() || !mandatePda.trim()} onClick={() => void check()} />
-            <Button type="button" variant="primary" label={busy === "pay" ? "Waiting for wallet…" : `Pay ${formatUsdCents(total)}`} isDisabled={Boolean(busy) || Boolean(paid) || !mandate || !target.recipientTokenAccount || !statement.digest} onClick={() => void pay()} />
+            <Button type="button" variant="primary" label={busy === "pay" ? "Waiting for wallet…" : `Pay ${formatUsdCents(total)}`} isDisabled={Boolean(busy) || Boolean(paid) || !mandate || !target.recipientTokenAccount || Boolean(target.conflict) || !statement.digest} onClick={() => void pay()} />
           </div></LayoutFooter>
         }
       />

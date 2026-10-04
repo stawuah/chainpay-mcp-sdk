@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { Selector } from "@astryxdesign/core/Selector";
@@ -6,9 +6,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { ArrowLeft, ArrowRight, Check, CircleCheck, CircleX, Loader, TriangleAlert } from "lucide-react";
 import {
   CARD_MCC_NAMES,
-  CARD_SANDBOX_MERCHANTS,
   DEFAULT_CARD_FEE_BPS,
-  cardMerchantByRef,
   formatUsdCents,
   mccLabel,
   normalizeCardDraft,
@@ -17,7 +15,7 @@ import {
   type CardDraftIntake,
 } from "@chainpay/sdk";
 import { PageHeader } from "../PageHeader";
-import type { CreateCardInput, CreateStepId, CreateStepState } from "./source";
+import type { CardShop, CreateCardInput, CreateStepId, CreateStepState } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { centsToDollarInput, dollarsToCents } from "./amounts";
 import { AgentCard } from "./AgentCard";
@@ -57,7 +55,7 @@ const STEP_LABELS = ["Limits", "Shops", "Review"];
 type Intake = { kind: "none" } | { kind: "checking" } | { kind: "result"; result: CardDraftIntake };
 
 /** Validate with the SDK's own draft rules so the dashboard and the agent tool agree on every message. */
-function validate(form: Form, step: number): { input?: CreateCardInput; error?: string } {
+function validate(form: Form, step: number, shops: CardShop[] | null): { input?: CreateCardInput; error?: string } {
   const budgetCents = dollarsToCents(form.budget);
   const maxPurchaseCents = dollarsToCents(form.maxPurchase);
   if (!form.label.trim()) return { error: "Give the card a name." };
@@ -65,7 +63,8 @@ function validate(form: Form, step: number): { input?: CreateCardInput; error?: 
   if (maxPurchaseCents === null) return { error: "Enter the max per purchase in dollars, like 30." };
   const count = Number(form.maxPurchases);
   if (!Number.isInteger(count) || count < 0 || count > 65_535) return { error: "Purchases per period must be a whole number (0 means no limit)." };
-  const unknown = form.merchants.find((ref) => !cardMerchantByRef(ref));
+  if (step >= 1 && form.merchants.length && !shops) return { error: "The shop list is still loading. Try again in a moment." };
+  const unknown = shops ? form.merchants.find((ref) => !shops.some((shop) => shop.ref === ref)) : undefined;
   if (unknown) return { error: `"${unknown}" isn't a registered shop, so it can't go on the card.` };
   const endsIn = Number(form.endsInDays);
   try {
@@ -73,7 +72,7 @@ function validate(form: Form, step: number): { input?: CreateCardInput; error?: 
       label: form.label,
       budgetCents,
       maxPurchaseCents,
-      merchants: step >= 1 ? form.merchants : ["demo-approved"],
+      merchants: step >= 1 ? form.merchants : [shops?.[0]?.ref ?? "demo-approved"],
       mccs: step >= 1 ? form.mccs : [],
       periodDays: Number(form.periodDays),
       expiresAt: endsIn > 0 ? new Date(Date.now() + endsIn * 86_400_000).toISOString() : null,
@@ -101,6 +100,15 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
   const heading = useRef<HTMLHeadingElement>(null);
   // Stable across "Try again" so a retry resumes the same card instead of creating another.
   const attemptId = useRef(globalThis.crypto.randomUUID());
+  // Shops come from ChainPay's registry (live) so the hashes the owner signs match what checkout opens.
+  const [shops, setShops] = useState<CardShop[] | null>(null);
+  const [shopsError, setShopsError] = useState("");
+  const loadShops = useCallback(() => {
+    setShopsError("");
+    source.merchants().then(setShops, (cause) => setShopsError(errorText(cause)));
+  }, [source]);
+  useEffect(() => { loadShops(); }, [loadShops]);
+  const shopName = (ref: string) => shops?.find((shop) => shop.ref === ref)?.displayName ?? ref;
 
   // Agent draft intake (ruling K7): the fragment never leaves the browser; the
   // form fills only when the recomputed digest matches the one in the link.
@@ -134,14 +142,14 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
   const toggle = <T,>(list: T[], value: T) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
 
   function next() {
-    const result = validate(form, step);
+    const result = validate(form, step, shops);
     if (result.error) { setError(result.error); return; }
     setError("");
     setStep((current) => Math.min(2, current + 1));
   }
 
   async function approve() {
-    const result = validate(form, 2);
+    const result = validate(form, 2, shops);
     if (!result.input) { setError(result.error ?? "Check the limits."); return; }
     setRunning(true);
     setFailed("");
@@ -162,7 +170,7 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
     }
   }
 
-  const review = step === 2 ? validate(form, 2) : null;
+  const review = step === 2 ? validate(form, 2, shops) : null;
   const summary = review?.input ? policyReviewSummary(BigInt(review.input.budgetCents), BigInt(review.input.maxPurchaseCents), review.input.feeBps) : null;
   const intakeResult = intake.kind === "result" ? intake.result : null;
 
@@ -220,7 +228,11 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
                   <div className="cp-shop-pick">
                     <fieldset>
                       <legend>Shops</legend>
-                      {CARD_SANDBOX_MERCHANTS.map((merchant) => (
+                      {shops === null && !shopsError && <p className="owner-muted" aria-busy="true">Loading shops…</p>}
+                      {shopsError && (
+                        <div className="builder-error" role="alert"><b>Shops didn't load</b><span>{shopsError}</span><Button type="button" variant="secondary" label="Try again" onClick={loadShops} /></div>
+                      )}
+                      {shops?.map((merchant) => (
                         <CheckboxInput key={merchant.ref} label={merchant.displayName} description={`${mccLabel(merchant.mcc)} · sandbox shop`} value={form.merchants.includes(merchant.ref)} onChange={() => update("merchants", toggle(form.merchants, merchant.ref))} />
                       ))}
                     </fieldset>
@@ -261,7 +273,7 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
                       <div><span>Max per purchase</span><strong>{summary.display.maxPurchase}</strong></div>
                       <div><span>Period</span><strong>Every {review.input.periodDays} days</strong></div>
                       <div><span>Purchases per period</span><strong>{review.input.maxPurchasesPerPeriod === 0 ? "No count limit" : review.input.maxPurchasesPerPeriod}</strong></div>
-                      <div><span>Shops</span><strong>{review.input.merchants.length ? review.input.merchants.map((ref) => cardMerchantByRef(ref)?.displayName ?? ref).join(", ") : "Any shop in the categories below"}</strong></div>
+                      <div><span>Shops</span><strong>{review.input.merchants.length ? review.input.merchants.map(shopName).join(", ") : "Any shop in the categories below"}</strong></div>
                       <div><span>Categories</span><strong>{review.input.mccs.length ? review.input.mccs.map(mccLabel).join(", ") : "Only the shops above"}</strong></div>
                       <div><span>Repeat charges</span><strong>{review.input.recurringAllowed ? "Allowed" : "Not allowed"}</strong></div>
                       <div><span>Card ends</span><strong>{review.input.expiresAt ? new Date(review.input.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "No end date"}</strong></div>

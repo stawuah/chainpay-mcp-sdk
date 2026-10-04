@@ -637,12 +637,45 @@ pub async fn check_attestation(
     status
 }
 
+/// MagicBlock Devnet TEE workload measurements pinned in the repo
+/// (`shared/cards/tee-measurements.json`, kept equal to the SDK's
+/// `MAGICBLOCK_DEVNET_TEE_MEASUREMENTS` by `sdk/test/cards-attestation.test.mjs`).
+/// Provenance: confirmed by MagicBlock to ChainPay, 2026-10-04 (direct, unsigned).
+pub const PINNED_DEVNET_MEASUREMENTS: &str =
+    include_str!("../../../../shared/cards/tee-measurements.json");
+
+/// `CARDS_TEE_MEASUREMENTS` when set (a JSON list, or the whole pinned file
+/// with its `allowlist`); otherwise the repo-pinned Devnet allowlist when the
+/// authorizer talks to MagicBlock's Devnet TEE. Any other TEE URL without an
+/// explicit allowlist stays empty ("pending"), never borrowed from Devnet.
+pub fn measurements_for(
+    env_value: Option<&str>,
+    tee_url: &str,
+) -> Result<Vec<Measurements>, &'static str> {
+    match env_value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(value) => parse_measurements(value),
+        None if tee_url.trim_end_matches('/') == DEVNET_TEE_URL.trim_end_matches('/') => {
+            parse_measurements(PINNED_DEVNET_MEASUREMENTS)
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
 pub fn parse_measurements(value: &str) -> Result<Vec<Measurements>, &'static str> {
     if value.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let items: Vec<Value> =
+    let parsed: Value =
         serde_json::from_str(value).map_err(|_| "CARDS_TEE_MEASUREMENTS must be a JSON list")?;
+    // Accept the pinned file as-is (`{"allowlist": [...]}`) as well as the bare list.
+    let items: Vec<Value> = match parsed {
+        Value::Array(items) => items,
+        Value::Object(mut file) => match file.remove("allowlist") {
+            Some(Value::Array(items)) => items,
+            _ => return Err("CARDS_TEE_MEASUREMENTS must be a JSON list"),
+        },
+        _ => return Err("CARDS_TEE_MEASUREMENTS must be a JSON list"),
+    };
     items
         .into_iter()
         .map(|item| {
@@ -795,6 +828,39 @@ mod tests {
         };
         assert!(ok.permits_approval(AttestationMode::Enforce, 11));
         assert!(!ok.permits_approval(AttestationMode::Enforce, 10 + 21 * 60 * 1000));
+    }
+
+    #[test]
+    fn pinned_devnet_measurements_match_the_recorded_devnet_quote() {
+        let pinned = measurements_for(None, DEVNET_TEE_URL).unwrap();
+        assert_eq!(pinned.len(), 1);
+        // Same list through the env var, as the bare list or the whole file.
+        assert_eq!(
+            measurements_for(Some(PINNED_DEVNET_MEASUREMENTS), "https://other.example").unwrap(),
+            pinned
+        );
+        // Another TEE never borrows the Devnet allowlist.
+        assert!(
+            measurements_for(None, "https://mainnet-tee.example")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            measurements_for(Some("  "), "https://mainnet-tee.example")
+                .unwrap()
+                .is_empty()
+        );
+        // The public quote recorded from devnet-tee on 2026-10-04 matches.
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../sdk/test/fixtures/devnet-tee-quote.json"
+        ))
+        .unwrap();
+        use base64::Engine;
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(fixture["quote"].as_str().unwrap())
+            .unwrap();
+        let (observed, _) = quote_measurements(&raw).unwrap();
+        assert_eq!(compare_measurements(&observed, &pinned), "match");
     }
 
     #[test]

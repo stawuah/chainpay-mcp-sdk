@@ -16,6 +16,19 @@ export function RecoveryBanner({ source, card, recovery, onChanged }: { source: 
   const report = recovery.report;
   const restored = recovery.state === "restored_pending_reconcile";
 
+  async function rebuild() {
+    setBusy(true);
+    setError("");
+    try {
+      await source.requestRecoveryReport(card);
+      onChanged();
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function act() {
     if (!report) return;
     setBusy(true);
@@ -42,7 +55,13 @@ export function RecoveryBanner({ source, card, recovery, onChanged }: { source: 
           : "Nothing new can be spent. Review the exact numbers we rebuilt, then approve the restore. Nothing is reset."}
         endContent={<Button type="button" variant="primary" label={restored ? "Review and confirm" : "Review and restore"} isDisabled={!report} onClick={() => setOpen(true)} />}
       />
-      {!report && <p className="owner-muted">ChainPay is still rebuilding the numbers from your encrypted backup and the card network. Check back in a minute.</p>}
+      {!report && (
+        <div className="cp-recovery-pending">
+          <p className="owner-muted">ChainPay rebuilds the numbers from your encrypted backup and the card network. Nothing is signed until you review them.</p>
+          <Button type="button" variant="secondary" label={busy ? "Rebuilding…" : "Rebuild the numbers"} isDisabled={busy} onClick={() => void rebuild()} />
+          {error && <p className="cp-inline-error" role="alert">{error}</p>}
+        </div>
+      )}
       <Dialog isOpen={open} onOpenChange={(next) => { if (!next) setOpen(false); }} purpose="form" width={540}>
         <Layout
           height="auto"
@@ -53,7 +72,7 @@ export function RecoveryBanner({ source, card, recovery, onChanged }: { source: 
                 <div className="cp-recovery-report" data-testid="recovery-report">
                   <p>{report.reason} Detected {formatWhen(report.detectedAt)}.</p>
                   <div className="mandate-summary">
-                    {report.numbers.map((row) => <div key={row.label}><span>{row.label}</span><strong>{row.cents !== undefined ? formatUsdCents(row.cents) : row.count}</strong></div>)}
+                    {report.numbers.map((row) => <div key={row.key ?? row.label}><span>{row.label}</span><strong>{row.cents !== undefined ? formatUsdCents(row.cents) : row.count}</strong></div>)}
                   </div>
                   <p className="owner-muted">Rebuilt from your encrypted backup at log position {report.snapshotLedgerSeq}, plus {report.issuerEventsReplayed} card network event{report.issuerEventsReplayed === 1 ? "" : "s"} since. Report fingerprint <code>{report.digest.slice(0, 12)}</code>.</p>
                   <ol className="cp-recovery-steps">

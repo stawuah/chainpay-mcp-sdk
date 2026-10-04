@@ -22,7 +22,6 @@ import {
   DELEGATION_PROGRAM_ID,
   getTeeSession,
   keypairSigner,
-  merchantIdHashesForRefs,
   readCardPeriod,
   readCardPolicy,
   readTeeAccount,
@@ -30,7 +29,9 @@ import {
   toWeb3Transaction,
   walletAdapterSigner,
   type CardActivityRow,
+  type CardMerchantListing,
   type CardView,
+  type StatementView,
   type ChainPayInstruction,
   type PolicyArgs,
   type PreparedCard,
@@ -39,13 +40,18 @@ import {
   type TeeSession,
 } from "@chainpay/sdk";
 import { authorizedFetch } from "../../session";
-import { BACKEND_URL, CARD_PARTNER_TOKEN_ACCOUNT, CARD_POLICY_PROGRAM_ID, DEVNET_USDC_MINT } from "../../config/public";
+import { BACKEND_URL, CARD_PARTNER_TOKEN_ACCOUNT, CARD_POLICY_PROGRAM_ID, DEVNET_USDC_MINT, MCP_URL } from "../../config/public";
+import { registerMcpConnection } from "../../owner/runtime";
 import { chainpayClient } from "../../config/client";
 import { sha256Hex, submitSignedTransaction } from "../../owner/runtime";
 import { checkTeeAttestation } from "./teeAttestation";
+import { statementAmountDue } from "./statementMath";
 import {
   CardsNotEnabledError,
+  CARD_AGENT_TOOLS,
   type CardPrivateRead,
+  type CardShop,
+  type CardStatements,
   type CardRecoveryView,
   type CardsSource,
   type CreateCardInput,
@@ -185,6 +191,13 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
     return { policy: decodeCardPolicy(policy.account.data), period: decodeCardPeriod(period.account.data) };
   }
 
+  let merchantList: Promise<CardMerchantListing[]> | null = null;
+  /** Axum's shop registry is the source of truth for allowlist hashes; fetched once, refetched after a failure. */
+  function listMerchants(): Promise<CardMerchantListing[]> {
+    merchantList ??= guard(() => api.listMerchants()).catch((error) => { merchantList = null; throw error; });
+    return merchantList;
+  }
+
   async function readCommitment(cardId: string) {
     const info = await chainpayClient.connection.getAccountInfo(new PublicKey(accounts(cardId).commitment), "finalized");
     return info ? decodeCardCommitment(info.data) : null;
@@ -195,14 +208,33 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
     listCards: () => guard(async () => (await api.listCards()).cards),
     getCard: (cardId) => guard(() => api.getCard(cardId)),
     activity: (cardId) => guard(async () => (await api.getCardActivity(cardId, { limit: 100 })).rows),
-    statements: (cardId) => guard(async () => (await api.listStatements(cardId)).statements),
+    statements: (cardId) => guard(async (): Promise<CardStatements> => {
+      const list = await api.listStatements(cardId);
+      return { closed: (list.statements ?? []).map(normalizeStatement), open: list.open ?? null };
+    }),
+    async closeStatement(cardId, operationId) {
+      await guard(() => api.closeStatement(cardId, operationId));
+    },
+    async merchants(): Promise<CardShop[]> {
+      return (await listMerchants()).map((m) => ({ ref: m.merchantRef, displayName: m.displayName, mcc: m.mcc, merchantIdHash: m.merchantIdHash }));
+    },
+    async connectAgent(cardId, agentName) {
+      const name = agentName.trim();
+      if (!name || name.length > 60) throw new Error("Give the agent a name (up to 60 characters).");
+      // Cards-only scope: checkout, activity and statement reads for this one card. The MCP
+      // server confirms the card is this owner's before it stores the connection.
+      const scope = JSON.stringify({ version: 1, mandates: [], agents: {}, cards: [cardId], tools: [...CARD_AGENT_TOOLS] });
+      const { connection, token } = await registerMcpConnection(deps.wallet, name, scope);
+      return { id: connection.id, agentName: connection.agentName || name, token, mcpUrl: MCP_URL, tools: [...CARD_AGENT_TOOLS] };
+    },
 
     recovery(card): CardRecoveryView {
-      const raw = card.recovery as { state?: unknown; report?: Partial<RecoveryReport> } | undefined;
-      const state = raw?.state === "recovery_frozen" || raw?.state === "restored_pending_reconcile" ? raw.state : "normal";
-      const report = raw?.report;
-      const valid = report && typeof report.digest === "string" && /^[0-9a-f]{64}$/.test(report.digest) && Array.isArray(report.numbers);
-      return valid ? { state, report: report as RecoveryReport } : { state };
+      return recoveryView(card);
+    },
+
+    async requestRecoveryReport(card) {
+      const prepared = await guard(() => api.prepareRestore(card.cardId, { clientOperationId: `card-recovery-report-${card.cardId.slice(0, 16)}-${Date.now()}` }));
+      if (prepared.state !== "review_required") throw new Error("ChainPay sent an unexpected recovery answer. Nothing was signed.");
     },
 
     async unlock() { await ensureSession(); },
@@ -232,7 +264,12 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       // Same clientOperationId on every retry: Axum returns the same card instead of issuing a second one.
       const prepared = attempt.prepared ?? await guard(() => api.prepareCard({ label: input.label, clientOperationId: `card-prepare-${attemptId}` }));
       attempt.prepared = prepared;
-      const merchantIdHashes = await merchantIdHashesForRefs(input.merchants);
+      const registry = await listMerchants();
+      const merchantIdHashes = input.merchants.map((ref) => {
+        const shop = registry.find((m) => m.merchantRef === ref);
+        if (!shop) throw new Error(`"${ref}" isn't a shop ChainPay can check out at, so nothing was signed.`);
+        return hexBytes(shop.merchantIdHash);
+      });
       progress("prepare", "done");
 
       progress("base", "active");
@@ -308,13 +345,15 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       await sendTee("Mark reviewed", [buildResolveExceptionInstruction({ ...cardRef(card.cardId), eventIdHash: hexBytes(eventIdHash), resolution: 1 }, programId)]);
     },
 
-    repaymentTarget: () => ({ recipientTokenAccount: CARD_PARTNER_TOKEN_ACCOUNT, mint: DEVNET_USDC_MINT, decimals: 6, cluster: "devnet" }),
+    repaymentTarget: (statement) => repaymentTargetFor(statement),
 
     async payStatement(_card, statement, mandateAddress) {
       if (!deps.signTransaction) throw new Error("This wallet can't sign transactions.");
-      if (!CARD_PARTNER_TOKEN_ACCOUNT) throw new Error("ChainPay hasn't set the simulated partner's account yet, so statements can't be paid.");
+      const target = repaymentTargetFor(statement);
+      if (!target.recipientTokenAccount) throw new Error("ChainPay hasn't set the simulated partner's account yet, so statements can't be paid.");
+      if (target.conflict) throw new Error(target.conflict);
       if (!statement.digest) throw new Error("This statement has no reference yet.");
-      const total = BigInt(statement.totalCents);
+      const total = statementAmountDue(statement);
       if (total <= 0n) throw new Error("Nothing to pay on this statement.");
       // Repayment = execute_payment with invoice_hash = statement digest (contracts §7.2).
       const [paymentId, signatureReference] = await Promise.all([sha256Hex(`${statement.digest}:payment`), sha256Hex(`${statement.digest}:signature`)]);
@@ -323,9 +362,9 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
         invoiceHash: hexBytes(statement.digest),
         paymentId: hexBytes(paymentId),
         signatureReference: hexBytes(signatureReference),
-        mint: DEVNET_USDC_MINT,
-        recipient: CARD_PARTNER_TOKEN_ACCOUNT,
-        amount: centsToTokenBaseUnits(total, 6),
+        mint: target.mint,
+        recipient: target.recipientTokenAccount,
+        amount: centsToTokenBaseUnits(total, target.decimals),
       }, deps.wallet);
       if (!prepared.preflight.valid) throw new Error(prepared.preflight.checks.filter((check) => !check.ok).map((check) => check.message).join(" · ") || "This spending permission can't pay the statement.");
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
@@ -354,17 +393,31 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
     submitRepayment: (cardId, statementId, input) => guard(() => api.submitRepayment(cardId, statementId, { ...input, cluster: "devnet" })),
 
     async restore(card, report) {
-      const prepared = await guard(() => api.prepareRestore(card.cardId, { clientOperationId: `card-restore-${report.digest.slice(0, 32)}`, reconReportDigest: report.digest }));
-      // card_policy requires owner + authorizer co-sign on restore, so there is no
-      // owner-only path. Axum returns the PER transaction already signed by the
-      // authorizer (`restoreTx`); the owner checks it writes exactly the reviewed
-      // values, adds a signature and sends it.
-      const encoded = typeof prepared.restoreTx === "string" ? prepared.restoreTx : typeof prepared.transaction === "string" ? prepared.transaction : null;
-      if (!encoded) throw new Error("ChainPay didn't return the co-signed restore yet. Nothing was signed; try again in a moment.");
-      await sendCoSignedTee("Approve restore", encoded, report, card.cardId);
+      // A restore that already landed (recovery_state 2) is never signed twice: go straight to replay.
+      const current = await ensureSession().then((tee) => readCardPolicy(tee, accounts(card.cardId).policy, programId)).catch(() => null);
+      const alreadyRestored = current?.state === "visible" && current.account.recoveryState === "restored_pending_reconcile";
+      if (!alreadyRestored) {
+        const prepared = await guard(() => api.prepareRestore(card.cardId, { clientOperationId: `card-restore-${report.digest.slice(0, 32)}`, reconReportDigest: report.digest }));
+        if (prepared.state !== "ready_to_sign") {
+          throw new Error("ChainPay's numbers changed since you reviewed them, so nothing was signed. Review the new numbers and try again.");
+        }
+        // card_policy requires owner + authorizer co-sign on restore, so there is no
+        // owner-only path. Axum returns the PER transaction already signed by the
+        // authorizer (`restoreTx`, nothing else is accepted); the owner checks it
+        // writes exactly the reviewed values, adds a signature and sends it.
+        if (typeof prepared.restoreTx !== "string" || !prepared.restoreTx) throw new Error("ChainPay didn't return the co-signed restore yet. Nothing was signed; try again in a moment.");
+        await sendCoSignedTee("Approve restore", prepared.restoreTx, report, card.cardId);
+      }
+      // Replay issuer events ChainPay never applied; the card stays frozen.
+      await guard(() => api.reconcileRecovery(card.cardId, `card-reconcile-${report.digest.slice(0, 32)}`));
     },
 
     async confirmReconciled(card, report) {
+      // Re-run the replay (idempotent) so nothing the issuer did since the restore is missed,
+      // and refuse to confirm a digest other than the one the owner reviewed.
+      const replay = await guard(() => api.reconcileRecovery(card.cardId, `card-reconcile-${report.digest.slice(0, 32)}`));
+      if (replay.reconDigest !== report.digest) throw new Error("The restore on the private rollup doesn't match the numbers you reviewed, so nothing was confirmed.");
+      // The owner's own instruction, built here, never the server-built transaction.
       await sendTee("Confirm it all matches", [buildConfirmReconciledInstruction({ ...cardRef(card.cardId), reconDigest: hexBytes(report.digest) }, programId)]);
     },
 
@@ -414,10 +467,13 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       const commitment = await readCommitment(card.cardId);
       if (!commitment) throw new Error("This card has no public checkpoint yet.");
       // The salt for the latest checkpoint lives in the owner's encrypted recovery record.
-      const response = await authorizedFetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/cards/${card.cardId}/disclosure-salt?seq=${commitment.seq}`, { method: "GET" });
-      if (NOT_ENABLED.has(response.status)) throw new Error("Sharing card records needs a ChainPay service that isn't live yet.");
-      if (!response.ok) throw new Error("ChainPay couldn't open this card's sharing key.");
-      const body = await response.json() as { masterSalt?: unknown };
+      let body: { masterSalt?: unknown };
+      try {
+        body = await api.disclosureSalt(card.cardId, commitment.seq.toString());
+      } catch (error) {
+        if (error instanceof CardsApiError && NOT_ENABLED.has(error.status) && error.code !== "not_found") throw new Error("Sharing card records needs a ChainPay service that isn't live yet.");
+        throw new Error("ChainPay couldn't open this card's sharing key.");
+      }
       if (typeof body.masterSalt !== "string") throw new Error("ChainPay sent an unexpected sharing key.");
       const masterSalt = hexBytes(body.masterSalt);
       try {
@@ -431,6 +487,65 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       }
     },
   };
+}
+
+/**
+ * Axum's recovery states → the banner: before the co-signed restore lands the card is
+ * `recovery_frozen` (also while `restore_prepared`); after issuer replay it waits for the
+ * owner's `confirm_reconciled`. `restored` (confirmed) and no recovery are both normal.
+ */
+export function recoveryView(card: CardView): CardRecoveryView {
+  const raw = card.recovery as { state?: unknown; report?: Partial<RecoveryReport> } | undefined;
+  const state: CardRecoveryView["state"] = raw?.state === "recovery_frozen" || raw?.state === "restore_prepared"
+    ? "recovery_frozen"
+    : raw?.state === "reconciled_pending_owner_confirm" || raw?.state === "restored_pending_reconcile"
+      ? "restored_pending_reconcile"
+      : "normal";
+  if (state === "normal") return { state };
+  const report = raw?.report;
+  const valid = report && typeof report.digest === "string" && /^[0-9a-f]{64}$/.test(report.digest) && Array.isArray(report.numbers)
+    && RECOVERY_NUMBER_KEYS.every((key) => report.numbers!.some((row) => row?.key === key));
+  if (!valid) return { state };
+  return {
+    state,
+    report: {
+      digest: report.digest!,
+      detectedAt: typeof report.detectedAt === "string" ? report.detectedAt : "",
+      reason: RECOVERY_REASON_COPY[String(report.reason)] ?? "ChainPay couldn't read this card's private records the way it expected.",
+      snapshotLedgerSeq: String(report.snapshotLedgerSeq ?? "0"),
+      issuerEventsReplayed: typeof report.issuerEventsReplayed === "number" ? report.issuerEventsReplayed : 0,
+      numbers: report.numbers as RecoveryReport["numbers"],
+    },
+  };
+}
+
+const RECOVERY_REASON_COPY: Record<string, string> = {
+  not_visible: "The private records stopped answering for this card.",
+  ledger_regressed: "The private records went back to an older state than ChainPay's backup.",
+  ledger_diverged: "The private records no longer match ChainPay's backup.",
+  recovery_frozen_on_chain: "The card was put in recovery on the private rollup.",
+  attestation: "The private rollup failed its hardware check, so approvals were paused.",
+};
+
+/**
+ * Where a repayment goes. Axum's `payWith` names the simulated partner account it will verify against; when this
+ * build pins one too (VITE_CHAINPAY_CARD_PARTNER_TOKEN_ACCOUNT) they must agree, or nothing is paid.
+ */
+export function repaymentTargetFor(statement?: StatementView) {
+  const served = statement?.payWith;
+  const mint = served?.mint ?? DEVNET_USDC_MINT;
+  const recipient = served?.recipientTokenAccount ?? CARD_PARTNER_TOKEN_ACCOUNT;
+  const conflict = served && CARD_PARTNER_TOKEN_ACCOUNT && served.recipientTokenAccount && served.recipientTokenAccount !== CARD_PARTNER_TOKEN_ACCOUNT
+    ? "ChainPay asked to repay a different account than this dashboard expects, so nothing was paid."
+    : served && served.mint !== DEVNET_USDC_MINT
+      ? "ChainPay asked to repay in a token other than Devnet USDC, so nothing was paid."
+      : undefined;
+  return { recipientTokenAccount: recipient ?? null, mint, decimals: 6, cluster: "devnet" as const, conflict };
+}
+
+/** Axum reports overdue as a display state on top of the real one. */
+function normalizeStatement(statement: StatementView): StatementView {
+  return statement.displayState === "overdue" ? { ...statement, state: "overdue" } : statement;
 }
 
 const RESTORE_MISMATCH = "The restore ChainPay prepared doesn't match the numbers you reviewed, so it wasn't signed.";

@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { ArrowLeft, CircleCheck, Clock3, Snowflake, TriangleAlert } from "lucide-react";
-import { availableCents, type CardActivityRow, type CardView, type StatementView } from "@chainpay/sdk";
+import { availableCents, type CardActivityRow, type CardView } from "@chainpay/sdk";
 import { CARD_SECTIONS, type CardSection } from "../../routing/paths";
 import { PageHeader } from "../PageHeader";
 import { cardStatus, ISSUER_FREEZE_COPY } from "./lifecycle";
-import { newOperationId, type CardPrivateRead } from "./source";
+import { newOperationId, type CardPrivateRead, type CardStatements } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { UnlockStrip } from "./Unlock";
 import { Money, Pill, PrivateValue } from "./ui";
@@ -17,6 +17,7 @@ import { CardSharing } from "./CardSharing";
 import { CardPrivacyCheck } from "./CardPrivacyCheck";
 import { RecoveryBanner } from "./CardRecovery";
 import { CardNumberReveal } from "./CardNumberReveal";
+import { CardAgentConnect } from "./CardAgentConnect";
 
 const SECTION_LABELS: Record<CardSection, string> = { activity: "Activity", statement: "Statement", sharing: "Sharing", privacy: "Privacy check" };
 const FREEZE_POLL_MS = 3_000;
@@ -35,7 +36,7 @@ export function CardDetail(props: CardDetailProps) {
   const [loadError, setLoadError] = useState("");
   const [read, setRead] = useState<CardPrivateRead | undefined>();
   const [activity, setActivity] = useState<CardActivityRow[] | null>(null);
-  const [statements, setStatements] = useState<StatementView[] | null>(null);
+  const [statements, setStatements] = useState<CardStatements | null>(null);
   const [busy, setBusy] = useState<"" | "freeze" | "unfreeze">("");
   const [actionError, setActionError] = useState("");
   const [polling, setPolling] = useState(false);
@@ -66,7 +67,7 @@ export function CardDetail(props: CardDetailProps) {
   ), [source, cardId]);
   const reloadStatements = useCallback(() => source.statements(cardId).then(
     (rows) => { if (currentCard.current === cardId) setStatements(rows); },
-    () => { if (currentCard.current === cardId) setStatements([]); },
+    () => { if (currentCard.current === cardId) setStatements({ closed: [], open: null }); },
   ), [source, cardId]);
 
   useEffect(() => {
@@ -202,6 +203,7 @@ export function CardDetail(props: CardDetailProps) {
               ) : (
                 <Button type="button" variant="secondary" className="cp-freeze-button" label={busy === "freeze" ? "Freezing…" : "Freeze card"} icon={<Snowflake size={16} />} isDisabled={Boolean(busy)} onClick={() => void freeze()} />
               )}
+              <CardAgentConnect source={source} card={card} />
             </div>
           </div>
           <div className="cp-card-left" data-private={policy && period ? "no" : "yes"}>

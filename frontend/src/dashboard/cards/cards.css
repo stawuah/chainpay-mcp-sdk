@@ -370,3 +370,12 @@
   .cp-card-create .owner-wizard-aside.cp-preview-aside > .cp-agent-card { grid-row: auto; max-width: 260px; }
   .cp-card-create .owner-wizard-aside.cp-preview-aside ul { display: none; }
 }
+
+/* Running statement, agent connect, recovery rebuild (integration) */
+.cp-statement-running { margin-bottom: 16px; }
+.cp-statement-running .cp-statement-head { align-items: center; }
+.cp-agent-connect { display: grid; gap: 12px; }
+.cp-agent-tools { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--soft, #5b6472); font-size: 13px; }
+.cp-agent-tools code { color: var(--ink, #0b1220); font-size: 12px; }
+.cp-agent-config { margin: 0; padding: 12px; border-radius: 10px; background: #f5f7fb; border: 1px solid var(--line, #e3e8f0); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.cp-recovery-pending { display: grid; gap: 8px; justify-items: start; margin-top: 8px; }

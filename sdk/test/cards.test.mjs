@@ -488,6 +488,37 @@ test("card API client sends the bearer, validates checkout capabilities and maps
   assert.throws(() => parseCheckoutCapabilityResponse({ capability: "4111111111111111", status: "ready" }), /format/);
 });
 
+test("card API client: merchant registry, statement close, restore and reconcile routes match Axum", async () => {
+  const { parseMerchantListings } = await import("../dist/index.js");
+  const cardId = "cd".repeat(32);
+  const seen = [];
+  const fetch = async (url, init) => {
+    seen.push({ url, method: init.method, body: init.body ? JSON.parse(init.body) : undefined });
+    if (url.endsWith("/v1/cards/merchants")) return Response.json({ merchants: [{ merchantRef: "demo-approved", displayName: "Data API credits", merchantIdHash: "c6".repeat(32), mcc: 5734 }] });
+    if (url.endsWith("/statements/close")) return Response.json({ statementId: `${cardId}:000001`, state: "closed" });
+    if (url.endsWith("/recovery/restore")) return Response.json({ state: "review_required", reconReport: {}, reconReportDigest: "ef".repeat(32) });
+    if (url.endsWith("/recovery/reconcile")) return Response.json({ state: "reconciled_pending_owner_confirm", issuerEventsReplayed: 0, reconDigest: "ef".repeat(32), confirmReconciledTx: "AA==" });
+    return Response.json({ cardId, seq: "3", masterSalt: "11".repeat(32), commitment: { state: "current", onChainSeq: "3" } });
+  };
+  const client = new CardsApiClient({ baseUrl: "https://axum.test", authToken: "owner", fetch });
+  const [shop] = await client.listMerchants();
+  assert.deepEqual(shop, { merchantRef: "demo-approved", displayName: "Data API credits", merchantIdHash: "c6".repeat(32), mcc: 5734 });
+  await client.closeStatement(cardId, "op-close-1234");
+  assert.deepEqual(seen[1], { url: `https://axum.test/v1/cards/${cardId}/statements/close`, method: "POST", body: { clientOperationId: "op-close-1234" } });
+  const review = await client.prepareRestore(cardId, { clientOperationId: "op-restore-1" });
+  assert.equal(review.state, "review_required");
+  assert.deepEqual(seen[2].body, { clientOperationId: "op-restore-1" }, "no digest sent when asking for the report");
+  await assert.rejects(client.prepareRestore(cardId, { clientOperationId: "op-restore-1", reconReportDigest: "nope" }), /64 lowercase hex/);
+  await client.reconcileRecovery(cardId, "op-reconcile-1");
+  assert.equal(seen[3].url, `https://axum.test/v1/cards/${cardId}/recovery/reconcile`);
+  const salt = await client.disclosureSalt(cardId, "3");
+  assert.equal(seen[4].url, `https://axum.test/v1/cards/${cardId}/disclosure-salt?seq=3`);
+  assert.equal(salt.commitment.state, "current");
+  // A registry entry with a bad hash never reaches a policy the owner signs.
+  assert.throws(() => parseMerchantListings([{ merchantRef: "demo-approved", displayName: "x", merchantIdHash: "zz", mcc: 5734 }]), /32 bytes of hex/);
+  assert.throws(() => parseMerchantListings([]), /missing/);
+});
+
 test("program-appended tails decode when present and account lists match the card_policy structs", async () => {
   const { reservationStateName, buildCloseCardInstruction, buildFreezeInstruction, buildUnfreezeInstruction, buildInitPermissionInstruction, PERMISSION_PROGRAM_ID, EPHEMERAL_VAULT_ID, MAGIC_PROGRAM_ID } = await import("../dist/index.js");
   // CardPolicy + recon_digest[32] + repayment_digests[8][32] + repayment_count u8 = 984 bytes on chain

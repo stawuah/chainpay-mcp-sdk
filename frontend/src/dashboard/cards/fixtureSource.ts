@@ -1,10 +1,13 @@
 import { PublicKey } from "@solana/web3.js";
 import {
   buildDisclosureBundle,
+  CARD_SANDBOX_MERCHANTS,
   cardPolicyView,
   commitmentRoot,
   formatUsdCents,
   MAGICBLOCK_DEVNET_TEE_MEASUREMENTS,
+  merchantIdHash,
+  type OpenStatementView,
   type CardActivityRow,
   type CardCommitment,
   type CardPeriod,
@@ -12,7 +15,7 @@ import {
   type CardView,
   type StatementView,
 } from "@chainpay/sdk";
-import type { CardPrivateRead, CardRecoveryView, CardsSource, CreateCardInput, PrivacyCheckResult, ReaderMember, RecoveryReport } from "./source";
+import { CARD_AGENT_TOOLS, type CardPrivateRead, type CardRecoveryView, type CardsSource, type CreateCardInput, type PrivacyCheckResult, type ReaderMember, type RecoveryReport } from "./source";
 
 /*
  * ILLUSTRATIVE fixture source for the design harness and tests. Never imported
@@ -168,7 +171,7 @@ function statementFor(cardId: string, state: StatementView["state"]): StatementV
       { kind: "purchase", amountCents: "12850", feeCents: "65", at: "2026-09-21T11:12:00Z", merchant: { displayName: "ChainPay demo shop", mcc: "7372" } },
       { kind: "purchase", amountCents: "2750", feeCents: "14", at: "2026-09-18T09:02:00Z", merchant: shop },
       { kind: "purchase", amountCents: "1150", feeCents: "6", at: "2026-09-12T19:44:00Z", merchant: { displayName: "Unlisted test shop", mcc: "5999" }, exception: "forced_capture" },
-      { kind: "refund", amountCents: "1299", feeCents: "-7", at: "2026-09-10T15:31:00Z", merchant: shop },
+      { kind: "refund", amountCents: "-1299", feeCents: "-7", at: "2026-09-10T15:31:00Z", merchant: shop },
       { kind: "adjustment_debit", amountCents: "1291", feeCents: "7", at: "2026-09-05T08:00:00Z" },
     ],
     repayment: state === "repayment_mismatch"
@@ -179,6 +182,23 @@ function statementFor(cardId: string, state: StatementView["state"]): StatementV
     partner: ["partner_confirmed", "discharged"].includes(state) ? { confirmedAt: "2026-10-04T10:02:00Z", ref: "sim-partner-0042" } : undefined,
     simulatedCredit: true,
   }];
+}
+
+/** Running statement for the first card: what posted since the last close (never a due amount). */
+function openStatementFor(cardId: string): OpenStatementView | null {
+  if (cardId !== FIXTURE_CARD_IDS.data) return null;
+  return {
+    lineCount: 2,
+    purchasesCents: "3399",
+    refundsCents: "0",
+    feeCents: "17",
+    runningTotalCents: "3416",
+    carriedCreditCents: "0",
+    lines: [
+      { kind: "purchase", amountCents: "1999", feeCents: "10", postedAt: "2026-10-03T17:05:00Z", merchant: shop },
+      { kind: "purchase", amountCents: "1400", feeCents: "7", postedAt: "2026-10-02T11:30:00Z", merchant: { displayName: "Paper index" } },
+    ],
+  };
 }
 
 const RECOVERY_REPORT: RecoveryReport = {
@@ -206,6 +226,7 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
   const delay = options.delayMs ?? 450;
   const statements = new Map(cards.map((card) => [card.view.cardId, statementFor(card.view.cardId, options.statement ?? "closed")]));
   const activity = new Map(cards.map((card) => [card.view.cardId, activityFor(card.view.cardId)]));
+  const openStatements = new Map(cards.map((card) => [card.view.cardId, openStatementFor(card.view.cardId)]));
   const find = (cardId: string) => {
     const card = cards.find((item) => item.view.cardId === cardId);
     if (!card) throw new Error("No card with that id in this workspace");
@@ -229,11 +250,34 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
     async listCards() { await wait(delay / 3); return cards.map((card) => card.view); },
     async getCard(cardId) { return find(cardId).view; },
     async activity(cardId) { await wait(delay / 3); return activity.get(cardId) ?? []; },
-    async statements(cardId) { await wait(delay / 3); return statements.get(cardId) ?? []; },
+    async statements(cardId) { await wait(delay / 3); return { closed: statements.get(cardId) ?? [], open: openStatements.get(cardId) ?? null }; },
+    async closeStatement(cardId) {
+      await wait(delay);
+      const open = openStatements.get(cardId);
+      if (!open || open.lineCount === 0) throw new Error("Nothing has posted since the last statement.");
+      const list = statements.get(cardId) ?? [];
+      const seq = list.length + 1;
+      statements.set(cardId, [{
+        statementId: `${cardId}:${String(seq).padStart(6, "0")}`, cardId, statementSeq: seq, periodIndex: 2, closeKind: "interim", state: "closed",
+        closedAt: new Date().toISOString(), dueAt: new Date(Date.now() + 21 * 86_400_000).toISOString(),
+        totalCents: open.runningTotalCents, feeCents: open.feeCents, amountDueCents: open.runningTotalCents, digest: FIXTURE_STATEMENT_DIGEST.replace(/^5f/, "6a"),
+        lines: open.lines, simulatedCredit: true,
+      }, ...list]);
+      openStatements.set(cardId, { ...open, lineCount: 0, lines: [], purchasesCents: "0", feeCents: "0", runningTotalCents: "0" });
+    },
+    async merchants() {
+      return Promise.all(CARD_SANDBOX_MERCHANTS.map(async (m) => ({ ref: m.ref, displayName: m.displayName, mcc: m.mcc, merchantIdHash: Array.from(await merchantIdHash(m.acceptorId), (b) => b.toString(16).padStart(2, "0")).join("") })));
+    },
+    async connectAgent(cardId, agentName) {
+      find(cardId);
+      await wait(delay);
+      return { id: "fixture-connection-1", agentName: agentName.trim() || "Research agent", token: "cp_fixture_token_shown_once", mcpUrl: "https://chainpay-mcp.example/mcp", tools: [...CARD_AGENT_TOOLS] };
+    },
     recovery(card): CardRecoveryView {
       const state = (card.recovery?.state ?? "normal") as CardRecoveryView["state"];
       return state === "normal" ? { state } : { state, report: RECOVERY_REPORT };
     },
+    async requestRecoveryReport() { await wait(delay); },
     async unlock() { await wait(delay); unlocked = true; },
     isUnlocked() { return unlocked; },
     async readPrivate(card): Promise<CardPrivateRead> {

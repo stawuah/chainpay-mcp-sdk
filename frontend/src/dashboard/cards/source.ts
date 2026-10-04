@@ -5,6 +5,7 @@ import type {
   CardView,
   DisclosureBundle,
   FreezeResult,
+  OpenStatementView,
   StatementState,
   StatementView,
   TeeRead,
@@ -41,6 +42,14 @@ export type CardRecoveryView = {
   state: "normal" | "recovery_frozen" | "restored_pending_reconcile";
   report?: RecoveryReport;
 };
+
+/** A shop a card can be limited to. Live: Axum's registry (`GET /v1/cards/merchants`); fixtures: the SDK's sandbox list. */
+export type CardShop = { ref: string; displayName: string; mcc: number; merchantIdHash: string };
+
+export type CardStatements = { closed: StatementView[]; open: OpenStatementView | null };
+
+/** A cards-only agent connection, shown once: the token never comes back. */
+export type CardAgentConnection = { id: string; agentName: string; token: string; mcpUrl: string; tools: string[] };
 
 export type CreateCardInput = {
   label: string;
@@ -91,7 +100,12 @@ export type RepaymentTarget = {
   mint: string;
   decimals: number;
   cluster: "devnet";
+  /** Set when ChainPay's statement and this dashboard disagree on where or in what to repay: nothing is paid. */
+  conflict?: string;
 };
+
+/** What a cards-only agent connection may call. No freeze, unfreeze, limits, credit or repayment. */
+export const CARD_AGENT_TOOLS = ["request_card_checkout", "get_card_activity", "get_statement", "prepare_agent_card"] as const;
 
 export type RepaymentResult = { receiptPda: string; mandatePda: string; signature?: string };
 
@@ -103,8 +117,16 @@ export interface CardsSource {
   listCards(): Promise<CardView[]>;
   getCard(cardId: string): Promise<CardView>;
   activity(cardId: string): Promise<CardActivityRow[]>;
-  statements(cardId: string): Promise<StatementView[]>;
+  statements(cardId: string): Promise<CardStatements>;
+  /** Owner only: close the running statement now (interim close; the budget period is untouched). */
+  closeStatement(cardId: string, operationId: string): Promise<void>;
+  /** Shops a card can be limited to, with the allowlist hash the owner signs. */
+  merchants(): Promise<CardShop[]>;
+  /** Owner only: connect an agent that may check out with this card (and read its activity and statements). Never unfreeze, limits or repayment. */
+  connectAgent(cardId: string, agentName: string): Promise<CardAgentConnection>;
   recovery(card: CardView): CardRecoveryView;
+  /** Ask ChainPay to rebuild the recovery report (numbers to review) when the card has none yet. */
+  requestRecoveryReport(card: CardView): Promise<void>;
 
   /** Opens the owner's private session (one message signature). */
   unlock(): Promise<void>;
@@ -124,7 +146,8 @@ export interface CardsSource {
   removeReader(card: CardView, pubkey: string): Promise<void>;
   resolveException(card: CardView, row: CardActivityRow): Promise<void>;
 
-  repaymentTarget(): RepaymentTarget;
+  /** Where a statement is repaid: the statement's own instructions when ChainPay sent them, checked against this build. */
+  repaymentTarget(statement?: StatementView): RepaymentTarget;
   payStatement(card: CardView, statement: StatementView, mandateAddress: string): Promise<RepaymentResult>;
   submitRepayment(cardId: string, statementId: string, input: { receiptPda: string; mandatePda: string }): Promise<{ state: StatementState }>;
 

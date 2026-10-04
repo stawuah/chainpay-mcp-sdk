@@ -133,4 +133,8 @@ export const MISMATCH_COPY: Record<string, string> = {
   owner: "The spending permission belongs to another wallet.",
   receipt: "The receipt couldn't be found or isn't a ChainPay receipt.",
   derivation: "The receipt address doesn't match the permission and reference.",
+  mandate: "The spending permission isn't the one that made this payment.",
+  payer: "The payment came from a wallet other than the card owner's.",
+  program: "The receipt isn't from the ChainPay program.",
+  receipt_status: "The receipt isn't in a settled state.",
 };

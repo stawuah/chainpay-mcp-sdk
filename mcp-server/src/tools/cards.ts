@@ -226,20 +226,23 @@ export async function getCardActivity(context: ChainPayMcpContext, args: Record<
 export function projectStatement(statement: StatementView) {
   const totalCents = signedCentsOrUndefined(statement.totalCents);
   const feeCents = signedCentsOrUndefined(statement.feeCents);
+  const amountDueCents = signedCentsOrUndefined(statement.amountDueCents);
   return {
     statementId: str(statement.statementId),
+    statementSeq: Number.isInteger(statement.statementSeq) ? statement.statementSeq : undefined,
     periodIndex: Number.isInteger(statement.periodIndex) ? statement.periodIndex : undefined,
     state: str(statement.state),
     closedAt: str(statement.closedAt),
     dueAt: str(statement.dueAt),
     totalCents,
     feeCents,
+    ...(amountDueCents !== undefined ? { amountDueCents } : {}),
     digest: str(statement.digest),
     lines: (Array.isArray(statement.lines) ? statement.lines : []).map((line) => ({
       kind: str(line.kind),
       amountCents: signedCentsOrUndefined(line.amountCents),
       feeCents: signedCentsOrUndefined(line.feeCents),
-      at: str(line.at),
+      at: str(line.postedAt ?? line.at),
       ...(line.merchant ? { merchant: { displayName: String(line.merchant.displayName ?? ""), mcc: String(line.merchant.mcc ?? "") } } : {}),
       ...(line.exception ? { exception: str(line.exception) } : {}),
     })),
@@ -247,7 +250,11 @@ export function projectStatement(statement: StatementView) {
     simulatedCredit: true as const,
     label: "Simulated credit",
     // An unreadable amount is reported as unknown, never as $0.00.
-    display: { total: totalCents === undefined ? "unknown" : formatUsdCents(totalCents), fee: feeCents === undefined ? "unknown" : formatUsdCents(feeCents) },
+    display: {
+      total: totalCents === undefined ? "unknown" : formatUsdCents(totalCents),
+      fee: feeCents === undefined ? "unknown" : formatUsdCents(feeCents),
+      ...(amountDueCents !== undefined ? { amountDue: formatUsdCents(amountDueCents) } : {}),
+    },
   };
 }
 
@@ -261,7 +268,8 @@ export async function getStatement(context: ChainPayMcpContext, args: Record<str
       statement = await api.getStatement(cardId, String(args.statementId));
     } else {
       const list = await api.listStatements(cardId);
-      statement = [...(Array.isArray(list?.statements) ? list.statements : [])].sort((a, b) => (b.periodIndex ?? 0) - (a.periodIndex ?? 0))[0];
+      // Newest first: statements are numbered (an owner can close one early, inside a period).
+      statement = [...(Array.isArray(list?.statements) ? list.statements : [])].sort((a, b) => (b.statementSeq ?? 0) - (a.statementSeq ?? 0) || (b.periodIndex ?? 0) - (a.periodIndex ?? 0))[0];
     }
     if (!statement) return cardToolResult({ action: "card_statement", cardId, found: false, simulatedCredit: true, label: "Simulated credit" }, "**No statement yet.** The first one closes at the end of the card's first period.");
     const projected = projectStatement(statement);

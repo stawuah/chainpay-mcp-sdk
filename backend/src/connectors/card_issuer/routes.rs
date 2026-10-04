@@ -1346,15 +1346,21 @@ pub async fn restore(
     let restored = super::recovery::restored_numbers(cards, &card, &snapshot).await?;
     let report = json!({"v": 1, "cardId": card_id, "snapshotLedgerSeq": latest.record["ledgerSeq"], "snapshot": snapshot, "issuerSinceSnapshot": issuer_events, "restore": restored});
     let digest = canonical_digest(&report);
-    let numbers = json!([
-        {"label": "Spent this period", "cents": restored["capturedCents"]},
-        {"label": "Open holds", "cents": restored["reservedCents"]},
-        {"label": "Refunds this period", "cents": restored["refundedCents"]},
-        {"label": "Exceptions this period", "cents": restored["exceptionCents"]},
-        {"label": "Owed (simulated credit)", "cents": restored["statementOutstandingCents"]},
-        {"label": "Purchases this period", "count": restored["purchasesCount"]},
-    ]);
-    let summary = json!({"digest": digest, "snapshotLedgerSeq": latest.record["ledgerSeq"], "issuerTransactionsSinceSnapshot": issuer_events.len(), "postingsSinceSnapshot": restored["postingsSinceSnapshot"], "numbers": numbers});
+    // Every value `restore` writes, keyed, so the owner's browser can check the
+    // co-signed transaction against exactly what it showed (frontend
+    // RECOVERY_NUMBER_KEYS). The budget comes from the snapshot's policy.
+    let numbers = recovery_numbers(&snapshot["policy"]["budgetCents"], &restored);
+    let recovery = &card.record["recovery"];
+    let summary = json!({
+        "digest": digest,
+        "detectedAt": recovery["detectedAt"].as_str().unwrap_or(""),
+        "reason": recovery["reason"].as_str().unwrap_or("unknown"),
+        "snapshotLedgerSeq": latest.record["ledgerSeq"].as_u64().unwrap_or(0).to_string(),
+        "issuerEventsReplayed": issuer_events.len(),
+        "issuerTransactionsSinceSnapshot": issuer_events.len(),
+        "postingsSinceSnapshot": restored["postingsSinceSnapshot"],
+        "numbers": numbers,
+    });
     let sealed = cards
         .crypto
         .seal_json(CardKind::Cards.as_str(), &card_key(card_id), &summary);
@@ -1468,6 +1474,19 @@ pub async fn restore(
     }))
 }
 
+/// Keyed recovery numbers for the owner's review (one per `restore` counter).
+pub fn recovery_numbers(budget_cents: &Value, restored: &Value) -> Value {
+    json!([
+        {"key": "budget", "label": "Budget per period", "cents": budget_cents.as_str().unwrap_or("0")},
+        {"key": "captured", "label": "Spent this period", "cents": restored["capturedCents"]},
+        {"key": "reserved", "label": "Open holds", "cents": restored["reservedCents"]},
+        {"key": "refunded", "label": "Refunds this period", "cents": restored["refundedCents"]},
+        {"key": "exceptions", "label": "Flagged charges this period", "cents": restored["exceptionCents"]},
+        {"key": "outstanding", "label": "Owed (simulated credit)", "cents": restored["statementOutstandingCents"]},
+        {"key": "purchases", "label": "Purchases this period", "count": restored["purchasesCount"]},
+    ])
+}
+
 // ------------------------------------------------------------------ misc
 
 pub fn merchants() -> Value {
@@ -1536,6 +1555,33 @@ mod unit {
         ));
         assert!(!bearer_matches(None, Some("x")));
         assert!(!bearer_matches(Some("Bearer x"), None));
+    }
+
+    #[test]
+    fn recovery_numbers_cover_every_restored_counter() {
+        let restored = json!({"capturedCents": "2000", "reservedCents": "0", "refundedCents": "0", "exceptionCents": "150", "statementOutstandingCents": "2010", "purchasesCount": 1});
+        let numbers = recovery_numbers(&json!("10000"), &restored);
+        let keys: Vec<&str> = numbers
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "budget",
+                "captured",
+                "reserved",
+                "refunded",
+                "exceptions",
+                "outstanding",
+                "purchases"
+            ]
+        );
+        assert_eq!(numbers[0]["cents"], "10000");
+        assert_eq!(numbers[4]["cents"], "150");
+        assert_eq!(numbers[6]["count"], 1);
     }
 
     #[test]

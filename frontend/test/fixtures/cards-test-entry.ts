@@ -9,5 +9,6 @@ export { createFixtureCardsSource, FIXTURE_CARD_IDS } from "../../src/dashboard/
 export { activityPills, cardStatus, rowNeedsReview, LIFECYCLE_PILLS } from "../../src/dashboard/cards/lifecycle";
 export { activityEvidence } from "../../src/dashboard/cards/evidence";
 export { dollarsToCents, centsToDollarInput } from "../../src/dashboard/cards/amounts";
-export { statementLineTotals, SIMULATED_CREDIT_LABEL } from "../../src/dashboard/cards/CardStatement";
-export { assertRestoreMatchesReport, assertCoSignedRestore } from "../../src/dashboard/cards/liveSource";
+export { statementLineTotals, SIMULATED_CREDIT_LABEL, CardStatement } from "../../src/dashboard/cards/CardStatement";
+export { statementAmountDue } from "../../src/dashboard/cards/statementMath";
+export { assertRestoreMatchesReport, assertCoSignedRestore, recoveryView, repaymentTargetFor } from "../../src/dashboard/cards/liveSource";

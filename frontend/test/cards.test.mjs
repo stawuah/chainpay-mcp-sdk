@@ -343,3 +343,54 @@ test("/verify/card checks disclosed fields against the on-chain commitment, with
   m.setCardCommitmentReader(null);
   history.replaceState(null, "", "/");
 });
+
+test("statement lines as Axum sends them: credits are negative and still add up", () => {
+  const axum = { totalCents: "1005", feeCents: "5", lines: [{ kind: "purchase", amountCents: "2000", feeCents: "10", postedAt: "2026-10-04T01:00:00Z" }, { kind: "refund", amountCents: "-1000", feeCents: "-5", postedAt: "2026-10-04T02:00:00Z" }] };
+  const totals = m.statementLineTotals(axum);
+  assert.equal(totals.matches, true);
+  assert.equal(totals.refunds, 1000n);
+  // Repayment carries the amount due (after carried credit), never the gross total.
+  assert.equal(m.statementAmountDue({ totalCents: "1005", amountDueCents: "505" }), 505n);
+  assert.equal(m.statementAmountDue({ totalCents: "-200", amountDueCents: "0" }), 0n);
+});
+
+test("repayment target: Axum's payWith is used, and a different token is refused", () => {
+  const usdc = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const ok = m.repaymentTargetFor({ payWith: { mint: usdc, recipientTokenAccount: "3burs6CNFvrQW8US2C5W84do8J1EezWsQfsoBAvHF5q6", amountCents: "2010" } });
+  assert.equal(ok.recipientTokenAccount, "3burs6CNFvrQW8US2C5W84do8J1EezWsQfsoBAvHF5q6");
+  assert.equal(ok.conflict, undefined);
+  const bad = m.repaymentTargetFor({ payWith: { mint: "So11111111111111111111111111111111111111112", recipientTokenAccount: "3burs6CNFvrQW8US2C5W84do8J1EezWsQfsoBAvHF5q6", amountCents: "2010" } });
+  assert.match(bad.conflict, /token other than Devnet USDC/);
+});
+
+test("recovery: Axum states map to the banner, and a report missing a restored counter is not offered", () => {
+  const numbers = ["budget", "captured", "reserved", "refunded", "exceptions", "outstanding"].map((key) => ({ key, label: key, cents: "0" })).concat([{ key: "purchases", label: "purchases", count: 0 }]);
+  const report = { digest: "ab".repeat(32), detectedAt: "2026-10-04T00:00:00Z", reason: "not_visible", snapshotLedgerSeq: "7", issuerEventsReplayed: 1, numbers };
+  const card = (state, r = report) => ({ cardId: "a1".repeat(32), recovery: { state, report: r } });
+  assert.equal(m.recoveryView(card("recovery_frozen")).state, "recovery_frozen");
+  assert.equal(m.recoveryView(card("restore_prepared")).state, "recovery_frozen");
+  assert.equal(m.recoveryView(card("reconciled_pending_owner_confirm")).state, "restored_pending_reconcile");
+  assert.equal(m.recoveryView(card("restored")).state, "normal");
+  assert.match(m.recoveryView(card("recovery_frozen")).report.reason, /stopped answering/);
+  const noExceptions = { ...report, numbers: numbers.filter((n) => n.key !== "exceptions") };
+  assert.equal(m.recoveryView(card("recovery_frozen", noExceptions)).report, undefined, "no report without the exceptions counter");
+});
+
+test("running statement: the owner can close it early, and it becomes a payable statement", async () => {
+  // Astryx's Button reads CSS.supports, which jsdom doesn't provide.
+  globalThis.CSS ??= { supports: () => false, escape: (value) => String(value) };
+  dom.window.CSS ??= globalThis.CSS;
+  const source = m.createFixtureCardsSource({ delayMs: 0 });
+  const [card] = await source.listCards();
+  let statements = await source.statements(card.cardId);
+  const view = () => createElement(m.CardStatement, { source, card, statements, mandates: [], wallet: "w", onChanged: async () => { statements = await source.statements(card.cardId); } });
+  const { host, unmount } = await render(view());
+  assert.ok(host.querySelector('[data-testid="running-statement"]'), "running statement shown");
+  assert.match(host.textContent, /Running statement · not closed yet/);
+  await click(button(host, "Close statement now"));
+  await settle(20);
+  assert.equal(statements.closed.length, 2);
+  assert.equal(statements.closed[0].closeKind, "interim");
+  assert.equal(statements.open.lineCount, 0);
+  await unmount();
+});
