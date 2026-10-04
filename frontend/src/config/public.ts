@@ -16,3 +16,5 @@ export const RPC_URL = configuredRpcUrl && configuredRpcUrl !== "https://api.dev
 export const MCP_URL = import.meta.env.VITE_CHAINPAY_MCP_URL ?? "https://chainpay-mcp.vercel.app/mcp";
 export const AGENT_URL = import.meta.env.VITE_CHAINPAY_AGENT_URL
   ?? `${MCP_URL.replace(/\/mcp\/?$/, "")}/agent/chat`;
+// /status reads Convex directly so it still loads when the relay is down.
+export const STATUS_API_URL = (import.meta.env.VITE_CHAINPAY_STATUS_URL ?? "https://notable-bee-447.convex.site").replace(/\/$/, "");
