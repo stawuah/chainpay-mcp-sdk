@@ -60,14 +60,14 @@ export function CardSharePicker({ source, card, open, onClose }: { source: Cards
         content={
           <LayoutContent>
             <div className="cp-share-picker" data-testid="share-picker">
-              <p>Pick only what the other person needs. They can check each field against the card's public checkpoint without seeing anything else.</p>
+              <p>Pick only what the other person needs. They can check each field against the card's public checkpoint. They don't see the fields you leave out.</p>
               <fieldset disabled={Boolean(link)}>
                 <legend className="cp-visually-hidden">Fields to share</legend>
                 {SHAREABLE_FIELDS.map((i) => (
                   <CheckboxInput key={i} label={COMMITMENT_FIELD_LABELS[i]} value={picked.includes(i)} onChange={(value) => setPicked((current) => value ? [...current, i] : current.filter((item) => item !== i))} />
                 ))}
               </fieldset>
-              <p className="cp-share-warning" role="note">Anyone with this link can read the fields you pick.</p>
+              <p className="cp-share-warning" role="note" data-testid="share-wallet-warning">Anyone with this link can read the fields you pick. The link also names this card's public account on Solana, and that account shows your wallet address, so they can look up your wallet and its public activity.</p>
               <p className="owner-muted cp-share-expiry">Links check against the card's latest public checkpoint, so a link stops checking once the card changes and a new checkpoint is written (at most every 15 minutes while it's in use). Make a fresh link when you need one.</p>
               {link && (
                 <div className="cp-share-link" data-testid="share-link">

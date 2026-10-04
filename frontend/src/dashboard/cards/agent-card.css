@@ -111,7 +111,7 @@
 .cp-agent-card-digits { font: 500 5cqw/1 Inter, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: .04em; white-space: nowrap; }
 .cp-agent-card .cp-agent-card-number small { display: block; margin: 0; color: rgba(255, 255, 255, .78); font: 500 2.9cqw/1 Inter, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
 
-/* Frost (P2): the landing's "nobody else can read it" glass. */
+/* Frost (P2): the landing's frosted "hidden from the public chain" glass. */
 .cp-agent-card-frost {
   position: absolute;
   inset: 0;

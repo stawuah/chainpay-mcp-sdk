@@ -23,6 +23,8 @@
 .cp-money.is-credit { color: var(--cp-good, #0a7a48); }
 .cp-money.is-credit::before { content: "−"; }
 .cp-private-value { display: inline-flex; align-items: center; gap: 4px; color: var(--body); font-size: 13px; }
+.cp-private-value.is-failed { color: #9a3412; }
+.cp-read-failed { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
 
 /* Unlock strip */
 .cp-unlock { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 16px; padding: 16px 20px; border: 1px solid #c9dafc; border-radius: 12px; background: #f5f8ff; }
@@ -240,6 +242,8 @@
 .cp-dialog-footer { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; width: 100%; }
 .cp-repay-paid { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid #bfe5d1; border-radius: 10px; background: #f3fbf7; font-size: 13px; overflow-wrap: anywhere; }
 .cp-repay-paid b { font-weight: 500; color: var(--ink); }
+.cp-repay-unknown { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid #f0d9a8; border-radius: 10px; background: #fdf8ec; font-size: 13px; overflow-wrap: anywhere; }
+.cp-repay-unknown b { font-weight: 500; color: var(--ink); }
 
 /* ───────── Premium pass (ruling 2026-10-04-premium, P3–P11) ───────── */
 .cp-cards { --cp-elev: 0 1px 2px rgba(16,24,40,.04), 0 12px 32px -16px rgba(16,24,40,.12); --cp-radius: 16px; }

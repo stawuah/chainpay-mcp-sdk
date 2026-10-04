@@ -153,7 +153,9 @@ test("co-signed restore: signs only the reviewed values, for this card, already 
     if (sign) t.partialSign(signer);
     return t;
   };
-  const input = { owner: owner.publicKey.toBase58(), cardId, programId, report };
+  // What the owner reviewed besides the numbers: the card's rules (here from its private records) and period.
+  const reviewed = { rules: { maxPurchaseCents: "4000", maxPurchasesPerPeriod: 0, periodSeconds: 2_592_000, currency: "USD", merchantIdHashes: ["01".repeat(32)], mccs: [], expiresAt: "0", recurringAllowed: false, feeBps: 50, authorizer: authorizer.publicKey.toBase58() }, periodIndex: 2 };
+  const input = { owner: owner.publicKey.toBase58(), cardId, programId, report, reviewed };
   assert.equal(m.assertCoSignedRestore(tx(), input).exceptionCents, 150n);
   // What the owner actually gets: Axum's wire bytes, read back (fee payer comes out writable).
   const wire = (t) => Transaction.from(t.serialize({ requireAllSignatures: false, verifySignatures: false }));
@@ -307,8 +309,10 @@ test("attestation copy claims the verified build only when both halves passed", 
     assert.notEqual(m.attestationCopy(a), m.ATTESTATION_VERIFIED_COPY);
     assert.doesNotMatch(m.attestationCopy(a), /build verified/);
   }
-  assert.match(m.attestationCopy(failing[1]), /isn't MagicBlock's confirmed Devnet build, so approvals are paused\.$/);
+  assert.match(m.attestationCopy(failing[1]), /isn't MagicBlock's confirmed Devnet build\.$/);
   assert.match(m.attestationCopy(failing[3]), /Couldn't confirm/);
+  // The browser check pauses nothing, so its line never says so.
+  for (const a of failing) assert.doesNotMatch(m.attestationCopy(a), /paused/);
 });
 
 test("card face carries a Sandbox mark while the issuer is a sandbox, and no back", async () => {
@@ -420,4 +424,375 @@ test("repayment offers both methods when ChainPay does, and the private one says
   assert.doesNotMatch(text, /untraceable|anonymous/i);
   assert.equal(prepared, 0, "nothing is prepared before the owner opts in");
   await unmount();
+});
+
+// ---------------------------------------------------------------- review 2026-10-04 (PR #40 frontend F1–F9, X2/X4/X5/X12)
+
+async function restoreFixture() {
+  const { Keypair, PublicKey, Transaction, TransactionInstruction } = await import("@solana/web3.js");
+  const sdk = await import("@chainpay/sdk");
+  const owner = Keypair.generate();
+  const authorizer = Keypair.generate();
+  const cardId = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
+  const programId = sdk.CARD_POLICY_PROGRAM_ID;
+  const digest = "cd".repeat(32);
+  const report = { digest, detectedAt: "", reason: "", snapshotLedgerSeq: "9", issuerEventsReplayed: 0, numbers: [
+    { key: "budget", label: "Budget", cents: "50000" }, { key: "captured", label: "Charged", cents: "12000" }, { key: "reserved", label: "Held", cents: "0" },
+    { key: "refunded", label: "Refunded", cents: "0" }, { key: "purchases", label: "Purchases", count: 3 }, { key: "exceptions", label: "Needs review", cents: "150" },
+    { key: "outstanding", label: "Owed", cents: "5025" },
+  ] };
+  const shop = new Uint8Array(32).fill(1);
+  // The owner's own private records (TEE read): what the card's rules are today.
+  const current = {
+    policy: { policyVersion: 3, authorizer: authorizer.publicKey.toBase58(), budgetCents: "50000", maxPurchaseCents: "4000", maxPurchasesPerPeriod: 0, periodSeconds: 2_592_000, currency: "USD",
+      merchantIdHashes: ["01".repeat(32)], mccs: [5734], expiresAt: null, recurringAllowed: false, feeBps: 50, maxObligationCents: "50250", frozen: true, freezeReason: "recovery",
+      recoveryState: "recovery_frozen", statementOutstandingCents: "0", exceptionsOpen: 0, members: [], ledgerSeq: "4", commitSeq: "1" },
+    period: { policy: "", periodIndex: 2, periodStart: 0n, periodEnd: 0n, capturedCents: 0n, reservedCents: 0n, refundedCents: 0n, purchasesCount: 0, exceptionCents: 0n, bump: 255 },
+  };
+  const restore = (policy = {}, o = {}) => ({
+    policy: { budgetCents: 50_000n, maxPurchaseCents: 4_000n, maxPurchasesPerPeriod: 0, periodSeconds: 2_592_000, currency: "USD", merchantIdHashes: [shop], mccs: [5734], expiresAt: 0n, recurringAllowed: false, feeBps: 50, authorizer: authorizer.publicKey.toBase58(), ...policy },
+    periodIndex: 2, capturedCents: 12_000n, reservedCents: 0n, refundedCents: 0n, purchasesCount: 3, exceptionCents: 150n, statementOutstandingCents: 5_025n,
+    ledgerHead: new Uint8Array(32).fill(4), ledgerSeq: 11n, reconDigest: Uint8Array.from(Buffer.from(digest, "hex")), ...o,
+  });
+  const wire = (args, signer = authorizer) => {
+    const ix = sdk.buildRestoreInstruction({ owner: owner.publicKey.toBase58(), cardId, authorizer: signer.publicKey.toBase58(), restore: args }, programId);
+    const t = new Transaction({ feePayer: owner.publicKey, recentBlockhash: "11111111111111111111111111111111" });
+    t.add(new TransactionInstruction({ programId: new PublicKey(ix.programId), keys: ix.keys.map((k) => ({ pubkey: new PublicKey(k.address), isSigner: k.isSigner, isWritable: k.isWritable })), data: Buffer.from(ix.data) }));
+    t.partialSign(signer);
+    return Transaction.from(t.serialize({ requireAllSignatures: false, verifySignatures: false }));
+  };
+  return { owner, authorizer, cardId, programId, report, current, restore, wire, Keypair };
+}
+
+test("F1/X4: a co-signed restore that changes any rule the owner didn't review is refused", async () => {
+  const f = await restoreFixture();
+  const reviewed = m.reviewedRestore(f.report, f.current);
+  const input = { owner: f.owner.publicKey.toBase58(), cardId: f.cardId, programId: f.programId, report: f.report, reviewed };
+  // The honest restore: the reviewed numbers, the card's own rules, its period.
+  assert.equal(m.assertCoSignedRestore(f.wire(f.restore()), input).capturedCents, 12_000n);
+  // The review repro: same 7 numbers, different rules.
+  const attacker = f.Keypair.generate();
+  const changes = [
+    [{ maxPurchaseCents: 50_000n }, /max per purchase/],
+    [{ merchantIdHashes: [] }, /shops/],
+    [{ mccs: [] }, /categories/],
+    [{ recurringAllowed: true }, /repeat charges/],
+    [{ feeBps: 1000 }, /fee/],
+    [{ maxPurchasesPerPeriod: 99 }, /purchases per period/],
+    [{ periodSeconds: 86_400 }, /period length/],
+    [{ expiresAt: 1_900_000_000n }, /end date/],
+    [{ authorizer: attacker.publicKey.toBase58() }, /ChainPay approver/],
+  ];
+  for (const [policy, why] of changes) {
+    assert.throws(() => m.assertCoSignedRestore(f.wire(f.restore(policy)), input), why, JSON.stringify(Object.keys(policy)));
+  }
+  assert.throws(() => m.assertCoSignedRestore(f.wire(f.restore({}, { periodIndex: 3 })), input), /period/);
+  assert.throws(() => m.assertCoSignedRestore(f.wire(f.restore({}, { ledgerSeq: 2n })), input), /doesn't match/, "ledger before the reviewed snapshot");
+  // A different co-signer (X4): the rules name one approver, the transaction is signed by another.
+  assert.throws(() => m.assertCoSignedRestore(f.wire(f.restore({ authorizer: attacker.publicKey.toBase58() }), attacker), input), /ChainPay approver|doesn't match/);
+  assert.throws(() => m.assertCoSignedRestore(f.wire(f.restore(), attacker), input), /doesn't match/);
+});
+
+test("F1: the rules a restore may write come from the owner's private records; the report must agree, and with neither nothing is signed", async () => {
+  const f = await restoreFixture();
+  const mine = m.rulesFromPolicy(f.current.policy, f.current.period);
+  assert.equal(mine.expiresAt, "0");
+  assert.equal(mine.periodIndex, 2);
+  // Report rules that disagree with the private records: refused before Axum is even asked.
+  assert.throws(() => m.reviewedRestore({ ...f.report, rules: { ...mine, feeBps: 1000 } }, f.current), /different card rules than your private records \(fee\)/);
+  // Records unreadable (e.g. reason not_visible): the report's rules, shown to the owner, are the reference.
+  const fromReport = m.reviewedRestore({ ...f.report, rules: mine }, { policy: null, period: null });
+  assert.equal(fromReport.rules.feeBps, 50);
+  assert.throws(() => m.reviewedRestore(f.report, { policy: null, period: null }), /can't be checked/);
+  assert.throws(() => m.reviewedRestore({ ...f.report, rules: { ...mine, periodIndex: undefined } }, { policy: null, period: null }), /which period/);
+  // Axum's report rules are parsed strictly; a malformed one can't vouch for a restore.
+  assert.deepEqual(m.parseRecoveryRules({ ...mine, merchantIdHashes: ["01".repeat(32).toUpperCase()] }).merchantIdHashes, ["01".repeat(32)]);
+  assert.equal(m.parseRecoveryRules({ ...mine, feeBps: "50" }), undefined);
+  assert.equal(m.recoveryView({ recovery: { state: "recovery_frozen", report: { ...f.report, rules: mine } } }).report.rules.authorizer, mine.authorizer);
+});
+
+test("F2: card setup signs only the exact setup instructions for THIS card", async () => {
+  const { Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, ComputeBudgetProgram } = await import("@solana/web3.js");
+  const sdk = await import("@chainpay/sdk");
+  const owner = Keypair.generate();
+  const ownerKey = owner.publicKey.toBase58();
+  const programId = sdk.CARD_POLICY_PROGRAM_ID;
+  const cardId = Uint8Array.from({ length: 32 }, (_, i) => 200 - i);
+  const otherCardId = new Uint8Array(32).fill(7);
+  const accounts = sdk.deriveCardAccounts(ownerKey, cardId, programId);
+  const prepared = { cardId: sdk.cardIdToHex(cardId), accounts: { binding: accounts.binding, policy: accounts.policy, period: accounts.period, commitment: accounts.commitment, escrow: accounts.escrow }, initTx: "", delegateTx: "", escrowTopUpTx: "", authorizer: Keypair.generate().publicKey.toBase58(), teeValidator: sdk.DEVNET_TEE_VALIDATOR, prefundLamports: "5000000" };
+  const web3ix = (ix) => new TransactionInstruction({ programId: new PublicKey(ix.programId), keys: ix.keys.map((k) => ({ pubkey: new PublicKey(k.address), isSigner: k.isSigner, isWritable: k.isWritable })), data: Buffer.from(ix.data) });
+  const wire = (...ixs) => { const t = new Transaction({ feePayer: owner.publicKey, recentBlockhash: "11111111111111111111111111111111" }).add(...ixs); return Transaction.from(t.serialize({ requireAllSignatures: false, verifySignatures: false })); };
+  const init = (o = {}) => web3ix(sdk.buildInitCardInstruction({ owner: ownerKey, cardId, issuer: 1, issuerCardRefHash: new Uint8Array(32).fill(3), prefundLamports: 5_000_000n, ...o }, programId));
+  const delegate = (o = {}) => web3ix(sdk.buildDelegateCardInstruction({ owner: ownerKey, cardId, validator: sdk.DEVNET_TEE_VALIDATOR, ...o }, programId));
+  const topUp = (lamports = 20_000_000n, escrow = accounts.escrow, policy = accounts.policy) => {
+    const data = Buffer.alloc(17); data.writeBigUInt64LE(9n, 0); data.writeBigUInt64LE(lamports, 8); data[16] = 255;
+    return new TransactionInstruction({ programId: new PublicKey(sdk.DELEGATION_PROGRAM_ID), keys: [
+      { pubkey: owner.publicKey, isSigner: true, isWritable: true }, { pubkey: new PublicKey(policy), isSigner: false, isWritable: false },
+      { pubkey: new PublicKey(escrow), isSigner: false, isWritable: true }, { pubkey: SystemProgram.programId, isSigner: false, isWritable: false } ], data });
+  };
+  const input = { owner: ownerKey, prepared, programId };
+  // The 3 real setup steps pass.
+  m.assertCardSetupTransaction(wire(init()), 0, input);
+  m.assertCardSetupTransaction(wire(delegate()), 1, input);
+  m.assertCardSetupTransaction(wire(topUp()), 2, input);
+  const refused = /does something other than set up this card/;
+  // The review repro: a 500 SOL System transfer dressed as a setup step.
+  const drain = SystemProgram.transfer({ fromPubkey: owner.publicKey, toPubkey: Keypair.generate().publicKey, lamports: 500_000_000_000 });
+  for (const step of [0, 1, 2]) assert.throws(() => m.assertCardSetupTransaction(wire(drain), step, input), refused, `transfer as step ${step}`);
+  assert.throws(() => m.assertCardSetupTransaction(wire(init(), drain), 0, input), refused, "transfer riding along");
+  assert.throws(() => m.assertCardSetupTransaction(wire(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000_000_000 }), init()), 0, input), refused, "priority-fee drain");
+  // card_policy instructions that aren't this step, or aimed at another of the owner's cards.
+  assert.throws(() => m.assertCardSetupTransaction(wire(web3ix(sdk.buildCloseCardInstruction({ owner: ownerKey, cardId: otherCardId }, programId))), 0, input), refused, "close another card");
+  assert.throws(() => m.assertCardSetupTransaction(wire(web3ix(sdk.buildWipeCardInstruction({ owner: ownerKey, cardId: otherCardId }, programId))), 1, input), refused, "wipe another card");
+  assert.throws(() => m.assertCardSetupTransaction(wire(init({ cardId: otherCardId })), 0, input), refused, "init another card");
+  assert.throws(() => m.assertCardSetupTransaction(wire(delegate({ cardId: otherCardId })), 1, input), refused, "delegate another card");
+  assert.throws(() => m.assertCardSetupTransaction(wire(init()), 1, input), refused, "right instruction, wrong step");
+  assert.throws(() => m.assertCardSetupTransaction(wire(init({ prefundLamports: 900_000_000n })), 0, input), refused, "prefund above the cap");
+  // Escrow: only this card's escrow, capped.
+  assert.throws(() => m.assertCardSetupTransaction(wire(topUp(m.MAX_ESCROW_TOP_UP_LAMPORTS + 1n)), 2, input), refused, "top-up above the cap");
+  const other = sdk.deriveCardAccounts(ownerKey, otherCardId, programId);
+  assert.throws(() => m.assertCardSetupTransaction(wire(topUp(20_000_000n, other.escrow, other.policy)), 2, input), refused, "another card's escrow");
+  // Served accounts that aren't this card's.
+  assert.throws(() => m.assertCardSetupTransaction(wire(init()), 0, { ...input, prepared: { ...prepared, accounts: { ...prepared.accounts, escrow: other.escrow } } }), refused);
+  // Paid by someone else.
+  const t = new Transaction({ feePayer: Keypair.generate().publicKey, recentBlockhash: "11111111111111111111111111111111" }).add(init());
+  assert.throws(() => m.assertCardSetupTransaction(t, 0, input), refused);
+});
+
+const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+function dialogSetup() {
+  globalThis.CSS ??= { supports: () => false, escape: (value) => String(value) };
+  dom.window.CSS ??= globalThis.CSS;
+  const D = dom.window.HTMLDialogElement?.prototype;
+  if (D && !D.showModal) { D.showModal = function () { this.setAttribute("open", ""); }; D.show = D.showModal; D.close = function () { this.removeAttribute("open"); }; }
+}
+const payButtons = () => [...document.querySelectorAll('[data-testid="repayment-dialog"]')].length
+  ? [...document.querySelector('[data-testid="repayment-dialog"]').closest("dialog")?.querySelectorAll("button") ?? document.querySelectorAll("button")].filter((b) => /^Pay \$/.test(b.textContent.trim()))
+  : [];
+
+test("F4/X2: an unknown repayment outcome reads 'Outcome unknown — checking', Pay stays off, and no other permission can pay the same statement", async () => {
+  dialogSetup();
+  document.body.innerHTML = "";
+  const source = m.createFixtureCardsSource({ delayMs: 0, repay: "unknown" });
+  const [card] = await source.listCards();
+  const statements = await source.statements(card.cardId);
+  const calls = [];
+  const fixturePay = source.payStatement;
+  source.payStatement = async (...args) => { calls.push(args[2]); return fixturePay(...args); };
+  const wallet = "Owner1111111111111111111111111111111111111";
+  const mandates = [
+    { address: "MandA111111111111111111111111111111111111", approvedAgent: wallet, allowedMint: USDC, status: "active" },
+    { address: "MandB111111111111111111111111111111111111", approvedAgent: wallet, allowedMint: USDC, status: "active" },
+  ];
+  const { host, unmount } = await render(createElement(m.CardStatement, { source, card, statements, mandates, wallet, onChanged() {} }));
+  await click([...host.querySelectorAll("button")].find((b) => /^Pay \$/.test(b.textContent.trim())));
+  await settle(20);
+  let [pay] = payButtons().slice(-1);
+  assert.equal(pay.disabled || pay.getAttribute("aria-disabled") === "true", false, "payable before any attempt");
+  await click(pay);
+  await settle(20);
+  const dialogText = document.querySelector('[data-testid="repayment-dialog"]').textContent;
+  assert.match(document.querySelector('[data-testid="repay-unknown"]').textContent, /Outcome unknown — checking/);
+  assert.doesNotMatch(dialogText, /Not paid/);
+  [pay] = payButtons().slice(-1);
+  assert.ok(pay.disabled || pay.getAttribute("aria-disabled") === "true", "Pay disabled after an unknown outcome");
+  // The receipt to check is pre-filled from the attempt.
+  const inputs = [...document.querySelectorAll('[data-testid="repayment-dialog"] input')];
+  assert.ok(inputs.some((input) => input.value === "4RcptStatementFixture11111111111111111111"));
+  await click(pay);
+  await settle(10);
+  assert.deepEqual(calls, ["MandA111111111111111111111111111111111111"], "paid once, never again through another permission");
+  await unmount();
+  document.body.innerHTML = "";
+  // Re-opened later: the statement is checked across every permission before Pay can be used.
+  const again = await render(createElement(m.CardStatement, { source, card, statements, mandates, wallet, onChanged() {} }));
+  await click([...again.host.querySelectorAll("button")].find((b) => /^Pay \$/.test(b.textContent.trim())));
+  await settle(20);
+  [pay] = payButtons().slice(-1);
+  assert.ok(pay.disabled || pay.getAttribute("aria-disabled") === "true", "still disabled after reopening");
+  assert.ok(document.querySelector('[data-testid="repay-unknown"]'));
+  await again.unmount();
+  document.body.innerHTML = "";
+});
+
+test("X2: a receipt already on Solana under another permission closes the statement instead of offering Pay", async () => {
+  dialogSetup();
+  document.body.innerHTML = "";
+  const source = m.createFixtureCardsSource({ delayMs: 0 });
+  const [card] = await source.listCards();
+  const statements = await source.statements(card.cardId);
+  const seen = [];
+  source.repaymentStatus = async (_s, addresses) => { seen.push(addresses); return { state: "paid", receiptPda: "RcptOnB", mandatePda: "MandB111111111111111111111111111111111111" }; };
+  const submitted = [];
+  source.submitRepayment = async (_c, _s, input) => { submitted.push(input); return { state: "repayment_observed" }; };
+  let paid = 0;
+  source.payStatement = async () => { paid += 1; throw new Error("must not be called"); };
+  const wallet = "Owner1111111111111111111111111111111111111";
+  const mandates = [
+    { address: "MandA111111111111111111111111111111111111", approvedAgent: wallet, allowedMint: USDC, status: "active" },
+    { address: "MandB111111111111111111111111111111111111", approvedAgent: wallet, allowedMint: USDC, status: "paused" },
+  ];
+  const { host, unmount } = await render(createElement(m.CardStatement, { source, card, statements, mandates, wallet, onChanged() {} }));
+  await click([...host.querySelectorAll("button")].find((b) => /^Pay \$/.test(b.textContent.trim())));
+  await settle(20);
+  assert.deepEqual(seen[0], mandates.map((item) => item.address), "checked across every permission, eligible or not");
+  assert.deepEqual(submitted, [{ receiptPda: "RcptOnB", mandatePda: "MandB111111111111111111111111111111111111" }]);
+  assert.equal(paid, 0);
+  await unmount();
+  document.body.innerHTML = "";
+  // A failed check never opens Pay.
+  source.repaymentStatus = async () => { throw new Error("RPC unavailable"); };
+  const failing = await render(createElement(m.CardStatement, { source, card, statements, mandates, wallet, onChanged() {} }));
+  await click([...failing.host.querySelectorAll("button")].find((b) => /^Pay \$/.test(b.textContent.trim())));
+  await settle(20);
+  const [pay] = payButtons().slice(-1);
+  assert.ok(pay.disabled || pay.getAttribute("aria-disabled") === "true");
+  assert.match(document.querySelector('[data-testid="repay-check-failed"]').textContent, /Pay stays off/);
+  await failing.unmount();
+  document.body.innerHTML = "";
+});
+
+test("X2: the repayment lookup is per statement across permissions, and only an expired, receipt-less attempt reopens Pay", async () => {
+  window.localStorage.clear();
+  const digest = "ef".repeat(32);
+  const none = await m.lookupRepayment({ digest, mandateAddresses: ["A"], getBlockHeight: async () => 1, findReceipt: async () => null });
+  assert.deepEqual(none, { state: "none" });
+  m.recordRepaymentAttempt(digest, { mandatePda: "A", receiptPda: "RA", lastValidBlockHeight: 100 });
+  // Before expiry with no receipt: unknown, whatever other permissions exist.
+  assert.deepEqual(await m.lookupRepayment({ digest, mandateAddresses: ["B"], getBlockHeight: async () => 90, findReceipt: async () => null }), { state: "unknown", receiptPda: "RA", mandatePda: "A" });
+  // A receipt under another permission: paid.
+  assert.deepEqual(await m.lookupRepayment({ digest, mandateAddresses: ["B"], getBlockHeight: async () => 90, findReceipt: async (mandate) => mandate === "B" ? "RB" : null }), { state: "paid", receiptPda: "RB", mandatePda: "B" });
+  m.recordRepaymentAttempt(digest, { mandatePda: "A", receiptPda: "RA", lastValidBlockHeight: 100 });
+  // The original permission is checked even when it's no longer listed.
+  const asked = [];
+  assert.equal((await m.lookupRepayment({ digest, mandateAddresses: [], getBlockHeight: async () => 90, findReceipt: async (mandate) => { asked.push(mandate); return mandate === "A" ? "RA" : null; } })).state, "paid");
+  assert.deepEqual(asked, ["A"]);
+  m.recordRepaymentAttempt(digest, { mandatePda: "A", receiptPda: "RA", lastValidBlockHeight: 100 });
+  // Past its last valid height with no receipt: it can never land, so it's cleared.
+  assert.deepEqual(await m.lookupRepayment({ digest, mandateAddresses: ["A"], getBlockHeight: async () => 101, findReceipt: async () => null }), { state: "none" });
+  assert.deepEqual(m.readRepaymentAttempts(digest), []);
+});
+
+test("F5/X5: the privacy check says what was checked, and shows ChainPay's approver attestation with its real mode", async () => {
+  // The review repro: hardware challenge-bound, build unreadable. Not "hardware verified", not "paused".
+  const repro = { hardware: "challenge_bound", measurements: "unavailable", label: "Hardware verified, but the workload couldn't be checked, so approvals are paused" };
+  assert.equal(m.attestationCopy(repro), "The private rollup answered a fresh challenge, but Intel's hardware signature wasn't checked here. Its build couldn't be checked.");
+  assert.match(m.BROWSER_CHECK_NOTE, /doesn't pause anything/);
+  // Axum's enum ("match", "unchecked") is normalized in one place.
+  const served = m.normalizeApproverAttestation({ mode: "enforce", hardware: "verified", measurements: "match", checkedAt: "2026-10-04T10:00:00Z", label: "x" });
+  assert.deepEqual(served, { mode: "enforce", hardware: "verified", measurements: "matched", checkedAt: "2026-10-04T10:00:00Z" });
+  assert.equal(m.approverAttestationPassed(served), true);
+  const report = m.normalizeApproverAttestation({ mode: "report", hardware: "verified", measurements: "match", label: "x" });
+  assert.equal(m.approverAttestationPassed(report), false, "report mode never reads as a gate");
+  assert.match(m.approverAttestationCopy(report), /Report only: purchases are still approved when this check fails/);
+  assert.match(m.approverAttestationCopy(m.normalizeApproverAttestation({ mode: "enforce", hardware: "unchecked", measurements: "pending", label: "" })), /hardware wasn't checked/);
+  assert.match(m.approverAttestationCopy(null), /hasn't reported/);
+  // Rendered: the browser line plus the approver line from the card view.
+  globalThis.CSS ??= { supports: () => false, escape: (value) => String(value) };
+  const source = m.createFixtureCardsSource({ delayMs: 0, unlocked: true, attestation: "challenge_bound" });
+  const [card] = await source.listCards();
+  const { host, unmount } = await render(createElement(m.CardPrivacyCheck, { source, card, unlocked: true, onUnlocked() {} }));
+  await click(button(host, "Run the check"));
+  await settle(20);
+  assert.doesNotMatch(host.querySelector('[data-testid="attestation"]').textContent, /paused|Hardware verified/);
+  assert.match(host.querySelector('[data-testid="approver-attestation"]').textContent, /ChainPay's approver checks.*Report only/);
+  assert.equal(host.querySelector('[data-testid="approver-attestation"]').dataset.mode, "report");
+  await unmount();
+});
+
+test("F6: no card copy claims only the owner can read the limits", async () => {
+  const { readdir, readFile } = await import("node:fs/promises");
+  const dir = join(frontendRoot, "src/dashboard/cards");
+  const files = [...(await readdir(dir)).filter((name) => /\.(tsx?|css)$/.test(name)).map((name) => join(dir, name)), join(frontendRoot, "src/dashboard/tabCopy.ts"), join(frontendRoot, "src/verify/CardVerifyPage.tsx")];
+  const banned = [/only you (?:can )?(?:see|read)/i, /nobody else/i, /no ?one else/i, /only your wallet and people you add/i, /limits only you/i, /only lets you read/i, /without seeing anything else/i, /every other field on this card stays private/i];
+  const hits = [];
+  for (const file of files) {
+    const text = await readFile(file, "utf8");
+    for (const pattern of banned) if (pattern.test(text)) hits.push(`${file.replace(frontendRoot, "")}: ${pattern}`);
+  }
+  assert.deepEqual(hits, []);
+  assert.equal(m.PRIVACY_COPY, "Hidden from the public chain and from wallets you haven't approved. ChainPay's approver, readers you add and the card issuer can see them.");
+  // Rendered where the review found the overclaims.
+  globalThis.CSS ??= { supports: () => false, escape: (value) => String(value) };
+  const locked = m.createFixtureCardsSource({ delayMs: 0 });
+  const list = await render(createElement(m.CardList, { source: locked, unlocked: false, onUnlocked() {}, onNavigate() {} }));
+  await settle(20);
+  assert.match(document.querySelector('[data-testid="cards-unlock"]').textContent, /ChainPay's approver, readers you add and the card issuer can see them/);
+  await list.unmount();
+});
+
+test("F7: the card number closes on a section switch, a hidden tab and unmount", async () => {
+  const live = { cardNumberSession: async () => ({ embedUrl: "https://sandbox.lithic.com/v1/embed?session=s1&type=PAN", expiresAt: new Date(Date.now() + 30_000).toISOString() }) };
+  const view = (closeKey) => createElement(m.CardNumberReveal, { source: live, card, closeKey });
+  const { host, root, unmount } = await render(view("activity"));
+  await click(button(host, "Show card number"));
+  await settle();
+  assert.ok(host.querySelector("iframe"), "open");
+  await act(async () => { root.render(view("statement")); });
+  assert.equal(host.querySelector("iframe"), null, "section switch closes it");
+  await click(button(host, "Show card number"));
+  await settle();
+  assert.ok(host.querySelector("iframe"));
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+  await act(async () => { document.dispatchEvent(new window.Event("visibilitychange")); });
+  assert.equal(host.querySelector("iframe"), null, "hidden tab closes it");
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+  await click(button(host, "Show card number"));
+  await settle();
+  await act(async () => { window.dispatchEvent(new window.Event("pagehide")); });
+  assert.equal(host.querySelector("iframe"), null, "leaving the page closes it");
+  await unmount();
+  assert.equal(document.querySelector("iframe.cp-card-number-frame"), null, "unmount removes it");
+});
+
+test("F8: the share picker says the link reveals the owner's wallet; the verify page doesn't claim the rest is private", async () => {
+  globalThis.CSS ??= { supports: () => false, escape: (value) => String(value) };
+  const D = dom.window.HTMLDialogElement?.prototype;
+  if (D && !D.showModal) { D.showModal = function () { this.setAttribute("open", ""); }; D.show = D.showModal; D.close = function () { this.removeAttribute("open"); }; }
+  const source = m.createFixtureCardsSource({ delayMs: 0 });
+  const [first] = await source.listCards();
+  const picker = await render(createElement(m.CardSharePicker, { source, card: first, open: true, onClose() {} }));
+  await settle();
+  assert.match(document.querySelector('[data-testid="share-wallet-warning"]').textContent, /shows your wallet address/);
+  await picker.unmount();
+  document.body.innerHTML = "";
+});
+
+test("F9: a failed private read shows an error with a retry, never 'Private', and doesn't hide other cards", async () => {
+  globalThis.CSS ??= { supports: () => false, escape: (value) => String(value) };
+  const source = m.createFixtureCardsSource({ delayMs: 0, unlocked: true });
+  const cards = await source.listCards();
+  const read = source.readPrivate.bind(source);
+  let failing = true;
+  source.readPrivate = async (c) => { if (failing && c.cardId === cards[1].cardId) throw new Error("rpc down"); return read(c); };
+  const { host, unmount } = await render(createElement(m.CardList, { source, unlocked: true, onUnlocked() {}, onNavigate() {} }));
+  await settle(30);
+  const rows = [...host.querySelectorAll("tbody tr")];
+  assert.match(rows[0].textContent, /\$/, "other cards keep their values");
+  assert.match(rows[1].textContent, /Couldn't load/);
+  assert.doesNotMatch(rows[1].textContent, /Private/);
+  assert.match(host.querySelector('[data-testid="cards-read-failed"]').textContent, /didn't load/);
+  failing = false;
+  await click(button(host, "Try again"));
+  await settle(30);
+  assert.equal(host.querySelector('[data-testid="cards-read-failed"]'), null);
+  assert.doesNotMatch(host.querySelectorAll("tbody tr")[1].textContent, /Couldn't load/);
+  await unmount();
+  // A rollup RPC error (not thrown) is a failure too.
+  const rpc = m.createFixtureCardsSource({ delayMs: 0, unlocked: true });
+  rpc.readPrivate = async () => ({ policy: { state: "rpc_error", code: -32000 }, period: { state: "rpc_error", code: -32000 } });
+  const second = await render(createElement(m.CardList, { source: rpc, unlocked: true, onUnlocked() {}, onNavigate() {} }));
+  await settle(30);
+  assert.ok(second.host.querySelector('[data-testid="cards-read-failed"]'));
+  await second.unmount();
+});
+
+test("X12: card dashboard code is lazy, so /verify doesn't download it", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const dashboard = await readFile(join(frontendRoot, "src/dashboard/Dashboard.tsx"), "utf8");
+  assert.doesNotMatch(dashboard, /import \{ CardsArea \} from/);
+  assert.match(dashboard, /lazy\(\(\) => import\("\.\/cards\/CardsArea"\)\)/);
+  const config = await readFile(join(frontendRoot, "vite.config.ts"), "utf8");
+  assert.match(config, /\/src\/dashboard\/cards\/.*return "cards"/);
 });

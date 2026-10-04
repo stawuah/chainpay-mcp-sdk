@@ -7,16 +7,20 @@ import { cardStatus } from "./lifecycle";
 import { CardsNotEnabledError, type CardPrivateRead } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { UnlockStrip } from "./Unlock";
-import { Money, Pill, PrivateValue } from "./ui";
+import { Money, Pill, PrivateValue, readFailed } from "./ui";
 import { AgentCard, frostFor } from "./AgentCard";
+import { PRIVACY_COPY } from "./privacyCopy";
 
-export const CARDS_LIST_COPY = { kicker: "AGENT CARDS", title: "Cards", subtitle: "Give an agent a card. Only you see its limits." };
+export const CARDS_LIST_COPY = { kicker: "AGENT CARDS", title: "Cards", subtitle: "Give an agent a card. Its limits stay hidden from the public chain." };
 
 type LoadState = { kind: "loading" } | { kind: "ready"; cards: CardView[] } | { kind: "not_enabled" } | { kind: "error"; message: string };
 
 export function CardList({ source, unlocked, onUnlocked, onNavigate, notice }: CardsShared) {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [reads, setReads] = useState<Record<string, CardPrivateRead>>({});
+  // Cards whose private read failed: shown as an error with a retry, never as "Private".
+  const [failed, setFailed] = useState<Record<string, true>>({});
+  const [readAttempt, setReadAttempt] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -30,11 +34,22 @@ export function CardList({ source, unlocked, onUnlocked, onNavigate, notice }: C
   useEffect(() => {
     if (!unlocked || state.kind !== "ready") return;
     let active = true;
-    void Promise.all(state.cards.map(async (card) => [card.cardId, await source.readPrivate(card)] as const)).then((entries) => {
-      if (active) setReads(Object.fromEntries(entries));
+    // One card's failure never hides the others' values.
+    void Promise.allSettled(state.cards.map((card) => source.readPrivate(card))).then((results) => {
+      if (!active) return;
+      const nextReads: Record<string, CardPrivateRead> = {};
+      const nextFailed: Record<string, true> = {};
+      results.forEach((result, i) => {
+        const id = state.cards[i].cardId;
+        if (result.status === "fulfilled" && !readFailed(result.value)) nextReads[id] = result.value;
+        else nextFailed[id] = true;
+      });
+      setReads(nextReads);
+      setFailed(nextFailed);
     });
     return () => { active = false; };
-  }, [source, unlocked, state]);
+  }, [source, unlocked, state, readAttempt]);
+  const failedCount = Object.keys(failed).length;
 
   const newCard = <Button type="button" variant="primary" label="New card" icon={<Plus size={18} />} onClick={() => onNavigate({ cardsNew: true })} />;
 
@@ -59,7 +74,7 @@ export function CardList({ source, unlocked, onUnlocked, onNavigate, notice }: C
           </div>
           <div className="cp-cards-empty-copy">
             <h3>No cards yet</h3>
-            <p>Give your agent a card with limits only you can read. It pays at regular checkouts, and you can freeze it in one tap.</p>
+            <p>Give your agent a card with its own limits. {PRIVACY_COPY} It pays only where you allow, and you can freeze it in one tap.</p>
             {newCard}
           </div>
         </div>
@@ -67,6 +82,13 @@ export function CardList({ source, unlocked, onUnlocked, onNavigate, notice }: C
       {state.kind === "ready" && state.cards.length > 0 && (
         <>
           {!unlocked && <UnlockStrip source={source} onUnlocked={onUnlocked} />}
+          {unlocked && failedCount > 0 && (
+            <div className="builder-error cp-read-failed" role="alert" data-testid="cards-read-failed">
+              <b>Private details didn't load</b>
+              <span>{failedCount === 1 ? "One card's" : `${failedCount} cards'`} limits couldn't be read from the private rollup.</span>
+              <Button type="button" variant="secondary" label="Try again" onClick={() => setReadAttempt((n) => n + 1)} />
+            </div>
+          )}
           <div className="dashboard-card cp-card-table-wrap">
             <table className="cp-card-table" data-testid="cards-table">
               <thead>
@@ -87,8 +109,8 @@ export function CardList({ source, unlocked, onUnlocked, onNavigate, notice }: C
                           <span><b>{card.label}</b><small>•••• {card.lastFour}</small></span>
                         </button>
                       </td>
-                      <td data-label="Left this period">{left !== null && policy ? <span><Money cents={left} /><small className="cp-sub"> of <Money cents={policy.budgetCents} /></small></span> : <PrivateValue />}</td>
-                      <td data-label="Charged this period">{period ? <Money cents={period.capturedCents} /> : <PrivateValue />}</td>
+                      <td data-label="Left this period">{left !== null && policy ? <span><Money cents={left} /><small className="cp-sub"> of <Money cents={policy.budgetCents} /></small></span> : <PrivateValue failed={Boolean(failed[card.cardId])} />}</td>
+                      <td data-label="Charged this period">{period ? <Money cents={period.capturedCents} /> : <PrivateValue failed={Boolean(failed[card.cardId])} />}</td>
                       <td data-label="Status"><Pill pill={status} /></td>
                       <td className="cp-row-action"><Button type="button" variant="secondary" label={status.key === "needs_restore" ? "Restore" : "Open"} onClick={() => onNavigate({ cardId: card.cardId })} /></td>
                     </tr>

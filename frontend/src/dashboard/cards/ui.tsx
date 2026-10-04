@@ -24,9 +24,18 @@ export function Money({ cents, className }: { cents: string | bigint; className?
   return <span className={`cp-money${className ? ` ${className}` : ""}`}>{formatUsdCents(cents)}</span>;
 }
 
-/** Shown wherever a value lives in the private rules and the owner hasn't opened them. Never rendered as $0. */
-export function PrivateValue() {
+/**
+ * Shown wherever a value lives in the private rules and the owner hasn't opened them. Never rendered as $0.
+ * `failed`: the owner opened them but the read failed, which must not look like "Private".
+ */
+export function PrivateValue({ failed = false }: { failed?: boolean }) {
+  if (failed) return <span className="cp-private-value is-failed" data-read="failed"><CircleHelp size={12} aria-hidden="true" /> Couldn't load</span>;
   return <span className="cp-private-value"><Lock size={12} aria-hidden="true" /> Private</span>;
+}
+
+/** A private read that failed (thrown, or an RPC error from the rollup), as opposed to one this wallet can't see. */
+export function readFailed(read: { policy: { state: string }; period: { state: string } } | undefined): boolean {
+  return read?.policy.state === "rpc_error" || read?.period.state === "rpc_error";
 }
 
 export function IllustrativeBanner() {
