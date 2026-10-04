@@ -116,7 +116,7 @@ export function CardVerifyPage() {
               {(state.check.state === "verified" || state.check.state === "mismatch") && <><dt>Written at slot</dt><dd>{state.check.writtenSlot}</dd><dt>Public commitment</dt><dd>{state.check.root}</dd></>}
               <dt>Read from</dt><dd>{state.address}</dd>
             </dl>
-            <p className="receipt-identifier-note">Only the fields above were shared. Every other field on this card stays private. The values are shown in the clear; the check proves they match what ChainPay committed on Solana Devnet.</p>
+            <p className="receipt-identifier-note">Only the fields above were shared; the card's other fields aren't in this link. The card's public account (above) shows the owner's wallet address. The values are shown in the clear; the check proves they match what ChainPay committed on Solana Devnet.</p>
           </article>
         )}
       </section>

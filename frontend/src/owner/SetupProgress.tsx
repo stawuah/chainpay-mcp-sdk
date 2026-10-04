@@ -7,7 +7,7 @@ export function SetupProgress({ current }: { current: 0 | 1 | 2 }) {
       {stages.map((label, index) => (
         <li key={label} aria-current={index === current ? "step" : undefined} className={index < current ? "is-complete" : ""}>
           <span className="cp-setup-progress-number" aria-hidden="true">{index < current ? "✓" : `0${index + 1}`}</span>
-          <span>{label}<span className="cp-setup-sr-only">{index < current ? ", complete" : index > current ? ", upcoming" : ", current step"}</span></span>
+          <span>{label}<span className="sr-only">{index < current ? ", complete" : index > current ? ", upcoming" : ", current step"}</span></span>
         </li>
       ))}
     </ol>

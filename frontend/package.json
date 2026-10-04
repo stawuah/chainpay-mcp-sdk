@@ -19,12 +19,14 @@
     "test:receipts-owner-browser": "node test/receipts-owner.browser.mjs",
     "test:permission-request-browser": "node test/permission-request.browser.mjs",
     "test:status-browser": "node test/status.browser.mjs",
-    "test:browser": "npm run test:landing-browser && npm run test:landing-motion-browser && npm run test:permission-browser && npm run test:verify-public-browser && npm run test:dashboard-nav-browser && npm run test:live-purchase-browser && npm run test:record-details-scope-browser && npm run test:receipts-owner-browser && npm run test:permission-request-browser && npm run test:crossmint-browser && npm run test:pet-browser && npm run test:status-browser",
+    "test:browser": "npm run test:landing-browser && npm run test:landing-motion-browser && npm run test:permission-browser && npm run test:verify-public-browser && npm run test:dashboard-nav-browser && npm run test:live-purchase-browser && npm run test:record-details-scope-browser && npm run test:receipts-owner-browser && npm run test:permission-request-browser && npm run test:crossmint-browser && npm run test:pet-browser && npm run test:status-browser && npm run test:cards-browser && npm run test:dashboard-workspace",
     "test:crossmint-browser": "node test/crossmint-inbox.browser.mjs",
     "test:owner-onboarding-browser": "node test/owner-onboarding.browser.mjs",
     "test:dashboard-owner": "node test/dashboard-owner.browser.mjs",
     "test:pet-browser": "node test/pet.browser.mjs",
-    "test:community-pet-browser": "node test/community-pet.browser.mjs && node test/community-review.browser.mjs"
+    "test:community-pet-browser": "node test/community-pet.browser.mjs && node test/community-review.browser.mjs",
+    "test:dashboard-workspace": "node test/dashboard-workspace.browser.mjs",
+    "test:cards-browser": "node test/cards.browser.mjs"
   },
   "dependencies": {
     "@astryxdesign/core": "0.6.1",

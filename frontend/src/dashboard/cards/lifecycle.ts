@@ -1,5 +1,6 @@
 import type { CardActivityRow, CardView, IssuerFreezeState } from "@chainpay/sdk";
 import { DECLINE_COPY } from "@chainpay/sdk";
+import type { StatusIcon, StatusProps, StatusTone } from "../../ui/workspace/Status";
 
 /*
  * Plain words for every card state (ruling K8). Each state has its own label
@@ -8,7 +9,7 @@ import { DECLINE_COPY } from "@chainpay/sdk";
  */
 
 export type PillTone = "neutral" | "info" | "positive" | "warning" | "danger";
-export type PillIcon = "clock" | "hold" | "check" | "half" | "undo" | "hourglass" | "late" | "refund" | "flag" | "alert" | "x" | "help" | "snow" | "lock" | "wrench" | "dot";
+export type PillIcon = "clock" | "hold" | "check" | "half" | "undo" | "hourglass" | "late" | "refund" | "flag" | "alert" | "x" | "help" | "snow" | "lock" | "dot";
 
 export type StatePill = { key: string; label: string; tone: PillTone; icon: PillIcon; detail?: string };
 
@@ -87,10 +88,10 @@ export type CardStatusPill = StatePill & { key: "active" | "frozen" | "freeze_pe
 export function cardStatus(card: CardView): CardStatusPill {
   const recovery = typeof card.recovery?.state === "string" ? card.recovery.state : "normal";
   if (recovery === "recovery_frozen" || recovery === "restored_pending_reconcile") {
-    return { key: "needs_restore", label: "Needs restore", tone: "danger", icon: "wrench" };
+    return { key: "needs_restore", label: "Needs restore", tone: "warning", icon: "alert" };
   }
   if (card.freeze.onChain) {
-    if (card.freeze.issuer === "pending_issuer_confirmation") return { key: "freeze_pending", label: "Freeze pending", tone: "warning", icon: "clock" };
+    if (card.freeze.issuer === "pending_issuer_confirmation") return { key: "freeze_pending", label: "Freeze pending", tone: "info", icon: "clock" };
     if (card.freeze.issuer === "failed") return { key: "freeze_failed", label: "Freeze not confirmed", tone: "danger", icon: "alert" };
     return { key: "frozen", label: "Frozen", tone: "neutral", icon: "snow" };
   }
@@ -98,6 +99,61 @@ export function cardStatus(card: CardView): CardStatusPill {
     return { key: "setting_up", label: "Setting up", tone: "neutral", icon: "clock" };
   }
   return { key: "active", label: "Active", tone: "positive", icon: "check" };
+}
+
+/*
+ * One appearance per state, shared by the Cards area and Overview's Cards
+ * summary, on the workspace Status contract (DESIGN.md 2026-10-04): positive
+ * check-circle, pending clock, paused pause, needs-review alert-triangle,
+ * expired calendar-x, failed x-circle, unknown help-circle. Labels stay each
+ * state's own words; only tone and icon come from here.
+ */
+type Appearance = { tone: StatusTone; icon: StatusIcon };
+const POSITIVE: Appearance = { tone: "positive", icon: "check-circle" };
+const PENDING: Appearance = { tone: "info", icon: "clock" };
+const PAUSED: Appearance = { tone: "neutral", icon: "pause" };
+const REVIEW: Appearance = { tone: "warning", icon: "alert-triangle" };
+const EXPIRED: Appearance = { tone: "neutral", icon: "calendar-x" };
+const FAILED: Appearance = { tone: "critical", icon: "x-circle" };
+const UNKNOWN: Appearance = { tone: "unknown", icon: "help-circle" };
+
+const STATE_APPEARANCE: Record<string, Appearance> = {
+  // Card status
+  active: POSITIVE,
+  frozen: PAUSED,
+  freeze_pending: PENDING,
+  setting_up: PENDING,
+  freeze_failed: FAILED,
+  needs_restore: REVIEW,
+  // Activity lifecycle
+  pending: PENDING,
+  reserved: PENDING,
+  captured: POSITIVE,
+  partially_captured: POSITIVE,
+  reversed: POSITIVE,
+  expired: EXPIRED,
+  late_capture: REVIEW,
+  refunded: POSITIVE,
+  forced_capture: REVIEW,
+  declined: FAILED,
+  ambiguous: UNKNOWN,
+  disputed: REVIEW,
+  exception: REVIEW,
+  // Activity kinds without a lifecycle
+  freeze: PAUSED,
+  unfreeze: POSITIVE,
+  policy_change: POSITIVE,
+  repayment: POSITIVE,
+};
+
+/** Tone and icon for a card or activity state key. An unrecognised key reads as unknown, never as fine. */
+export function stateAppearance(key: string): Appearance {
+  return STATE_APPEARANCE[key] ?? UNKNOWN;
+}
+
+/** Props for the shared workspace Status. `describe` adds the state's detail for assistive technology. */
+export function pillStatusProps(pill: StatePill, describe = true): StatusProps {
+  return { ...stateAppearance(pill.key), label: pill.label, description: describe ? pill.detail : undefined };
 }
 
 export const ISSUER_FREEZE_COPY: Record<IssuerFreezeState, string> = {

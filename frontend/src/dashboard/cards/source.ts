@@ -37,6 +37,26 @@ export type RecoveryReport = {
   issuerEventsReplayed: number;
   /** Every value the restore will write, keyed so the signed values can be checked against what was shown. */
   numbers: { key: RecoveryNumberKey; label: string; cents?: string; count?: number }[];
+  /** The card rules the restore writes, when ChainPay's report includes them (shown to the owner and compared before signing). */
+  rules?: RecoveryRules;
+};
+
+/** Every rule `restore` writes besides the budget (that one is a reviewed number). Cents and seconds as decimal strings. */
+export type RecoveryRules = {
+  maxPurchaseCents: string;
+  maxPurchasesPerPeriod: number;
+  periodSeconds: number;
+  currency: string;
+  /** Lowercase hex. */
+  merchantIdHashes: string[];
+  mccs: number[];
+  /** Unix seconds, "0" = no end date. */
+  expiresAt: string;
+  recurringAllowed: boolean;
+  feeBps: number;
+  /** ChainPay's approver key. */
+  authorizer: string;
+  periodIndex?: number;
 };
 
 export type CardRecoveryView = {
@@ -108,13 +128,29 @@ export type RepaymentTarget = {
 /** What a cards-only agent connection may call. No freeze, unfreeze, limits, credit or repayment. */
 export const CARD_AGENT_TOOLS = ["request_card_checkout", "get_card_activity", "get_statement", "prepare_agent_card"] as const;
 
-export type RepaymentResult = { receiptPda: string; mandatePda: string; signature?: string };
+/**
+ * `confirmed`: the relay confirmed the repayment. `unknown`: the owner signed and it was handed
+ * to the relay, but no answer came back, so it may have settled. Both carry the receipt it creates.
+ */
+export type RepaymentResult =
+  | { outcome: "confirmed"; receiptPda: string; mandatePda: string; signature?: string }
+  | { outcome: "unknown"; receiptPda: string; mandatePda: string; reason: string };
+
+/**
+ * Earlier repayments of one statement, across every spending permission (the receipt address
+ * depends on the permission, so another permission would create a second, separate payment).
+ * `paid`: a receipt exists on Solana. `unknown`: a signed attempt hasn't resolved yet.
+ */
+export type RepaymentLookup =
+  | { state: "none" }
+  | { state: "paid" | "unknown"; receiptPda: string; mandatePda: string };
 
 /** MagicBlock Private Payments repayment (contracts §7.3). The payer is not verifiable; deposit and payout timing are public. */
 export type PrivateRepayActions = {
   prepare: () => Promise<PrivateRepaymentAttempt>;
   check: (attempt: PrivateRepaymentAttempt) => Promise<PrivateRepaymentResult>;
-  pay: (attempt: PrivateRepaymentAttempt) => Promise<{ transferOutcome: "sent" | "unknown" }>;
+  /** `onSigned` runs once the wallet has returned the signed private transfer, before it is sent. */
+  pay: (attempt: PrivateRepaymentAttempt, onSigned: (signature: string) => void) => Promise<{ transferOutcome: "sent" | "unknown" }>;
   wait: (attempt: PrivateRepaymentAttempt) => Promise<PrivateRepaymentResult>;
 };
 
@@ -158,6 +194,8 @@ export interface CardsSource {
   /** Where a statement is repaid: the statement's own instructions when ChainPay sent them, checked against this build. */
   repaymentTarget(statement?: StatementView): RepaymentTarget;
   payStatement(card: CardView, statement: StatementView, mandateAddress: string): Promise<RepaymentResult>;
+  /** Has this statement been paid, or is an attempt unresolved, under any of these permissions? Throws when it can't tell. */
+  repaymentStatus(statement: StatementView, mandateAddresses: string[]): Promise<RepaymentLookup>;
   submitRepayment(cardId: string, statementId: string, input: { receiptPda: string; mandatePda: string }): Promise<{ state: StatementState }>;
   /** Opt-in private repayment for one statement; null when ChainPay doesn't offer it for this statement. */
   privateRepay(card: CardView, statement: StatementView): PrivateRepayActions | null;
