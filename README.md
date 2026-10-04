@@ -145,7 +145,7 @@ Optional local demo receipt (Devnet baseline, readonly):
 VITE_CHAINPAY_DEMO_RECEIPT_PDA=7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q
 ```
 
-ChainPay was started by [Kwasi Awuah](https://github.com/stawuah).
+ChainPay was started by [Stephen Awuah](https://github.com/stawuah).
 [Dre](https://github.com/tantshirt)'s fork adds work on onboarding, payment
 review, and usable receipts. [Contribution guidance](CONTRIBUTING.md)
 explains how changes reach the upstream project.
