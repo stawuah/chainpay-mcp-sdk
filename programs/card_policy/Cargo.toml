@@ -1,0 +1,65 @@
+# card_policy is its own Cargo workspace (contracts.md CD-1). It is excluded
+# from the root workspace so the ER SDK's pins (base64ct =1.6.0, solana 2.x
+# compat crates) never touch the chainpay program's or the backend's lockfile.
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "card_policy"
+version = "0.1.0"
+description = "ChainPay private agent card policy (MagicBlock Private Ephemeral Rollup)"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "card_policy"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+custom-heap = []
+custom-panic = []
+anchor-debug = []
+# LiteSVM only. Replaces the MagicBlock CPIs (ephemeral accounts, ephemeral
+# permissions, Magic Actions, commit/undelegate) with local equivalents, because
+# the magic program and permission program only exist inside the ER validator.
+# Never build a deployable binary with this feature.
+litesvm-mock = []
+
+[dependencies]
+anchor-lang = "=1.1.2"
+ephemeral-rollups-sdk = { version = "0.17.3", features = ["anchor", "access-control"] }
+solana-sha256-hasher = "3"
+# Zero-copy AuthGuard (8 KB, never Borsh-deserialized on the SBF stack).
+bytemuck = { version = "1.25", features = ["derive", "min_const_generics"] }
+
+[dev-dependencies]
+litesvm = "0.10.0"
+# Reads shared/cards/fee-vectors.json (review X6); already in the lockfile.
+serde_json = "1"
+solana-instruction = "3.0"
+solana-keypair = "3.1"
+solana-message = "3.0.1"
+solana-signer = "3.0"
+solana-transaction = { version = "3.0", features = ["verify"] }
+solana-transaction-error = "3.0"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+# Size over speed: keeps the program rent (and the deploy buffer) small.
+opt-level = "z"
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

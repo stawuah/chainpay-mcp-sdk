@@ -1,0 +1,9 @@
+{
+  "name": "single_message",
+  "description": "A single-message (financial) authorization is captured at once on PER.",
+  "steps": [
+    {"intent": {"as": "i", "merchant": "demo-approved", "amountCents": "1200"}},
+    {"asa": {"txn": "t1", "amountCents": 1200, "merchant": "demo-approved", "status": "FINANCIAL_AUTHORIZATION"}, "expect": "APPROVED"},
+    {"expect": {"txn": "t1", "state": "captured", "capturedCents": "1200"}}
+  ]
+}

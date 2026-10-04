@@ -10,7 +10,7 @@ await blockExternal(page);
 await page.goto(`${BASE_URL}/test/fixtures/dashboard-nav.html`);
 await page.getByRole("navigation").waitFor();
 
-const labels = ["Overview", "Agents", "Spending permissions", "Requests", "Payments", "Settings"];
+const labels = ["Overview", "Agents", "Spending permissions", "Cards", "Requests", "Payments", "Settings"];
 for (const label of labels) {
   assert.ok(
     await page.getByRole("button", { name: label }).count() > 0,

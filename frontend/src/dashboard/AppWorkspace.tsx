@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react";
 import { OwnerEntry } from "../owner/OwnerEntry";
 import { useOwnerSignIn } from "../owner/useOwnerSignIn";
-import "./owner-dashboard.css";
+import "./workspace.css";
 import { useRoute } from "../routing/useRoute";
 import { useWallet } from "../wallet/context";
 import { OwnerWelcome } from "../owner/OwnerWelcome";
@@ -59,12 +59,18 @@ export default function AppWorkspace() {
           mandateBuilder={currentRoute.mandateBuilder}
           receiptDetail={currentRoute.receiptDetail}
           permissionRequest={currentRoute.permissionRequest}
+          cardsNew={currentRoute.cardsNew}
+          cardId={currentRoute.cardId}
+          cardSection={currentRoute.cardSection}
           onTabChange={(tab, options) => navigate({
             kind: "app",
             tab,
             mandateBuilder: options?.mandateBuilder,
             mandateDetail: options?.mandateDetail,
             receiptDetail: options?.receiptDetail,
+            cardsNew: options?.cardsNew,
+            cardId: options?.cardId,
+            cardSection: options?.cardSection,
           })}
           onNavigateHome={() => navigate({ kind: "landing" })}
           onRefresh={wallet.refreshMandate}

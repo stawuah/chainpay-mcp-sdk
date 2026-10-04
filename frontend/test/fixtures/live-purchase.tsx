@@ -8,6 +8,7 @@ import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
+import { setMintMetadataFetcherOverride } from "../../src/ui/amount/useMintMetadata";
 import blocked from "./inbox-blocked.json";
 import waiting from "./inbox-waiting.json";
 
@@ -18,6 +19,12 @@ const stablecoinOptions = [{
   detail: "Devnet fixture",
   tokenProgram: "spl-token" as const,
 }];
+
+// Fixture mint metadata (RPC is blocked): amounts render through the shared Amount.
+setMintMetadataFetcherOverride(async (mint) => {
+  if (mint === stablecoinOptions[0].mint) return 6;
+  throw new Error("No fixture decimals for this mint.");
+});
 
 const inbox = [waiting, blocked] as AgentInboxItem[];
 const counts = inboxAttentionCounts(inbox);

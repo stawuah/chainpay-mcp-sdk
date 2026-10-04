@@ -12,6 +12,7 @@ export const DASHBOARD_NAV_ITEMS: DashboardNavItem[] = [
   { id: "overview", label: "Overview", icon: "house", group: "workspace" },
   { id: "agents", label: "Agents", icon: "bot", group: "workspace" },
   { id: "mandates", label: "Spending permissions", icon: "shield", group: "workspace" },
+  { id: "cards", label: "Cards", icon: "credit-card", group: "workspace" },
   { id: "assistant", label: "Requests", icon: "inbox", group: "workspace" },
   { id: "payments", label: "Payments", icon: "payments", group: "workspace" },
   { id: "settings", label: "Settings", icon: "settings", group: "admin" },

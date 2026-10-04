@@ -4,7 +4,7 @@ import { world as petWorld, actionResult as petResult } from "./petValidators";
 
 // Record JSON is deliberately opaque: JavaScript must never round u64 values,
 // nested x402 proof numbers, or signed statements while persisting them.
-export const kind = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"), v.literal("receipt_requests"), v.literal("observed_policies"), v.literal("mandate_requests"));
+export const kind = v.union(v.literal("payments"), v.literal("transactions"), v.literal("x402_payments"), v.literal("managed_signer_challenges"), v.literal("managed_signers"), v.literal("delivery_attestations"), v.literal("receipt_requests"), v.literal("observed_policies"), v.literal("mandate_requests"), v.literal("cards"), v.literal("card_events"), v.literal("card_statements"), v.literal("card_recovery"));
 const statusComponent = v.union(v.literal("web"), v.literal("relay"), v.literal("mcp"), v.literal("solana"), v.literal("program"));
 export default defineSchema({
   // Public status page: raw checks kept 7 days, daily rollups ~95 days, incidents written by hand.
@@ -49,5 +49,8 @@ export default defineSchema({
     toolsCalled: v.array(v.object({ name: v.string(), count: v.number(), lastCalledAt: v.string() })), revokedAt: v.union(v.string(), v.null()), source_json: v.optional(v.string()),
   }).index("by_external_id", ["id"]).index("by_token", ["tokenHash"]).index("by_wallet_revoked_created", ["wallet", "revokedAt", "connectedAt"]),
   inbox_messages: defineTable({ id: v.string(), wallet: v.string(), role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool")), content_json: v.string(), createdAt: v.string(), source_json: v.optional(v.string()) }).index("by_external_id", ["id"]).index("by_wallet_created", ["wallet", "createdAt"]),
+  // Support page tracker: one row per contribution/payout found in a vault transaction.
+  support_events: defineTable({ signature: v.string(), index: v.number(), slot: v.number(), blockTime: v.union(v.number(), v.null()), kind: v.union(v.literal("contribution"), v.literal("payout"), v.literal("funding"), v.literal("anomaly")), asset: v.union(v.literal("SOL"), v.literal("USDC")), amount: v.string(), donor: v.union(v.string(), v.null()), note: v.union(v.string(), v.null()), side: v.union(v.literal("A"), v.literal("B"), v.null()) }).index("by_signature", ["signature"]).index("by_slot", ["slot"]),
+  support_cursors: defineTable({ account: v.string(), cursor: v.object({ newest: v.union(v.string(), v.null()), pending: v.union(v.object({ top: v.string(), before: v.string() }), v.null()) }) }).index("by_account", ["account"]),
   rate_limits: defineTable({ key: v.string(), count: v.number(), expires: v.number() }).index("by_key", ["key"]).index("by_expires", ["expires"]),
 });

@@ -34,6 +34,11 @@ const STATIC: Record<Exclude<DashboardTab, "overview" | "mandates">, TabCopy> = 
     subtitle:
       "Manage your agents, their access, and their activity.",
   },
+  cards: {
+    kicker: "AGENT CARDS",
+    title: "Cards",
+    subtitle: "Give an agent a card. Its limits stay hidden from the public chain.",
+  },
   payments: {
     kicker: "SETTLEMENT",
     title: "Payments",

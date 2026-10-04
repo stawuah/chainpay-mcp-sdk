@@ -1,6 +1,7 @@
 export const DASHBOARD_TABS = [
   "overview",
   "mandates",
+  "cards",
   "payments",
   "agents",
   "receipts",
@@ -13,11 +14,17 @@ export const DASHBOARD_TABS = [
 
 export type DashboardTab = (typeof DASHBOARD_TABS)[number];
 
+/** Sections of one card's page: `/app/cards/<cardId>/<section>`. Activity is the default. */
+export const CARD_SECTIONS = ["activity", "statement", "sharing", "privacy"] as const;
+export type CardSection = (typeof CARD_SECTIONS)[number];
+const CARD_ID_PATTERN = /^[0-9a-f]{64}$/;
+
 export type AppRoute =
   | { kind: "landing" }
   | { kind: "pet" }
   | { kind: "status" }
   | { kind: "use-cases" }
+  | { kind: "support" }
   | { kind: "use-case"; slug: string }
   | {
       kind: "app";
@@ -27,10 +34,17 @@ export type AppRoute =
       receiptDetail?: string;
       /** `/app/requests/permission#req=…`: a signed permission request to review in Requests. */
       permissionRequest?: boolean;
+      /** `/app/cards/new[#draft=…&digest=…]`: create a card, optionally from an agent's draft. */
+      cardsNew?: boolean;
+      /** `/app/cards/<64-hex cardId>[/<section>]`. */
+      cardId?: string;
+      cardSection?: CardSection;
     }
   | { kind: "app-not-found"; path: string }
   | { kind: "public-not-found"; path: string }
   | { kind: "verify"; receiptPda: string }
+  /** `/verify/card#disclose=…`: a shared card record checked against its on-chain commitment. */
+  | { kind: "verify-card" }
   | { kind: "embed-overview"; owner: string };
 
 export function isDashboardTab(value: string): value is DashboardTab {
@@ -43,6 +57,7 @@ export function parsePathname(pathname: string): AppRoute {
   if (normalized === "/") return { kind: "landing" };
   if (normalized === "/status") return { kind: "status" };
   if (normalized === "/use-cases") return { kind: "use-cases" };
+  if (normalized === "/support") return { kind: "support" };
   if (/^\/use-cases\/[a-z0-9-]+$/.test(normalized)) return { kind: "use-case", slug: normalized.slice("/use-cases/".length) };
 
   if (normalized === "/app") return { kind: "app", tab: "overview" };
@@ -54,6 +69,15 @@ export function parsePathname(pathname: string): AppRoute {
     if (rest === "settings/advanced" || rest === "settings/advanced/tools") return { kind: "app", tab: "tools" };
     if (rest === "settings/advanced/protocol") return { kind: "app", tab: "protocol" };
     if (rest === "receipts") return { kind: "app", tab: "payments" };
+    if (rest === "cards/new") return { kind: "app", tab: "cards", cardsNew: true };
+    if (rest.startsWith("cards/")) {
+      const [, cardId, section, extra] = rest.split("/");
+      if (CARD_ID_PATTERN.test(cardId) && extra === undefined) {
+        if (section === undefined) return { kind: "app", tab: "cards", cardId };
+        if ((CARD_SECTIONS as readonly string[]).includes(section)) return { kind: "app", tab: "cards", cardId, cardSection: section as CardSection };
+      }
+      return { kind: "app-not-found", path: normalized };
+    }
     if (rest === "mandates/new") return { kind: "app", tab: "mandates", mandateBuilder: true };
     if (/^mandates\/[^/]+$/.test(rest)) {
       const encoded = rest.slice("mandates/".length);
@@ -77,6 +101,7 @@ export function parsePathname(pathname: string): AppRoute {
   }
 
   if (normalized === "/verify") return { kind: "verify", receiptPda: "" };
+  if (normalized === "/verify/card") return { kind: "verify-card" };
 
   if (normalized.startsWith("/verify/")) {
     const encoded = normalized.slice("/verify/".length);
@@ -107,7 +132,9 @@ export function buildPath(route: AppRoute): string {
   if (route.kind === "landing") return "/";
   if (route.kind === "status") return "/status";
   if (route.kind === "use-cases") return "/use-cases";
+  if (route.kind === "support") return "/support";
   if (route.kind === "use-case") return `/use-cases/${route.slug}`;
+  if (route.kind === "verify-card") return "/verify/card";
   if (route.kind === "verify") {
     return route.receiptPda ? `/verify/${encodeURIComponent(route.receiptPda)}` : "/verify";
   }
@@ -115,6 +142,11 @@ export function buildPath(route: AppRoute): string {
     return route.owner ? `/embed/overview/${encodeURIComponent(route.owner)}` : "/embed/overview";
   }
   if (route.kind === "app-not-found" || route.kind === "public-not-found") return route.path;
+  if (route.tab === "cards") {
+    if (route.cardsNew) return "/app/cards/new";
+    if (route.cardId) return `/app/cards/${route.cardId}${route.cardSection && route.cardSection !== "activity" ? `/${route.cardSection}` : ""}`;
+    return "/app/cards";
+  }
   if (route.mandateBuilder && route.tab === "mandates") return "/app/mandates/new";
   if (route.mandateDetail && route.tab === "mandates") return `/app/mandates/${encodeURIComponent(route.mandateDetail)}`;
   if (route.receiptDetail && route.tab === "receipts") return `/app/receipts/${encodeURIComponent(route.receiptDetail)}`;

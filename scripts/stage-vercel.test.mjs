@@ -12,6 +12,7 @@ for(const service of ['backend','mcp','frontend'])test(`staged ${service} reject
     const config=JSON.parse(readFileSync(join(dir,'vercel.json'),'utf8'));
     assert.match(config.buildCommand,/^node scripts\/check-release-env.mjs /);
     assert.throws(()=>execFileSync('/bin/sh',['-c',config.buildCommand],{cwd:dir,env:{PATH:process.env.PATH},stdio:'pipe'}),error=>{assert.match(error.stderr.toString(),/CHAINPAY_RELEASE_ENVIRONMENT is required/);return true;});
+    if(service==='backend')assert.ok(existsSync(join(dir,'shared/cards/tee-measurements.json')),'pinned TEE measurements must reach the staged relay');
     if(service==='frontend' && existsSync(join(root,'shared')))assert.ok(existsSync(join(dir,'shared/pet.ts')),'shared source must reach hosted frontend');
   } finally {rmSync(join(root,'.vercel-staging',stamp),{recursive:true,force:true});}
 });

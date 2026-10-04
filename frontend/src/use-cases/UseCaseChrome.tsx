@@ -56,6 +56,7 @@ export function UseCaseChrome({ title, children }: { title: string; children: Re
           <a href="/use-cases" onClick={onLink}>Use cases</a>
           <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">GitHub</a>
           <a href={MCP_DOCS_URL} target="_blank" rel="noreferrer">MCP docs</a>
+          <a href="/support" onClick={onLink}>Support</a>
         </div>
       </footer>
     </div>

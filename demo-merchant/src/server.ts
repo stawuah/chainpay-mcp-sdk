@@ -5,6 +5,7 @@ import {
   deriveX402PaymentReferences,
 } from "@chainpay/sdk";
 import { createMerchantApp } from "./app.js";
+import { loadCardShopSettings } from "./card-shops.js";
 import { loadMerchantConfig, loadSellerPublishConfig, sanitizedResourceLabel } from "./config.js";
 import { loadMandateRequestSettings } from "./mandate-requests.js";
 import { createRpcTransactionReader } from "./proof.js";
@@ -33,10 +34,12 @@ async function main(): Promise<void> {
 
   const sellerPublish = loadSellerPublishConfig(process.env, config.programId);
   const mandateRequestSettings = loadMandateRequestSettings(process.env, config);
+  const cardShopSettings = loadCardShopSettings(process.env);
   const app = createMerchantApp(config, references, {
     getFinalizedReceipt: (address) => client.getPayment(address),
     getFinalizedTransaction: createRpcTransactionReader(config.rpcUrl),
     ...(sellerPublish ? { publisher: createAxumDeliveryPublisher(sellerPublish) } : {}),
+    cardShops: cardShopSettings ? { settings: cardShopSettings } : {},
     ...(mandateRequestSettings
       ? {
         mandateRequests: {
@@ -61,6 +64,11 @@ async function main(): Promise<void> {
           : `Mandate requests signed by ${mandateRequestSettings.requester}\n`,
       );
     }
+    process.stdout.write(
+      cardShopSettings
+        ? "Sandbox card shops at /card-shops (checkout redeems through ChainPay)\n"
+        : "Sandbox card shops at /card-shops (checkout off: set CHAINPAY_CARDS_API_URL and CHAINPAY_CARDS_RUNNER_SECRET)\n",
+    );
     if (sellerPublish) {
       process.stdout.write(
         `Seller response-served attestations enabled for ${sellerPublish.seller}\n`,

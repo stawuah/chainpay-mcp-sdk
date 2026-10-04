@@ -1,0 +1,23 @@
+// Test-only bundle entry for test/cards.test.mjs.
+export { ReceiptEvidenceCard } from "../../src/receipts/ReceiptCard";
+export { CardCreate } from "../../src/dashboard/cards/CardCreate";
+export { CardPrivacyCheck, readVerdict, attestationCopy, attestationPassed, ATTESTATION_VERIFIED_COPY } from "../../src/dashboard/cards/CardPrivacyCheck";
+export { AgentCard } from "../../src/dashboard/cards/AgentCard";
+export { CardNumberReveal, safeEmbedUrl } from "../../src/dashboard/cards/CardNumberReveal";
+export { CardVerifyPage, setCardCommitmentReader, CARD_VERIFY_COPY } from "../../src/verify/CardVerifyPage";
+export { createFixtureCardsSource, FIXTURE_CARD_IDS } from "../../src/dashboard/cards/fixtureSource";
+export { activityPills, cardStatus, rowNeedsReview, LIFECYCLE_PILLS } from "../../src/dashboard/cards/lifecycle";
+export { activityEvidence } from "../../src/dashboard/cards/evidence";
+export { dollarsToCents, centsToDollarInput } from "../../src/dashboard/cards/amounts";
+export { statementLineTotals, SIMULATED_CREDIT_LABEL, CardStatement } from "../../src/dashboard/cards/CardStatement";
+export { statementAmountDue } from "../../src/dashboard/cards/statementMath";
+export { recoveryView, repaymentTargetFor, parseRecoveryRules } from "../../src/dashboard/cards/liveSource";
+export { assertRestoreMatchesReport, assertCoSignedRestore, assertCardSetupTransaction, reviewedRestore, rulesFromPolicy, MAX_ESCROW_TOP_UP_LAMPORTS } from "../../src/dashboard/cards/signingGuards";
+export { PrivateRepayOptIn } from "../../src/dashboard/cards/PrivateRepayOptIn";
+export { normalizeApproverAttestation, approverAttestationCopy, approverAttestationPassed, BROWSER_CHECK_NOTE } from "../../src/dashboard/cards/CardPrivacyCheck";
+export { CardList } from "../../src/dashboard/cards/CardList";
+export { PRIVACY_COPY, PRIVACY_SHORT } from "../../src/dashboard/cards/privacyCopy";
+export { lookupRepayment, recordRepaymentAttempt, readRepaymentAttempts } from "../../src/dashboard/cards/repaymentAttempts";
+export { CardNumberReveal as CardNumberRevealComponent } from "../../src/dashboard/cards/CardNumberReveal";
+export { CardSharePicker } from "../../src/dashboard/cards/CardSharePicker";
+export { CardDetail } from "../../src/dashboard/cards/CardDetail";

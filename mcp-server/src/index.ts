@@ -1,5 +1,5 @@
-import { authorizeTool } from "./authorization.js";
-import { ChainPayClient, isDuplicateInvoiceError, publicKey } from "@chainpay/sdk";
+import { CARD_TOOLS, authorizeTool } from "./authorization.js";
+import { ChainPayClient, isDuplicateInvoiceError, publicKey, redactCardNumbers, redactCardNumbersInInput } from "@chainpay/sdk";
 import { createMandate } from "./tools/create_mandate.js";
 import { checkPaymentRequirements } from "./tools/check_payment_requirements.js";
 import { createDemoPaymentRequest } from "./tools/demo-payment-request.js";
@@ -25,6 +25,7 @@ import { waitForPayment } from "./tools/wait_for_payment.js";
 import { executeX402Payment, prepareX402Payment } from "./tools/x402.js";
 import { toolResult } from "./tools/common.js";
 import { prepareCrossmintPayment, executeCrossmintPayment, crossmintPaymentStatus } from "./tools/crossmint.js";
+import { freezeAgentCard, getCardActivity, getStatement, prepareAgentCard, requestCardCheckout } from "./tools/cards.js";
 
 export { TOOL_DEFINITIONS };
 export type { ChainPayMcpContext };
@@ -108,6 +109,10 @@ export async function callTool(
         receiptAddress: error.receiptAddress,
       }, true);
     }
+    // Card tools never echo anything card-like, whatever threw (review F3).
+    if (CARD_TOOLS.has(name) && error instanceof Error) {
+      error.message = redactCardNumbersInInput(redactCardNumbers(error.message));
+    }
     throw error;
   }
 }
@@ -174,6 +179,16 @@ async function dispatchTool(
       return revokeMandate(context, args);
     case "update_mandate":
       return updateMandate(context, args);
+    case "prepare_agent_card":
+      return prepareAgentCard(context, args);
+    case "request_card_checkout":
+      return requestCardCheckout(context, args);
+    case "get_card_activity":
+      return getCardActivity(context, args);
+    case "get_statement":
+      return getStatement(context, args);
+    case "freeze_agent_card":
+      return freezeAgentCard(context, args);
     default:
       throw new Error(`Unknown ChainPay tool: ${name}`);
   }

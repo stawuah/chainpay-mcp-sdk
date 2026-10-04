@@ -1,7 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["backend", "programs/chainpay"]
+members = ["backend", "programs/chainpay", "programs/support-splitter"]
 default-members = ["backend", "programs/chainpay"]
+# card_policy is its own Cargo workspace (own Cargo.lock) so the MagicBlock ER
+# SDK pins never touch this lockfile. Build it from programs/card_policy.
+exclude = ["programs/card_policy"]
 
 [profile.release]
 overflow-checks = true

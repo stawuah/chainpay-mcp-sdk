@@ -1,0 +1,179 @@
+/* The card object (premium ruling P1, P2, P10). Pure CSS; scales with its own width. */
+
+.cp-agent-card {
+  --card-r: 4.6cqw;
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 340px;
+  margin: 0;
+  aspect-ratio: 85.6 / 53.98;
+  container-type: inline-size;
+  border-radius: 16px;
+  color: #fff;
+  isolation: isolate;
+  box-shadow:
+    0 1px 1px rgba(0, 31, 110, .10),
+    0 6px 14px -6px rgba(0, 45, 160, .32),
+    0 22px 40px -22px rgba(0, 60, 210, .55);
+  transform: translateZ(0);
+}
+.cp-agent-card-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  padding: 7.2cqw 7.6cqw 6.6cqw;
+  overflow: hidden;
+  border-radius: inherit;
+  background:
+    radial-gradient(120% 90% at 8% 0%, rgba(255, 255, 255, .30) 0%, rgba(255, 255, 255, 0) 52%),
+    radial-gradient(90% 120% at 100% 100%, rgba(0, 18, 120, .45) 0%, rgba(0, 18, 120, 0) 60%),
+    linear-gradient(135deg, #3d7bff 0%, #0052ff 42%, #0038c7 100%);
+}
+/* Fine diagonal sheen and a hairline inner edge: the soft-3D of the landing art. */
+.cp-agent-card-face::before {
+  content: "";
+  position: absolute;
+  inset: -40% -10%;
+  background: linear-gradient(115deg, rgba(255, 255, 255, 0) 38%, rgba(255, 255, 255, .16) 47%, rgba(255, 255, 255, 0) 56%);
+  transform: translateX(-6%);
+  pointer-events: none;
+}
+.cp-agent-card-face::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22), inset 0 1px 0 rgba(255, 255, 255, .28);
+  pointer-events: none;
+}
+.cp-agent-card-top, .cp-agent-card-mid, .cp-agent-card-bottom { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 3cqw; min-width: 0; }
+.cp-agent-card-brand { display: inline-flex; align-items: center; gap: 2.4cqw; }
+.cp-agent-card-logo {
+  display: grid;
+  place-items: center;
+  width: 10.5cqw;
+  height: 10.5cqw;
+  border-radius: 2.8cqw;
+  background: linear-gradient(180deg, #fff 0%, #eef3ff 100%);
+  color: #0052ff;
+  box-shadow: 0 1px 2px rgba(0, 20, 90, .25), inset 0 -1px 0 rgba(0, 60, 200, .10);
+}
+.cp-agent-card-logo svg { width: 64%; height: 64%; }
+.cp-agent-card-word { font: 600 5.4cqw/1 Inter, sans-serif; letter-spacing: -.035em; }
+.cp-agent-card-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: 1.4cqw;
+  padding: 1.3cqw 2.8cqw;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22);
+  font: 500 3.6cqw/1.2 Inter, sans-serif;
+  white-space: nowrap;
+}
+.cp-agent-card-limit svg { width: 3.4cqw; height: 3.4cqw; }
+.cp-agent-card-limit .cp-money { color: inherit; font-weight: 600; }
+.cp-agent-card-mid { justify-content: flex-start; gap: 4cqw; }
+.cp-agent-card-chip {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  width: 13cqw;
+  height: 10cqw;
+  overflow: hidden;
+  border-radius: 2cqw;
+  background: linear-gradient(135deg, #f4f7ff 0%, #c9d6f2 48%, #eef3ff 100%);
+  box-shadow: inset 0 0 0 1px rgba(0, 30, 120, .18);
+}
+.cp-agent-card-chip i { border: .5px solid rgba(0, 30, 120, .18); }
+.cp-agent-card-chip i:nth-child(1) { grid-column: 1 / -1; border-width: 0 0 .5px; }
+.cp-agent-card-chip i:nth-child(2) { grid-row: 2 / 4; border-width: 0 .5px 0 0; }
+.cp-agent-card-chip i:nth-child(3) { grid-row: 2 / 4; border-width: 0; }
+.cp-agent-card-wave { width: 7cqw; height: 7cqw; opacity: .85; }
+/* Sandbox mark: small, quiet, always there while the issuer is a sandbox. White on the face stays >= 4.5:1. */
+.cp-agent-card-sandbox {
+  margin-left: auto;
+  padding: 1cqw 2.4cqw;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .55);
+  color: #fff;
+  font: 600 2.9cqw/1 Inter, sans-serif;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.cp-agent-card-bottom { align-items: flex-end; }
+.cp-agent-card-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 4.6cqw/1.2 Inter, sans-serif; letter-spacing: -.01em; }
+.cp-agent-card-number { display: grid; justify-items: end; gap: .6cqw; flex-shrink: 0; }
+.cp-agent-card-digits { font: 500 5cqw/1 Inter, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: .04em; white-space: nowrap; }
+.cp-agent-card .cp-agent-card-number small { display: block; margin: 0; color: rgba(255, 255, 255, .78); font: 500 2.9cqw/1 Inter, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+
+/* Frost (P2): the landing's frosted "hidden from the public chain" glass. */
+.cp-agent-card-frost {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, .08) 0 2px, rgba(255, 255, 255, 0) 2px 7px),
+    rgba(236, 242, 252, .80);
+  color: #26324a;
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .cp-agent-card-frost {
+    background:
+      repeating-linear-gradient(135deg, rgba(255, 255, 255, .10) 0 2px, rgba(255, 255, 255, 0) 2px 7px),
+      rgba(240, 245, 255, .52);
+    -webkit-backdrop-filter: blur(6px) saturate(.55);
+    backdrop-filter: blur(6px) saturate(.55);
+  }
+}
+.cp-agent-card.is-frosted { box-shadow: 0 1px 1px rgba(16, 24, 40, .08), 0 18px 34px -22px rgba(16, 40, 100, .45); }
+.cp-agent-card-frost-badge {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 10px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .86);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .08), 0 8px 20px -10px rgba(16, 24, 40, .25);
+  text-align: center;
+}
+.cp-agent-card-frost-badge svg { color: #0049df; }
+.cp-agent-card-frost-badge b { font: 600 14px/1.2 Inter, sans-serif; color: #192436; }
+.cp-agent-card-frost-badge small { display: inline-flex; align-items: center; gap: 4px; font: 500 12px/1.2 Inter, sans-serif; color: #7a4f00; }
+.cp-agent-card-frost-badge small svg { color: inherit; }
+.cp-agent-card[data-frost="needs_restore"] .cp-agent-card-frost-badge svg { color: #b3141f; }
+
+/* Mini (list rows): same face, logo tile + last four. */
+.cp-agent-card.is-mini {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 60px;
+  max-width: none;
+  border-radius: 7px;
+  box-shadow: 0 1px 1px rgba(0, 31, 110, .12), 0 4px 10px -4px rgba(0, 45, 160, .40);
+}
+.cp-agent-card.is-mini .cp-agent-card-face { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; padding: 5px 6px; }
+.cp-agent-card.is-mini .cp-agent-card-logo { width: 13px; height: 13px; border-radius: 4px; }
+.cp-agent-card.is-mini .cp-agent-card-digits { align-self: flex-end; font-size: 8.5px; letter-spacing: .03em; position: relative; z-index: 1; }
+.cp-agent-card.is-mini .cp-agent-card-frost { color: #0049df; }
+.cp-agent-card.is-mini.is-frosted { box-shadow: 0 1px 1px rgba(16, 24, 40, .1), 0 4px 10px -5px rgba(16, 40, 100, .35); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .cp-agent-card { transition: transform 200ms cubic-bezier(.2, .7, .2, 1), box-shadow 200ms ease-out; }
+  .cp-agent-card-face::before { transition: transform 280ms cubic-bezier(.2, .7, .2, 1); }
+  .cp-agent-card-frost { animation: cp-frost-in 240ms ease-out both; }
+  .cp-agent-card.is-lift:hover, .cp-card-name:hover .cp-agent-card, .cp-card-name:focus-visible .cp-agent-card { transform: translateY(-2px); }
+  .cp-agent-card.is-lift:hover .cp-agent-card-face::before { transform: translateX(6%); }
+}
+@keyframes cp-frost-in { from { opacity: 0; } to { opacity: 1; } }
+
+@media print {
+  .cp-agent-card { box-shadow: none; }
+}

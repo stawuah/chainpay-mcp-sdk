@@ -195,6 +195,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
           <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">GitHub</a>
           <a href={MCP_DOCS_URL} target="_blank" rel="noreferrer">MCP docs</a>
           <a href="/status">Status</a>
+          <a href="/support">Support</a>
         </div>
       </footer>
     </div>
