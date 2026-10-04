@@ -24,6 +24,8 @@ import {
 import "./receipt-card.css";
 import { printReceipt } from "./print";
 import { sharePublicReceipt, shareStatusCopy } from "./share";
+import { isCardEvidence, mayRenderAsSplSettlement, type ReceiptEvidence } from "@chainpay/sdk";
+import { CardEvidenceCard } from "./CardEvidenceCard";
 
 function Field({ label, value }: { label: string; value: string }) {
   return (
@@ -313,6 +315,19 @@ export function ReceiptCard({
       {shareMessage && <p className="receipt-share-status" role="status">{shareMessage}</p>}
     </article>
   );
+}
+
+/**
+ * One entry point for every evidence kind (contracts §9). Only `spl_settlement`
+ * may reach the payment receipt layout; card evidence always renders as a
+ * private card record, whatever else is passed.
+ */
+export function ReceiptEvidenceCard({ evidence, receipt, onShare }: { evidence: ReceiptEvidence; receipt?: ReceiptView; onShare?: () => void }) {
+  if (isCardEvidence(evidence) || !mayRenderAsSplSettlement(evidence)) {
+    return isCardEvidence(evidence) ? <CardEvidenceCard evidence={evidence} onShare={onShare} /> : null;
+  }
+  if (!receipt || receipt.address !== evidence.receiptPda) return null;
+  return <ReceiptCard receipt={receipt} onShare={onShare} />;
 }
 
 export function ReceiptPageState({

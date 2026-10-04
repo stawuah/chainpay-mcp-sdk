@@ -212,19 +212,18 @@ export function useLandingTour({
     let candidate: string | null = null;
     let since = 0;
 
-    // Leaving is checked on every scroll frame, so a line never outlives its
-    // section; speaking waits for the slower settle-and-dwell check below.
-    let frame = 0;
+    // Leaving is checked synchronously on every scroll, so a line never
+    // outlives its section, not even for one frame; speaking waits for the
+    // slower settle-and-dwell check below. Smooth scrolling (Lenis) moves the
+    // page a frame before the browser's scroll event, so it announces its own
+    // moves (see landing/useLandingMotion.ts).
     const onScroll = () => {
       lastScroll = performance.now();
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const id = sectionInView()?.id ?? null;
-        if (id === candidate) return;
-        if (candidate) latest.current.onLeave(candidate);
-        candidate = id;
-        since = performance.now();
-      });
+      const id = sectionInView()?.id ?? null;
+      if (id === candidate) return;
+      if (candidate) latest.current.onLeave(candidate);
+      candidate = id;
+      since = lastScroll;
     };
     const check = () => {
       const now = performance.now();
@@ -245,6 +244,7 @@ export function useLandingTour({
       }
     };
     window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("chainpay:smooth-scroll", onScroll);
     const timer = window.setInterval(check, 200);
 
     const onOver = (event: PointerEvent) => {
@@ -259,7 +259,7 @@ export function useLandingTour({
     document.addEventListener("pointerover", onOver);
     return () => {
       window.removeEventListener("scroll", onScroll);
-      cancelAnimationFrame(frame);
+      window.removeEventListener("chainpay:smooth-scroll", onScroll);
       window.clearInterval(timer);
       document.removeEventListener("pointerover", onOver);
     };

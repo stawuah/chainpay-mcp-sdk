@@ -1,4 +1,4 @@
-import { requestContext, authorizeMandate, AuthorizationError, parseScope } from "./authorization.js";
+import { requestContext, authorizeMandate, authorizeOwnedCard, AuthorizationError, parseScope } from "./authorization.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { createDefaultContext, TOOL_DEFINITIONS } from "./index.js";
@@ -356,9 +356,10 @@ export function createHttpHandler(
         const body = await readJsonValue(req) as Partial<RegisterConnectionInput>;
         if (body.wallet && body.wallet !== principal.wallet) throw new AuthorizationError("Wallet differs from verified owner");
         const scope = parseScope(typeof body.scope === "string" ? body.scope : "");
-        if (scope.tools.some(tool => !TOOL_DEFINITIONS.some(def => def.name === tool) || ["create_mandate","update_mandate","pause_mandate","revoke_mandate"].includes(tool))) throw new AuthorizationError("Invalid delegated tool permission");
+        if (scope.tools.some(tool => !TOOL_DEFINITIONS.some(def => def.name === tool) || ["create_mandate","update_mandate","pause_mandate","revoke_mandate","freeze_agent_card"].includes(tool))) throw new AuthorizationError("Invalid delegated tool permission");
         scope.agents = {};
         for (const address of scope.mandates) scope.agents[address] = (await authorizeMandate(caller, address)).approvedAgent;
+        for (const cardId of scope.cards ?? []) await authorizeOwnedCard(caller, cardId);
         const registered = await registry.register({
           wallet: principal.wallet,
           agentName: typeof body.agentName === "string" ? body.agentName : "",

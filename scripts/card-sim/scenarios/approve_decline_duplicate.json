@@ -1,0 +1,15 @@
+{
+  "name": "approve_decline_duplicate",
+  "description": "Budget $50, max $40. Two intents open first. $20 approves, the same ASA again returns the same decision, $40 is over what is left, and a shop with no intent is refused before PER.",
+  "steps": [
+    {"intent": {"as": "i20", "merchant": "demo-approved", "amountCents": "2000"}},
+    {"intent": {"as": "i40", "merchant": "demo-approved", "amountCents": "4000"}},
+    {"asa": {"txn": "t20", "amountCents": 2000, "merchant": "demo-approved"}, "expect": "APPROVED"},
+    {"asa": {"txn": "t20", "amountCents": 2000, "merchant": "demo-approved"}, "expect": "APPROVED", "note": "duplicate ASA request (Lithic retry)"},
+    {"asa": {"txn": "t40", "amountCents": 4000, "merchant": "demo-approved"}, "expect": "INSUFFICIENT_FUNDS"},
+    {"asa": {"txn": "toff", "amountCents": 1000, "merchant": "demo-unapproved"}, "expect": "UNAUTHORIZED_MERCHANT"},
+    {"expect": {"txn": "t20", "state": "reserved", "reservedCents": "2000"}},
+    {"expect": {"txn": "t40", "state": "declined", "declineReason": "over_budget"}},
+    {"expectProgram": {"authorize": 2}}
+  ]
+}

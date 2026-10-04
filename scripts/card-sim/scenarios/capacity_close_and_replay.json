@@ -1,0 +1,99 @@
+{
+  "name": "capacity_close_and_replay",
+  "description": "A final hold's Reservation is closed and its rent returned; a replay of the same Lithic token gets the stored decision from Axum without a second authorize, and on-chain the auth id stays in the AuthGuard ring.",
+  "steps": [
+    {
+      "intent": {
+        "as": "i",
+        "merchant": "demo-approved",
+        "amountCents": "1000"
+      }
+    },
+    {
+      "asa": {
+        "txn": "t1",
+        "amountCents": 1000,
+        "merchant": "demo-approved"
+      },
+      "expect": "APPROVED"
+    },
+    {
+      "event": {
+        "txn": "t1",
+        "id": "c1",
+        "type": "CLEARING",
+        "amountCents": 1000
+      }
+    },
+    {
+      "deliver": {
+        "txn": "t1",
+        "webhookId": "w1"
+      }
+    },
+    {
+      "expect": {
+        "txn": "t1",
+        "state": "captured",
+        "capturedCents": "1000",
+        "reservedCents": "0",
+        "reservationClosed": true
+      }
+    },
+    {
+      "expectProgram": {
+        "authorize": 1,
+        "capture": 1,
+        "close_reservation": 1
+      }
+    },
+    {
+      "intent": {
+        "as": "j",
+        "merchant": "demo-approved",
+        "amountCents": "1000"
+      }
+    },
+    {
+      "asa": {
+        "txn": "t1",
+        "amountCents": 1000,
+        "merchant": "demo-approved"
+      },
+      "expect": "APPROVED",
+      "note": "replayed token: Axum's stored decision, no second authorize"
+    },
+    {
+      "expectProgram": {
+        "authorize": 1
+      }
+    },
+    {
+      "asa": {
+        "txn": "t2",
+        "amountCents": 1000,
+        "merchant": "demo-approved"
+      },
+      "expect": "APPROVED",
+      "note": "the intent opened before the replay is still usable by a new token"
+    },
+    {
+      "expectProgram": {
+        "authorize": 2
+      }
+    },
+    {
+      "deliver": {
+        "txn": "t1",
+        "webhookId": "w1b"
+      },
+      "note": "same truth again: nothing re-applied, nothing re-closed"
+    },
+    {
+      "expectProgram": {
+        "capture": 1,
+        "close_reservation": 1
+      }
+    }
+  ]
+}
