@@ -20,12 +20,14 @@ import {
 import { currencyBytes } from "./accounts.js";
 import { BorshReader, BorshWriter } from "./layout.js";
 import {
+  deriveAuthGuardAddress,
   deriveCardAccounts,
   deriveCheckoutIntentAddress,
   deriveDelegationBufferAddress,
   deriveDelegationMetadataAddress,
   deriveDelegationRecordAddress,
   derivePermissionAddress,
+  deriveReservationAddress,
 } from "./pda.js";
 
 /**
@@ -98,6 +100,7 @@ export type CardInstructionArgs = {
   checkpoint: { masterSalt: Uint8Array; seq: bigint };
   writeCommitment: { root: Uint8Array; seq: bigint; policyVersion: number; periodIndex: number };
   wipeCard: Record<string, never>;
+  closeReservation: Record<string, never>;
   closeCard: Record<string, never>;
   recordRepayment: { statementDigest: Uint8Array; amountCents: bigint };
 };
@@ -241,6 +244,7 @@ const CODECS: { [K in CardPolicyInstructionName]: Codec<CardInstructionArgs[K]> 
   },
   wipeCard: empty,
   closeCard: empty,
+  closeReservation: empty,
   recordRepayment: {
     encode: (w, a) => { w.fixed(a.statementDigest, 32, "statementDigest").u64(a.amountCents, "amountCents"); },
     decode: (r) => ({ statementDigest: r.fixed(32, "statementDigest"), amountCents: r.u64("amountCents") }),
@@ -454,9 +458,36 @@ export function buildConfirmReconciledInstruction(input: CardRef & { reconDigest
 }
 
 /**
- * `ephemeralAccounts` lists every Reservation and CheckoutIntent the card ever
- * created; each goes in remaining_accounts as [account, its permission] so the
- * program can close it. Omitting one leaves private data behind.
+ * PER. Owner or authorizer closes a final Reservation (fully captured, reversed
+ * or expired; nothing held; no open dispute) and its permission. The rent goes
+ * back to the card prefund and the auth id moves into the card's AuthGuard
+ * ring, so a replayed issuer authorization still gets `DuplicateAuthorization`.
+ * Axum normally does this; the owner can too.
+ */
+export function buildCloseReservationInstruction(input: CardRef & { authIdHash: Uint8Array; signer?: Address }, programId?: Address): ChainPayInstruction {
+  const a = deriveCardAccounts(input.owner, input.cardId, programId);
+  const reservation = deriveReservationAddress(a.policy, input.authIdHash, programId);
+  const guard = deriveAuthGuardAddress(a.policy, programId);
+  return build("closeReservation", "close_reservation", programId, [
+    meta(input.signer ?? input.owner, false, true),
+    meta(a.policy, true),
+    meta(a.period),
+    meta(reservation, true),
+    meta(derivePermissionAddress(reservation), true),
+    meta(guard, true),
+    meta(derivePermissionAddress(guard), true),
+    meta(EPHEMERAL_VAULT_ID, true),
+    meta(MAGIC_PROGRAM_ID),
+    meta(PERMISSION_PROGRAM_ID),
+  ], {});
+}
+
+/**
+ * `ephemeralAccounts` lists every live Reservation and CheckoutIntent of the
+ * card, plus its AuthGuard once a reservation was ever closed
+ * (`deriveAuthGuardAddress`); each goes in remaining_accounts as
+ * [account, its permission] so the program can close it. Omitting one leaves
+ * private data behind (`EphemeralAccountsOpen`).
  */
 export function buildWipeCardInstruction(input: CardRef & { ephemeralAccounts?: Address[] }, programId?: Address): ChainPayInstruction {
   const a = deriveCardAccounts(input.owner, input.cardId, programId);

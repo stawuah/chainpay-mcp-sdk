@@ -84,6 +84,9 @@ pub struct Card {
     pub intents: HashMap<Address, FakeIntent>,
     pub reservations: HashMap<Address, FakeReservation>,
     pub event_ids: HashSet<[u8; 32]>,
+    /// AuthGuard ring: auth ids of the last `GUARD_RING` closed reservations.
+    pub closed_auth_ids: std::collections::VecDeque<[u8; 32]>,
+    pub closed_count: u64,
 }
 
 #[derive(Debug, Default)]
@@ -130,7 +133,8 @@ fn account_disc(name: &str) -> [u8; 8] {
         .unwrap()
 }
 
-const NAMES: [&str; 18] = [
+const NAMES: [&str; 19] = [
+    "close_reservation",
     "roll_period",
     "record_repayment",
     "confirm_reconciled",
@@ -299,6 +303,19 @@ impl FakePer {
                     slot: 1,
                 };
             }
+            if &program::auth_guard_pda(policy_pda) == address && card.closed_count > 0 {
+                let mut data = vec![0u8; 8 + 32 + 8 + 32 + 32 * program::GUARD_RING as usize + 8];
+                data[8..40].copy_from_slice(policy_pda.as_ref());
+                data[40..48].copy_from_slice(&card.closed_count.to_le_bytes());
+                for (i, id) in card.closed_auth_ids.iter().enumerate() {
+                    data[80 + 32 * i..112 + 32 * i].copy_from_slice(id);
+                }
+                return TeeRead::Visible {
+                    data,
+                    owner: program::CARD_POLICY_PROGRAM_ID.into(),
+                    slot: 1,
+                };
+            }
             if let Some(i) = card.intents.get(address) {
                 return TeeRead::Visible {
                     data: encode_intent(policy_pda, i),
@@ -340,6 +357,32 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
         .budget
         .saturating_sub(card.period.captured + card.period.reserved);
     match name {
+        "close_reservation" => {
+            let is_owner = signer == card.policy.owner;
+            if !is_authorizer && !is_owner {
+                return err(6000);
+            }
+            let res_key = ix.accounts[3].pubkey;
+            let r = card
+                .reservations
+                .get(&res_key)
+                .ok_or(program::ACCOUNT_NOT_INITIALIZED)?;
+            let fin = matches!(r.state, rs::CAPTURED | rs::REVERSED | rs::EXPIRED)
+                && r.hold == 0
+                && r.dispute != 1;
+            if !fin {
+                return err(6045);
+            }
+            let auth_id = r.auth_id;
+            card.reservations.remove(&res_key);
+            card.closed_auth_ids.push_back(auth_id);
+            if card.closed_auth_ids.len() > program::GUARD_RING as usize {
+                card.closed_auth_ids.pop_front();
+            }
+            card.closed_count += 1;
+            ledger(card, 18, 0);
+            Ok(())
+        }
         "open_checkout_intent" => {
             if !is_authorizer {
                 return err(6000);
@@ -384,7 +427,9 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
             let merchant: [u8; 32] = args[59..91].try_into().unwrap();
             let single = args[94] != 0;
             let reservation = ix.accounts[4].pubkey;
-            if card.reservations.contains_key(&reservation) {
+            if card.reservations.contains_key(&reservation)
+                || card.closed_auth_ids.contains(&auth_id)
+            {
                 return err(6019);
             }
             if card.policy.frozen {
@@ -453,7 +498,11 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
             }
             let res_key = ix.accounts[3].pubkey;
             let fee_bps = card.policy.fee_bps as u64;
-            let r = card.reservations.get_mut(&res_key).ok_or(6039u32)?;
+            // Like Anchor: a closed (absent) Reservation is AccountNotInitialized.
+            let r = card
+                .reservations
+                .get_mut(&res_key)
+                .ok_or(program::ACCOUNT_NOT_INITIALIZED)?;
             match name {
                 "capture" => {
                     let amount = u64_at(args, 0);
@@ -553,12 +602,17 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
                     <[u8; 32]>::try_from(&args[9..41]).unwrap(),
                 )
             };
+            let res_key = ix.accounts[3].pubkey;
+            let reservation = (res_key != program::program_id()).then_some(res_key);
+            // Anchor validates accounts first: a closed Reservation passed as
+            // `Some` fails before the handler runs.
+            if reservation.is_some_and(|k| !card.reservations.contains_key(&k)) {
+                return err(program::ACCOUNT_NOT_INITIALIZED);
+            }
             if card.event_ids.contains(&id) {
                 return err(6043);
             }
             card.event_ids.insert(id);
-            let res_key = ix.accounts[3].pubkey;
-            let reservation = (res_key != program::program_id()).then_some(res_key);
             let bps = card.policy.fee_bps;
             let credit = |card: &mut Card| {
                 let gross = with_fee(amount, bps);
@@ -570,6 +624,12 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
                     r.refunded += amount;
                 }
                 credit(card);
+            } else if kind == program::exception_kind::LATE_CAPTURE {
+                if reservation.is_some() {
+                    return err(6039);
+                }
+                card.period.captured += amount;
+                card.policy.outstanding += with_fee(amount, bps);
             } else {
                 card.policy.exceptions_open += 1;
                 match kind {
@@ -707,6 +767,21 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
         }
         "checkpoint" => {
             card.policy.commit_seq = u64_at(args, 32);
+            Ok(())
+        }
+        "close_checkout_intent" => {
+            if !is_authorizer && signer != card.policy.owner {
+                return err(6000);
+            }
+            let key = ix.accounts[2].pubkey;
+            let intent = card
+                .intents
+                .get(&key)
+                .ok_or(program::ACCOUNT_NOT_INITIALIZED)?;
+            if intent.state == 0 && intent.expires_at >= now_secs() {
+                return err(6007);
+            }
+            card.intents.remove(&key);
             Ok(())
         }
         _ => Ok(()),

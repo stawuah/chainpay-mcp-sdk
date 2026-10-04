@@ -217,7 +217,7 @@ fn event_amount(event: &Value) -> u64 {
 }
 
 /// States in which `card_policy` holds a Reservation for this transaction.
-fn has_reservation(record: &Value) -> bool {
+pub(super) fn has_reservation(record: &Value) -> bool {
     record["hasReservation"].as_bool().unwrap_or(false)
         || matches!(
             record["state"].as_str(),
@@ -281,6 +281,10 @@ pub async fn apply_transaction(
     let original = row.record.clone();
     let mut record = row.record.clone();
     let reservation_present = has_reservation(&record);
+    // A final hold whose Reservation was closed (rent back to the prefund):
+    // later issuer events post without it (contracts.md, final fixes).
+    let mut reservation_closed = super::capacity::is_closed(&record);
+    let reservation_open = reservation_present && !reservation_closed;
     let auth_id = program::auth_id_hash(cards.config.issuer_code, &token);
     let reservation = program::reservation_pda(&pdas.policy, &auth_id);
     let applied: Vec<String> = record["appliedEventIds"]
@@ -337,7 +341,13 @@ pub async fn apply_transaction(
                 ),
                 "unpaired_capture",
             ),
-            "AUTHORIZATION_ADVICE" if reservation_present => {
+            // Holds of a closed Reservation are final: nothing left to move.
+            "AUTHORIZATION_ADVICE" | "AUTHORIZATION_REVERSAL" | "AUTHORIZATION_EXPIRY"
+                if reservation_closed =>
+            {
+                Step::Local("after_close_noop")
+            }
+            "AUTHORIZATION_ADVICE" if reservation_open => {
                 let new_total = advice_total(&event, truth);
                 Step::Program(
                     program::adjust_reservation(
@@ -355,13 +365,13 @@ pub async fn apply_transaction(
                     &authorizer,
                     &pdas.policy,
                     &pdas.period,
-                    reservation_present.then_some(&reservation),
+                    reservation_open.then_some(&reservation),
                     amount,
                     &id,
                 ),
                 "refund",
             ),
-            "CLEARING" if reservation_present => Step::Program(
+            "CLEARING" if reservation_open => Step::Program(
                 program::capture(
                     &authorizer,
                     &pdas.policy,
@@ -372,6 +382,40 @@ pub async fn apply_transaction(
                 ),
                 "capture",
             ),
+            // Clearing after the hold went final and its Reservation was
+            // closed. After a reversal or expiry it is a late capture
+            // (counted, flagged, never re-reserved: the same accounting as
+            // `capture` on that hold); above a full capture it is an
+            // over-capture for review, as `capture` would have booked it.
+            "CLEARING" if reservation_closed => {
+                if matches!(record["state"].as_str(), Some("reversed" | "expired")) {
+                    Step::Program(
+                        program::record_exception(
+                            &authorizer,
+                            &pdas.policy,
+                            &pdas.period,
+                            None,
+                            exception_kind::LATE_CAPTURE,
+                            amount,
+                            &id,
+                        ),
+                        "late_capture",
+                    )
+                } else {
+                    Step::Program(
+                        program::record_exception(
+                            &authorizer,
+                            &pdas.policy,
+                            &pdas.period,
+                            None,
+                            exception_kind::OVER_CAPTURE,
+                            amount,
+                            &id,
+                        ),
+                        "over_capture",
+                    )
+                }
+            }
             // A capture with no authorization we reserved: forced post.
             "CLEARING" => Step::Program(
                 program::record_exception(
@@ -385,7 +429,7 @@ pub async fn apply_transaction(
                 ),
                 "forced_capture",
             ),
-            "AUTHORIZATION_REVERSAL" if reservation_present => Step::Program(
+            "AUTHORIZATION_REVERSAL" if reservation_open => Step::Program(
                 program::reverse(
                     &authorizer,
                     &pdas.policy,
@@ -397,7 +441,7 @@ pub async fn apply_transaction(
                 ),
                 "reverse",
             ),
-            "AUTHORIZATION_EXPIRY" if reservation_present => Step::Program(
+            "AUTHORIZATION_EXPIRY" if reservation_open => Step::Program(
                 program::reverse(
                     &authorizer,
                     &pdas.policy,
@@ -414,7 +458,7 @@ pub async fn apply_transaction(
                     &authorizer,
                     &pdas.policy,
                     &pdas.period,
-                    reservation_present.then_some(&reservation),
+                    reservation_open.then_some(&reservation),
                     amount,
                     &id,
                 ),
@@ -425,7 +469,7 @@ pub async fn apply_transaction(
                     &authorizer,
                     &pdas.policy,
                     &pdas.period,
-                    reservation_present.then_some(&reservation),
+                    reservation_open.then_some(&reservation),
                     exception_kind::RETURN_REVERSAL,
                     amount,
                     &id,
@@ -437,7 +481,7 @@ pub async fn apply_transaction(
                     &authorizer,
                     &pdas.policy,
                     &pdas.period,
-                    reservation_present.then_some(&reservation),
+                    reservation_open.then_some(&reservation),
                     exception_kind::CORRECTION_DEBIT,
                     amount,
                     &id,
@@ -449,7 +493,7 @@ pub async fn apply_transaction(
                     &authorizer,
                     &pdas.policy,
                     &pdas.period,
-                    reservation_present.then_some(&reservation),
+                    reservation_open.then_some(&reservation),
                     exception_kind::CORRECTION_CREDIT,
                     amount,
                     &id,
@@ -460,6 +504,10 @@ pub async fn apply_transaction(
         };
         match step {
             Step::Skip => newly_applied.push(id_hex),
+            Step::Local("after_close_noop") => {
+                notes.push(json!({"event": id_hex, "kind": "after_close_noop"}));
+                newly_applied.push(id_hex);
+            }
             Step::Local(label) => {
                 notes.push(json!({"event": id_hex, "kind": label}));
                 record["needsReview"] = json!(true);
@@ -487,6 +535,19 @@ pub async fn apply_transaction(
                             note_exception(&mut record, label, &id_hex);
                             postings.push((id, label, amount));
                             newly_applied.push(id_hex);
+                        }
+                        // The Reservation was closed by a concurrent pass after
+                        // this one routed the event to it. Record that and
+                        // stop: the retry routes the event without it.
+                        // Never mark the event applied here: if the read
+                        // cannot confirm the close, the retry tries again.
+                        None if *code == program::ACCOUNT_NOT_INITIALIZED && reservation_open => {
+                            if super::capacity::gone(cards, &pdas.policy, &auth_id).await {
+                                reservation_closed = true;
+                                record["reservationClosed"] = json!(true);
+                            }
+                            stop = Some("reservation closed meanwhile".into());
+                            break;
                         }
                         // Releasing a hold that is already gone is a true no-op.
                         Some("ReservationClosed") if matches!(label, "reverse" | "expire") => {
@@ -549,7 +610,7 @@ pub async fn apply_transaction(
             }
         }
     }
-    if reservation_present {
+    if reservation_present && !reservation_closed {
         refresh_from_reservation(cards, &mut record, &reservation).await;
         // An over-capture is flagged by the program on the capture itself.
         if record["exception"] == "over_capture" && record["exceptionEventId"].is_null() {
@@ -579,7 +640,8 @@ pub async fn apply_transaction(
         .chain(newly_applied.iter().cloned())
         .collect();
     let progressed = !newly_applied.is_empty();
-    if progressed || !signatures.is_empty() {
+    let closed_changed = record["reservationClosed"] != original["reservationClosed"];
+    if progressed || !signatures.is_empty() || closed_changed {
         cards
             .update_txn(&token, |current| {
                 // Merge onto the latest copy: union applied ids and keep the
@@ -610,6 +672,7 @@ pub async fn apply_transaction(
                     "exception",
                     "exceptionEventId",
                     "issuerStatus",
+                    "reservationClosed",
                 ] {
                     // Only fields this pass changed: never revert a concurrent
                     // writer (e.g. a dispute webhook) with a stale copy.
@@ -618,6 +681,12 @@ pub async fn apply_transaction(
                     }
                 }
                 current["appliedEventIds"] = json!(ids);
+                if progressed {
+                    // The row changed: a close PER refused may now apply.
+                    if let Some(map) = current.as_object_mut() {
+                        map.remove("closeNotFinalAtMs");
+                    }
+                }
                 if let Some(list) = current["perTx"].as_array_mut() {
                     for signature in &signatures {
                         list.push(json!(signature));
@@ -635,6 +704,18 @@ pub async fn apply_transaction(
             .await
             .map_err(|_| "storage")?;
         super::reconcile::maybe_snapshot(cards, card).await;
+    }
+    if stop.is_none() && reservation_present && !reservation_closed {
+        // Final on PER and at the issuer: give the rent back to the prefund.
+        record["issuerStatus"] = truth["status"].clone();
+        if progressed {
+            if let Some(map) = record.as_object_mut() {
+                map.remove("closeNotFinalAtMs");
+            }
+        }
+        if super::capacity::closable(&record) {
+            super::capacity::close_reservation(cards, card, &token).await;
+        }
     }
     match stop {
         Some(reason) => Err(reason),
@@ -666,6 +747,7 @@ fn note_exception(record: &mut Value, label: &str, id_hex: &str) {
     if matches!(
         label,
         "forced_capture"
+            | "over_capture"
             | "unpaired_capture"
             | "over_hold"
             | "return_reversal"
@@ -682,6 +764,17 @@ fn apply_label(record: &mut Value, label: &str, amount: u64) {
     match label {
         "capture" => add_cents(record, "capturedCents", amount),
         "reverse" | "expire" => add_cents(record, "reversedCents", amount),
+        "late_capture" => {
+            add_cents(record, "capturedCents", amount);
+            flag(record, "lateCapture");
+        }
+        "over_capture" => {
+            add_cents(record, "capturedCents", amount);
+            add_cents(record, "exceptionCents", amount);
+            flag(record, "overCapture");
+            record["needsReview"] = json!(true);
+            record["exception"] = json!("over_capture");
+        }
         "refund" => {
             add_cents(record, "refundedCents", amount);
             flag(record, "refunded");
@@ -887,7 +980,9 @@ async fn dispute(
     };
     let state = dispute_state(body);
     let id = program::event_id_hash(cards.config.issuer_code, &row.key);
-    if has_reservation(&txn.record) {
+    // A closed Reservation keeps no dispute overlay on-chain; the dispute
+    // stays on the row (money from a dispute arrives as a refund anyway).
+    if has_reservation(&txn.record) && !super::capacity::is_closed(&txn.record) {
         let Some(pdas) = pdas(&card) else {
             return InboxOutcome::Ignored("card accounts missing".into());
         };

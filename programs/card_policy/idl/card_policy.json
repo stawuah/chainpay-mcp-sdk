@@ -321,6 +321,35 @@
         {
           "name": "permission_program",
           "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        },
+        {
+          "name": "auth_guard",
+          "docs": [
+            "the first reservation is closed; read in the handler."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  95,
+                  103,
+                  117,
+                  97,
+                  114,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -799,6 +828,261 @@
               {
                 "kind": "account",
                 "path": "intent"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "address": "MagicVau1t999999999999999999999999999999999"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "permission_program",
+          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_reservation",
+      "discriminator": [
+        171,
+        96,
+        8,
+        85,
+        100,
+        252,
+        173,
+        204
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reservation",
+          "docs": [
+            "handler. Unchecked (like `close_checkout_intent`'s intent) so Anchor",
+            "never re-serializes an account the magic program just closed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "reservation_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "reservation"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "auth_guard",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  95,
+                  103,
+                  117,
+                  97,
+                  114,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "auth_guard_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "auth_guard"
               }
             ],
             "program": {
@@ -4310,6 +4594,11 @@
       "code": 6044,
       "name": "EphemeralAccountsOpen",
       "msg": "Card still has ephemeral accounts"
+    },
+    {
+      "code": 6045,
+      "name": "ReservationNotFinal",
+      "msg": "Reservation is not final yet"
     }
   ],
   "types": [

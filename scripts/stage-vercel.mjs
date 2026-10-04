@@ -32,6 +32,8 @@ if (service === "backend") {
   const manifest = (await readFile(path.join(root, "backend/Cargo.toml"), "utf8"))
     .replace('path = "api/relay.rs"', 'path = "backend/api/relay.rs"')
     .replace('[features]', '[features]\ndefault = ["vercel"]')
+    // The vendored DCAP verifier is copied with backend/ (path dependency).
+    .replace('path = "vendor/dcap-qvl"', 'path = "backend/vendor/dcap-qvl"')
     + '\n[lib]\npath = "backend/src/lib.rs"\n\n[workspace]\n\n[profile.release]\noverflow-checks = true\nlto = "fat"\ncodegen-units = 1\n';
   // Vercel discovers Rust handlers under api/ while the library remains intact.
   await mkdir(path.join(target, "api"), { recursive: true });

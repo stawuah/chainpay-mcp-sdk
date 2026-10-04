@@ -269,6 +269,16 @@ pub async fn agent_card(
 
 // -------------------------------------------------------------------- views
 
+fn attestation_label(status: &super::tee::AttestationStatus) -> &'static str {
+    match (status.hardware, status.measurements) {
+        ("verified", "match") => "Genuine TDX hardware and the expected MagicBlock build verified",
+        ("verified", "mismatch") => "Genuine TDX hardware, but not the expected build",
+        ("verified", _) => "Genuine TDX hardware verified, build measurements pending",
+        ("failed", _) => "Attestation failed",
+        _ => "Not verified yet",
+    }
+}
+
 pub fn card_view(
     cards: &CardsConnector,
     card: &StoredCardRecord,
@@ -330,7 +340,7 @@ pub fn card_view(
             "hardware": status.hardware,
             "measurements": status.measurements,
             "checkedAt": (status.checked_at_ms > 0).then(|| rfc3339(status.checked_at_ms)),
-            "label": if status.measurements == "match" { "Enclave measurements verified" } else if status.hardware == "challenge_bound" { "Hardware verified, measurements pending" } else { "Not verified yet" },
+            "label": attestation_label(status),
         });
     }
     view["billing"] = json!({

@@ -205,6 +205,11 @@ pub mod card_policy {
         instructions::intent::close_checkout_intent(ctx)
     }
 
+    // 29 · PER (appended in final fixes)
+    pub fn close_reservation(ctx: Context<CloseReservation>) -> Result<()> {
+        instructions::close_reservation::close_reservation(ctx)
+    }
+
     // 27 · PER
     pub fn record_repayment(
         ctx: Context<FreezeCard>,

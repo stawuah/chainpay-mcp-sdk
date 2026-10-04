@@ -7,7 +7,15 @@
 //! cargo run -p chainpay-backend --example cards_live_sandbox -- teardown
 //! cargo run -p chainpay-backend --example cards_live_sandbox -- statement <out json>
 //! cargo run -p chainpay-backend --example cards_live_sandbox -- repay <state json> <receipt> <mandate> <label>
+//! cargo run -p chainpay-backend --example cards_live_sandbox -- soak <n> <out json> [card id]
 //! ```
+//!
+//! `soak` (final fixes, capacity): one card, `n` $0.10 purchases through the
+//! whole path (agent intent → runner redeem → Lithic `simulate/authorize` →
+//! ASA → PER `authorize`, then `simulate/clearing` → events webhook → capture
+//! → `close_reservation`). Every 25 purchases it reads, as the owner over PER,
+//! the policy's lamports (the prefund), its live ephemeral-account count and
+//! the AuthGuard's closed count, so the run shows the prefund holding steady.
 //!
 //! `statement` (workstream E) creates and activates a card, captures one $10
 //! purchase through the full checkout path, shows that the period cannot roll
@@ -59,6 +67,7 @@ async fn main() {
         Some("teardown") => teardown().await,
         Some("statement") => statement(&args[2]).await,
         Some("repay") => repay(&args[2], &args[3], &args[4], &args[5]).await,
+        Some("soak") => soak(args[2].parse().expect("n"), &args[3], args.get(4).cloned()).await,
         Some("private-prepare") => private_prepare(&args[2], &args[3], &args[4]).await,
         Some("private-submit") => private_submit(&args[2], &args[3], &args[4]).await,
         Some("private-verify") => private_verify(&args[2], &args[3], &args[4], &args[5]).await,
@@ -1064,4 +1073,204 @@ async fn private_verify(partner: &str, cursor: &str, reference: &str, base_units
         private_repay::Scan::Unavailable => json!({"unavailable": true}),
     };
     println!("{}", serde_json::to_string_pretty(&out).unwrap());
+}
+
+// ------------------------------------------------ final fixes: capacity soak
+
+/// Owner read over PER: (lamports, data) of one account.
+async fn per_account(tee: &TeeClient, address: &Address) -> Option<(u64, Vec<u8>)> {
+    let body = tee
+        .rpc(
+            "getAccountInfo",
+            json!([address.to_string(), {"encoding":"base64","commitment":"confirmed"}]),
+            Duration::from_secs(8),
+        )
+        .await
+        .ok()?;
+    let value = &body["result"]["value"];
+    let lamports = value["lamports"].as_u64()?;
+    let data = B64.decode(value["data"][0].as_str()?).ok()?;
+    Some((lamports, data))
+}
+
+/// Prefund lamports, live ephemeral accounts (CardPolicy's trailing u16) and
+/// AuthGuard closed count (u64 at offset 40), read as the owner.
+async fn capacity_probe(tee: &TeeClient, policy: &Address) -> Value {
+    let (lamports, ephemeral) = match per_account(tee, policy).await {
+        Some((lamports, data)) if data.len() >= 2 => (
+            json!(lamports),
+            json!(u16::from_le_bytes([
+                data[data.len() - 2],
+                data[data.len() - 1]
+            ])),
+        ),
+        _ => (Value::Null, Value::Null),
+    };
+    let closed = per_account(tee, &program::auth_guard_pda(policy))
+        .await
+        .filter(|(_, data)| data.len() >= 48)
+        .map(|(_, data)| u64::from_le_bytes(data[40..48].try_into().unwrap()));
+    json!({"policyLamports": lamports, "ephemeralAccounts": ephemeral, "guardClosedCount": closed})
+}
+
+async fn soak(n: usize, out_path: &str, existing: Option<String>) {
+    let http = reqwest::Client::new();
+    let url = env("RELAY_URL");
+    let owner = keypair(&env("OWNER_KEYPAIR"));
+    let owner_pk = Address::from(owner.verifying_key().to_bytes());
+    let l = lithic();
+    let session = login(&http, &url, &owner).await;
+    let mut relay = Relay {
+        http: http.clone(),
+        url: url.clone(),
+        session,
+        agent: String::new(),
+    };
+    let (card_id, policy, setup) = match existing {
+        Some(card_id) => {
+            let (_, view) = relay
+                .owner("GET", &format!("/v1/cards/{card_id}"), None)
+                .await;
+            let accounts = CardAccountsView::from(&view);
+            relay.agent = register_agent(&owner_pk.to_string(), &card_id).await;
+            (card_id, accounts.policy, json!({"reused": true}))
+        }
+        None => {
+            let (card_id, policy, _period, setup) =
+                new_card(&mut relay, &owner, "Capacity soak").await;
+            (card_id, policy, setup)
+        }
+    };
+    let tee = TeeClient::new(DEVNET_TEE_URL, owner.clone()).unwrap();
+    let started_at = chainpay_backend::connectors::card_issuer::rfc3339(
+        chainpay_backend::connectors::card_issuer::now_ms(),
+    );
+    let mut out = json!({
+        "ranAt": started_at,
+        "network": "solana-devnet + magicblock-devnet-tee + lithic-sandbox",
+        "cardId": card_id,
+        "setup": setup,
+        "prefundLamports": program::PREFUND_LAMPORTS,
+        "probes": [],
+        "purchases": [],
+    });
+    let save =
+        |out: &Value| std::fs::write(out_path, serde_json::to_vec_pretty(out).unwrap()).unwrap();
+    out["probes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"after": 0, "at": capacity_probe(&tee, &policy).await}));
+    let mut approved = 0usize;
+    let mut cleared = 0usize;
+    let mut tokens: Vec<String> = Vec::new();
+    for i in 0..n {
+        let op = format!(
+            "soak-{i}-{}",
+            chainpay_backend::connectors::card_issuer::now_ms()
+        );
+        let intent_started = Instant::now();
+        let (status, intent) = checkout(&relay, &card_id, &op, "demo-approved", "10").await;
+        let intent_ms = intent_started.elapsed().as_millis();
+        if status != 200 {
+            out["purchases"].as_array_mut().unwrap().push(
+                json!({"i": i, "stage": "intent", "status": status, "code": intent["code"], "intentMs": intent_ms}),
+            );
+            println!("{i} intent {status} {}", intent["code"]);
+            save(&out);
+            continue;
+        }
+        let mut redeemed = (0u16, Value::Null, 0u128);
+        for _ in 0..5 {
+            redeemed = redeem(&relay, intent["capability"].as_str().unwrap()).await;
+            if redeemed.0 != 429 && redeemed.0 != 503 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+        }
+        let (rs, body, redeem_ms) = redeemed;
+        let token = body["lithicToken"].as_str().unwrap_or_default().to_owned();
+        let result = if token.is_empty() {
+            Value::Null
+        } else {
+            issuer(&l, &token).await["result"].clone()
+        };
+        let ok = result == "APPROVED";
+        let mut cleared_ok = false;
+        if ok {
+            approved += 1;
+            tokens.push(token.clone());
+            cleared_ok = simulate(
+                &l,
+                "/v1/simulate/clearing",
+                json!({"token": token, "amount": 10}),
+            )
+            .await;
+            if cleared_ok {
+                cleared += 1;
+            }
+        }
+        out["purchases"].as_array_mut().unwrap().push(json!({
+            "i": i, "stage": "redeem", "status": rs, "result": result,
+            "intentMs": intent_ms, "redeemMs": redeem_ms, "cleared": cleared_ok,
+        }));
+        if (i + 1) % 25 == 0 {
+            let probe = capacity_probe(&tee, &policy).await;
+            println!("{} approved {approved} cleared {cleared} {probe}", i + 1);
+            out["probes"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"after": i + 1, "at": probe}));
+        }
+        save(&out);
+    }
+    // Let the last clearing webhooks land, then let the cron sweep anything left.
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    let _ = relay
+        .call(
+            "POST",
+            "/internal/cron/cards/reconcile",
+            &env("CRON_SECRET"),
+            None,
+        )
+        .await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let (_, metrics) = relay
+        .call(
+            "GET",
+            "/internal/ops/cards/metrics",
+            &env("CRON_SECRET"),
+            None,
+        )
+        .await;
+    let last = capacity_probe(&tee, &policy).await;
+    // Replays of closed authorizations: Lithic retrying an ASA for a token we
+    // already decided. The first token's auth id has left the guard ring once
+    // more than 256 holds closed; the last one is still in it. Both must get
+    // the stored decision from Axum and never a new hold.
+    let mut replays = Vec::new();
+    for token in [tokens.first(), tokens.last()].into_iter().flatten() {
+        replays.push(duplicate_asa(&http, &url, token, &l, 10).await);
+    }
+    let after_replays = capacity_probe(&tee, &policy).await;
+    out["final"] = json!({"approved": approved, "cleared": cleared, "attempts": n, "at": last, "replays": replays, "afterReplays": after_replays, "opsMetrics": metrics});
+    println!(
+        "done: approved {approved}/{n}, cleared {cleared}, final {last}, replays {replays:?}, after replays {after_replays}"
+    );
+    save(&out);
+}
+
+struct CardAccountsView {
+    policy: Address,
+}
+
+impl From<&Value> for CardAccountsView {
+    fn from(view: &Value) -> Self {
+        let policy = view["accounts"]["policy"]
+            .as_str()
+            .or_else(|| view["policyPda"].as_str())
+            .expect("card view has the policy account")
+            .parse()
+            .unwrap();
+        Self { policy }
+    }
 }

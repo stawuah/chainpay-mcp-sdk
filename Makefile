@@ -43,14 +43,16 @@ frontend-dev:
 contract-check:
 	cargo check -p chainpay
 
+# Anchor's key sync rewrites declare_id!/Anchor.toml during the build; the
+# script restores both on exit so a run leaves `git status` clean.
 contract-build:
-	$(ANCHOR) build --ignore-keys --no-docs
+	ANCHOR=$(ANCHOR) scripts/anchor-build-clean.sh
 
 contract-idl:
 	$(ANCHOR) idl build -p chainpay --no-docs
 
-contract-smoke: contract-build
-	cargo test -p chainpay --features settlement-tests --test settlement -- --nocapture
+contract-smoke:
+	ANCHOR=$(ANCHOR) scripts/anchor-build-clean.sh --smoke
 
 # programs/card_policy is its own Cargo + Anchor workspace (MagicBlock PER).
 card-policy-build:

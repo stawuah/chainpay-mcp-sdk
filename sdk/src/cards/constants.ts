@@ -35,6 +35,8 @@ export const CARD_SEEDS = {
   reservation: "res",
   intent: "intent",
   commitment: "card_commit",
+  /** Per-card replay guard for closed reservations (PER only). */
+  authGuard: "auth_guard",
 } as const;
 
 export const MAX_MERCHANTS = 8;
@@ -88,6 +90,7 @@ export const CARD_POLICY_DISCRIMINATORS = {
   wipeCard: Uint8Array.from([210, 120, 235, 58, 105, 132, 206, 76]),
   closeCard: Uint8Array.from([142, 206, 170, 182, 227, 204, 185, 115]),
   recordRepayment: Uint8Array.from([193, 155, 76, 246, 27, 189, 147, 102]),
+  closeReservation: Uint8Array.from([171, 96, 8, 85, 100, 252, 173, 204]),
 } as const;
 
 export type CardPolicyInstructionName = keyof typeof CARD_POLICY_DISCRIMINATORS;
@@ -100,6 +103,8 @@ export const CARD_ACCOUNT_DISCRIMINATORS = {
   reservation: Uint8Array.from([188, 235, 0, 111, 208, 253, 247, 212]),
   checkoutIntent: Uint8Array.from([39, 73, 4, 146, 212, 151, 108, 241]),
   cardCommitment: Uint8Array.from([43, 146, 163, 253, 221, 147, 4, 9]),
+  /** Zero-copy, 8 KB: the last 256 closed reservations' auth ids. */
+  authGuard: Uint8Array.from([53, 204, 86, 193, 155, 169, 182, 150]),
 } as const;
 
 /** `CardPolicyError` codes (contracts.md §1.4). Append only. */
@@ -150,6 +155,7 @@ export const CARD_POLICY_ERRORS = {
   6042: "InvalidEventId",
   6043: "DuplicateEvent",
   6044: "EphemeralAccountsOpen",
+  6045: "ReservationNotFinal",
 } as const;
 
 export type CardPolicyErrorCode = keyof typeof CARD_POLICY_ERRORS;

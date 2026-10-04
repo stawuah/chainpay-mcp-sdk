@@ -1,25 +1,143 @@
 {
   "name": "lifecycle_partial_return",
-  "description": "Partial clearing, a duplicate webhook, the final clearing, a return and a dispute stay distinct and never count twice.",
+  "description": "Partial clearing, a duplicate webhook, the final clearing, a return and a dispute stay distinct and never count twice. Once the hold is fully captured and the issuer shows SETTLED, the Reservation is closed (rent back to the prefund); the later return posts without it and the dispute stays on the row (contracts.md, final fixes).",
   "steps": [
-    {"intent": {"as": "i", "merchant": "demo-approved", "amountCents": "3000"}},
-    {"asa": {"txn": "t1", "amountCents": 3000, "merchant": "demo-approved"}, "expect": "APPROVED"},
-    {"event": {"txn": "t1", "id": "e1", "type": "CLEARING", "amountCents": 1000}},
-    {"deliver": {"txn": "t1", "webhookId": "w1"}},
-    {"expect": {"txn": "t1", "state": "partially_captured", "capturedCents": "1000", "reservedCents": "2000"}},
-    {"deliver": {"txn": "t1", "webhookId": "w1"}, "note": "duplicate delivery of the same webhook id"},
-    {"deliver": {"txn": "t1", "webhookId": "w1b"}, "note": "same truth under a new webhook id"},
-    {"expectProgram": {"capture": 1}},
-    {"event": {"txn": "t1", "id": "e2", "type": "CLEARING", "amountCents": 2000}},
-    {"deliver": {"txn": "t1", "webhookId": "w2"}},
-    {"expect": {"txn": "t1", "state": "captured", "capturedCents": "3000", "reservedCents": "0"}},
-    {"event": {"txn": "t1", "id": "e3", "type": "RETURN", "amountCents": 500, "polarity": "CREDIT"}},
-    {"deliver": {"txn": "t1", "webhookId": "w3"}},
-    {"expect": {"txn": "t1", "refundedCents": "500", "flags": {"refunded": true}}},
-    {"dispute": {"txn": "t1", "webhookId": "d1", "status": "NEW"}},
-    {"expect": {"txn": "t1", "disputeState": 1}},
-    {"dispute": {"txn": "t1", "webhookId": "d2", "status": "CASE_WON"}},
-    {"expect": {"txn": "t1", "disputeState": 2}},
-    {"expectProgram": {"capture": 2, "refund": 1, "record_dispute": 2}}
+    {
+      "intent": {
+        "as": "i",
+        "merchant": "demo-approved",
+        "amountCents": "3000"
+      }
+    },
+    {
+      "asa": {
+        "txn": "t1",
+        "amountCents": 3000,
+        "merchant": "demo-approved"
+      },
+      "expect": "APPROVED"
+    },
+    {
+      "event": {
+        "txn": "t1",
+        "id": "e1",
+        "type": "CLEARING",
+        "amountCents": 1000
+      }
+    },
+    {
+      "deliver": {
+        "txn": "t1",
+        "webhookId": "w1"
+      }
+    },
+    {
+      "expect": {
+        "txn": "t1",
+        "state": "partially_captured",
+        "capturedCents": "1000",
+        "reservedCents": "2000"
+      }
+    },
+    {
+      "deliver": {
+        "txn": "t1",
+        "webhookId": "w1"
+      },
+      "note": "duplicate delivery of the same webhook id"
+    },
+    {
+      "deliver": {
+        "txn": "t1",
+        "webhookId": "w1b"
+      },
+      "note": "same truth under a new webhook id"
+    },
+    {
+      "expectProgram": {
+        "capture": 1
+      }
+    },
+    {
+      "event": {
+        "txn": "t1",
+        "id": "e2",
+        "type": "CLEARING",
+        "amountCents": 2000
+      }
+    },
+    {
+      "deliver": {
+        "txn": "t1",
+        "webhookId": "w2"
+      }
+    },
+    {
+      "expect": {
+        "txn": "t1",
+        "state": "captured",
+        "capturedCents": "3000",
+        "reservedCents": "0",
+        "reservationClosed": true
+      }
+    },
+    {
+      "event": {
+        "txn": "t1",
+        "id": "e3",
+        "type": "RETURN",
+        "amountCents": 500,
+        "polarity": "CREDIT"
+      }
+    },
+    {
+      "deliver": {
+        "txn": "t1",
+        "webhookId": "w3"
+      }
+    },
+    {
+      "expect": {
+        "txn": "t1",
+        "refundedCents": "500",
+        "flags": {
+          "refunded": true
+        }
+      }
+    },
+    {
+      "dispute": {
+        "txn": "t1",
+        "webhookId": "d1",
+        "status": "NEW"
+      }
+    },
+    {
+      "expect": {
+        "txn": "t1",
+        "disputeState": 1
+      }
+    },
+    {
+      "dispute": {
+        "txn": "t1",
+        "webhookId": "d2",
+        "status": "CASE_WON"
+      }
+    },
+    {
+      "expect": {
+        "txn": "t1",
+        "disputeState": 2
+      }
+    },
+    {
+      "expectProgram": {
+        "capture": 2,
+        "close_reservation": 1,
+        "refund": 1,
+        "record_dispute": 0
+      }
+    }
   ]
 }

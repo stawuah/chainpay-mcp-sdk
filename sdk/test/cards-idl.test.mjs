@@ -20,6 +20,7 @@ import {
   buildCancelCheckoutIntentInstruction,
   buildCloseCardInstruction,
   buildCloseCheckoutIntentInstruction,
+  buildCloseReservationInstruction,
   buildConfirmReconciledInstruction,
   buildDelegateCardInstruction,
   buildFreezeInstruction,
@@ -33,8 +34,10 @@ import {
   buildWipeCardInstruction,
   buildWriteCommitmentInstruction,
   deriveCardAccounts,
+  deriveAuthGuardAddress,
   deriveCheckoutIntentAddress,
   derivePermissionAddress,
+  deriveReservationAddress,
   merchantIdHash,
 } from "../dist/index.js";
 
@@ -184,7 +187,7 @@ const intentId = Uint8Array.from({ length: 16 }, (_, i) => 200 - i);
 const a = deriveCardAccounts(owner, cardId, PROGRAM);
 const ctx = (extra = {}) => ({
   accounts: { owner, signer: owner, authorizer, policy: a.policy, period: a.period, ...extra.accounts },
-  fields: { "policy.binding": new PublicKey(a.binding).toBytes(), "binding.card_id": cardId, "intent.intent_id": intentId, "binding.owner": new PublicKey(owner).toBytes() },
+  fields: { "policy.binding": new PublicKey(a.binding).toBytes(), "binding.card_id": cardId, "intent.intent_id": intentId, "binding.owner": new PublicKey(owner).toBytes(), ...extra.fields },
   args: { card_id: cardId, "args.intent_id": intentId, ...extra.args },
 });
 
@@ -263,6 +266,17 @@ test("checkout intent builders match the IDL", () => {
   const extra = { accounts: { intent: deriveCheckoutIntentAddress(a.policy, intentId, PROGRAM) } };
   assertMatchesIdl("cancel_checkout_intent", buildCancelCheckoutIntentInstruction({ owner, cardId, intentId }, PROGRAM), ctx(extra));
   assertMatchesIdl("close_checkout_intent", buildCloseCheckoutIntentInstruction({ owner, cardId, intentId }, PROGRAM), ctx(extra));
+});
+
+test("close_reservation matches the IDL (owner or authorizer signs)", () => {
+  const authIdHash = new Uint8Array(32).fill(9);
+  const reservation = deriveReservationAddress(a.policy, authIdHash, PROGRAM);
+  const extra = { accounts: { reservation }, fields: { "reservation.auth_id_hash": authIdHash } };
+  assertMatchesIdl("close_reservation", buildCloseReservationInstruction({ owner, cardId, authIdHash }, PROGRAM), ctx(extra));
+  const authorizer = Keypair.generate().publicKey.toBase58();
+  const built = buildCloseReservationInstruction({ owner, cardId, authIdHash, signer: authorizer }, PROGRAM);
+  assert.equal(built.keys[0].address, authorizer);
+  assert.equal(built.keys[5].address, deriveAuthGuardAddress(a.policy, PROGRAM));
 });
 
 test("wipe_card and write_commitment match the IDL", () => {

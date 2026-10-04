@@ -26,6 +26,7 @@ pub(crate) fn captured_logs() -> &'static std::sync::Mutex<Vec<String>> {
 }
 
 pub mod asa;
+pub mod capacity;
 pub mod checkout;
 pub mod crypto;
 pub mod events;
@@ -57,6 +58,21 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tee::{AttestationMode, AttestationStatus, Measurements};
 use tokio::sync::RwLock;
+
+type AttestationFlight = tokio::sync::watch::Receiver<Option<AttestationStatus>>;
+
+/// Empties `CardsConnector::attestation_flight` when dropped.
+struct ClearFlight(Arc<CardsConnector>);
+
+impl Drop for ClearFlight {
+    fn drop(&mut self) {
+        *self
+            .0
+            .attestation_flight
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
 
 pub const CONNECTOR: &str = "lithic";
 /// Reference value that groups an owner's card registry rows.
@@ -113,7 +129,14 @@ pub struct CardsConnector {
     pub metrics: metrics::CardMetrics,
     base: std::sync::OnceLock<statements::BaseChain>,
     attestation: RwLock<AttestationStatus>,
-    attestation_refreshing: std::sync::atomic::AtomicBool,
+    /// Single flight: the one attestation check in progress, if any. Every
+    /// concurrent caller (cold-start ASAs, the background refresh, cron, the
+    /// owner route) waits on the same check instead of starting its own.
+    attestation_flight: std::sync::Mutex<Option<AttestationFlight>>,
+    #[cfg(test)]
+    attestation_checks: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    pub(crate) attestation_panics: std::sync::atomic::AtomicBool,
     card_cache: RwLock<HashMap<String, (StoredCardRecord, Instant)>>,
     http: reqwest::Client,
 }
@@ -267,7 +290,11 @@ impl CardsConnector {
             metrics: metrics::CardMetrics::default(),
             base: std::sync::OnceLock::new(),
             attestation: RwLock::new(AttestationStatus::unchecked(mode)),
-            attestation_refreshing: std::sync::atomic::AtomicBool::new(false),
+            attestation_flight: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            attestation_checks: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            attestation_panics: std::sync::atomic::AtomicBool::new(false),
             card_cache: RwLock::new(HashMap::new()),
             http: reqwest::Client::new(),
         }
@@ -307,20 +334,68 @@ impl CardsConnector {
             this.per.warm().await;
             let stale = now_ms().saturating_sub(this.attestation.read().await.checked_at_ms)
                 > 10 * 60 * 1000;
-            if !stale
-                || this
-                    .attestation_refreshing
-                    .swap(true, std::sync::atomic::Ordering::SeqCst)
-            {
-                return;
+            if stale {
+                this.refresh_attestation().await;
             }
-            this.refresh_attestation().await;
-            this.attestation_refreshing
-                .store(false, std::sync::atomic::Ordering::SeqCst);
         });
     }
 
-    pub async fn refresh_attestation(&self) -> AttestationStatus {
+    /// Run (or join) the attestation check. Concurrent callers share one
+    /// check: the first starts it in its own task, the rest wait for the same
+    /// result. The check is detached from its callers, so an ASA that gives up
+    /// after its budget slice never cancels the check the others are waiting on.
+    pub async fn refresh_attestation(self: &Arc<Self>) -> AttestationStatus {
+        let mut receiver = {
+            let mut flight = self
+                .attestation_flight
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match flight.as_ref() {
+                Some(receiver) => receiver.clone(),
+                None => {
+                    let (sender, receiver) = tokio::sync::watch::channel(None);
+                    *flight = Some(receiver.clone());
+                    let this = self.clone();
+                    tokio::spawn(async move {
+                        // Clears the slot however the task ends (a panic in
+                        // the verifier included), so the next caller starts a
+                        // fresh check instead of joining a dead flight.
+                        let _clear = ClearFlight(this.clone());
+                        let status = this.check_attestation_now().await;
+                        *this.attestation.write().await = status.clone();
+                        // Clear the flight before publishing, so a caller that
+                        // arrives after the result starts a fresh check.
+                        drop(_clear);
+                        let _ = sender.send(Some(status));
+                    });
+                    receiver
+                }
+            }
+        };
+        let landed = receiver
+            .wait_for(Option::is_some)
+            .await
+            .ok()
+            .and_then(|status| status.clone());
+        match landed {
+            Some(status) => status,
+            // The check task died (panic): report the last known status.
+            None => self.attestation.read().await.clone(),
+        }
+    }
+
+    async fn check_attestation_now(&self) -> AttestationStatus {
+        #[cfg(test)]
+        {
+            self.attestation_checks
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self
+                .attestation_panics
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                panic!("verifier blew up (test)");
+            }
+        }
         let status = if matches!(self.per, Per::Live(_)) {
             tee::check_attestation(
                 &self.http,
@@ -331,6 +406,8 @@ impl CardsConnector {
             )
             .await
         } else {
+            #[cfg(test)]
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             self.attestation.read().await.clone()
         };
         if status.measurements == "mismatch" || status.hardware == "failed" {
@@ -341,8 +418,13 @@ impl CardsConnector {
                 status.detail.as_deref().unwrap_or("-")
             );
         }
-        *self.attestation.write().await = status.clone();
         status
+    }
+
+    #[cfg(test)]
+    pub fn attestation_checks(&self) -> usize {
+        self.attestation_checks
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     #[cfg(test)]

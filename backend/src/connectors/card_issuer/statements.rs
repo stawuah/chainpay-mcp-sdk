@@ -130,7 +130,11 @@ impl PostingKind {
 /// and correction credits remove it, an over-hold moves no money.
 pub fn posting_for_label(label: &str) -> Option<(PostingKind, Option<&'static str>)> {
     Some(match label {
-        "capture" | "single_message" => (PostingKind::Purchase, None),
+        "capture" | "single_message" | "late_capture" => (PostingKind::Purchase, None),
+        // Clearing above a fully captured hold whose Reservation was closed.
+        // Booked exactly like the open-hold path, where `capture` posts the
+        // whole amount as a purchase (the row carries the review flag).
+        "over_capture" => (PostingKind::Purchase, None),
         "refund" => (PostingKind::Refund, None),
         "forced_capture" => (PostingKind::AdjustmentDebit, Some("forced_capture")),
         "unpaired_capture" => (PostingKind::AdjustmentDebit, Some("unpaired_capture")),

@@ -21,8 +21,11 @@ pub const COMPUTE_BUDGET_PROGRAM: &str = "ComputeBudget1111111111111111111111111
 pub const ISSUER_LITHIC_SANDBOX: u8 = 1;
 pub const ISSUER_CARD_SIM: u8 = 2;
 pub const ACTION_ESCROW_INDEX: u8 = 255;
-/// contracts.md Changelog: 2,665,408 lamports at 32 lamports/byte. Rounded up
-/// for headroom; the program refuses anything below its constant.
+/// Program `MIN_PREFUND` is 2,942,720 lamports at 32 lamports/byte (contracts.md
+/// Changelog, final fixes: AuthGuard included). Rounded up for headroom; the
+/// program refuses anything below its constant. Closed intents and
+/// reservations return their rent, so this bounds holds open at once, not the
+/// card's lifetime.
 pub const PREFUND_LAMPORTS: u64 = 5_000_000;
 pub const ESCROW_TOP_UP_LAMPORTS: u64 = 20_000_000;
 
@@ -46,6 +49,8 @@ pub mod exception_kind {
     pub const CORRECTION_CREDIT: u8 = 5;
     pub const RETURN_REVERSAL: u8 = 6;
     pub const UNPAIRED_CAPTURE: u8 = 7;
+    /// Clearing after a reversed/expired hold whose Reservation was closed.
+    pub const LATE_CAPTURE: u8 = 8;
 }
 pub const FREEZE_AUTHORIZER_SAFETY: u8 = 2;
 pub const FREEZE_RECOVERY: u8 = 3;
@@ -173,6 +178,19 @@ pub fn reservation_pda(policy: &Address, auth_id_hash: &[u8; 32]) -> Address {
     pda(&[b"res", policy.as_ref(), auth_id_hash], &program_id())
 }
 
+/// Per-card replay guard for closed reservations (`["auth_guard", policy]`).
+pub fn auth_guard_pda(policy: &Address) -> Address {
+    pda(&[b"auth_guard", policy.as_ref()], &program_id())
+}
+
+/// Anchor `AccountNotInitialized`: the instruction named an account that does
+/// not exist (here: a Reservation already closed).
+pub const ACCOUNT_NOT_INITIALIZED: u32 = 3012;
+
+/// Size of the guard ring (`card_policy::constants::GUARD_RING`): a duplicate
+/// auth id is refused on-chain for this many later closes on the same card.
+pub const GUARD_RING: u64 = 256;
+
 pub fn permission_pda(account: &Address) -> Address {
     pda(
         &[b"permission:", account.as_ref()],
@@ -296,8 +314,38 @@ pub fn authorize(
             w(addr(MAGIC_VAULT)),
             r(addr(MAGIC_PROGRAM)),
             r(addr(PERMISSION_PROGRAM)),
+            // Replay guard for closed reservations (read-only; may be empty).
+            r(auth_guard_pda(policy)),
         ],
         &args,
+    )
+}
+
+/// #29: close a final Reservation; its rent returns to the card prefund and
+/// its auth id moves into the guard ring (created on the card's first close).
+pub fn close_reservation(
+    signer_key: &Address,
+    policy: &Address,
+    period: &Address,
+    auth_id_hash: &[u8; 32],
+) -> Instruction {
+    let reservation = reservation_pda(policy, auth_id_hash);
+    let guard = auth_guard_pda(policy);
+    ix(
+        "close_reservation",
+        vec![
+            signer(*signer_key),
+            w(*policy),
+            r(*period),
+            w(reservation),
+            w(permission_pda(&reservation)),
+            w(guard),
+            w(permission_pda(&guard)),
+            w(addr(MAGIC_VAULT)),
+            r(addr(MAGIC_PROGRAM)),
+            r(addr(PERMISSION_PROGRAM)),
+        ],
+        &[],
     )
 }
 
@@ -1139,7 +1187,7 @@ pub fn decode_commitment(data: &[u8]) -> Result<CommitmentAccount, DecodeError> 
 
 // ------------------------------------------------------------------ errors
 
-pub const ERRORS: [&str; 45] = [
+pub const ERRORS: [&str; 46] = [
     "Unauthorized",
     "ValidatorNotAllowed",
     "PolicyNotSet",
@@ -1185,6 +1233,7 @@ pub const ERRORS: [&str; 45] = [
     "InvalidEventId",
     "DuplicateEvent",
     "EphemeralAccountsOpen",
+    "ReservationNotFinal",
 ];
 
 pub fn error_name(code: u32) -> Option<&'static str> {

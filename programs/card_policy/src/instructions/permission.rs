@@ -6,7 +6,7 @@ use crate::{
     errors::CardPolicyError,
     hashes::{append_ledger, LedgerEvent},
     instructions::common::*,
-    state::{CardPeriod, CardPolicy, CheckoutIntent, Reservation},
+    state::{guard_bytes, AuthGuard, CardPeriod, CardPolicy, CheckoutIntent, Reservation},
 };
 use anchor_lang::prelude::*;
 use anchor_lang::Discriminator;
@@ -327,6 +327,14 @@ pub fn ephemeral_identity(
             let i = CheckoutIntent::try_deserialize(&mut &data[..])?;
             require!(i.policy == *policy, CardPolicyError::InvalidAccount);
             (INTENT_SEED, i.intent_id.to_vec(), i.bump)
+        } else if data.starts_with(AuthGuard::DISCRIMINATOR) {
+            // Read in place: the guard is larger than the SBF stack frame.
+            require!(
+                guard_bytes::policy(&data) == Some(*policy),
+                CardPolicyError::InvalidAccount
+            );
+            // Seeds are [AUTH_GUARD_SEED, policy, bump]; an empty id adds no bytes.
+            (AUTH_GUARD_SEED, Vec::new(), guard_bytes::bump(&data))
         } else {
             return err!(CardPolicyError::InvalidAccount);
         };

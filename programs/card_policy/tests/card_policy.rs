@@ -16,8 +16,8 @@ use card_policy::instructions::common::MIN_PREFUND;
 use card_policy::instructions::{PermissionOp, RestoreArgs};
 use card_policy::policy::{AuthorizeArgs, IntentArgs, PolicyArgs};
 use card_policy::state::{
-    reservation_state as rs, CardBinding, CardCommitment, CardPeriod, CardPolicy, CheckoutIntent,
-    Reservation,
+    reservation_state as rs, AuthGuard, CardBinding, CardCommitment, CardPeriod, CardPolicy,
+    CheckoutIntent, Reservation,
 };
 use card_policy::{accounts, instruction};
 use ephemeral_rollups_sdk::access_control::structs::PERMISSION_SEED;
@@ -34,6 +34,8 @@ const NOW: i64 = 1_800_000_000;
 const DAY: i64 = 86_400;
 const MOCK_PREFUND: u64 = 2_000_000_000;
 const SYSTEM: Pubkey = anchor_lang::system_program::ID;
+/// Pseudo error code: the transaction failed because the card prefund ran dry.
+const PREFUND_EXHAUSTED: u32 = u32::MAX;
 
 fn err_code(name: &str) -> u32 {
     // Mirrors CardPolicyError declaration order (codes from 6000, contracts.md §1.4).
@@ -83,6 +85,7 @@ fn err_code(name: &str) -> u32 {
         "InvalidEventId",
         "DuplicateEvent",
         "EphemeralAccountsOpen",
+        "ReservationNotFinal",
     ];
     6000 + NAMES.iter().position(|n| *n == name).expect("known error") as u32
 }
@@ -121,6 +124,10 @@ fn permission(account: &Pubkey) -> Pubkey {
 
 impl Card {
     fn new() -> Self {
+        Self::with_prefund(MOCK_PREFUND)
+    }
+
+    fn with_prefund(prefund_lamports: u64) -> Self {
         let mut svm = LiteSVM::new();
         let so = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/mock/card_policy.so");
         svm.add_program_from_file(card_policy::ID, &so)
@@ -160,7 +167,7 @@ impl Card {
                 issuer_card_ref_hash: [12u8; 32],
                 // The mock pays base-layer rent for "ephemeral" accounts, which is
                 // ~200x the ER rate MIN_PREFUND is sized for.
-                prefund_lamports: MOCK_PREFUND,
+                prefund_lamports,
             },
         );
         card.send(ix, &[]).expect("init_card");
@@ -169,7 +176,10 @@ impl Card {
 
     /// A card with permissions and the default policy ($50 budget, $30 max).
     fn ready() -> Self {
-        let mut card = Self::new();
+        Self::ready_with(Self::new())
+    }
+
+    fn ready_with(mut card: Self) -> Self {
         let ix = card.init_permission_ix(card.authorizer.pubkey());
         card.send_as(ix, "owner").expect("init_permission");
         card.set_policy(card.default_policy()).expect("set_policy");
@@ -226,7 +236,11 @@ impl Card {
                         _,
                         solana_transaction_error_code::IxErr::Custom(code),
                     ) => Err(code),
-                    other => panic!("unexpected failure: {other:?}"),
+                    // The mock's sponsor (policy PDA) ran out of prefund.
+                    solana_transaction_error_code::TxErr::InsufficientFundsForRent { .. } => {
+                        Err(PREFUND_EXHAUSTED)
+                    }
+                    other => panic!("unexpected failure: {other:?} {:#?}", failed.meta.logs),
                 }
             }
         }
@@ -258,6 +272,67 @@ impl Card {
 
     fn reservation_key(&self, auth: u64) -> Pubkey {
         pda(&[RESERVATION_SEED, self.policy.as_ref(), &hash("auth", auth)])
+    }
+
+    fn guard_key(&self) -> Pubkey {
+        pda(&[AUTH_GUARD_SEED, self.policy.as_ref()])
+    }
+
+    fn guard(&self) -> AuthGuard {
+        let account = self
+            .svm
+            .get_account(&self.guard_key())
+            .expect("guard exists");
+        assert!(account
+            .data
+            .starts_with(&<AuthGuard as anchor_lang::Discriminator>::DISCRIMINATOR));
+        *bytemuck::from_bytes::<AuthGuard>(&account.data[8..])
+    }
+
+    fn lamports(&self, key: &Pubkey) -> u64 {
+        self.svm.get_account(key).map(|a| a.lamports).unwrap_or(0)
+    }
+
+    fn close_reservation_as(&mut self, auth: u64, who: &str) -> Result<(), u32> {
+        let reservation = self.reservation_key(auth);
+        let guard = self.guard_key();
+        let ix = self.ix(
+            accounts::CloseReservation {
+                signer: self.signer(who).pubkey(),
+                policy: self.policy,
+                period: self.period,
+                reservation,
+                reservation_permission: permission(&reservation),
+                auth_guard: guard,
+                auth_guard_permission: permission(&guard),
+                vault: EPHEMERAL_VAULT_ID,
+                magic_program: SYSTEM,
+                permission_program: PERMISSION_PROGRAM_ID,
+            },
+            instruction::CloseReservation {},
+        );
+        self.send_as(ix, who)
+    }
+
+    fn close_reservation(&mut self, auth: u64) -> Result<(), u32> {
+        self.close_reservation_as(auth, "authorizer")
+    }
+
+    fn close_intent(&mut self, id: u8) -> Result<(), u32> {
+        let intent = self.intent_key(id);
+        let ix = self.ix(
+            accounts::CloseCheckoutIntent {
+                signer: self.authorizer.pubkey(),
+                policy: self.policy,
+                intent,
+                intent_permission: permission(&intent),
+                vault: EPHEMERAL_VAULT_ID,
+                magic_program: SYSTEM,
+                permission_program: PERMISSION_PROGRAM_ID,
+            },
+            instruction::CloseCheckoutIntent {},
+        );
+        self.send_as(ix, "authorizer")
     }
 
     fn intent_key(&self, id: u8) -> Pubkey {
@@ -392,6 +467,7 @@ impl Card {
                 vault: EPHEMERAL_VAULT_ID,
                 magic_program: SYSTEM,
                 permission_program: PERMISSION_PROGRAM_ID,
+                auth_guard: self.guard_key(),
             },
             instruction::Authorize { args },
         )
@@ -587,7 +663,7 @@ fn init_card_publishes_only_zeroed_private_accounts() {
     assert_eq!(commitment.seq, 0);
     assert!(card.svm.get_account(&card.policy).unwrap().lamports >= MIN_PREFUND);
     // Published in contracts.md (changelog) for the SDK; changes with account sizes.
-    assert_eq!(MIN_PREFUND, 2_665_408);
+    assert_eq!(MIN_PREFUND, 2_942_720);
 }
 
 #[test]
@@ -1114,7 +1190,7 @@ fn forced_capture_and_over_capture_are_flagged_never_approved() {
         Err(err_code("InvalidAccount"))
     );
     assert_eq!(
-        card.exception(None, 8, 10, 3),
+        card.exception(None, 9, 10, 3),
         Err(err_code("InvalidPolicy"))
     );
     card.exception(None, EXC_CORRECTION_CREDIT, 100, 4).unwrap();
@@ -1667,4 +1743,309 @@ fn update_permission_resyncs_passed_ephemeral_accounts() {
     ix.accounts
         .push(AccountMeta::new(permission(&card.binding), false));
     assert!(card.send_as(ix, "owner").is_err());
+}
+
+// ------------------------------------------------ capacity: close_reservation
+
+fn dispute(card: &mut Card, auth: u64, state: u8, event: u64) -> Result<(), u32> {
+    let ix = card.ix(
+        card.res_accounts(auth),
+        instruction::RecordDispute {
+            state,
+            event_id_hash: hash("event", event),
+        },
+    );
+    card.send_as(ix, "authorizer")
+}
+
+#[test]
+fn close_reservation_needs_a_final_hold_and_returns_the_rent() {
+    let mut card = Card::ready();
+    card.buy(1, 1, 1_000).unwrap();
+    // Open, then partially captured: not final.
+    assert_eq!(
+        card.close_reservation(1),
+        Err(err_code("ReservationNotFinal"))
+    );
+    card.capture(1, 400, 1).unwrap();
+    assert_eq!(card.reservation(1).state, rs::PARTIALLY_CAPTURED);
+    assert_eq!(
+        card.close_reservation(1),
+        Err(err_code("ReservationNotFinal"))
+    );
+    card.capture(1, 600, 2).unwrap();
+    assert_eq!(card.reservation(1).state, rs::CAPTURED);
+    // An open dispute keeps it.
+    dispute(&mut card, 1, 1, 10).unwrap();
+    assert_eq!(
+        card.close_reservation(1),
+        Err(err_code("ReservationNotFinal"))
+    );
+    dispute(&mut card, 1, 2, 11).unwrap();
+    // Only the owner or the authorizer.
+    assert_eq!(
+        card.close_reservation_as(1, "stranger"),
+        Err(err_code("Unauthorized"))
+    );
+    // Only a Reservation of this card: an intent in its place is refused.
+    let guard = card.guard_key();
+    let intent = card.intent_key(1);
+    let ix = card.ix(
+        accounts::CloseReservation {
+            signer: card.authorizer.pubkey(),
+            policy: card.policy,
+            period: card.period,
+            reservation: intent,
+            reservation_permission: permission(&intent),
+            auth_guard: guard,
+            auth_guard_permission: permission(&guard),
+            vault: EPHEMERAL_VAULT_ID,
+            magic_program: SYSTEM,
+            permission_program: PERMISSION_PROGRAM_ID,
+        },
+        instruction::CloseReservation {},
+    );
+    assert_eq!(
+        card.send_as(ix, "authorizer"),
+        Err(err_code("InvalidAccount"))
+    );
+
+    let ledger_before = card.policy().ledger_seq;
+    let r1 = card.reservation(1);
+    card.close_reservation(1).unwrap();
+    assert!(!card.exists(&card.reservation_key(1)));
+    let guard = card.guard();
+    assert_eq!(guard.closed_count, 1);
+    assert_eq!(guard.recent[0], hash("auth", 1));
+    assert_eq!(
+        guard.closed_head,
+        card_policy::instructions::closed_head(&[0u8; 32], &r1)
+    );
+    assert_eq!(card.policy().ledger_seq, ledger_before + 1);
+    // Reservation closed (-1), guard created (+1); intent 1 still open.
+    assert_eq!(card.policy().ephemeral_count, 2);
+    // Period totals are unchanged by a close.
+    assert_eq!(card.period().captured_cents, 1_000);
+    assert_eq!(card.period().reserved_cents, 0);
+
+    // With the guard in place, a close returns exactly the reservation's rent.
+    card.buy(2, 2, 700).unwrap();
+    card.reverse(2, 700, 0, 20).unwrap();
+    assert_eq!(card.reservation(2).state, rs::REVERSED);
+    let rent = card.lamports(&card.reservation_key(2));
+    let before = card.lamports(&card.policy);
+    card.close_owner_closes(2);
+    assert_eq!(card.lamports(&card.policy), before + rent);
+    assert_eq!(card.guard().closed_count, 2);
+
+    // Expired holds (roll_period) close too.
+    card.buy(3, 3, 500).unwrap();
+    card.set_clock(NOW + 31 * DAY);
+    card.roll(&[3]).unwrap();
+    assert_eq!(card.reservation(3).state, rs::EXPIRED);
+    card.close_reservation(3).unwrap();
+    assert_eq!(card.guard().closed_count, 3);
+}
+
+impl Card {
+    /// The owner may close a final hold as well.
+    fn close_owner_closes(&mut self, auth: u64) {
+        self.close_reservation_as(auth, "owner").unwrap();
+    }
+}
+
+#[test]
+fn a_replayed_auth_id_never_reserves_again_after_close() {
+    let mut card = Card::ready();
+    card.buy(1, 1, 1_000).unwrap();
+    card.capture(1, 1_000, 1).unwrap();
+    card.close_reservation(1).unwrap();
+    card.close_intent(1).unwrap();
+    let period = card.period();
+
+    // A fresh, matching intent is open, yet the same issuer auth id is refused.
+    card.open_intent(9, 1, 1_000).unwrap();
+    assert_eq!(
+        card.authorize(1, 9, 1_000),
+        Err(err_code("DuplicateAuthorization"))
+    );
+    assert!(!card.exists(&card.reservation_key(1)));
+    assert_eq!(card.period().try_to_vec_bytes(), period.try_to_vec_bytes());
+    let intent: CheckoutIntent = card.get(&card.intent_key(9));
+    assert_eq!(intent.state, INTENT_OPEN, "the intent is not consumed");
+    // A new auth id on the same intent still works.
+    card.authorize(2, 9, 1_000).unwrap();
+}
+
+#[test]
+fn replay_window_is_exactly_guard_ring_later_closes() {
+    let mut card = Card::ready();
+    let mut policy = card.default_policy();
+    policy.budget_cents = 1_000_000;
+    card.set_policy(policy).unwrap();
+    let cycle = |card: &mut Card, auth: u64| {
+        card.buy(auth, 1, 1).unwrap();
+        card.capture(auth, 1, auth).unwrap();
+        card.close_reservation(auth).unwrap();
+        card.close_intent(1).unwrap();
+    };
+    cycle(&mut card, 1);
+    // GUARD_RING - 1 later closes: auth 1 is still in the ring.
+    for auth in 2..(GUARD_RING as u64 + 1) {
+        cycle(&mut card, auth);
+    }
+    card.open_intent(1, 1, 1).unwrap();
+    assert_eq!(
+        card.authorize(1, 1, 1),
+        Err(err_code("DuplicateAuthorization"))
+    );
+    card.close_intent_open(1);
+    // The GUARD_RING-th later close evicts it: from here Axum's durable
+    // operation claim (`card-asa:v1:<token>`) is the only guard left.
+    cycle(&mut card, GUARD_RING as u64 + 1);
+    assert!(!card.guard().contains(&hash("auth", 1)));
+    assert!(card.guard().contains(&hash("auth", 2)));
+}
+
+impl Card {
+    /// Close an open (unconsumed) intent by expiring it first.
+    fn close_intent_open(&mut self, id: u8) {
+        let now = self.now();
+        self.set_clock(now + 601);
+        self.close_intent(id).unwrap();
+        self.set_clock(now);
+    }
+}
+
+/// The capacity soak: >1,000 authorizations on one card whose prefund covers
+/// only a handful of open holds at a time. Without closes the same card runs
+/// dry within that handful.
+#[test]
+fn soak_1100_authorizations_on_one_card_without_running_out() {
+    let probe = Card::new();
+    let rent = |len: usize| probe.svm.minimum_balance_for_rent_exemption(len);
+    let res_len = card_policy::instructions::common::RESERVATION_LEN;
+    let intent_len = card_policy::instructions::common::INTENT_LEN;
+    let guard_len = card_policy::instructions::common::AUTH_GUARD_LEN;
+    // Base-rent prefund for the guard plus 4 open (intent + reservation) pairs.
+    let per_auth = rent(res_len) + rent(intent_len);
+    let prefund = MIN_PREFUND.max(rent(guard_len) + 4 * per_auth + rent(guard_len) / 2);
+    drop(probe);
+
+    // Control: no closes. The card stops after a few authorizations.
+    let mut control = Card::ready_with(Card::with_prefund(prefund));
+    let mut approved = 0u64;
+    for auth in 0..64u64 {
+        let id = 1 + (auth % 200) as u8;
+        if control.open_intent(id, 1, 1).is_err() || control.authorize(auth, id, 1).is_err() {
+            break;
+        }
+        approved += 1;
+    }
+    // Every un-closed authorization keeps an intent + reservation funded, so the
+    // control can never get past prefund / per-auth rent.
+    assert!(
+        approved <= prefund / per_auth && approved < 32,
+        "control card approved {approved}"
+    );
+    println!("soak control: prefund {prefund} lamports, {approved} authorizations without closes");
+
+    // With closes: 1,100 full cycles, all approved, prefund steady.
+    let mut card = Card::ready_with(Card::with_prefund(prefund));
+    let mut policy = card.default_policy();
+    policy.budget_cents = 1_000_000;
+    card.set_policy(policy).unwrap();
+    let mut steady = None;
+    for auth in 0..1_100u64 {
+        let id = 1 + (auth % 200) as u8;
+        card.open_intent(id, 1, 1)
+            .unwrap_or_else(|code| panic!("intent for {auth} failed with {code}"));
+        card.authorize(auth, id, 1)
+            .unwrap_or_else(|code| panic!("authorization {auth} failed with {code}"));
+        card.close_intent(id).unwrap();
+        card.capture(auth, 1, auth).unwrap();
+        card.close_reservation(auth).unwrap();
+        let lamports = card.lamports(&card.policy);
+        match steady {
+            None => steady = Some(lamports),
+            Some(expected) => assert_eq!(lamports, expected, "prefund drifted at {auth}"),
+        }
+        // A replay of any auth id still in the window is refused.
+        if auth % 97 == 0 && auth > 0 {
+            card.open_intent(250, 1, 1).unwrap();
+            assert_eq!(
+                card.authorize(auth - 1, 250, 1),
+                Err(err_code("DuplicateAuthorization"))
+            );
+            card.close_intent_open(250);
+        }
+    }
+    assert_eq!(card.period().purchases_count, 1_100);
+    assert_eq!(card.period().captured_cents, 1_100);
+    assert_eq!(card.guard().closed_count, 1_100);
+    assert_eq!(card.policy().ephemeral_count, 1, "only the guard stays");
+    println!(
+        "soak: 1100 authorizations approved and closed on one card, prefund steady at {} lamports",
+        steady.unwrap()
+    );
+}
+
+#[test]
+fn wipe_closes_the_guard_with_the_other_ephemeral_accounts() {
+    let mut card = Card::ready();
+    card.buy(1, 1, 1_000).unwrap();
+    card.reverse(1, 1_000, 0, 1).unwrap();
+    card.close_reservation(1).unwrap();
+    card.close_intent(1).unwrap();
+    assert_eq!(card.policy().ephemeral_count, 1);
+    card.freeze("owner", FREEZE_OWNER).unwrap();
+    let mut ix = card.ix(
+        accounts::WipeCard {
+            owner: card.owner.pubkey(),
+            policy: card.policy,
+            period: card.period,
+            policy_permission: permission(&card.policy),
+            period_permission: permission(&card.period),
+            vault: EPHEMERAL_VAULT_ID,
+            magic_context: MAGIC_CONTEXT_ID,
+            magic_program: SYSTEM,
+            permission_program: PERMISSION_PROGRAM_ID,
+        },
+        instruction::WipeCard {},
+    );
+    let guard = card.guard_key();
+    ix.accounts.push(AccountMeta::new(guard, false));
+    ix.accounts
+        .push(AccountMeta::new(permission(&guard), false));
+    card.send_as(ix, "owner").unwrap();
+    assert!(!card.exists(&guard));
+}
+
+#[test]
+fn late_capture_after_close_counts_without_review_and_needs_no_reservation() {
+    let mut card = Card::ready();
+    card.buy(1, 1, 2_000).unwrap();
+    card.reverse(1, 2_000, 1, 1).unwrap();
+    card.close_reservation(1).unwrap();
+    let exposure = card.policy().statement_outstanding_cents;
+    card.exception(None, EXC_LATE_CAPTURE, 2_000, 2).unwrap();
+    assert_eq!(card.period().captured_cents, 2_000);
+    assert_eq!(card.period().exception_cents, 0);
+    assert_eq!(card.policy().exceptions_open, 0, "no owner review");
+    assert_eq!(
+        card.policy().statement_outstanding_cents,
+        exposure + 2_000 + 10,
+        "spend plus the 0.5% fee"
+    );
+    // Retried: deduped like every issuer event.
+    assert_eq!(
+        card.exception(None, EXC_LATE_CAPTURE, 2_000, 2),
+        Err(err_code("DuplicateEvent"))
+    );
+    // Never against a live Reservation (that takes `capture`).
+    card.buy(3, 3, 500).unwrap();
+    assert_eq!(
+        card.exception(Some(3), EXC_LATE_CAPTURE, 500, 4),
+        Err(err_code("InvalidAccount"))
+    );
 }

@@ -36,6 +36,11 @@ export function deriveReservationAddress(policy: Address, authIdHash: Uint8Array
   return pda([utf8(CARD_SEEDS.reservation), publicKey(policy).toBytes(), bytes32(authIdHash, "authIdHash")], resolveCardPolicyProgramId(programId));
 }
 
+/** `["auth_guard", policy]` (PER-only): replay guard for closed reservations. */
+export function deriveAuthGuardAddress(policy: Address, programId?: Address): Address {
+  return pda([utf8(CARD_SEEDS.authGuard), publicKey(policy).toBytes()], resolveCardPolicyProgramId(programId));
+}
+
 /** `["intent", policy, intent_id]` (PER-only); intent_id is 16 bytes. */
 export function deriveCheckoutIntentAddress(policy: Address, intentId: Uint8Array, programId?: Address): Address {
   if (intentId.length !== 16) throw new Error("intentId must be exactly 16 bytes");

@@ -1,5 +1,6 @@
 pub mod authorize;
 pub mod card;
+pub mod close_reservation;
 pub mod commitment;
 pub mod common;
 pub mod freeze;
@@ -12,6 +13,7 @@ pub mod set_policy;
 
 pub use authorize::*;
 pub use card::*;
+pub use close_reservation::*;
 pub use commitment::*;
 pub use freeze::*;
 pub use intent::*;

@@ -583,6 +583,7 @@ scenario!(void_expiry_late);
 scenario!(force_post);
 scenario!(advice);
 scenario!(single_message);
+scenario!(capacity_close_and_replay);
 
 // --------------------------------------------------------------- targeted
 
@@ -845,12 +846,13 @@ async fn enforce_mode_without_verified_measurements_declines_everything() {
     assert_eq!(h.program_count("authorize"), 0);
     h.cards
         .set_attestation(AttestationStatus {
-            hardware: "challenge_bound",
+            hardware: "verified",
             measurements: "match",
             mode: "enforce",
             checked_at_ms: now_ms(),
             observed: None,
             detail: None,
+            tcb_status: Some("UpToDate".into()),
         })
         .await;
     h.intent("demo-approved", "1000").await;
@@ -860,6 +862,192 @@ async fn enforce_mode_without_verified_measurements_declines_everything() {
             .1,
         "APPROVED"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reconcile_closes_final_holds_and_dead_intents_the_event_path_missed() {
+    let h = Harness::new().await;
+    // 1. The event path closes a hold as soon as PER and the issuer are final.
+    h.intent("demo-approved", "1000").await;
+    assert_eq!(
+        h.asa("cap-1", 1_000, "demo-approved", "AUTHORIZATION")
+            .await
+            .1,
+        "APPROVED"
+    );
+    if h.sim.transaction("cap-1").is_none() {
+        h.sim.authorization(
+            "cap-1",
+            &h.card_token,
+            1_000,
+            "DEMO-DATAAPI",
+            "APPROVED",
+            "AUTHORIZATION",
+        );
+    }
+    h.sim
+        .add_event("cap-1", "cap-1-c", "CLEARING", 1_000, "DEBIT");
+    assert_eq!(h.deliver("cap-1-w", h.sim.webhook("cap-1")).await, 200);
+    let record = h.txn("cap-1").await;
+    assert_eq!(record["state"], "captured");
+    assert_eq!(record["reservationClosed"], true, "{record}");
+
+    // 2. A reversal the issuer still listed as PENDING when it was applied:
+    //    PER is final, the row is not closable yet.
+    h.intent("demo-approved", "500").await;
+    assert_eq!(
+        h.asa("cap-2", 500, "demo-approved", "AUTHORIZATION")
+            .await
+            .1,
+        "APPROVED"
+    );
+    if h.sim.transaction("cap-2").is_none() {
+        h.sim.authorization(
+            "cap-2",
+            &h.card_token,
+            500,
+            "DEMO-DATAAPI",
+            "APPROVED",
+            "AUTHORIZATION",
+        );
+    }
+    h.sim
+        .add_event("cap-2", "cap-2-v", "AUTHORIZATION_REVERSAL", 500, "DEBIT");
+    let mut truth = h.sim.transaction("cap-2").unwrap();
+    truth["status"] = json!("PENDING");
+    h.sim.put_transaction(truth.clone());
+    assert_eq!(h.deliver("cap-2-w", h.sim.webhook("cap-2")).await, 200);
+    let record = h.txn("cap-2").await;
+    assert_eq!(record["state"], "reversed");
+    assert_ne!(record["reservationClosed"], true);
+    let auth_id = program::auth_id_hash(h.cards.config.issuer_code, "cap-2");
+    let reservation = program::reservation_pda(&h.policy, &auth_id);
+    assert!(
+        h.per
+            .with_card(&h.policy, |c| c.reservations.contains_key(&reservation))
+    );
+    truth["status"] = json!("VOIDED");
+    h.sim.put_transaction(truth);
+
+    // 3. An intent opened and never used, now well past its expiry.
+    h.intent("demo-approved", "700").await;
+    h.per.with_card(&h.policy, |c| {
+        for intent in c.intents.values_mut() {
+            if intent.state == 0 {
+                intent.expires_at = 1;
+            }
+        }
+    });
+    for row in h
+        .store
+        .scan_card_records(CardKind::CardEvents, "intent:", None, 50)
+        .await
+        .unwrap()
+    {
+        if row.record["state"] == "open" {
+            let mut record = row.record.clone();
+            record["expiresAtSecs"] = json!(1);
+            h.store
+                .put_card_record(
+                    CardKind::CardEvents,
+                    &row.key,
+                    row.index.clone(),
+                    record,
+                    Some(row.rev()),
+                    now_ms(),
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let (status, _) = h
+        .call("POST", "/internal/cron/cards/reconcile", Some(CRON), None)
+        .await;
+    assert_eq!(status, 200);
+    assert!(
+        h.per.with_card(&h.policy, |c| c.reservations.is_empty()),
+        "the cron closed the reversed hold"
+    );
+    assert_eq!(h.txn("cap-2").await["reservationClosed"], true);
+    assert!(
+        h.per.with_card(&h.policy, |c| c.intents.is_empty()),
+        "consumed and expired intents are all closed"
+    );
+    assert_eq!(h.per.with_card(&h.policy, |c| c.closed_count), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_token_whose_hold_was_closed_is_declined_even_if_axum_forgot_it() {
+    // Axum's durable claim normally answers a replay. Here it is gone (a
+    // fresh row), so only the program's AuthGuard ring stands between the
+    // replayed token and a second hold.
+    let h = Harness::new().await;
+    let auth_id = program::auth_id_hash(h.cards.config.issuer_code, "ghost-1");
+    h.per.with_card(&h.policy, |c| {
+        c.closed_auth_ids.push_back(auth_id);
+        c.closed_count += 1;
+    });
+    h.intent("demo-approved", "1000").await;
+    let (_, result) = h
+        .asa("ghost-1", 1_000, "demo-approved", "AUTHORIZATION")
+        .await;
+    assert_eq!(result, "SUSPECTED_FRAUD");
+    let record = h.txn("ghost-1").await;
+    assert_eq!(record["state"], "declined", "{record}");
+    assert!(h.per.with_card(&h.policy, |c| c.reservations.is_empty()));
+    assert!(
+        h.per
+            .with_card(&h.policy, |c| c.intents.values().all(|i| i.state == 0)),
+        "the intent was not consumed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_cold_start_attestation_checks_run_once() {
+    let h = Harness::with(AttestationMode::Enforce, true).await;
+    let before = h.cards.attestation_checks();
+    // Eight callers race on a cold status: one check runs, all get its result.
+    let results = futures_join_all(
+        (0..8)
+            .map(|_| {
+                let cards = h.cards.clone();
+                tokio::spawn(async move { cards.refresh_attestation().await })
+            })
+            .collect(),
+    )
+    .await;
+    assert_eq!(h.cards.attestation_checks() - before, 1);
+    assert!(results.windows(2).all(|w| w[0] == w[1]));
+    // Once that flight lands, a later caller starts a fresh check.
+    h.cards.refresh_attestation().await;
+    assert_eq!(h.cards.attestation_checks() - before, 2);
+    // A caller that gives up early never cancels the shared check.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(5),
+        h.cards.refresh_attestation(),
+    )
+    .await;
+    h.cards.refresh_attestation().await;
+    assert_eq!(h.cards.attestation_checks() - before, 3);
+    // A check that panics still frees the slot: the next caller runs a new one.
+    h.cards
+        .attestation_panics
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    h.cards.refresh_attestation().await;
+    h.cards
+        .attestation_panics
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    h.cards.refresh_attestation().await;
+    assert_eq!(h.cards.attestation_checks() - before, 5);
+}
+
+async fn futures_join_all<T: Send + 'static>(handles: Vec<tokio::task::JoinHandle<T>>) -> Vec<T> {
+    let mut out = Vec::with_capacity(handles.len());
+    for handle in handles {
+        out.push(handle.await.unwrap());
+    }
+    out
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

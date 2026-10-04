@@ -1,7 +1,7 @@
 use crate::{
     constants::*,
     errors::CardPolicyError,
-    state::{CardPolicy, CheckoutIntent, Reservation},
+    state::{AuthGuard, CardPolicy, CheckoutIntent, Reservation},
 };
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::access_control::structs::EphemeralPermission;
@@ -73,6 +73,8 @@ pub const fn ephemeral_rent(data_len: usize) -> u64 {
 pub const PERMISSION_RENT: u64 = ephemeral_rent(EphemeralPermission::size_of(MAX_MEMBERS));
 pub const RESERVATION_LEN: usize = 8 + Reservation::INIT_SPACE;
 pub const INTENT_LEN: usize = 8 + CheckoutIntent::INIT_SPACE;
+pub const AUTH_GUARD_LEN: usize = 8 + core::mem::size_of::<AuthGuard>();
+const _: () = assert!(AUTH_GUARD_LEN == crate::state::guard_bytes::LEN);
 const LARGEST_EPHEMERAL_LEN: usize = if RESERVATION_LEN > INTENT_LEN {
     RESERVATION_LEN
 } else {
@@ -81,8 +83,12 @@ const LARGEST_EPHEMERAL_LEN: usize = if RESERVATION_LEN > INTENT_LEN {
 /// Allowance for Magic Action / intent scheduling fees paid on the ER.
 pub const MAGIC_FEE_ALLOWANCE: u64 = 1_000_000;
 pub const PREFUNDED_EPHEMERAL_ACCOUNTS: u64 = 64;
-/// Rent for the policy and period permissions, 64 reservations or intents with
-/// their own permissions, and the magic fee allowance (contracts.md §1.3 #1).
+/// Rent for the policy and period permissions, the replay guard and its
+/// permission, 64 reservations or intents with their own permissions, and the
+/// magic fee allowance (contracts.md §1.3 #1). Closed reservations and intents
+/// return their rent, so 64 is the number open at once, not a lifetime cap.
 pub const MIN_PREFUND: u64 = 2 * PERMISSION_RENT
+    + ephemeral_rent(AUTH_GUARD_LEN)
+    + PERMISSION_RENT
     + PREFUNDED_EPHEMERAL_ACCOUNTS * (ephemeral_rent(LARGEST_EPHEMERAL_LEN) + PERMISSION_RENT)
     + MAGIC_FEE_ALLOWANCE;

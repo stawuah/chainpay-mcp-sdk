@@ -14,7 +14,7 @@ const LATENCY_WINDOW: usize = 2_048;
 
 /// Counter names. Anything else is refused, so a call site can never smuggle
 /// an identifier in as a metric name.
-pub const COUNTERS: [&str; 14] = [
+pub const COUNTERS: [&str; 16] = [
     "asa_decisions",
     "asa_approved",
     "asa_timeouts",
@@ -29,6 +29,8 @@ pub const COUNTERS: [&str; 14] = [
     "periods_rolled",
     "events_applied",
     "reconcile_runs",
+    "reservations_closed",
+    "intents_closed",
 ];
 
 #[derive(Debug, Default)]

@@ -8,11 +8,13 @@
 //!   "missing" (`TeeRead::NotVisible`).
 //! - Writes: send with `skipPreflight`, then poll signature status until a
 //!   hard deadline. An unknown outcome is reported as such, never as failure.
-//! - Attestation: "integrity-only" until MagicBlock publishes MRTD/RTMR
-//!   values (gate G-MB). The quote's report data must equal our fresh
-//!   challenge and its MRTD/RTMR0-2 are compared to `CARDS_TEE_MEASUREMENTS`
-//!   in `report` (log only) or `enforce` mode. The Intel DCAP chain is
-//!   verified by MagicBlock's SDK on clients, not in Axum (see Changelog).
+//! - Attestation: a fresh quote must echo our 64-byte challenge, verify
+//!   under Intel's DCAP chain (PCK chain + CRLs to Intel's root, signed TCB
+//!   info and QE identity, accepted TCB status) and carry MRTD/RTMR0-2 from
+//!   the pinned allowlist. `report` mode logs; `enforce` blocks approvals
+//!   unless all of it holds. The verifier is a vendored copy of dcap-qvl
+//!   (`backend/vendor/dcap-qvl`) built without `serde_json/preserve_order`,
+//!   so the backend's JSON key order is unchanged.
 
 use super::program::{self, error_name};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -504,7 +506,8 @@ pub struct Measurements {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttestationStatus {
-    /// `challenge_bound` (fresh quote for our challenge), `failed`, `unchecked`.
+    /// `verified` (fresh quote for our challenge whose Intel DCAP chain and
+    /// TCB status verified), `failed`, `unchecked`.
     pub hardware: &'static str,
     /// `match`, `mismatch`, `pending` (no allowlist yet: gate G-MB).
     pub measurements: &'static str,
@@ -512,6 +515,8 @@ pub struct AttestationStatus {
     pub checked_at_ms: u64,
     pub observed: Option<Measurements>,
     pub detail: Option<String>,
+    /// Intel TCB status of the platform (`UpToDate`, ...) once the chain verified.
+    pub tcb_status: Option<String>,
 }
 
 impl AttestationStatus {
@@ -523,17 +528,18 @@ impl AttestationStatus {
             checked_at_ms: 0,
             observed: None,
             detail: None,
+            tcb_status: None,
         }
     }
 
-    /// May the authorizer approve? `report` mode never blocks on attestation
-    /// (integrity-only until G-MB); `enforce` requires a fresh hardware pass
-    /// and an allowlist match.
+    /// May the authorizer approve? `report` mode never blocks on attestation;
+    /// `enforce` requires a fresh, fully verified quote (challenge + Intel
+    /// DCAP chain + accepted TCB status) and an allowlist match.
     pub fn permits_approval(&self, mode: AttestationMode, now_ms: u64) -> bool {
         match mode {
             AttestationMode::Report => true,
             AttestationMode::Enforce => {
-                self.hardware == "challenge_bound"
+                self.hardware == "verified"
                     && self.measurements == "match"
                     && now_ms.saturating_sub(self.checked_at_ms) < 20 * 60 * 1000
             }
@@ -625,16 +631,117 @@ pub async fn check_attestation(
         status.detail = Some("quote report data does not match our challenge".into());
         return status;
     }
-    // Full DCAP chain verification (Intel PCK chain + TCB) is not done in
-    // Axum: the Rust verifier (`dcap-qvl`) forces `serde_json/preserve_order`
-    // on the whole backend. The quote is bound to our fresh challenge and its
-    // measurements are checked; MagicBlock's SDK verifier covers the chain on
-    // the client side (contracts.md Changelog, Lane 1 / C).
-    let _ = pccs_url;
-    status.hardware = "challenge_bound";
-    status.detail =
-        Some("quote bound to a fresh challenge; DCAP chain not verified in Axum".into());
+    match verify_quote_chain(http, pccs_url, &raw, now_ms() / 1000).await {
+        Ok(tcb_status) if ACCEPTED_TCB.contains(&tcb_status.as_str()) => {
+            status.hardware = "verified";
+            status.detail = Some(format!(
+                "Intel DCAP chain verified (TCB {tcb_status}); quote bound to a fresh challenge"
+            ));
+            status.tcb_status = Some(tcb_status);
+        }
+        Ok(tcb_status) => {
+            status.hardware = "failed";
+            status.detail = Some(format!("platform TCB status {tcb_status} is not accepted"));
+            status.tcb_status = Some(tcb_status);
+        }
+        Err(reason) => {
+            status.hardware = "failed";
+            status.detail = Some(format!("Intel DCAP verification failed: {reason}"));
+        }
+    }
     status
+}
+
+/// dcap-qvl verdicts that still mean a genuine, patched platform (the same set
+/// the browser accepts in `frontend/src/dashboard/cards/teeAttestation.ts`).
+/// `OutOfDate`, `Revoked` and the rest fail.
+pub const ACCEPTED_TCB: [&str; 4] = [
+    "UpToDate",
+    "SWHardeningNeeded",
+    "ConfigurationNeeded",
+    "ConfigurationAndSWHardeningNeeded",
+];
+
+/// Collateral (CRLs, TCB info, QE identity) is per platform and valid for
+/// days; re-fetching it on every check would not fit a cold-start ASA slice.
+/// It is reused for this long, and refetched at once if a quote fails with it.
+const COLLATERAL_TTL_SECS: u64 = 6 * 3600;
+
+static COLLATERAL: std::sync::Mutex<Option<(dcap_qvl::QuoteCollateralV3, u64)>> =
+    std::sync::Mutex::new(None);
+
+/// reqwest 0.12 transport for the vendored collateral client (PCCS `GET`s).
+struct PccsHttp(Client);
+
+impl dcap_qvl::http::HttpClient for PccsHttp {
+    async fn get(&self, url: &str) -> anyhow::Result<dcap_qvl::http::HttpResponse> {
+        let response = self
+            .0
+            .get(url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("collateral service unreachable"))?;
+        let status = response.status().as_u16();
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+            })
+            .collect();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|_| anyhow::anyhow!("collateral body unreadable"))?
+            .to_vec();
+        Ok(dcap_qvl::http::HttpResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+}
+
+/// Verify the quote under Intel's DCAP chain and return its TCB status.
+/// Errors are short, fixed phrases (no URLs, no secrets).
+pub async fn verify_quote_chain(
+    http: &Client,
+    pccs_url: &str,
+    raw: &[u8],
+    now_secs: u64,
+) -> Result<String, String> {
+    let embedded_chain = dcap_qvl::quote::Quote::parse(raw)
+        .map_err(|_| "quote does not parse".to_owned())?
+        .inner_cert_type()
+        == 5;
+    let cached = COLLATERAL
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .filter(|(_, at)| embedded_chain && now_secs.saturating_sub(*at) < COLLATERAL_TTL_SECS);
+    if let Some((mut collateral, _)) = cached {
+        // The PCK chain belongs to the quote, not to the platform collateral.
+        collateral.pck_certificate_chain = None;
+        if let Ok(report) = dcap_qvl::verify::verify(raw, &collateral, now_secs) {
+            return Ok(report.status);
+        }
+    }
+    let collateral = dcap_qvl::collateral::CollateralClient::<
+        dcap_qvl::configs::DefaultConfig,
+        PccsHttp,
+    >::new(PccsHttp(http.clone()), pccs_url)
+    .fetch(raw)
+    .await
+    .map_err(|_| "collateral fetch failed".to_owned())?;
+    let report = dcap_qvl::verify::verify(raw, &collateral, now_secs)
+        .map_err(|error| short_reason(&error.to_string()))?;
+    *COLLATERAL.lock().unwrap_or_else(|p| p.into_inner()) = Some((collateral, now_secs));
+    Ok(report.status)
+}
+
+fn short_reason(message: &str) -> String {
+    message.chars().take(120).collect()
 }
 
 /// MagicBlock Devnet TEE workload measurements pinned in the repo
@@ -813,12 +920,13 @@ mod tests {
         assert_eq!(parsed[0].mrtd, "a".repeat(96));
         assert!(parse_measurements("[{}]").is_err());
         let status = AttestationStatus {
-            hardware: "challenge_bound",
+            hardware: "verified",
             measurements: "pending",
             mode: "enforce",
             checked_at_ms: 10,
             observed: None,
             detail: None,
+            tcb_status: Some("UpToDate".into()),
         };
         assert!(status.permits_approval(AttestationMode::Report, 10));
         assert!(!status.permits_approval(AttestationMode::Enforce, 10));
@@ -828,6 +936,12 @@ mod tests {
         };
         assert!(ok.permits_approval(AttestationMode::Enforce, 11));
         assert!(!ok.permits_approval(AttestationMode::Enforce, 10 + 21 * 60 * 1000));
+        // A challenge-bound quote whose Intel chain did not verify never approves.
+        let unverified = AttestationStatus {
+            hardware: "challenge_bound",
+            ..ok.clone()
+        };
+        assert!(!unverified.permits_approval(AttestationMode::Enforce, 11));
     }
 
     #[test]
@@ -861,6 +975,83 @@ mod tests {
             .unwrap();
         let (observed, _) = quote_measurements(&raw).unwrap();
         assert_eq!(compare_measurements(&observed, &pinned), "match");
+    }
+
+    fn devnet_quote() -> Vec<u8> {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../sdk/test/fixtures/devnet-tee-quote.json"
+        ))
+        .unwrap();
+        BASE64.decode(fixture["quote"].as_str().unwrap()).unwrap()
+    }
+
+    /// Refresh `testdata/devnet-tee-collateral.json` from Phala's PCCS
+    /// (network): `cargo test -p chainpay-backend record_devnet_collateral -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn record_devnet_collateral() {
+        let raw = devnet_quote();
+        let collateral = dcap_qvl::collateral::CollateralClient::<
+            dcap_qvl::configs::DefaultConfig,
+            PccsHttp,
+        >::new(PccsHttp(Client::new()), "https://pccs.phala.network")
+        .fetch(&raw)
+        .await
+        .unwrap();
+        let now = now_ms() / 1000;
+        let report = dcap_qvl::verify::verify(&raw, &collateral, now).unwrap();
+        let out = json!({
+            "source": "Phala PCCS (https://pccs.phala.network) collateral for sdk/test/fixtures/devnet-tee-quote.json, recorded by record_devnet_collateral. Base64 of the QuoteCollateralV3 JSON, so CRL/hex digit runs never trip the card-number fixture scan.",
+            "recordedAt": now,
+            "tcbStatus": report.status,
+            "collateralB64": BASE64.encode(serde_json::to_vec(&collateral).unwrap()),
+        });
+        std::fs::write(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/connectors/card_issuer/testdata/devnet-tee-collateral.json"
+            ),
+            serde_json::to_string_pretty(&out).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn recorded_devnet_quote_verifies_under_the_intel_chain_and_tampering_fails() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("testdata/devnet-tee-collateral.json")).unwrap();
+        let at = fixture["recordedAt"].as_u64().unwrap();
+        let collateral: dcap_qvl::QuoteCollateralV3 = serde_json::from_slice(
+            &BASE64
+                .decode(fixture["collateralB64"].as_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let raw = devnet_quote();
+        let report = dcap_qvl::verify::verify(&raw, &collateral, at).unwrap();
+        assert_eq!(report.status, fixture["tcbStatus"].as_str().unwrap());
+        assert!(ACCEPTED_TCB.contains(&report.status.as_str()));
+        // The PCK chain comes from the quote itself (cert type 5).
+        let mut without_chain = collateral.clone();
+        without_chain.pck_certificate_chain = None;
+        assert!(dcap_qvl::verify::verify(&raw, &without_chain, at).is_ok());
+        // One flipped bit in the measured TD report breaks the QE signature.
+        let mut tampered = raw.clone();
+        tampered[48 + 136] ^= 1;
+        assert!(dcap_qvl::verify::verify(&tampered, &collateral, at).is_err());
+        // Re-serialized TCB info (key order changed) fails Intel's signature.
+        let mut reordered = collateral.clone();
+        let value: Value = serde_json::from_str(&reordered.tcb_info).unwrap();
+        reordered.tcb_info = value.to_string();
+        assert_ne!(reordered.tcb_info, collateral.tcb_info);
+        assert!(dcap_qvl::verify::verify(&raw, &reordered, at).is_err());
+    }
+
+    #[test]
+    fn serde_json_keeps_sorted_keys_backend_wide() {
+        // Guard for the reason dcap-qvl is vendored: `preserve_order` must
+        // never be unified into the backend again.
+        assert_eq!(json!({"b": 1, "a": 2}).to_string(), r#"{"a":2,"b":1}"#);
     }
 
     #[test]

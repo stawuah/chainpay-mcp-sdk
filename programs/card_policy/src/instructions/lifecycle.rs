@@ -305,13 +305,21 @@ pub fn record_exception(
     let a = ctx.accounts;
     require_authorizer(&a.policy, &a.authorizer.key())?;
     require!(
-        (EXC_FORCED_CAPTURE..=EXC_UNPAIRED_CAPTURE).contains(&kind),
+        (EXC_FORCED_CAPTURE..=EXC_LATE_CAPTURE).contains(&kind),
         CardPolicyError::InvalidPolicy
     );
     require!(amount_cents > 0, CardPolicyError::InvalidAmount);
     record_event_id(&mut a.policy, &event_id_hash)?;
 
     match kind {
+        EXC_LATE_CAPTURE => {
+            // Only for a closed hold: an open Reservation takes `capture`.
+            require!(a.reservation.is_none(), CardPolicyError::InvalidAccount);
+            a.period.captured_cents = add(a.period.captured_cents, amount_cents)?;
+            add_exposure(&mut a.policy, amount_cents)?;
+            let e = event(EV_EXCEPTION, None, event_id_hash, amount_cents, kind);
+            return append_ledger(&mut a.policy, e, a.period.period_index, now);
+        }
         EXC_OVER_HOLD => {
             // The issuer holds more than the policy allowed: track the real hold
             // so `available` stays honest, and flag it.

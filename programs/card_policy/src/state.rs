@@ -137,6 +137,91 @@ pub struct Reservation {
     pub capture_ids: [[u8; 32]; CAPTURE_RING],
 }
 
+/// PER-only ephemeral account, private. Created on the card's first
+/// `close_reservation` (sponsor = `CardPolicy`). Keeps replay protection after
+/// a terminal Reservation is closed and its rent returned: `authorize` rejects
+/// any `auth_id_hash` still in `recent`. `closed_head` chains every closed
+/// reservation's final numbers, so the closed set stays auditable.
+///
+/// Zero-copy (`bytemuck`, `repr(C)`): at 8 KB it is twice the SBF stack frame,
+/// so it is never Borsh-deserialized on-chain (see `guard_bytes`).
+#[account(zero_copy)]
+pub struct AuthGuard {
+    pub policy: Pubkey,
+    pub closed_count: u64,
+    pub closed_head: [u8; 32],
+    pub recent: [[u8; 32]; GUARD_RING],
+    pub bump: u8,
+    pub _padding: [u8; 7],
+}
+
+impl AuthGuard {
+    pub fn contains(&self, auth_id_hash: &[u8; 32]) -> bool {
+        self.recent.iter().any(|h| h == auth_id_hash)
+    }
+}
+
+/// In-place access to an `AuthGuard`'s bytes. The account is 8 KB, twice the
+/// SBF stack frame, so the program never deserializes it: it checks the
+/// discriminator and owner fields and reads/writes slots where they lie.
+/// Layout (Borsh, fixed): disc 8 | policy 32 | closed_count u64 | closed_head 32
+/// | recent 32 x GUARD_RING | bump u8.
+pub mod guard_bytes {
+    use super::AuthGuard;
+    use crate::constants::GUARD_RING;
+    use anchor_lang::{prelude::Pubkey, Discriminator};
+
+    const POLICY: usize = 8;
+    const COUNT: usize = POLICY + 32;
+    const HEAD: usize = COUNT + 8;
+    const RECENT: usize = HEAD + 32;
+    const BUMP: usize = RECENT + 32 * GUARD_RING;
+    /// bump + 7 bytes of `repr(C)` padding.
+    pub const LEN: usize = BUMP + 8;
+
+    /// The guard's policy, when `data` is a well-formed AuthGuard.
+    pub fn policy(data: &[u8]) -> Option<Pubkey> {
+        if data.len() < LEN || !data.starts_with(AuthGuard::DISCRIMINATOR) {
+            return None;
+        }
+        Some(Pubkey::new_from_array(data[POLICY..COUNT].try_into().ok()?))
+    }
+
+    pub fn bump(data: &[u8]) -> u8 {
+        data[BUMP]
+    }
+
+    pub fn closed_count(data: &[u8]) -> u64 {
+        u64::from_le_bytes(data[COUNT..HEAD].try_into().expect("8 bytes"))
+    }
+
+    pub fn closed_head(data: &[u8]) -> [u8; 32] {
+        data[HEAD..RECENT].try_into().expect("32 bytes")
+    }
+
+    pub fn contains(data: &[u8], auth_id_hash: &[u8; 32]) -> bool {
+        data[RECENT..BUMP]
+            .chunks_exact(32)
+            .any(|slot| slot == auth_id_hash)
+    }
+
+    /// Writes a fresh, empty guard into zeroed account data.
+    pub fn init(data: &mut [u8], policy: &Pubkey, bump: u8) {
+        data[..8].copy_from_slice(AuthGuard::DISCRIMINATOR);
+        data[POLICY..COUNT].copy_from_slice(policy.as_ref());
+        data[COUNT..LEN].fill(0);
+        data[BUMP] = bump;
+    }
+
+    /// Records one closed reservation: ring slot, count, hash chain.
+    pub fn push(data: &mut [u8], auth_id_hash: &[u8; 32], head: &[u8; 32], count: u64) {
+        let slot = RECENT + 32 * (closed_count(data) % GUARD_RING as u64) as usize;
+        data[slot..slot + 32].copy_from_slice(auth_id_hash);
+        data[COUNT..HEAD].copy_from_slice(&count.to_le_bytes());
+        data[HEAD..RECENT].copy_from_slice(head);
+    }
+}
+
 /// PER-only ephemeral account, private. What the agent may buy, once.
 #[account]
 #[derive(InitSpace)]

@@ -440,18 +440,31 @@ async fn evaluate(
         TxOutcome::ProgramError { code, .. }
             if program::error_name(*code) == Some("DuplicateAuthorization") =>
         {
-            // Replay of a token we already authorized: same answer, if amounts agree.
-            match observe(
-                cards,
-                &reservation,
-                request.amount_cents,
-                single_message,
-                deadline,
-            )
-            .await
-            {
-                d if d.result == APPROVED => d,
-                _ => Decision::decline(SUSPECTED_FRAUD, "ambiguous", "internal"),
+            // The program refused a duplicate and the card's AuthGuard ring
+            // holds this auth id: the hold was final and its Reservation was
+            // closed. A replay of a finished authorization never gets a new
+            // hold; decline it plainly (not `ambiguous`: there is nothing for
+            // reconciliation to resolve). Anything less certain (a read that
+            // has not caught up) keeps the observe / ambiguous path.
+            if super::capacity::closed_on_chain(cards, &policy, &auth_id, deadline).await {
+                Decision {
+                    program_error: Some("DuplicateAuthorization"),
+                    ..Decision::decline(SUSPECTED_FRAUD, "declined", "internal")
+                }
+            } else {
+                // Replay of a token we already authorized: same answer, if amounts agree.
+                match observe(
+                    cards,
+                    &reservation,
+                    request.amount_cents,
+                    single_message,
+                    deadline,
+                )
+                .await
+                {
+                    d if d.result == APPROVED => d,
+                    _ => Decision::decline(SUSPECTED_FRAUD, "ambiguous", "internal"),
+                }
             }
         }
         TxOutcome::ProgramError { code, .. } => Decision {
@@ -679,9 +692,6 @@ async fn persist(
 /// lost close only leaves rent parked, never changes a decision.
 fn close_intent_later(cards: Arc<CardsConnector>, card_id: String, intent_id: String) {
     tokio::spawn(async move {
-        let Some(id) = program::unhex::<16>(&intent_id) else {
-            return;
-        };
         let Ok(Some(card)) = cards.card(&card_id).await else {
             return;
         };
@@ -691,21 +701,7 @@ fn close_intent_later(cards: Arc<CardsConnector>, card_id: String, intent_id: St
         else {
             return;
         };
-        let intent = program::intent_pda(&policy, &id);
-        let outcome = cards
-            .per
-            .submit(
-                vec![program::close_checkout_intent(
-                    &cards.authorizer(),
-                    &policy,
-                    &intent,
-                )],
-                Instant::now() + Duration::from_secs(8),
-            )
-            .await;
-        if matches!(outcome, TxOutcome::Confirmed { .. }) {
-            mark_intent(&cards, &intent_id, "closed", None).await;
-        }
+        super::capacity::close_intent(&cards, &policy, &intent_id, "closed").await;
     });
 }
 

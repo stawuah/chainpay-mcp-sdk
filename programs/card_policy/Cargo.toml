@@ -35,6 +35,8 @@ litesvm-mock = []
 anchor-lang = "=1.1.2"
 ephemeral-rollups-sdk = { version = "0.17.3", features = ["anchor", "access-control"] }
 solana-sha256-hasher = "3"
+# Zero-copy AuthGuard (8 KB, never Borsh-deserialized on the SBF stack).
+bytemuck = { version = "1.25", features = ["derive", "min_const_generics"] }
 
 [dev-dependencies]
 litesvm = "0.10.0"

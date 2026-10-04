@@ -885,6 +885,7 @@ name = "card_policy"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "bytemuck",
  "ephemeral-rollups-sdk",
  "litesvm",
  "solana-instruction 3.5.1",

@@ -284,7 +284,7 @@ pub async fn run(cards: &Arc<CardsConnector>, budget: Duration) -> ReconcileRepo
             continue;
         }
         report.processed += 1;
-        reconcile_card(cards, card, &mut report).await;
+        reconcile_card(cards, card, &mut report, started + budget).await;
         last = Some(card.key.clone());
     }
     // Wrap around once the page runs out.
@@ -383,6 +383,7 @@ async fn reconcile_card(
     cards: &Arc<CardsConnector>,
     card: &StoredCardRecord,
     report: &mut ReconcileReport,
+    deadline: Instant,
 ) {
     let Some(issuer) = cards.card_issuer(card) else {
         return;
@@ -547,6 +548,11 @@ async fn reconcile_card(
             super::statements::backfill_postings(cards, &fresh).await;
             super::statements::tick(cards, &fresh).await;
         }
+    }
+    // Rent back to the prefund for final holds and dead intents the event
+    // path did not close (never on a lost card: PER state is not trusted).
+    if lost.is_none() {
+        super::capacity::sweep_card(cards, card, deadline).await;
     }
     if advance {
         let through = now_ms() / 1000;

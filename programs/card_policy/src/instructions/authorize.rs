@@ -5,7 +5,7 @@ use crate::{
     hashes::{append_ledger, LedgerEvent},
     instructions::common::*,
     policy::{add, add_exposure, validate_authorize, AuthorizeArgs},
-    state::{reservation_state, CardPeriod, CardPolicy, CheckoutIntent, Reservation},
+    state::{guard_bytes, reservation_state, CardPeriod, CardPolicy, CheckoutIntent, Reservation},
 };
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::{
@@ -49,6 +49,25 @@ pub struct Authorize<'info> {
     /// CHECK: permission program.
     #[account(address = PERMISSION_PROGRAM_ID)]
     pub permission_program: UncheckedAccount<'info>,
+    /// CHECK: the card's AuthGuard PDA (appended in final fixes). Empty until
+    /// the first reservation is closed; read in the handler.
+    #[account(seeds = [AUTH_GUARD_SEED, policy.key().as_ref()], bump)]
+    pub auth_guard: UncheckedAccount<'info>,
+}
+
+/// `true` when a closed reservation for this `auth_id_hash` is still inside
+/// the guard's window. An empty guard (no closes yet) holds nothing.
+fn recently_closed(guard: &AccountInfo, policy: &Pubkey, auth_id_hash: &[u8; 32]) -> Result<bool> {
+    if guard.data_is_empty() {
+        return Ok(false);
+    }
+    require!(guard.owner == &crate::ID, CardPolicyError::InvalidAccount);
+    let data = guard.try_borrow_data()?;
+    require!(
+        guard_bytes::policy(&data) == Some(*policy),
+        CardPolicyError::InvalidAccount
+    );
+    Ok(guard_bytes::contains(&data, auth_id_hash))
 }
 
 fn load_intent(info: &AccountInfo, policy: &Pubkey) -> Result<CheckoutIntent> {
@@ -71,6 +90,15 @@ pub fn authorize(ctx: Context<Authorize>, args: AuthorizeArgs) -> Result<()> {
     // back as DuplicateAuthorization, even though its intent is now consumed.
     require!(
         accounts.reservation.data_is_empty(),
+        CardPolicyError::DuplicateAuthorization
+    );
+    // ...and after its terminal Reservation was closed, the guard ring.
+    require!(
+        !recently_closed(
+            &accounts.auth_guard,
+            &accounts.policy.key(),
+            &args.auth_id_hash
+        )?,
         CardPolicyError::DuplicateAuthorization
     );
     require!(

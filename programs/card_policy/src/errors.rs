@@ -96,4 +96,6 @@ pub enum CardPolicyError {
     DuplicateEvent, // 6043
     #[msg("Card still has ephemeral accounts")]
     EphemeralAccountsOpen, // 6044
+    #[msg("Reservation is not final yet")]
+    ReservationNotFinal, // 6045
 }

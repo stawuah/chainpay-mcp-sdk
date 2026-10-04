@@ -108,7 +108,10 @@ make contract-smoke
 The Make target runs `anchor build --ignore-keys --no-docs`, generates the
 compiled program and `target/idl/chainpay.json`, then runs the feature-gated
 LiteSVM settlement tests for classic SPL Token and Token-2022. LiteSVM executes
-the compiled program locally; it does not connect to Devnet. If your Anchor
+the compiled program locally; it does not connect to Devnet. The Anchor CLI
+temporarily rewrites `declare_id!` and `Anchor.toml` to the throwaway key in
+`target/deploy` while it builds; `scripts/anchor-build-clean.sh` restores both
+files when the run ends (also on failure), so the tree stays clean. If your Anchor
 binary is outside PATH, use `make ANCHOR=/absolute/path/to/anchor contract-smoke`.
 
 For build or IDL generation alone, use `make contract-build` or

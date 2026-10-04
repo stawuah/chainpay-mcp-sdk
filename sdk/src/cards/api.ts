@@ -51,10 +51,14 @@ export type PreparedCard = {
 
 export type IssuerFreezeState = "pending_issuer_confirmation" | "confirmed" | "failed";
 
-/** Axum's own attestation of the TEE it authorizes against (challenge-bound quote + measurement allowlist). */
+/**
+ * Axum's own attestation of the TEE it authorizes against: a fresh quote bound to
+ * Axum's challenge, verified under Intel's DCAP chain with an accepted TCB status
+ * (`verified`), plus the pinned measurement allowlist.
+ */
 export type CardAttestationView = {
   mode: "report" | "enforce" | string;
-  hardware: "challenge_bound" | "failed" | "unchecked" | string;
+  hardware: "verified" | "failed" | "unchecked" | string;
   measurements: "match" | "mismatch" | "pending" | string;
   checkedAt?: string | null;
   label: string;

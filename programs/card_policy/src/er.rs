@@ -51,8 +51,52 @@ pub struct PermissionAccounts<'a, 'info> {
     pub permission_program: &'a AccountInfo<'info>,
 }
 
+/// A permission account exists when the permission program owns it and it has
+/// data. Not by lamports: on the ER, ephemeral permissions are zero-balance
+/// accounts (rent is paid by the sponsor), so a lamport check is always false
+/// there. Live Devnet showed it: every close was skipped and each purchase
+/// left two 134-byte permissions behind, with their rent never returned.
 pub fn permission_exists(permission: &AccountInfo) -> bool {
-    permission.lamports() > 0
+    permission.owner == &ephemeral_rollups_sdk::consts::PERMISSION_PROGRAM_ID
+        && !permission.data_is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ephemeral_rollups_sdk::consts::PERMISSION_PROGRAM_ID;
+
+    fn info<'a>(
+        key: &'a Pubkey,
+        owner: &'a Pubkey,
+        lamports: &'a mut u64,
+        data: &'a mut [u8],
+    ) -> AccountInfo<'a> {
+        AccountInfo::new(key, false, true, lamports, data, owner, false)
+    }
+
+    #[test]
+    fn zero_balance_ephemeral_permissions_exist_and_closed_ones_do_not() {
+        let key = Pubkey::new_unique();
+        let (mut zero, mut data) = (0u64, [1u8; 134]);
+        // Live ER shape: owned by the permission program, 134 bytes, 0 lamports.
+        assert!(permission_exists(&info(
+            &key,
+            &PERMISSION_PROGRAM_ID,
+            &mut zero,
+            &mut data
+        )));
+        let (mut zero, mut empty) = (0u64, [0u8; 0]);
+        let system = anchor_lang::system_program::ID;
+        assert!(!permission_exists(&info(
+            &key, &system, &mut zero, &mut empty
+        )));
+        // Funded but not a permission (e.g. a foreign account): not one.
+        let (mut some, mut data) = (5u64, [1u8; 8]);
+        assert!(!permission_exists(&info(
+            &key, &system, &mut some, &mut data
+        )));
+    }
 }
 
 #[cfg(not(feature = "litesvm-mock"))]
