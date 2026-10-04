@@ -13,3 +13,7 @@ npm-debug.log*
 .vercel/
 .vercel-staging/
 .migration/
+
+# support-splitter: never commit keypairs
+programs/support-splitter/**/*.json
+!programs/support-splitter/**/package.json

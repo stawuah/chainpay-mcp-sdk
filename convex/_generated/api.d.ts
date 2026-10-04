@@ -17,6 +17,7 @@ import type * as migration from "../migration.js";
 import type * as records from "../records.js";
 import type * as status from "../status.js";
 import type * as storage from "../storage.js";
+import type * as support from "../support.js";
 
 import type {
   ApiFromModules,
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   records: typeof records;
   status: typeof status;
   storage: typeof storage;
+  support: typeof support;
 }>;
 
 /**
