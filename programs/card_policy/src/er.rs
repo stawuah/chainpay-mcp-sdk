@@ -8,10 +8,16 @@
 use crate::errors::CardPolicyError;
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::access_control::structs::{
-    EphemeralMembersArgs, Member, AUTHORITY_FLAG, TX_BALANCES_FLAG, TX_LOGS_FLAG, TX_MESSAGE_FLAG,
+    EphemeralMembersArgs, Member, TX_BALANCES_FLAG, TX_LOGS_FLAG, TX_MESSAGE_FLAG,
 };
 
-pub const OWNER_FLAGS: u8 = AUTHORITY_FLAG | TX_LOGS_FLAG | TX_MESSAGE_FLAG | TX_BALANCES_FLAG;
+/// No member holds `AUTHORITY_FLAG`, the owner included. A member with that
+/// flag can call the permission program directly and rewrite the member list
+/// (add a reader, drop the authorizer, or publish the account), which would
+/// bypass `update_permission`'s rules and its ledger event. The permissioned
+/// PDA stays the only permission authority, so every membership change goes
+/// through this program (review, Kwasi on #40, 2026-10-04).
+pub const OWNER_FLAGS: u8 = TX_LOGS_FLAG | TX_MESSAGE_FLAG | TX_BALANCES_FLAG;
 pub const AUTHORIZER_FLAGS: u8 = TX_LOGS_FLAG | TX_MESSAGE_FLAG;
 pub const READER_FLAGS: u8 = TX_LOGS_FLAG | TX_MESSAGE_FLAG;
 
@@ -73,6 +79,22 @@ mod tests {
         data: &'a mut [u8],
     ) -> AccountInfo<'a> {
         AccountInfo::new(key, false, true, lamports, data, owner, false)
+    }
+
+    #[test]
+    fn no_member_can_edit_the_permission_directly() {
+        use ephemeral_rollups_sdk::access_control::structs::AUTHORITY_FLAG;
+        for flags in [OWNER_FLAGS, AUTHORIZER_FLAGS, READER_FLAGS] {
+            assert_eq!(flags & AUTHORITY_FLAG, 0);
+        }
+        assert_eq!(
+            OWNER_FLAGS,
+            TX_LOGS_FLAG | TX_MESSAGE_FLAG | TX_BALANCES_FLAG
+        );
+        let owner = Pubkey::new_unique();
+        let args = private_members(&[owner], &[OWNER_FLAGS]).unwrap();
+        assert!(args.is_private);
+        assert!(args.members.iter().all(|m| m.flags & AUTHORITY_FLAG == 0));
     }
 
     #[test]
