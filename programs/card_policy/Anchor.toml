@@ -15,4 +15,5 @@ card_policy = "H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n"
 
 [provider]
 cluster = "devnet"
-wallet = "~/.config/solana/id.json"
+# Dedicated Devnet deployer (never committed); see docs/scope.md 4 Oct 2026.
+wallet = "~/.config/solana/card-policy-devnet.json"

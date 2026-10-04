@@ -663,3 +663,44 @@ Migrate existing records during a brief write pause; no realtime UI rewrite.
 This does not authorize payments or a mainnet transition. Existing service
 cutover requires the source records held by the upstream operator. See the
 [Vercel/Convex handoff](guides/vercel-convex-handoff.md).
+
+## Approved extension delta — Private Agent Cards, 4 October 2026
+
+Approved by Kwasi on #40 for the public Devnet MVP: MagicBlock Devnet, Lithic
+sandbox, simulated credit, and clearly labelled Devnet USDC repayment. This is
+an isolated extension; the "Out of Scope for MVP" list above still holds for
+everything it doesn't name.
+
+- **What changes:**
+  - A new separate program `card_policy` with its own program ID and workspace
+    (Devnet `H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n`, deployed from its
+    own wallet `3k2udKWaAbhav4CzkuXPTD4Q6SwNFM9qDiL3KXvUYbTu`). `chainpay` is unchanged.
+  - Card policy state lives on a MagicBlock Private Ephemeral Rollup, readable
+    only by permissioned wallets. A public `CardCommitment` holds only a salted
+    hash. No permission member, the owner included, can edit a card's members
+    directly; changes go through `card_policy`.
+  - A new Axum connector `backend/src/connectors/card_issuer/` for the Lithic
+    sandbox. Axum stays the only backend.
+  - New Convex record kinds with AES-GCM-encrypted sensitive fields.
+  - Scoped MCP tools.
+  - Repayment runs through a CPI into chainpay `execute_payment`: the owner
+    approves a normal mandate for the card's repay agent, `repay_statement`
+    pays the statement under it, and `record_repayment` lowers the card's
+    balance only against the resulting on-chain receipt. The opt-in MagicBlock
+    private repayment has no receipt and is recorded as authorizer-attested.
+- **Rules that still hold:**
+  - The owner owns the funds and the policy.
+  - Agents never see card numbers, raise limits, grant credit, unfreeze or
+    authorize repayment.
+  - Card budget and mandates are separate.
+  - Exact integer cents.
+  - Devnet + sandbox only. Vercel's `production` is the public Devnet MVP: the
+    release gate allows cards there only with Solana Devnet and the Lithic
+    sandbox, refuses real Lithic endpoints and keys, and
+    `CARDS_CONNECTOR_ENABLED` stays `false` through the merge and first deploy.
+- **Still excluded:** real credit and underwriting, consumer programs, issuer
+  production, existing-card repayment, real-merchant checkout, escrow,
+  subscriptions, fiat conversion, mainnet. PayPal settlement of statements is
+  gated on PayPal pre-approval.
+- **The only privacy claim:** "Your card's limits and spending totals are
+  hidden from the public chain and from wallets you haven't approved."
