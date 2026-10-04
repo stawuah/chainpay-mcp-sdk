@@ -321,7 +321,22 @@ pub async fn apply_transaction(
         let amount = event_amount(&event);
         let credit = event["effective_polarity"].as_str() == Some("CREDIT");
         let kind = event["type"].as_str().unwrap_or("");
+        // A credit on a hold never returns more than that hold captured
+        // (program `RefundExceedsCapture`; Axum applies the same cap when the
+        // Reservation is already closed). A standalone issuer credit (its own
+        // transaction, nothing captured under it) has no hold to cap against.
+        let is_refund = matches!(kind, "RETURN" | "FINANCIAL_CREDIT_AUTHORIZATION")
+            || (kind == "CLEARING" && credit);
+        let over_refund = is_refund
+            && record["unsolicited"] != true
+            && refundable(
+                cents_of(&record, "capturedCents"),
+                cents_of(&record, "refundedCents"),
+                amount,
+            )
+            .is_none();
         let step = match kind {
+            _ if over_refund => Step::Local("refund_over_capture"),
             "AUTHORIZATION" if reservation_present => Step::Skip,
             // A $0 verification ChainPay approved itself (no hold by design).
             "AUTHORIZATION" if record["state"] == "account_verification" && amount == 0 => {
@@ -515,6 +530,35 @@ pub async fn apply_transaction(
                 newly_applied.push(id_hex);
             }
             Step::Program(instruction, label) => {
+                // An earlier submission of this event whose outcome we never
+                // heard: look it up before sending a new transaction, so a
+                // landed event is booked once even after the program's
+                // event-id ring has moved past it (review F3).
+                if let Some(pending) = record["pendingEvents"][&id_hex].as_object().cloned() {
+                    let signature = pending["signature"].as_str().unwrap_or("");
+                    let at = pending["atMs"].as_u64().unwrap_or(0);
+                    match cards.per.signature_status(signature).await {
+                        Some(TxOutcome::Confirmed { .. }) => {
+                            apply_label(&mut record, label, amount);
+                            note_exception(&mut record, label, &id_hex);
+                            postings.push((id, label, amount));
+                            clear_pending(&mut record, &id_hex);
+                            newly_applied.push(id_hex);
+                            continue;
+                        }
+                        // Did not apply: safe to send again.
+                        Some(TxOutcome::ProgramError { .. } | TxOutcome::Failed { .. }) => {
+                            clear_pending(&mut record, &id_hex)
+                        }
+                        // Not found yet: it may still land until its
+                        // blockhash expires. Wait, keep issuer order.
+                        _ if now_ms().saturating_sub(at) < PENDING_EVENT_GRACE_MS => {
+                            stop = Some(format!("{label} may still land"));
+                            break;
+                        }
+                        _ => clear_pending(&mut record, &id_hex),
+                    }
+                }
                 let outcome = cards
                     .per
                     .submit(vec![instruction], Instant::now() + Duration::from_secs(6))
@@ -598,9 +642,28 @@ pub async fn apply_transaction(
                         other => {
                             notes.push(json!({"event": id_hex, "kind": label, "programError": other, "signature": signature}));
                             record["needsReview"] = json!(true);
+                            // Refused by the owner's limits: booked for review,
+                            // never onto the owner's statement (review X1/F2/F3).
+                            if let Some(exception) = match other {
+                                Some("BudgetExceeded") => Some("over_budget"),
+                                Some("RefundExceedsCapture") => Some("refund_over_capture"),
+                                Some("CaptureLimit") => Some("capture_limit"),
+                                _ => None,
+                            } {
+                                record["exception"] = json!(exception);
+                            }
                             newly_applied.push(id_hex);
                         }
                     },
+                    TxOutcome::Unknown {
+                        signature: Some(signature),
+                    } => {
+                        // Remember the signature: the retry asks about it first.
+                        record["pendingEvents"][&id_hex] =
+                            json!({"signature": signature, "atMs": now_ms()});
+                        stop = Some(format!("{label} not confirmed"));
+                        break;
+                    }
                     TxOutcome::Failed { .. } | TxOutcome::Unknown { .. } => {
                         // Keep issuer order: stop here and retry the rest later.
                         stop = Some(format!("{label} not confirmed"));
@@ -641,7 +704,8 @@ pub async fn apply_transaction(
         .collect();
     let progressed = !newly_applied.is_empty();
     let closed_changed = record["reservationClosed"] != original["reservationClosed"];
-    if progressed || !signatures.is_empty() || closed_changed {
+    let pending_changed = record["pendingEvents"] != original["pendingEvents"];
+    if progressed || !signatures.is_empty() || closed_changed || pending_changed {
         cards
             .update_txn(&token, |current| {
                 // Merge onto the latest copy: union applied ids and keep the
@@ -673,6 +737,7 @@ pub async fn apply_transaction(
                     "exceptionEventId",
                     "issuerStatus",
                     "reservationClosed",
+                    "pendingEvents",
                 ] {
                     // Only fields this pass changed: never revert a concurrent
                     // writer (e.g. a dispute webhook) with a stale copy.
@@ -727,6 +792,27 @@ pub async fn apply_transaction(
 /// (Lithic `simulate/authorization_advice` "overrides the pending amount").
 fn advice_total(event: &Value, _truth: &Value) -> u64 {
     event_amount(event)
+}
+
+/// How long an unconfirmed event transaction may still land (PER blockhash
+/// lifetime, with margin). After it, a signature that is still unknown can't
+/// land and the event is sent again.
+const PENDING_EVENT_GRACE_MS: u64 = 120_000;
+
+fn clear_pending(record: &mut Value, id_hex: &str) {
+    if let Some(map) = record["pendingEvents"].as_object_mut() {
+        map.remove(id_hex);
+    }
+}
+
+/// `Some(amount)` when a refund of `amount` fits what the hold captured and
+/// has not refunded yet (shared/cards/fee-vectors.json `holds`), else `None`.
+pub fn refundable(captured: u64, refunded: u64, amount: u64) -> Option<u64> {
+    (refunded.checked_add(amount)? <= captured).then_some(amount)
+}
+
+fn cents_of(record: &Value, field: &str) -> u64 {
+    parse_cents(record[field].as_str().unwrap_or("0")).unwrap_or(0)
 }
 
 fn add_cents(record: &mut Value, field: &str, amount: u64) {

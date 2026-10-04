@@ -74,6 +74,8 @@ pub struct FakeReservation {
     pub dispute: u8,
     pub flags: u8,
     pub capture_ids: Vec<[u8; 32]>,
+    /// The intent's max (program `Reservation.max_amount_cents`).
+    pub max: u64,
 }
 
 #[derive(Debug, Default)]
@@ -332,8 +334,17 @@ fn now_secs() -> i64 {
     (super::now_ms() / 1000) as i64
 }
 
+/// The program's one fee rule (floor), via the statements helper.
 fn with_fee(amount: u64, bps: u16) -> u64 {
-    amount + (amount as u128 * bps as u128).div_ceil(10_000) as u64
+    amount + super::statements::fee_cents(amount, bps)
+}
+
+/// Program `require_billable`: a billed debit must fit the period budget.
+fn billable(card: &Card, amount: u64) -> Result<(), u32> {
+    if card.period.captured + card.period.reserved + amount > card.policy.budget {
+        return err(6016);
+    }
+    Ok(())
 }
 
 fn ledger(card: &mut Card, kind: u8, amount: u64) {
@@ -476,6 +487,7 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
                 auth_id,
                 state: rs::RESERVED,
                 hold: amount,
+                max: intent.max,
                 ..Default::default()
             };
             if single {
@@ -497,7 +509,12 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
                 return err(6000);
             }
             let res_key = ix.accounts[3].pubkey;
-            let fee_bps = card.policy.fee_bps as u64;
+            let fee_bps = card.policy.fee_bps;
+            let (captured, reserved, budget) = (
+                card.period.captured,
+                card.period.reserved,
+                card.policy.budget,
+            );
             // Like Anchor: a closed (absent) Reservation is AccountNotInitialized.
             let r = card
                 .reservations
@@ -509,6 +526,18 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
                     let id: [u8; 32] = args[8..40].try_into().unwrap();
                     if r.capture_ids.contains(&id) {
                         return err(6020);
+                    }
+                    if r.capture_ids.len() >= program::CAPTURE_RING {
+                        return err(6048);
+                    }
+                    // After the hold release, the capture must fit the budget.
+                    let release = if matches!(r.state, rs::REVERSED | rs::EXPIRED) {
+                        0
+                    } else {
+                        amount.min(r.hold)
+                    };
+                    if captured + reserved.saturating_sub(release) + amount > budget {
+                        return err(6016);
                     }
                     r.capture_ids.push(id);
                     if matches!(r.state, rs::REVERSED | rs::EXPIRED) {
@@ -533,7 +562,7 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
                             rs::PARTIALLY_CAPTURED
                         };
                     }
-                    card.policy.outstanding += amount + (amount * fee_bps).div_ceil(10_000);
+                    card.policy.outstanding += with_fee(amount, fee_bps);
                 }
                 "reverse" => {
                     let amount = u64_at(args, 0);
@@ -574,6 +603,9 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
                         card.period.reserved -= r.hold - new;
                         r.hold = new;
                     } else if new > r.hold {
+                        if new + r.captured > r.max {
+                            return err(6015);
+                        }
                         let delta = new - r.hold;
                         if delta > available {
                             return err(6016);
@@ -611,6 +643,18 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
             }
             if card.event_ids.contains(&id) {
                 return err(6043);
+            }
+            if name == "refund" {
+                if let Some(r) = reservation.and_then(|k| card.reservations.get(&k)) {
+                    if r.refunded + amount > r.captured {
+                        return err(6047);
+                    }
+                }
+            } else if !matches!(
+                kind,
+                program::exception_kind::CORRECTION_CREDIT | program::exception_kind::OVER_HOLD
+            ) {
+                billable(card, amount)?;
             }
             card.event_ids.insert(id);
             let bps = card.policy.fee_bps;

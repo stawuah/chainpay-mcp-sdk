@@ -226,8 +226,9 @@ impl BackendState {
         if signer_provider.is_some() && config.auth_token.is_empty() {
             return Err(BackendStateError::MissingManagedPaymentAuth);
         }
-        let cards = crate::connectors::card_issuer::CardsConnector::from_env(store.clone())
-            .map_err(|error| BackendStateError::Cards(error.to_string()))?;
+        let cards =
+            crate::connectors::card_issuer::CardsConnector::from_env(store.clone(), config.cluster)
+                .map_err(|error| BackendStateError::Cards(error.to_string()))?;
         Ok(Self {
             config,
             rpc,

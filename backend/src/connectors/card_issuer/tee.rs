@@ -986,10 +986,16 @@ mod tests {
     }
 
     /// Refresh `testdata/devnet-tee-collateral.json` from Phala's PCCS
-    /// (network): `cargo test -p chainpay-backend record_devnet_collateral -- --ignored`.
+    /// (network): `RECORD_TEE_COLLATERAL=1 cargo test -p chainpay-backend
+    /// record_devnet_collateral -- --ignored`. Without the variable it does
+    /// nothing, so CI's `--ignored` job (meant for Postgres) never touches the
+    /// network or rewrites the tracked fixture (review X10).
     #[tokio::test]
     #[ignore]
     async fn record_devnet_collateral() {
+        if std::env::var("RECORD_TEE_COLLATERAL").as_deref() != Ok("1") {
+            return;
+        }
         let raw = devnet_quote();
         let collateral = dcap_qvl::collateral::CollateralClient::<
             dcap_qvl::configs::DefaultConfig,

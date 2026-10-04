@@ -82,9 +82,24 @@ impl LithicClient {
     pub fn new(base: &str, api_key: String, writes_enabled: bool) -> Result<Self, &'static str> {
         let base = base.trim_end_matches('/').to_owned();
         let parsed = reqwest::Url::parse(&base).map_err(|_| "LITHIC_API_URL is not a URL")?;
-        let local = matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"));
-        if parsed.host_str() == Some("api.lithic.com") {
-            return Err("the card connector is sandbox-only; api.lithic.com is refused");
+        // Allow-list on the normalized host (the URL parser lowercases it and
+        // splits off the port; a trailing FQDN dot is dropped here), so
+        // `https://API.lithic.com.:443` is the production host it is.
+        let host = parsed
+            .host_str()
+            .ok_or("LITHIC_API_URL has no host")?
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        let local = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
+        if host != "sandbox.lithic.com" && !local {
+            return Err(
+                "the card connector is sandbox-only; LITHIC_API_URL must be sandbox.lithic.com (or loopback for card-sim)",
+            );
+        }
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err("LITHIC_API_URL must not carry credentials");
         }
         if parsed.scheme() != "https" && !local {
             return Err("LITHIC_API_URL must be https");
@@ -451,6 +466,40 @@ impl LithicError {
 
 #[cfg(test)]
 mod tests {
+    /// Review F4: an allow-list on the normalized host, not a deny-list on
+    /// one spelling of production.
+    #[test]
+    fn only_the_sandbox_or_loopback_host_is_accepted() {
+        let key = || "sandbox-key-123456".to_owned();
+        for refused in [
+            "https://api.lithic.com",
+            "https://api.lithic.com./",
+            "https://API.Lithic.COM:443/",
+            "https://api.lithic.com.:8443",
+            "https://evil.example",
+            "https://sandbox.lithic.com.evil.example",
+            "https://user:pw@sandbox.lithic.com",
+            "http://sandbox.lithic.com",
+        ] {
+            assert!(
+                super::LithicClient::new(refused, key(), true).is_err(),
+                "{refused}"
+            );
+        }
+        for accepted in [
+            "https://sandbox.lithic.com",
+            "https://SANDBOX.lithic.com./",
+            "https://sandbox.lithic.com:443",
+            "http://127.0.0.1:4010",
+            "http://localhost:4010",
+        ] {
+            assert!(
+                super::LithicClient::new(accepted, key(), true).is_ok(),
+                "{accepted}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

@@ -44,8 +44,22 @@ pub struct AsaRequest {
     pub merchant_initiated: bool,
 }
 
+/// A money field that must be a whole number of cents when present. `None`
+/// means unparseable: absent fields are the caller's call, never `0`.
+fn cents_field(value: &Value) -> Option<Option<u64>> {
+    match value {
+        Value::Null => Some(None),
+        v => v.as_u64().map(Some),
+    }
+}
+
 /// Read only the allowlisted fields of `card_authorization.approval_request`.
 /// The reserved amount is `max(cardholder.amount, hold.amount)` in USD.
+///
+/// Fails closed (`None`, so the caller declines): an amount that is missing,
+/// a string, negative or fractional, a missing currency, or a malformed hold
+/// or cash amount never becomes `0` (review F1: that used to approve as a $0
+/// account verification with no hold on PER).
 pub fn parse(body: &Value) -> Option<AsaRequest> {
     let token = body["token"]
         .as_str()
@@ -53,16 +67,19 @@ pub fn parse(body: &Value) -> Option<AsaRequest> {
         .to_owned();
     let status = body["status"].as_str()?.to_owned();
     let cardholder = &body["amounts"]["cardholder"];
-    let amount = cardholder["amount"]
-        .as_u64()
-        .or_else(|| body["amount"].as_u64())
-        .unwrap_or(0);
-    let hold = body["amounts"]["hold"]["amount"].as_u64().unwrap_or(0);
+    let amount = match cents_field(&cardholder["amount"])? {
+        Some(amount) => amount,
+        None => cents_field(&body["amount"])??,
+    };
+    let hold = match &body["amounts"]["hold"] {
+        Value::Null => 0,
+        hold => cents_field(&hold["amount"])?.unwrap_or(0),
+    };
     let currency = cardholder["currency"]
         .as_str()
-        .or_else(|| body["cardholder_currency"].as_str())
-        .unwrap_or("USD")
+        .or_else(|| body["cardholder_currency"].as_str())?
         .to_owned();
+    let cash_cents = cents_field(&body["cash_amount"])??;
     let merchant = &body["merchant"];
     let mcc_raw = merchant["mcc"].as_str().unwrap_or("").to_owned();
     Some(AsaRequest {
@@ -70,7 +87,7 @@ pub fn parse(body: &Value) -> Option<AsaRequest> {
         status,
         amount_cents: amount.max(hold),
         currency,
-        cash_cents: body["cash_amount"].as_u64().unwrap_or(0),
+        cash_cents,
         card_token: body["card"]["token"]
             .as_str()
             .or_else(|| body["card_token"].as_str())?
@@ -381,6 +398,16 @@ async fn evaluate(
     };
     let intent_hex = program::hex(&intent_id);
     if request.amount_cents == 0 {
+        // Only a plain AUTHORIZATION with an explicit $0 is an account
+        // verification, and only one per intent (review X1): a second $0 at
+        // the same shop is not a verification, it is a probe.
+        if request.status != "AUTHORIZATION"
+            || intent.record["verifiedBy"]
+                .as_str()
+                .is_some_and(|t| t != request.token)
+        {
+            return Decision::decline(UNAUTHORIZED_MERCHANT, "declined", "intent_missing");
+        }
         // $0 account verification never goes through `authorize`
         // (program `InvalidAmount`); approve only while the card is live.
         return match cards
@@ -554,9 +581,11 @@ pub fn match_reference(cards: &CardsConnector, card_id: &str, merchant_hash: &[u
     )
 }
 
-/// Newest open, unexpired intent for this card + merchant (+ USD) whose
-/// maximum covers the amount, falling back to the newest open one so the
-/// program can give the precise rejection.
+/// Newest redeemed, unexpired intent for this card + merchant (+ USD) whose
+/// maximum covers the amount, falling back to the newest redeemed one so the
+/// program can give the precise rejection. Only `redeemed`: an intent the
+/// checkout runner never redeemed (its capability was never used, e.g. an
+/// agent retry after a gateway timeout) can't approve a charge (review X7).
 pub async fn find_intent(
     cards: &CardsConnector,
     owner: &str,
@@ -580,7 +609,7 @@ pub async fn find_intent(
     let open: Vec<StoredCardRecord> = rows
         .into_iter()
         .filter(|row| {
-            matches!(row.record["state"].as_str(), Some("open" | "redeemed"))
+            row.record["state"] == "redeemed"
                 && row.record["expiresAtSecs"]
                     .as_i64()
                     .is_some_and(|e| e > now_secs)
@@ -673,7 +702,18 @@ async fn persist(
             });
         }
     }
-    // A $0 verification leaves the intent open for the real purchase.
+    // A $0 verification leaves the intent open for the real purchase, marked
+    // so it can't verify a second time.
+    if decision.result == APPROVED && decision.state == "account_verification" {
+        if let Some(intent_id) = &decision.intent_id {
+            let token = request.token.clone();
+            let _ = cards
+                .update_txn_or_intent(&format!("intent:{intent_id}"), |record| {
+                    record["verifiedBy"] = json!(token);
+                })
+                .await;
+        }
+    }
     if decision.result == APPROVED && decision.state != "account_verification" {
         if let Some(intent_id) = &decision.intent_id {
             mark_intent(cards, intent_id, "consumed", Some(&request.token)).await;

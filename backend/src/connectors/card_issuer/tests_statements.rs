@@ -208,11 +208,14 @@ async fn statement_bills_captured_purchases_and_posted_refunds_with_exact_fees()
     let (status, stmt) = h.close_now("close-0001").await;
     assert_eq!(status, 200, "{stmt}");
     let fees = fee_cents(1_500, 50) + fee_cents(500, 50);
-    assert_eq!(fees, 8 + 3);
+    assert_eq!(fees, 7 + 2);
     let expected = 2_000 - 500 + fees as i64 - fee_cents(500, 50) as i64;
     assert_eq!(stmt["purchasesCents"], "2000");
     assert_eq!(stmt["refundsCents"], "500");
-    assert_eq!(stmt["feeCents"], (fees as i64 - 3).to_string());
+    assert_eq!(
+        stmt["feeCents"],
+        (fees as i64 - fee_cents(500, 50) as i64).to_string()
+    );
     assert_eq!(stmt["totalCents"], expected.to_string());
     assert_eq!(stmt["amountDueCents"], expected.to_string());
     assert_eq!(stmt["state"], "closed");
@@ -748,7 +751,7 @@ async fn lost_private_state_freezes_at_once_and_resumes_only_after_cosigned_rest
     let before = h
         .per
         .with_card(&h.policy, |c| (c.period.captured, c.policy.outstanding));
-    assert_eq!(before, (2_000, 2_000 + 8 + 3));
+    assert_eq!(before, (2_000, 2_000 + 7 + 2));
 
     // The rollup loses the card: reads null, writes fail.
     h.per.knobs.lock().unwrap().lost = true;
@@ -793,7 +796,7 @@ async fn lost_private_state_freezes_at_once_and_resumes_only_after_cosigned_rest
         restore["capturedCents"], "2000",
         "snapshot + post-snapshot capture: {restore}"
     );
-    assert_eq!(restore["statementOutstandingCents"], "2011");
+    assert_eq!(restore["statementOutstandingCents"], "2009");
     assert_eq!(restore["postingsSinceSnapshot"], 1);
     let (_, view) = h
         .owner("GET", &format!("/v1/cards/{}", h.card_id), None)
@@ -808,7 +811,7 @@ async fn lost_private_state_freezes_at_once_and_resumes_only_after_cosigned_rest
             .as_array()
             .unwrap()
             .iter()
-            .any(|n| n["cents"] == "2011")
+            .any(|n| n["cents"] == "2009")
     );
     assert!(view["attestation"]["mode"].is_string());
     // Authorizations decline while in recovery.
@@ -855,7 +858,7 @@ async fn lost_private_state_freezes_at_once_and_resumes_only_after_cosigned_rest
     });
     assert_eq!(
         restored,
-        (2_000, 2_011, 2, true),
+        (2_000, 2_009, 2, true),
         "restored from records, never reset"
     );
     // Issuer reconciliation, then the owner's confirm_reconciled.
@@ -1376,7 +1379,7 @@ async fn paying_statements_out_of_order_clears_all_exposure() {
     h.purchase("oo-2", 700, &[("oo-2-c", "CLEARING", 700, "DEBIT")])
         .await;
     let (_, second) = h.close_now("close-oo-2").await;
-    assert_eq!(h.outstanding(), 2_010 + 704);
+    assert_eq!(h.outstanding(), 2_010 + 703);
     let (r2, m2) = h.pay(
         &second,
         Payment {
