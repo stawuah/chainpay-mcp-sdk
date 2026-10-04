@@ -175,6 +175,7 @@ pub fn authorize(ctx: Context<Authorize>, args: AuthorizeArgs) -> Result<()> {
         bump: ctx.bumps.reservation,
         capture_count: 0,
         capture_ids: [[0u8; 32]; CAPTURE_RING],
+        max_amount_cents: intent.max_amount_cents,
     };
 
     let accounts = ctx.accounts;

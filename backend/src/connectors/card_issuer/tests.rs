@@ -307,7 +307,22 @@ impl Harness {
         }
     }
 
+    /// Opens an intent and redeems it the way the checkout runner does
+    /// (`state: redeemed`), so an ASA can match it.
     async fn intent(&self, merchant: &str, amount: &str) -> (u16, Value) {
+        let (status, body) = self.intent_unredeemed(merchant, amount).await;
+        if let Some(id) = body["intentId"].as_str() {
+            self.cards
+                .update_txn_or_intent(&format!("intent:{id}"), |record| {
+                    record["state"] = json!("redeemed");
+                })
+                .await
+                .unwrap();
+        }
+        (status, body)
+    }
+
+    async fn intent_unredeemed(&self, merchant: &str, amount: &str) -> (u16, Value) {
         let n = self
             .asa_seq
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -930,7 +945,7 @@ async fn reconcile_closes_final_holds_and_dead_intents_the_event_path_missed() {
     h.sim.put_transaction(truth);
 
     // 3. An intent opened and never used, now well past its expiry.
-    h.intent("demo-approved", "700").await;
+    h.intent_unredeemed("demo-approved", "700").await;
     h.per.with_card(&h.policy, |c| {
         for intent in c.intents.values_mut() {
             if intent.state == 0 {
@@ -1240,14 +1255,14 @@ async fn checkout_capabilities_are_scoped_single_use_and_merchant_bound() {
     // Owner sessions have no agent identity to bind.
     let (status, _) = h.owner("POST", &format!("/v1/cards/{}/checkout-intents", h.card_id), Some(json!({"clientOperationId": "checkout-owner", "merchantRef": "demo-approved", "amountCents": "2000", "currency": "USD"}))).await;
     assert_eq!(status, 403);
-    let (status, cap) = h.intent("demo-approved", "2000").await;
+    let (status, cap) = h.intent_unredeemed("demo-approved", "2000").await;
     assert_eq!(status, 200, "{cap}");
     let capability = cap["capability"].as_str().unwrap().to_owned();
     assert!(checkout::is_capability(&capability));
     assert_eq!(cap["status"], "ready");
     assert_eq!(cap["merchant"]["displayName"], "Data API credits");
     // Unapproved merchant: refused on PER, no capability.
-    let (status, refused) = h.intent("demo-unapproved", "1000").await;
+    let (status, refused) = h.intent_unredeemed("demo-unapproved", "1000").await;
     assert_eq!(status, 409, "{refused}");
     assert_eq!(refused["detail"], "MerchantNotAllowed");
     // The runner needs its own secret.
@@ -1301,7 +1316,7 @@ async fn checkout_capabilities_are_scoped_single_use_and_merchant_bound() {
         (409, Some("capability_used"))
     );
     // A capability used at another shop fails and is dead afterwards.
-    let (_, other) = h.intent("demo-approved", "1000").await;
+    let (_, other) = h.intent_unredeemed("demo-approved", "1000").await;
     let other_cap = other["capability"].as_str().unwrap().to_owned();
     let (status, run) = h
         .call(
@@ -1797,6 +1812,310 @@ async fn a_freeze_retried_with_the_same_operation_finishes_an_unconfirmed_freeze
     )
     .await;
     assert_eq!(h.program_count("freeze"), before);
+}
+
+// ------------------------------------------------- review fixes (2026-10-04)
+
+impl Harness {
+    /// Sends an ASA body as-is (signed), for malformed or drifted payloads.
+    async fn asa_body(&self, txn: &str, body: &Value) -> String {
+        let raw = serde_json::to_vec(body).unwrap();
+        let response = self
+            .http
+            .post(format!("{}/v1/cards/lithic/asa", self.url))
+            .headers(sim::signed_headers(
+                &sim::ASA_KEY,
+                &format!("asa_{txn}"),
+                &raw,
+            ))
+            .body(raw)
+            .send()
+            .await
+            .unwrap();
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        body["result"].as_str().unwrap_or("").to_owned()
+    }
+
+    fn payload(&self, txn: &str, amount: u64) -> Value {
+        let m = merchant_by_ref("demo-approved").unwrap();
+        sim::asa_payload(
+            txn,
+            &self.card_token,
+            amount,
+            m.acceptor_id,
+            m.descriptor,
+            &m.mcc.to_string(),
+            "AUTHORIZATION",
+        )
+    }
+}
+
+/// Review F1: an amount, currency or cash amount that doesn't parse
+/// declines; it never becomes a $0 account verification.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_asa_amount_that_does_not_parse_declines_never_zero() {
+    let h = Harness::new().await;
+    h.intent("demo-approved", "2000").await;
+    let cases: Vec<(&str, Box<dyn Fn(&mut Value)>)> = vec![
+        (
+            "string",
+            Box::new(|b| b["amounts"]["cardholder"]["amount"] = json!("2000")),
+        ),
+        (
+            "negative",
+            Box::new(|b| b["amounts"]["cardholder"]["amount"] = json!(-2000)),
+        ),
+        (
+            "fraction",
+            Box::new(|b| b["amounts"]["cardholder"]["amount"] = json!(20.5)),
+        ),
+        (
+            "missing",
+            Box::new(|b| {
+                b["amounts"]["cardholder"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("amount");
+            }),
+        ),
+        (
+            "no-currency",
+            Box::new(|b| {
+                b["amounts"]["cardholder"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("currency");
+            }),
+        ),
+        (
+            "bad-hold",
+            Box::new(|b| b["amounts"]["hold"] = json!({"amount": "9000"})),
+        ),
+        (
+            "no-cash",
+            Box::new(|b| {
+                b.as_object_mut().unwrap().remove("cash_amount");
+            }),
+        ),
+    ];
+    for (name, mutate) in cases {
+        let txn = format!("drift-{name}");
+        let mut body = h.payload(&txn, 2_000);
+        mutate(&mut body);
+        assert!(super::asa::parse(&body).is_none(), "{name} parses");
+        assert_eq!(h.asa_body(&txn, &body).await, "SUSPECTED_FRAUD", "{name}");
+        assert!(
+            h.txn(&txn).await.is_null(),
+            "{name}: no row, nothing approved"
+        );
+    }
+    assert_eq!(h.program_count("authorize"), 0);
+    // A top-level integer amount is still read when `amounts` lacks one.
+    let mut body = h.payload("top-level", 2_000);
+    body["amounts"]["cardholder"]
+        .as_object_mut()
+        .unwrap()
+        .remove("amount");
+    body["amount"] = json!(2_000);
+    assert_eq!(super::asa::parse(&body).unwrap().amount_cents, 2_000);
+}
+
+/// Review X1: only a plain AUTHORIZATION with an explicit $0 verifies, once
+/// per intent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_zero_dollar_verification_happens_once_per_intent() {
+    let h = Harness::new().await;
+    h.intent("demo-approved", "2000").await;
+    assert_eq!(
+        h.asa("zero-1", 0, "demo-approved", "AUTHORIZATION").await.1,
+        "APPROVED"
+    );
+    assert_eq!(
+        h.asa("zero-2", 0, "demo-approved", "AUTHORIZATION").await.1,
+        "UNAUTHORIZED_MERCHANT",
+        "a second $0 on the same intent is a probe"
+    );
+    assert_eq!(
+        h.asa("zero-3", 0, "demo-approved", "FINANCIAL_AUTHORIZATION")
+            .await
+            .1,
+        "UNAUTHORIZED_MERCHANT"
+    );
+    // The intent is still there for the real purchase.
+    assert_eq!(
+        h.asa("real-1", 2_000, "demo-approved", "AUTHORIZATION")
+            .await
+            .1,
+        "APPROVED"
+    );
+}
+
+/// Review X7: an intent the runner never redeemed can't approve a charge.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unredeemed_checkout_intent_never_approves() {
+    let h = Harness::new().await;
+    let (status, _) = h.intent_unredeemed("demo-approved", "2000").await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        h.asa("orphan-1", 2_000, "demo-approved", "AUTHORIZATION")
+            .await
+            .1,
+        "UNAUTHORIZED_MERCHANT"
+    );
+    assert_eq!(h.program_count("authorize"), 0);
+}
+
+/// Review X1 (compound): drifted ASAs decline, and clearings with no hold are
+/// billed only while they fit the budget; the rest goes to review. The owner
+/// never owes more than budget + fee(budget) for the period.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clearings_without_a_hold_never_bill_past_the_budget() {
+    let h = Harness::new().await; // budget 5000, max purchase 4000, 50 bps
+    h.intent("demo-approved", "4000").await;
+    for i in 0..3 {
+        let token = format!("drift-{i}");
+        let mut body = h.payload(&token, 4_000);
+        body["amounts"]["cardholder"]["amount"] = json!("4000");
+        assert_eq!(h.asa_body(&token, &body).await, "SUSPECTED_FRAUD");
+        // Issuer truth anyway: the network cleared 40.00 with no hold.
+        h.sim.authorization(
+            &token,
+            &h.card_token,
+            4_000,
+            "DEMO-DATAAPI",
+            "APPROVED",
+            "AUTHORIZATION",
+        );
+        h.sim
+            .add_event(&token, &format!("{token}-c"), "CLEARING", 4_000, "DEBIT");
+        assert_eq!(
+            h.deliver(&format!("w-{token}"), h.sim.webhook(&token))
+                .await,
+            200
+        );
+    }
+    assert_eq!(h.program_count("authorize"), 0);
+    let (captured, outstanding, budget) = h.per.with_card(&h.policy, |c| {
+        (c.period.captured, c.policy.outstanding, c.policy.budget)
+    });
+    assert!(captured <= budget, "captured {captured} > budget {budget}");
+    assert!(outstanding <= budget + statements::fee_cents(budget, 50));
+    let mut over_budget = 0;
+    for i in 0..3 {
+        let row = h.txn(&format!("drift-{i}")).await;
+        assert_eq!(row["needsReview"], true, "{row}");
+        if row["exception"] == "over_budget" {
+            over_budget += 1;
+        }
+    }
+    assert_eq!(over_budget, 2, "one forced post fits, two are review only");
+}
+
+/// Review F2: a refund on a hold never returns more than it captured, even
+/// once the Reservation is closed (Axum applies the cap from its row).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refunds_past_what_a_hold_captured_go_to_review() {
+    let h = Harness::new().await;
+    h.intent("demo-approved", "1000").await;
+    assert_eq!(
+        h.asa("rf-1", 1_000, "demo-approved", "AUTHORIZATION")
+            .await
+            .1,
+        "APPROVED"
+    );
+    h.sim.authorization(
+        "rf-1",
+        &h.card_token,
+        1_000,
+        "DEMO-DATAAPI",
+        "APPROVED",
+        "AUTHORIZATION",
+    );
+    h.sim
+        .add_event("rf-1", "rf-1-c", "CLEARING", 1_000, "DEBIT");
+    h.sim.add_event("rf-1", "rf-1-r1", "RETURN", 600, "CREDIT");
+    h.sim.add_event("rf-1", "rf-1-r2", "RETURN", 600, "CREDIT");
+    assert_eq!(h.deliver("w-rf-1", h.sim.webhook("rf-1")).await, 200);
+    let row = h.txn("rf-1").await;
+    assert_eq!(row["refundedCents"], "600", "{row}");
+    assert_eq!(row["exception"], "refund_over_capture", "{row}");
+    assert_eq!(h.program_count("refund"), 1);
+    // 1000 + 5 billed, 600 + 3 credited: 402 left.
+    assert_eq!(h.per.with_card(&h.policy, |c| c.policy.outstanding), 402);
+}
+
+/// Review F3: an event whose transaction landed but was never confirmed is
+/// looked up by signature on the retry, not sent again, so dedupe never
+/// depends on the program's event ring still holding its id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_landed_but_unconfirmed_event_is_looked_up_not_resent() {
+    let h = Harness::new().await;
+    h.intent("demo-approved", "1000").await;
+    assert_eq!(
+        h.asa("lu-1", 1_000, "demo-approved", "AUTHORIZATION")
+            .await
+            .1,
+        "APPROVED"
+    );
+    h.sim.authorization(
+        "lu-1",
+        &h.card_token,
+        1_000,
+        "DEMO-DATAAPI",
+        "APPROVED",
+        "AUTHORIZATION",
+    );
+    h.sim
+        .add_event("lu-1", "lu-1-c", "CLEARING", 1_000, "DEBIT");
+    // The capture lands after the 6 s deadline: Axum sees Unknown.
+    h.per.knobs.lock().unwrap().confirm_delay = Duration::from_secs(7);
+    h.deliver("w-lu-1", h.sim.webhook("lu-1")).await;
+    h.per.knobs.lock().unwrap().confirm_delay = Duration::ZERO;
+    let row = h.txn("lu-1").await;
+    assert!(
+        row["pendingEvents"]
+            .as_object()
+            .is_some_and(|m| m.len() == 1),
+        "{row}"
+    );
+    assert_eq!(h.program_count("capture"), 1);
+    // The retry asks PER about that signature and books it once.
+    h.deliver("w-lu-1b", h.sim.webhook("lu-1")).await;
+    assert_eq!(h.program_count("capture"), 1, "never sent twice");
+    let row = h.txn("lu-1").await;
+    assert_eq!(row["capturedCents"], "1000", "{row}");
+    assert!(
+        row["pendingEvents"]
+            .as_object()
+            .is_none_or(|m| m.is_empty()),
+        "{row}"
+    );
+    assert_eq!(h.per.with_card(&h.policy, |c| c.period.captured), 1_000);
+}
+
+/// Review F2: attestation gates approvals unless `report` is asked for.
+#[test]
+fn attestation_defaults_to_enforce_and_report_is_explicit() {
+    assert_eq!(
+        super::attestation_mode(None).unwrap(),
+        AttestationMode::Enforce
+    );
+    assert_eq!(
+        super::attestation_mode(Some("enforce")).unwrap(),
+        AttestationMode::Enforce
+    );
+    assert_eq!(
+        super::attestation_mode(Some("report")).unwrap(),
+        AttestationMode::Report
+    );
+    assert!(super::attestation_mode(Some("off")).is_err());
+}
+
+/// Review F4: the connector refuses to start off Devnet.
+#[test]
+fn the_connector_refuses_any_cluster_but_devnet() {
+    assert!(CardsConnector::from_env_cluster_check("mainnet-beta").is_err());
+    assert!(CardsConnector::from_env_cluster_check("devnet").is_ok());
 }
 
 #[path = "tests_private_repay.rs"]

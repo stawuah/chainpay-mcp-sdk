@@ -77,9 +77,12 @@ pub fn is_address(value: &str) -> bool {
 
 // ------------------------------------------------------------------- money
 
-/// `fee(x) = ceil(x · fee_bps / 10_000)`, the program's rule (contracts.md §1.5).
+/// `fee(x) = floor(x · fee_bps / 10_000)`, the program's one rule for debit
+/// and credit lines alike (contracts.md §1.5, review fixes 2026-10-04): split
+/// refunds never credit more than one refund, and statements match on-chain
+/// exposure line for line. Vectors: `shared/cards/fee-vectors.json`.
 pub fn fee_cents(amount: u64, fee_bps: u16) -> u64 {
-    ((amount as u128 * fee_bps as u128).div_ceil(10_000)) as u64
+    ((amount as u128 * fee_bps as u128) / 10_000) as u64
 }
 
 /// Signed cents as an exact decimal string (`-250`, `0`, `2010`).
@@ -2142,16 +2145,93 @@ mod unit {
     }
 
     #[test]
-    fn fee_is_the_program_ceiling_rule() {
+    fn fee_is_the_program_floor_rule() {
         assert_eq!(fee_cents(50_000, 50), 250);
-        assert_eq!(fee_cents(1, 50), 1);
-        assert_eq!(fee_cents(199, 50), 1);
+        assert_eq!(fee_cents(1, 50), 0);
+        assert_eq!(fee_cents(199, 50), 0);
         assert_eq!(fee_cents(200, 50), 1);
-        assert_eq!(fee_cents(201, 50), 2);
-        assert_eq!(fee_cents(1_500, 50), 8);
+        assert_eq!(fee_cents(201, 50), 1);
+        assert_eq!(fee_cents(1_500, 50), 7);
         assert_eq!(fee_cents(0, 50), 0);
         assert_eq!(fee_cents(12_345, 0), 0);
-        assert_eq!(fee_cents(u64::MAX, 1_000), u64::MAX / 10 + 1);
+        assert_eq!(fee_cents(u64::MAX, 1_000), u64::MAX / 10);
+    }
+
+    /// The vectors the program and the SDK run too (review X6).
+    #[test]
+    fn shared_fee_vectors_hold() {
+        let v: Value =
+            serde_json::from_str(include_str!("../../../../shared/cards/fee-vectors.json"))
+                .unwrap();
+        let n = |x: &Value| x.as_str().unwrap().parse::<u64>().unwrap();
+        for case in v["fee"].as_array().unwrap() {
+            let bps = case["feeBps"].as_u64().unwrap() as u16;
+            assert_eq!(
+                fee_cents(n(&case["amountCents"]), bps),
+                n(&case["feeCents"]),
+                "{case}"
+            );
+        }
+        for case in v["statements"].as_array().unwrap() {
+            let bps = case["feeBps"].as_u64().unwrap() as u16;
+            let lines: Vec<Line> = case["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|l| {
+                    let kind = if l[0] == "purchase" {
+                        PostingKind::Purchase
+                    } else {
+                        PostingKind::Refund
+                    };
+                    line(kind, n(&l[1]), bps, "2026-10-04T00:00:00.000Z")
+                })
+                .collect();
+            let t = totals(&lines, 0);
+            assert_eq!(
+                t.fees.to_string(),
+                case["feeCents"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+            assert_eq!(
+                t.total.to_string(),
+                case["totalCents"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        for case in v["holds"].as_array().unwrap() {
+            let bps = case["feeBps"].as_u64().unwrap() as u16;
+            let captured = n(&case["capturedCents"]);
+            let mut refunded = 0;
+            let mut lines = vec![line(
+                PostingKind::Purchase,
+                captured,
+                bps,
+                "2026-10-04T00:00:00.000Z",
+            )];
+            for refund in case["refunds"].as_array().unwrap() {
+                // Axum's cap for a closed hold: never past what it captured.
+                if let Some(amount) =
+                    super::super::events::refundable(captured, refunded, n(refund))
+                {
+                    refunded += amount;
+                    lines.push(line(
+                        PostingKind::Refund,
+                        amount,
+                        bps,
+                        "2026-10-04T00:00:01.000Z",
+                    ));
+                }
+            }
+            assert_eq!(
+                totals(&lines, 0).total.to_string(),
+                case["outstandingCents"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
     }
 
     #[test]
@@ -2168,7 +2248,7 @@ mod unit {
             (2_500, 500, 10, 2_010)
         );
         assert_eq!((t.amount_due, t.credit_forward), (2_010, 0));
-        // Per-line ceilings, not a ceiling of the sum.
+        // Per-line floors: never more than the fee of the sum.
         let pennies: Vec<Line> = (0..3)
             .map(|i| {
                 line(
@@ -2179,8 +2259,8 @@ mod unit {
                 )
             })
             .collect();
-        assert_eq!(totals(&pennies, 0).fees, 3);
-        assert_eq!(fee_cents(3, 50), 1);
+        assert_eq!(totals(&pennies, 0).fees, 0);
+        assert_eq!(fee_cents(3, 50), 0);
     }
 
     #[test]
@@ -2192,17 +2272,17 @@ mod unit {
             "2026-10-04T00:00:00.000Z",
         )];
         let t = totals(&refund_only, 0);
-        assert_eq!((t.total, t.amount_due, t.credit_forward), (-503, 0, 503));
+        assert_eq!((t.total, t.amount_due, t.credit_forward), (-502, 0, 502));
         let next = vec![line(
             PostingKind::Purchase,
             2_000,
             50,
             "2026-10-05T00:00:00.000Z",
         )];
-        let t = totals(&next, 503);
-        assert_eq!((t.total, t.amount_due, t.credit_forward), (2_010, 1_507, 0));
-        let t = totals(&[], 503);
-        assert_eq!((t.amount_due, t.credit_forward), (0, 503));
+        let t = totals(&next, 502);
+        assert_eq!((t.total, t.amount_due, t.credit_forward), (2_010, 1_508, 0));
+        let t = totals(&[], 502);
+        assert_eq!((t.amount_due, t.credit_forward), (0, 502));
     }
 
     #[test]

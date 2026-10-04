@@ -34,6 +34,12 @@ export function checkReleaseEnvironment(service, env) {
       if (!env[`CARDS_RECORD_KEY_${env.CARDS_RECORD_KID}`]) throw new Error("CARDS_RECORD_KEY_<CARDS_RECORD_KID> is required for the card connector");
       if (env.CRON_SECRET.length < 16) throw new Error("CRON_SECRET must have at least 16 characters");
       if (env.CARDS_CHECKOUT_RUNNER_SECRET && env.CARDS_CHECKOUT_RUNNER_SECRET.length < 32) throw new Error("CARDS_CHECKOUT_RUNNER_SECRET must have at least 32 characters");
+      // Unset means enforce: TEE attestation gates every approval. `report` is an explicit opt-out.
+      if (env.CARDS_TEE_ATTESTATION_MODE && !["enforce", "report"].includes(env.CARDS_TEE_ATTESTATION_MODE)) throw new Error("CARDS_TEE_ATTESTATION_MODE must be enforce or report");
+      if (env.LITHIC_API_URL) {
+        const lithic = new URL(env.LITHIC_API_URL);
+        if (lithic.protocol !== "https:" || lithic.username || lithic.password || lithic.hostname.replace(/\.$/, "").toLowerCase() !== "sandbox.lithic.com") throw new Error("LITHIC_API_URL must be https://sandbox.lithic.com");
+      }
     }
     if (env.CHAINPAY_CROSSMINT_ENABLED === "true") {
       if (required("CHAINPAY_CROSSMINT_AUTH_SECRET").length < 32) throw new Error("Crossmint authorization secret must have at least 32 characters");

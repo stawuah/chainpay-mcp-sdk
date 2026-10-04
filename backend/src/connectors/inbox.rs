@@ -134,7 +134,12 @@ impl WebhookVerifier for StandardWebhooks {
             .trim()
             .parse()
             .map_err(|_| WebhookRejection::MissingHeaders)?;
-        if (now_secs - timestamp).abs() > TOLERANCE_SECS {
+        // Checked: an extreme timestamp (`i64::MIN`) is stale, never a panic.
+        if now_secs
+            .checked_sub(timestamp)
+            .map(i64::unsigned_abs)
+            .is_none_or(|skew| skew > TOLERANCE_SECS as u64)
+        {
             return Err(WebhookRejection::Stale);
         }
         let mut matched = false;
@@ -366,6 +371,21 @@ impl Inbox<'_> {
 
 #[cfg(test)]
 mod tests {
+    /// Review F5: an extreme timestamp is stale (401), never a panic, and is
+    /// rejected before any signature work.
+    #[test]
+    fn extreme_timestamps_are_stale_not_a_panic() {
+        let v = StandardWebhooks::new(&BASE64.encode([7u8; 24])).unwrap();
+        for ts in ["-9223372036854775808", "9223372036854775807"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("webhook-id", "x".parse().unwrap());
+            headers.insert("webhook-timestamp", ts.parse().unwrap());
+            headers.insert("webhook-signature", "v1,AAAA".parse().unwrap());
+            let result = std::panic::catch_unwind(|| v.verify(&headers, b"{}", 1_790_000_000));
+            assert!(matches!(result, Ok(Err(WebhookRejection::Stale))), "{ts}");
+        }
+    }
+
     use super::*;
     use axum::http::HeaderValue;
 

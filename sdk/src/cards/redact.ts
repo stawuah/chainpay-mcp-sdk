@@ -20,6 +20,11 @@ const FORBIDDEN_KEY = /^(?:pan|card_?number|cardnum|primary_?account_?number|cvv
 // and dashed ids are never touched; a dashed PAN still matches when it stands alone.
 const CARD_NUMBER_RUN = /(?<![0-9A-Za-z_-])\d(?:[ -]?\d){12,18}(?![0-9A-Za-z_-])/g;
 
+// Inputs (tool arguments, keys included) are scanned more loosely: dots and
+// slashes between digits too, so `4111.1111.1111.1111` or `4111/1111/...`
+// never reaches Axum (review F7). Outputs keep the strict pattern above.
+const CARD_NUMBER_RUN_INPUT = /(?<![0-9A-Za-z_-])\d(?:[ ./-]?\d){12,18}(?![0-9A-Za-z_-])/g;
+
 export function isForbiddenCardKey(key: string): boolean {
   return FORBIDDEN_KEY.test(key);
 }
@@ -27,6 +32,16 @@ export function isForbiddenCardKey(key: string): boolean {
 /** Every 13 to 19 digit run that could be a card number. */
 export function findCardNumberLike(text: string): string[] {
   return text.match(CARD_NUMBER_RUN) ?? [];
+}
+
+/** Input-side scan: also catches digits separated by dots or slashes. */
+export function findCardNumberLikeInInput(text: string): string[] {
+  return text.match(CARD_NUMBER_RUN_INPUT) ?? [];
+}
+
+/** Input-side redaction, for anything that echoes caller text (errors). */
+export function redactCardNumbersInInput(text: string): string {
+  return text.replace(CARD_NUMBER_RUN_INPUT, CARD_DATA_REDACTION);
 }
 
 export function luhnValid(digits: string): boolean {

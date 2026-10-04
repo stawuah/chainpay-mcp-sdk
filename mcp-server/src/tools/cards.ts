@@ -6,12 +6,13 @@ import {
   cardDraftDigest,
   cardDraftMaxObligationCents,
   encodeCardDraftReviewLink,
-  findCardNumberLike,
+  findCardNumberLikeInInput,
   formatFeeBps,
   formatUsdCents,
   isForbiddenCardKey,
   normalizeCardDraft,
   parseCents,
+  redactCardNumbersInInput,
   parseSignedCents,
   redactCardData,
   type CardActivityRow,
@@ -39,20 +40,25 @@ const CLOSED_INPUTS: Record<string, readonly string[]> = {
 };
 
 /** Closed input schema, enforced at runtime: an unknown field (say `creditLimit` or `unfreeze`) is refused, not ignored. */
+const CARD_NUMBER_REFUSAL = "That looks like a card number. ChainPay never takes card numbers in tool calls; remove it and try again.";
+
 function assertClosedInput(tool: string, args: Record<string, unknown>): void {
   const allowed = CLOSED_INPUTS[tool];
-  for (const key of Object.keys(args)) {
-    if (!allowed.includes(key)) throw new Error(`${tool} does not accept "${key}". Card tools can't change limits, credit, freezes or repayments beyond what they describe.`);
-  }
+  // Card data first, keys included, so nothing card-like is ever echoed back
+  // in the error below (review F3). Dots and slashes count as separators (F7).
   for (const key of Object.keys(args)) {
     if (isForbiddenCardKey(key)) throw new Error("Card numbers, CVVs and tokens are never accepted by ChainPay tools");
+    if (findCardNumberLikeInInput(key).length) throw new Error(CARD_NUMBER_REFUSAL);
   }
   const scan = (value: unknown): void => {
     const text = typeof value === "string" ? value : typeof value === "number" || typeof value === "bigint" ? value.toString() : undefined;
-    if (text !== undefined && findCardNumberLike(text).length) throw new Error("That looks like a card number. ChainPay never takes card numbers in tool calls; remove it and try again.");
+    if (text !== undefined && findCardNumberLikeInInput(text).length) throw new Error(CARD_NUMBER_REFUSAL);
     if (Array.isArray(value)) value.forEach(scan);
   };
   Object.values(args).forEach(scan);
+  for (const key of Object.keys(args)) {
+    if (!allowed.includes(key)) throw new Error(`${tool} does not accept "${redactCardNumbersInInput(key)}". Card tools can't change limits, credit, freezes or repayments beyond what they describe.`);
+  }
   // Money and ids travel as strings, never JS numbers (contracts.md preamble).
   for (const key of ["amountCents", "budgetCents", "maxPurchaseCents", "cardId", "merchantRef", "clientOperationId", "statementId", "cursor"]) {
     if (args[key] !== undefined && typeof args[key] !== "string") throw new Error(`${key} must be a string`);
@@ -73,14 +79,15 @@ function cardsApi(context: ChainPayMcpContext): CardsApiClient {
 /** Writes (checkout, freeze) resume with their clientOperationId; reads are simply safe to repeat. */
 function apiFailure(tool: string, error: unknown, clientOperationId?: string) {
   if (error instanceof CardsApiError) {
-    const unknownOutcome = error.code === "network_unknown";
+    // A dropped connection, a gateway 5xx, or Axum saying it can't tell yet.
+    const unknownOutcome = error.code === "network_unknown" || error.code === "outcome_unknown" || error.evidenceState === "unknown";
     const retry = clientOperationId
       ? `Call ${tool} again with clientOperationId "${clientOperationId}" to check; don't start a new one.`
       : `It only reads, so it's safe to call ${tool} again.`;
     return cardToolResult(
       { action: `${tool}_failed`, code: error.code, retryable: error.retryable, ...(error.operationId ? { operationId: error.operationId } : {}), ...(clientOperationId ? { clientOperationId } : {}), outcome: unknownOutcome ? "unknown" : "not_done" },
       unknownOutcome
-        ? `**Outcome unknown.** ChainPay couldn't be reached. ${retry}`
+        ? `**Outcome unknown.** ChainPay didn't confirm whether it happened. ${retry}`
         : `**Not done.** ${error.message}`,
       true,
     );
@@ -131,7 +138,7 @@ export async function prepareAgentCard(_context: ChainPayMcpContext, args: Recor
     "",
     `- Budget: ${display.budget} every ${draft.periodDays} day${draft.periodDays === 1 ? "" : "s"}`,
     `- Max per purchase: ${display.maxPurchase}`,
-    `- Platform fee: ${display.fee}, so the most the owner could owe per period is ${display.maxObligation} (simulated credit)`,
+    `- Platform fee: ${display.fee}, so the most the owner could owe per period is ${display.maxObligation} (simulated credit; the card refuses to bill past it)`,
     `- Shops: ${draft.merchants.length ? draft.merchants.join(", ") : "any shop in the listed categories"}${draft.mccs.length ? `; categories ${draft.mccs.join(", ")}` : ""}`,
     `- Check code: ${draftDigest.slice(0, 8)} (the owner sees the same code on the review page)`,
     "",

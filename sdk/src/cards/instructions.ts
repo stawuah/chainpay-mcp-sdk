@@ -384,12 +384,23 @@ export function buildUpdatePermissionInstruction(input: CardRef & { op: Permissi
   return build("updatePermission", "update_permission", programId, [...permissionKeys(input.owner, input.cardId, programId), ...ephemeralPairs(input.ephemeralAccounts)], { op: input.op });
 }
 
-/** PER. The owner signs this over their own TEE connection. Rejects a policy the program would reject. */
-export function buildSetPolicyInstruction(input: CardRef & { policy: PolicyArgs }, programId?: Address): ChainPayInstruction {
+/**
+ * PER. The owner signs this over their own TEE connection. Rejects a policy the program would reject.
+ *
+ * Once the card's policy is set, changing the credit terms (the authorizer, the
+ * fee, a larger budget or a shorter period) also needs ChainPay's current
+ * authorizer as `coSigner`: it rides as an extra signer account and the
+ * program refuses the change without it. The authorizer is never the owner.
+ */
+export function buildSetPolicyInstruction(input: CardRef & { policy: PolicyArgs; coSigner?: Address }, programId?: Address): ChainPayInstruction {
   const problems = policyArgsProblems(input.policy);
+  if (input.policy.authorizer === input.owner) problems.push("The authorizer can't be the owner.");
+  if (input.coSigner !== undefined && input.coSigner === input.owner) problems.push("The co-signer must be ChainPay's authorizer, not the owner.");
   if (problems.length) throw new Error(problems.join(" "));
-  // set_policy shares the CardPermissions account struct.
-  return build("setPolicy", "set_policy", programId, permissionKeys(input.owner, input.cardId, programId), { policy: input.policy });
+  // set_policy shares the CardPermissions account struct; the co-signer is the first remaining account.
+  const keys = permissionKeys(input.owner, input.cardId, programId);
+  if (input.coSigner !== undefined) keys.push(meta(input.coSigner, false, true));
+  return build("setPolicy", "set_policy", programId, keys, { policy: input.policy });
 }
 
 /** PER. Owner freeze (reason 1). The authorizer variant lives in Axum. */

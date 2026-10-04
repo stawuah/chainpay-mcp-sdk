@@ -198,6 +198,19 @@ fn repayment_config() -> Result<statements::RepaymentConfig, CardsConfigError> {
     })
 }
 
+/// `enforce` unless `report` is asked for by name (review F2): attestation
+/// gates approvals by default, and reporting only is an explicit opt-out for
+/// local runs without a TEE.
+fn attestation_mode(value: Option<&str>) -> Result<AttestationMode, CardsConfigError> {
+    match value {
+        None | Some("enforce") => Ok(AttestationMode::Enforce),
+        Some("report") => Ok(AttestationMode::Report),
+        Some(_) => Err(invalid(
+            "CARDS_TEE_ATTESTATION_MODE must be report or enforce",
+        )),
+    }
+}
+
 fn flag(name: &str) -> bool {
     env(name).as_deref() == Some("true")
 }
@@ -206,12 +219,16 @@ impl CardsConnector {
     /// `Ok(None)` unless `CARDS_CONNECTOR_ENABLED=true`. When enabled, every
     /// required secret must be present; a half-configured connector refuses
     /// to start rather than approving without verification.
-    pub fn from_env(store: StatusStore) -> Result<Option<Arc<Self>>, CardsConfigError> {
+    pub fn from_env(
+        store: StatusStore,
+        cluster: &str,
+    ) -> Result<Option<Arc<Self>>, CardsConfigError> {
         if !flag("CARDS_CONNECTOR_ENABLED") {
             return Ok(None);
         }
-        let api_key = env("LITHIC_API_KEY")
-            .or_else(|| env("LITHIC_SANDBOX_API_KEY"))
+        Self::from_env_cluster_check(cluster)?;
+        let api_key = env("LITHIC_SANDBOX_API_KEY")
+            .or_else(|| env("LITHIC_API_KEY"))
             .ok_or_else(|| invalid("LITHIC_SANDBOX_API_KEY (or LITHIC_API_KEY) is required when CARDS_CONNECTOR_ENABLED=true"))?;
         let issuer_writes = flag("CARDS_ISSUER_WRITES_ENABLED");
         let lithic = LithicClient::new(
@@ -232,15 +249,7 @@ impl CardsConnector {
             StandardWebhooks::new(&env(name).unwrap_or_default())
                 .map_err(|e| invalid(format!("{name}: {e}")))
         };
-        let attestation_mode = match env("CARDS_TEE_ATTESTATION_MODE").as_deref() {
-            None | Some("report") => AttestationMode::Report,
-            Some("enforce") => AttestationMode::Enforce,
-            Some(_) => {
-                return Err(invalid(
-                    "CARDS_TEE_ATTESTATION_MODE must be report or enforce",
-                ));
-            }
-        };
+        let attestation_mode = attestation_mode(env("CARDS_TEE_ATTESTATION_MODE").as_deref())?;
         let config = CardsConfig {
             issuer_writes,
             checkout_enabled: flag("CARDS_CHECKOUT_ENABLED"),
@@ -271,6 +280,15 @@ impl CardsConnector {
             crypto,
             store,
         ))))
+    }
+
+    /// Simulated credit against a sandbox issuer: Devnet only, checked at
+    /// runtime too, not just by the release script (review F4).
+    pub fn from_env_cluster_check(cluster: &str) -> Result<(), CardsConfigError> {
+        if cluster != "devnet" {
+            return Err(invalid("the card connector runs on Devnet only"));
+        }
+        Ok(())
     }
 
     pub fn new(
