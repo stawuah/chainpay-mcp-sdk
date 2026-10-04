@@ -1,4 +1,4 @@
-import { House, Bot, ShieldCheck, Inbox, ArrowUpRight, Settings2, PanelLeftClose, PanelLeftOpen, ArrowLeft, LayoutGrid } from "lucide-react";
+import { House, Bot, ShieldCheck, CreditCard, Inbox, ArrowUpRight, Settings2, PanelLeftClose, PanelLeftOpen, ArrowLeft, LayoutGrid } from "lucide-react";
 import { BrandLogo } from "../brand/Brand";
 import { Button } from "@astryxdesign/core/Button";
 import { IconButton } from "@astryxdesign/core/IconButton";
@@ -33,7 +33,7 @@ function NavButton({
   collapsed?: boolean;
   onSelect: (tab: DashboardTab) => void;
 }) {
-  const Icon = ({ overview: House, agents: Bot, mandates: ShieldCheck, assistant: Inbox, payments: ArrowUpRight, settings: Settings2 } as Partial<Record<DashboardTab, typeof House>>)[item.id] ?? Settings2;
+  const Icon = ({ overview: House, agents: Bot, mandates: ShieldCheck, cards: CreditCard, assistant: Inbox, payments: ArrowUpRight, settings: Settings2 } as Partial<Record<DashboardTab, typeof House>>)[item.id] ?? Settings2;
   return (
     <Button
       type="button"

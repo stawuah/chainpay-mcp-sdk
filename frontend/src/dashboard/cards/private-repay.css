@@ -1,0 +1,46 @@
+/* PrivateRepayOptIn: scoped to .cp-private, no global selectors. */
+.cp-private {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cp-private h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.cp-private p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cp-private-lede {
+  color: var(--color-text-secondary, #5b6170);
+}
+
+.cp-private-points {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.cp-private-agree {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.cp-private-agree input {
+  margin-top: 3px;
+  flex: none;
+}
+
+.cp-private-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}

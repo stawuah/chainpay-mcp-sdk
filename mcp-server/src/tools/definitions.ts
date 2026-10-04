@@ -426,4 +426,81 @@ export const TOOL_DEFINITIONS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "prepare_agent_card",
+    description: "Draft a private agent card for the owner to review: budget, max per purchase, shops, categories and period. Returns a review link and the most the owner could owe (budget plus fee). Draft only: nothing is created, signed or stored, and only the owner's wallet can make it live.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        label: { type: "string", description: "Short name, at most 40 characters" },
+        budgetCents: { type: "string", description: "Budget per period in whole US cents, e.g. \"2000\" for $20.00" },
+        maxPurchaseCents: { type: "string", description: "Largest single purchase in whole US cents; no more than the budget" },
+        merchants: { type: "array", items: { type: "string" }, description: "Registered merchant references, at most 8" },
+        mccs: { type: "array", items: { type: "integer" }, description: "Merchant category codes, at most 16" },
+        periodDays: { type: "integer", description: "Days per budget period, 1 to 365" },
+        expiresAt: { type: "string", description: "Optional ISO date when the card stops working" },
+        feeBps: { type: "integer", description: "Optional platform fee in basis points, 0 to 1000; defaults to 50 (0.5%)" },
+      },
+      required: ["label", "budgetCents", "maxPurchaseCents", "periodDays"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "request_card_checkout",
+    description: "Ask for a one-time checkout at a registered shop for an exact USD amount on a card this connection is scoped to. Returns a short-lived, single-use capability for the ChainPay checkout runner. Never returns a card number, CVV or expiry. The card still checks every rule when the shop charges it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cardId: { type: "string", description: "Card id, 64 lowercase hex characters" },
+        merchantRef: { type: "string", description: "Registered shop reference. Sandbox shops: demo-approved (ChainPay demo shop, sells data API credits) and demo-unapproved (Unlisted test shop, a card should decline it unless the owner allowed it)." },
+        amountCents: { type: "string", description: "Exact amount in whole US cents" },
+        currency: { type: "string", enum: ["USD"] },
+        description: { type: "string", description: "Optional note, at most 80 characters" },
+        clientOperationId: { type: "string", description: "Your idempotency key. Reuse it to check an unknown outcome; never invent a new one after a timeout." },
+      },
+      required: ["cardId", "merchantRef", "amountCents", "currency", "clientOperationId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_card_activity",
+    description: "List what happened on a card: approvals, declines with plain reasons, captures, refunds and items that need review. No card number, no limits, no balances.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cardId: { type: "string" },
+        cursor: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      required: ["cardId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_statement",
+    description: "Read a card statement (simulated credit): exact total, fees, lines and due date. Omit statementId for the latest. Read only: agents can't pay, approve or change a statement.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cardId: { type: "string" },
+        statementId: { type: "string" },
+      },
+      required: ["cardId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "freeze_agent_card",
+    description: "Freeze a card so new purchases decline. Owner session only; refused on agent connections. The issuer confirms separately, so report it as pending. There is no unfreeze tool: unfreezing needs the owner's wallet in the dashboard.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cardId: { type: "string" },
+        reason: { type: "string", description: "Why, in a few words" },
+        clientOperationId: { type: "string", description: "Optional idempotency key. Reuse it after an unknown outcome." },
+      },
+      required: ["cardId", "reason"],
+      additionalProperties: false,
+    },
+  },
 ] as const;

@@ -13,5 +13,11 @@
       "maxDuration": 300
     }
   },
-  "outputDirectory": "public"
+  "outputDirectory": "public",
+  "crons": [
+    {
+      "path": "/internal/cron/cards/reconcile",
+      "schedule": "*/5 * * * *"
+    }
+  ]
 }
