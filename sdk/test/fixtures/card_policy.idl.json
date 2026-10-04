@@ -1,0 +1,5134 @@
+{
+  "address": "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F",
+  "metadata": {
+    "name": "card_policy",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "ChainPay private agent card policy (MagicBlock Private Ephemeral Rollup)"
+  },
+  "instructions": [
+    {
+      "name": "adjust_reservation",
+      "discriminator": [
+        137,
+        209,
+        64,
+        94,
+        107,
+        194,
+        101,
+        43
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reservation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "reservation.auth_id_hash",
+                "account": "Reservation"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_amount_cents",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "authorize",
+      "discriminator": [
+        173,
+        193,
+        102,
+        210,
+        219,
+        137,
+        113,
+        120
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "intent",
+          "docs": [
+            "intent maps to `IntentInvalid` instead of a generic account error."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "arg",
+                "path": "args.intent_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reservation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "arg",
+                "path": "args.auth_id_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reservation_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "reservation"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "address": "MagicVau1t999999999999999999999999999999999"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "permission_program",
+          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "AuthorizeArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "cancel_checkout_intent",
+      "discriminator": [
+        175,
+        152,
+        6,
+        182,
+        211,
+        206,
+        160,
+        167
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "intent",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "intent.intent_id",
+                "account": "CheckoutIntent"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "capture",
+      "discriminator": [
+        110,
+        65,
+        245,
+        241,
+        195,
+        248,
+        233,
+        142
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reservation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "reservation.auth_id_hash",
+                "account": "Reservation"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_cents",
+          "type": "u64"
+        },
+        {
+          "name": "capture_id_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "checkpoint",
+      "discriminator": [
+        213,
+        200,
+        19,
+        204,
+        240,
+        143,
+        184,
+        252
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "binding"
+        },
+        {
+          "name": "commitment",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  99,
+                  111,
+                  109,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "magic_context",
+          "writable": true,
+          "address": "MagicContext1111111111111111111111111111111"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "master_salt",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "close_card",
+      "discriminator": [
+        142,
+        206,
+        170,
+        182,
+        227,
+        204,
+        185,
+        115
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "binding"
+          ]
+        },
+        {
+          "name": "binding",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  98,
+                  105,
+                  110,
+                  100,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "binding.card_id",
+                "account": "CardBinding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy",
+          "writable": true
+        },
+        {
+          "name": "period",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_checkout_intent",
+      "discriminator": [
+        36,
+        161,
+        214,
+        238,
+        244,
+        192,
+        71,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "intent",
+          "writable": true
+        },
+        {
+          "name": "intent_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "intent"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "address": "MagicVau1t999999999999999999999999999999999"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "permission_program",
+          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "confirm_reconciled",
+      "discriminator": [
+        116,
+        7,
+        34,
+        18,
+        87,
+        241,
+        4,
+        233
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "policy"
+          ]
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "recon_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "delegate_card",
+      "discriminator": [
+        143,
+        76,
+        125,
+        25,
+        4,
+        123,
+        254,
+        155
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "binding"
+          ]
+        },
+        {
+          "name": "binding",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  98,
+                  105,
+                  110,
+                  100,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "binding.card_id",
+                "account": "CardBinding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer_policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                3,
+                18,
+                3,
+                81,
+                91,
+                200,
+                225,
+                11,
+                17,
+                155,
+                151,
+                84,
+                179,
+                195,
+                6,
+                85,
+                43,
+                240,
+                252,
+                201,
+                17,
+                190,
+                232,
+                110,
+                123,
+                69,
+                78,
+                200,
+                231,
+                35,
+                6,
+                180
+              ]
+            }
+          }
+        },
+        {
+          "name": "delegation_record_policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "delegation_metadata_policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "policy",
+          "writable": true
+        },
+        {
+          "name": "buffer_period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "period"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                3,
+                18,
+                3,
+                81,
+                91,
+                200,
+                225,
+                11,
+                17,
+                155,
+                151,
+                84,
+                179,
+                195,
+                6,
+                85,
+                43,
+                240,
+                252,
+                201,
+                17,
+                190,
+                232,
+                110,
+                123,
+                69,
+                78,
+                200,
+                231,
+                35,
+                6,
+                180
+              ]
+            }
+          }
+        },
+        {
+          "name": "delegation_record_period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "period"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "delegation_metadata_period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "period"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "period",
+          "writable": true
+        },
+        {
+          "name": "owner_program",
+          "address": "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F"
+        },
+        {
+          "name": "delegation_program",
+          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "validator",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "freeze",
+      "discriminator": [
+        255,
+        91,
+        207,
+        84,
+        251,
+        194,
+        254,
+        63
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "reason",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "init_card",
+      "discriminator": [
+        163,
+        228,
+        150,
+        17,
+        250,
+        36,
+        156,
+        20
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "binding",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  98,
+                  105,
+                  110,
+                  100,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "arg",
+                "path": "card_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "binding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "binding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "commitment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  99,
+                  111,
+                  109,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "binding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "card_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "issuer",
+          "type": "u8"
+        },
+        {
+          "name": "issuer_card_ref_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "prefund_lamports",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "init_permission",
+      "discriminator": [
+        66,
+        14,
+        153,
+        250,
+        187,
+        36,
+        179,
+        236
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "policy"
+          ]
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "period_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "period"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "address": "MagicVau1t999999999999999999999999999999999"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "permission_program",
+          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        }
+      ],
+      "args": [
+        {
+          "name": "authorizer",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "open_checkout_intent",
+      "discriminator": [
+        139,
+        180,
+        113,
+        38,
+        119,
+        108,
+        36,
+        224
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "intent",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "arg",
+                "path": "args.intent_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "intent_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "intent"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "address": "MagicVau1t999999999999999999999999999999999"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "permission_program",
+          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "IntentArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "process_undelegation",
+      "discriminator": [
+        196,
+        28,
+        41,
+        206,
+        48,
+        37,
+        51,
+        167
+      ],
+      "accounts": [
+        {
+          "name": "base_account",
+          "writable": true
+        },
+        {
+          "name": "buffer",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  110,
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  101,
+                  45,
+                  98,
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "base_account"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                181,
+                183,
+                0,
+                225,
+                242,
+                87,
+                58,
+                192,
+                204,
+                6,
+                34,
+                1,
+                52,
+                74,
+                207,
+                151,
+                184,
+                53,
+                6,
+                235,
+                140,
+                229,
+                25,
+                152,
+                204,
+                98,
+                126,
+                24,
+                147,
+                128,
+                167,
+                62
+              ]
+            }
+          }
+        },
+        {
+          "name": "payer",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "account_seeds",
+          "type": {
+            "vec": "bytes"
+          }
+        }
+      ]
+    },
+    {
+      "name": "record_dispute",
+      "discriminator": [
+        190,
+        94,
+        198,
+        130,
+        215,
+        36,
+        43,
+        143
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reservation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "reservation.auth_id_hash",
+                "account": "Reservation"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "state",
+          "type": "u8"
+        },
+        {
+          "name": "event_id_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "record_exception",
+      "discriminator": [
+        221,
+        204,
+        254,
+        53,
+        116,
+        13,
+        197,
+        105
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reservation",
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "reservation.auth_id_hash",
+                "account": "Reservation"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "kind",
+          "type": "u8"
+        },
+        {
+          "name": "amount_cents",
+          "type": "u64"
+        },
+        {
+          "name": "event_id_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "record_repayment",
+      "discriminator": [
+        193,
+        155,
+        76,
+        246,
+        27,
+        189,
+        147,
+        102
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "statement_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "amount_cents",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "recovery_freeze",
+      "discriminator": [
+        113,
+        1,
+        136,
+        29,
+        212,
+        19,
+        213,
+        56
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "reason",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "refund",
+      "discriminator": [
+        2,
+        96,
+        183,
+        251,
+        63,
+        208,
+        46,
+        46
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reservation",
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "reservation.auth_id_hash",
+                "account": "Reservation"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_cents",
+          "type": "u64"
+        },
+        {
+          "name": "event_id_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "resolve_exception",
+      "discriminator": [
+        131,
+        144,
+        179,
+        147,
+        199,
+        157,
+        77,
+        127
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "policy"
+          ]
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "event_id_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "resolution",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "restore",
+      "discriminator": [
+        77,
+        37,
+        122,
+        128,
+        139,
+        35,
+        6,
+        58
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "policy"
+          ]
+        },
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "RestoreArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reverse",
+      "discriminator": [
+        137,
+        149,
+        242,
+        82,
+        88,
+        95,
+        221,
+        145
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reservation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              },
+              {
+                "kind": "account",
+                "path": "reservation.auth_id_hash",
+                "account": "Reservation"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_cents",
+          "type": "u64"
+        },
+        {
+          "name": "reason",
+          "type": "u8"
+        },
+        {
+          "name": "event_id_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "roll_period",
+      "discriminator": [
+        30,
+        184,
+        166,
+        42,
+        251,
+        204,
+        47,
+        107
+      ],
+      "accounts": [
+        {
+          "name": "authorizer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "set_policy",
+      "discriminator": [
+        40,
+        133,
+        12,
+        157,
+        235,
+        202,
+        2,
+        132
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "policy"
+          ]
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "period_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "period"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "address": "MagicVau1t999999999999999999999999999999999"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "permission_program",
+          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "PolicyArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "sync_permission",
+      "discriminator": [
+        164,
+        186,
+        105,
+        85,
+        229,
+        147,
+        214,
+        246
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target",
+          "writable": true
+        },
+        {
+          "name": "target_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "target"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "address": "MagicVau1t999999999999999999999999999999999"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "permission_program",
+          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unfreeze",
+      "discriminator": [
+        133,
+        160,
+        68,
+        253,
+        80,
+        232,
+        218,
+        247
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "policy"
+          ]
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_permission",
+      "discriminator": [
+        1,
+        120,
+        111,
+        126,
+        237,
+        61,
+        41,
+        61
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "policy"
+          ]
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "period_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "period"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "address": "MagicVau1t999999999999999999999999999999999"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "permission_program",
+          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        }
+      ],
+      "args": [
+        {
+          "name": "op",
+          "type": {
+            "defined": {
+              "name": "PermissionOp"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "wipe_card",
+      "discriminator": [
+        210,
+        120,
+        235,
+        58,
+        105,
+        132,
+        206,
+        76
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "policy"
+          ]
+        },
+        {
+          "name": "policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "period",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  101,
+                  114,
+                  105,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy.binding",
+                "account": "CardPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "policy"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "period_permission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110,
+                  58
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "period"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                136,
+                161,
+                10,
+                196,
+                33,
+                152,
+                1,
+                214,
+                246,
+                106,
+                29,
+                60,
+                6,
+                152,
+                192,
+                102,
+                169,
+                175,
+                212,
+                217,
+                180,
+                252,
+                231,
+                71,
+                151,
+                141,
+                209,
+                5,
+                168,
+                212,
+                103,
+                82
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "address": "MagicVau1t999999999999999999999999999999999"
+        },
+        {
+          "name": "magic_context",
+          "writable": true,
+          "address": "MagicContext1111111111111111111111111111111"
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "permission_program",
+          "address": "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "write_commitment",
+      "discriminator": [
+        159,
+        54,
+        242,
+        213,
+        46,
+        162,
+        174,
+        75
+      ],
+      "accounts": [
+        {
+          "name": "commitment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  99,
+                  111,
+                  109,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "binding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "binding",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  100,
+                  95,
+                  98,
+                  105,
+                  110,
+                  100,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "binding.owner",
+                "account": "CardBinding"
+              },
+              {
+                "kind": "account",
+                "path": "binding.card_id",
+                "account": "CardBinding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "source_program",
+          "address": "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F"
+        },
+        {
+          "name": "escrow_auth"
+        },
+        {
+          "name": "escrow",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        },
+        {
+          "name": "policy_version",
+          "type": "u32"
+        },
+        {
+          "name": "period_index",
+          "type": "u32"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "CardBinding",
+      "discriminator": [
+        86,
+        71,
+        81,
+        106,
+        155,
+        166,
+        1,
+        72
+      ]
+    },
+    {
+      "name": "CardCommitment",
+      "discriminator": [
+        43,
+        146,
+        163,
+        253,
+        221,
+        147,
+        4,
+        9
+      ]
+    },
+    {
+      "name": "CardPeriod",
+      "discriminator": [
+        112,
+        201,
+        91,
+        227,
+        87,
+        121,
+        62,
+        2
+      ]
+    },
+    {
+      "name": "CardPolicy",
+      "discriminator": [
+        196,
+        159,
+        33,
+        83,
+        231,
+        156,
+        65,
+        71
+      ]
+    },
+    {
+      "name": "CheckoutIntent",
+      "discriminator": [
+        39,
+        73,
+        4,
+        146,
+        212,
+        151,
+        108,
+        241
+      ]
+    },
+    {
+      "name": "Reservation",
+      "discriminator": [
+        188,
+        235,
+        0,
+        111,
+        208,
+        253,
+        247,
+        212
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Signer is not allowed to perform this action"
+    },
+    {
+      "code": 6001,
+      "name": "ValidatorNotAllowed",
+      "msg": "Validator is not on the TEE allowlist"
+    },
+    {
+      "code": 6002,
+      "name": "PolicyNotSet",
+      "msg": "Card policy has not been set"
+    },
+    {
+      "code": 6003,
+      "name": "InvalidPolicy",
+      "msg": "Policy arguments are invalid"
+    },
+    {
+      "code": 6004,
+      "name": "CardFrozen",
+      "msg": "Card is frozen"
+    },
+    {
+      "code": 6005,
+      "name": "RecoveryFrozen",
+      "msg": "Card is in recovery"
+    },
+    {
+      "code": 6006,
+      "name": "PolicyExpired",
+      "msg": "Card policy has expired"
+    },
+    {
+      "code": 6007,
+      "name": "IntentInvalid",
+      "msg": "Checkout intent is not usable"
+    },
+    {
+      "code": 6008,
+      "name": "IntentExpired",
+      "msg": "Checkout intent has expired"
+    },
+    {
+      "code": 6009,
+      "name": "IntentStale",
+      "msg": "Checkout intent was opened under an older policy"
+    },
+    {
+      "code": 6010,
+      "name": "MerchantMismatch",
+      "msg": "Merchant does not match the checkout intent"
+    },
+    {
+      "code": 6011,
+      "name": "MerchantNotAllowed",
+      "msg": "Merchant is not allowed by the card policy"
+    },
+    {
+      "code": 6012,
+      "name": "MccNotAllowed",
+      "msg": "Merchant category is not allowed"
+    },
+    {
+      "code": 6013,
+      "name": "CurrencyMismatch",
+      "msg": "Currency does not match"
+    },
+    {
+      "code": 6014,
+      "name": "AmountExceedsIntent",
+      "msg": "Amount exceeds the checkout intent"
+    },
+    {
+      "code": 6015,
+      "name": "AmountExceedsMax",
+      "msg": "Amount exceeds the per-purchase maximum"
+    },
+    {
+      "code": 6016,
+      "name": "BudgetExceeded",
+      "msg": "Amount exceeds the available budget"
+    },
+    {
+      "code": 6017,
+      "name": "VelocityExceeded",
+      "msg": "Purchase count limit reached for this period"
+    },
+    {
+      "code": 6018,
+      "name": "RecurringNotAllowed",
+      "msg": "Merchant-initiated purchases are not allowed"
+    },
+    {
+      "code": 6019,
+      "name": "DuplicateAuthorization",
+      "msg": "Authorization was already recorded"
+    },
+    {
+      "code": 6020,
+      "name": "DuplicateCapture",
+      "msg": "Capture was already recorded"
+    },
+    {
+      "code": 6021,
+      "name": "ReservationClosed",
+      "msg": "Reservation is closed"
+    },
+    {
+      "code": 6022,
+      "name": "PeriodNotEnded",
+      "msg": "Period has not ended"
+    },
+    {
+      "code": 6023,
+      "name": "DisclosureBlocked",
+      "msg": "Making card data public is blocked"
+    },
+    {
+      "code": 6024,
+      "name": "MemberLimit",
+      "msg": "Permission member limit reached"
+    },
+    {
+      "code": 6025,
+      "name": "ExceptionsOpen",
+      "msg": "Exceptions need owner review first"
+    },
+    {
+      "code": 6026,
+      "name": "NotInRecovery",
+      "msg": "Card is not in recovery"
+    },
+    {
+      "code": 6027,
+      "name": "StaleCommitment",
+      "msg": "Commitment sequence is stale"
+    },
+    {
+      "code": 6028,
+      "name": "OpenReservations",
+      "msg": "Card has open reservations"
+    },
+    {
+      "code": 6029,
+      "name": "OutstandingBalance",
+      "msg": "Card has an outstanding statement balance"
+    },
+    {
+      "code": 6030,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6031,
+      "name": "AuthorizerChangeRequiresFreeze",
+      "msg": "Changing the authorizer requires a frozen card"
+    },
+    {
+      "code": 6032,
+      "name": "DuplicateRepayment",
+      "msg": "Repayment was already recorded"
+    },
+    {
+      "code": 6033,
+      "name": "MemberNotFound",
+      "msg": "Permission member not found"
+    },
+    {
+      "code": 6034,
+      "name": "PermissionNotInitialized",
+      "msg": "Permissions have not been initialized"
+    },
+    {
+      "code": 6035,
+      "name": "InvalidAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6036,
+      "name": "NoOpenExceptions",
+      "msg": "No open exceptions"
+    },
+    {
+      "code": 6037,
+      "name": "ReconDigestMismatch",
+      "msg": "Reconciliation digest does not match"
+    },
+    {
+      "code": 6038,
+      "name": "RepaymentExceedsOutstanding",
+      "msg": "Repayment exceeds the outstanding balance"
+    },
+    {
+      "code": 6039,
+      "name": "InvalidAccount",
+      "msg": "Account does not belong to this card"
+    },
+    {
+      "code": 6040,
+      "name": "PrefundTooLow",
+      "msg": "Prefund is below the minimum"
+    },
+    {
+      "code": 6041,
+      "name": "NotWiped",
+      "msg": "Card account is not zeroed"
+    },
+    {
+      "code": 6042,
+      "name": "InvalidEventId",
+      "msg": "Event identifier must not be zero"
+    },
+    {
+      "code": 6043,
+      "name": "DuplicateEvent",
+      "msg": "Issuer event was already recorded"
+    },
+    {
+      "code": 6044,
+      "name": "EphemeralAccountsOpen",
+      "msg": "Card still has ephemeral accounts"
+    }
+  ],
+  "types": [
+    {
+      "name": "AuthorizeArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "auth_id_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "intent_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "amount_cents",
+            "type": "u64"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "merchant_id_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "mcc",
+            "type": "u16"
+          },
+          {
+            "name": "merchant_initiated",
+            "type": "bool"
+          },
+          {
+            "name": "single_message",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CardBinding",
+      "docs": [
+        "Base layer, never delegated, public. Owner <-> card link, no sensitive fields."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "card_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "issuer",
+            "type": "u8"
+          },
+          {
+            "name": "issuer_card_ref_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "period",
+            "type": "pubkey"
+          },
+          {
+            "name": "commitment",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CardCommitment",
+      "docs": [
+        "Base layer, never delegated, public. Written only by the checkpoint Magic Action."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "binding",
+            "type": "pubkey"
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "policy_version",
+            "type": "u32"
+          },
+          {
+            "name": "period_index",
+            "type": "u32"
+          },
+          {
+            "name": "written_slot",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CardPeriod",
+      "docs": [
+        "Delegated, private. Current-period counters."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "period_index",
+            "type": "u32"
+          },
+          {
+            "name": "period_start",
+            "type": "i64"
+          },
+          {
+            "name": "period_end",
+            "type": "i64"
+          },
+          {
+            "name": "captured_cents",
+            "type": "u64"
+          },
+          {
+            "name": "reserved_cents",
+            "type": "u64"
+          },
+          {
+            "name": "refunded_cents",
+            "type": "u64"
+          },
+          {
+            "name": "purchases_count",
+            "type": "u16"
+          },
+          {
+            "name": "exception_cents",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CardPolicy",
+      "docs": [
+        "Delegated to the TEE validator, private. Created zeroed on base apart from",
+        "`binding`, `owner` and `bump` (already public through `CardBinding`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "binding",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "authorizer",
+            "type": "pubkey"
+          },
+          {
+            "name": "policy_version",
+            "type": "u32"
+          },
+          {
+            "name": "budget_cents",
+            "type": "u64"
+          },
+          {
+            "name": "max_purchase_cents",
+            "type": "u64"
+          },
+          {
+            "name": "max_purchases_per_period",
+            "type": "u16"
+          },
+          {
+            "name": "period_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "merchant_count",
+            "type": "u8"
+          },
+          {
+            "name": "merchant_id_hashes",
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                },
+                8
+              ]
+            }
+          },
+          {
+            "name": "mcc_count",
+            "type": "u8"
+          },
+          {
+            "name": "mccs",
+            "type": {
+              "array": [
+                "u16",
+                16
+              ]
+            }
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "recurring_allowed",
+            "type": "bool"
+          },
+          {
+            "name": "fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "frozen",
+            "type": "bool"
+          },
+          {
+            "name": "freeze_reason",
+            "type": "u8"
+          },
+          {
+            "name": "recovery_state",
+            "type": "u8"
+          },
+          {
+            "name": "statement_outstanding_cents",
+            "type": "u64"
+          },
+          {
+            "name": "exceptions_open",
+            "type": "u16"
+          },
+          {
+            "name": "member_count",
+            "type": "u8"
+          },
+          {
+            "name": "members",
+            "type": {
+              "array": [
+                "pubkey",
+                6
+              ]
+            }
+          },
+          {
+            "name": "member_flags",
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          },
+          {
+            "name": "ledger_head",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "ledger_seq",
+            "type": "u64"
+          },
+          {
+            "name": "commit_seq",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "recon_digest",
+            "docs": [
+              "Digest the owner signed in `restore`; `confirm_reconciled` must match it."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "repayment_digests",
+            "docs": [
+              "Last statement digests passed to `record_repayment` (replay guard)."
+            ],
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                },
+                8
+              ]
+            }
+          },
+          {
+            "name": "repayment_count",
+            "type": "u8"
+          },
+          {
+            "name": "event_ids",
+            "docs": [
+              "Last issuer event ids applied by reverse/refund/dispute/exception/resolve.",
+              "Guards against a retried transaction landing twice."
+            ],
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                },
+                16
+              ]
+            }
+          },
+          {
+            "name": "event_count",
+            "type": "u8"
+          },
+          {
+            "name": "ephemeral_count",
+            "docs": [
+              "Live ephemeral accounts (intents + reservations). `wipe_card` needs 0."
+            ],
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CheckoutIntent",
+      "docs": [
+        "PER-only ephemeral account, private. What the agent may buy, once."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "intent_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "merchant_id_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "mcc",
+            "type": "u16"
+          },
+          {
+            "name": "max_amount_cents",
+            "type": "u64"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "policy_version",
+            "type": "u32"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "state",
+            "type": "u8"
+          },
+          {
+            "name": "reservation",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "IntentArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "intent_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "merchant_id_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "mcc",
+            "type": "u16"
+          },
+          {
+            "name": "max_amount_cents",
+            "type": "u64"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PermissionOp",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "AddReader",
+            "fields": [
+              {
+                "name": "pubkey",
+                "type": "pubkey"
+              }
+            ]
+          },
+          {
+            "name": "RemoveReader",
+            "fields": [
+              {
+                "name": "pubkey",
+                "type": "pubkey"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "PolicyArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "budget_cents",
+            "type": "u64"
+          },
+          {
+            "name": "max_purchase_cents",
+            "type": "u64"
+          },
+          {
+            "name": "max_purchases_per_period",
+            "type": "u16"
+          },
+          {
+            "name": "period_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "merchant_id_hashes",
+            "type": {
+              "vec": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          },
+          {
+            "name": "mccs",
+            "type": {
+              "vec": "u16"
+            }
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "recurring_allowed",
+            "type": "bool"
+          },
+          {
+            "name": "fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "authorizer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Reservation",
+      "docs": [
+        "PER-only ephemeral account, private. PDA existence is the replay guard."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "auth_id_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "intent",
+            "type": "pubkey"
+          },
+          {
+            "name": "period_index",
+            "type": "u32"
+          },
+          {
+            "name": "amount_reserved_cents",
+            "docs": [
+              "Open hold still reserved against the budget."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "captured_cents",
+            "type": "u64"
+          },
+          {
+            "name": "reversed_cents",
+            "type": "u64"
+          },
+          {
+            "name": "refunded_cents",
+            "type": "u64"
+          },
+          {
+            "name": "state",
+            "type": "u8"
+          },
+          {
+            "name": "dispute_state",
+            "type": "u8"
+          },
+          {
+            "name": "flags",
+            "type": "u8"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "hold_expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "capture_count",
+            "type": "u8"
+          },
+          {
+            "name": "capture_ids",
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                },
+                8
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "RestoreArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "policy",
+            "type": {
+              "defined": {
+                "name": "PolicyArgs"
+              }
+            }
+          },
+          {
+            "name": "period_index",
+            "type": "u32"
+          },
+          {
+            "name": "captured_cents",
+            "type": "u64"
+          },
+          {
+            "name": "reserved_cents",
+            "type": "u64"
+          },
+          {
+            "name": "refunded_cents",
+            "type": "u64"
+          },
+          {
+            "name": "purchases_count",
+            "type": "u16"
+          },
+          {
+            "name": "exception_cents",
+            "type": "u64"
+          },
+          {
+            "name": "statement_outstanding_cents",
+            "type": "u64"
+          },
+          {
+            "name": "ledger_head",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "ledger_seq",
+            "type": "u64"
+          },
+          {
+            "name": "recon_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

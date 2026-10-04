@@ -1,6 +1,7 @@
 import express, { type Express, type Request, type Response } from "express";
 import type { X402PaymentReferences } from "@chainpay/sdk";
 import { paymentRequiredForConfig, type MerchantConfig } from "./config.js";
+import { mountCardShops, type CardShopDependencies } from "./card-shops.js";
 import { createDeliveryController, type DeliveryController, type DeliveryPublisher } from "./delivery.js";
 import {
   MandateRequestLookupError,
@@ -22,6 +23,8 @@ export type MerchantAppDependencies = MerchantVerificationDependencies & {
   publisher?: DeliveryPublisher;
   /** Absent in production without a seller key: the endpoint answers 503. */
   mandateRequests?: { settings: MandateRequestSettings; lookup: MandateRequestDependencies };
+  /** Sandbox card shops (workstream D). Pages always mount; checkout needs settings. */
+  cardShops?: CardShopDependencies;
 };
 
 const PAGE_CSP = [
@@ -61,6 +64,7 @@ export function createMerchantApp(
       .type("html")
       .send(PAY_WITH_CHAINPAY_HTML);
   });
+  mountCardShops(app, deps.cardShops);
   app.post("/mandate-requests", express.json({ limit: "2kb" }), async (request: Request, response: Response) => {
     response.set("Cache-Control", "no-store");
     const configured = deps.mandateRequests;

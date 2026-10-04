@@ -1,7 +1,7 @@
 /** Print only the public receipt document, never the surrounding private inbox. */
 export function printableReceipt(card: HTMLElement): HTMLElement {
   const copy = card.cloneNode(true) as HTMLElement;
-  copy.querySelectorAll(".receipt-card-actions, .receipt-share-status, .receipt-share-details-note").forEach((node) => node.remove());
+  copy.querySelectorAll(".receipt-card-actions, .receipt-share-status, .receipt-share-details-note, .cp-receipt-share-note").forEach((node) => node.remove());
   copy.querySelectorAll("details").forEach((details) => { details.open = true; });
   return copy;
 }
@@ -39,6 +39,12 @@ export function printReceipt(card: HTMLElement): void {
     .receipt-pill { display: inline-block; border: 1px solid #ccd3df; border-radius: 999px; padding: 0 8px; }
     .receipt-public-url, a { overflow-wrap: anywhere; color: inherit; }
     .receipt-summary, .receipt-card-heading, .receipt-public-url { break-inside: avoid; }
+    .cp-receipt-brand-row, .cp-receipt-row { display: flex; justify-content: space-between; gap: 12px; }
+    .cp-receipt-rows { display: block; }
+    .cp-receipt-row.is-long { display: block; }
+    .cp-receipt-leader, .cp-receipt-stamp { display: none; }
+    .cp-receipt-kind { display: inline-block; margin-top: 12px; font-weight: 600; letter-spacing: .08em; }
+    .cp-receipt-body { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #ccd3df; break-inside: avoid; }
   `;
   doc.head.appendChild(style);
   doc.body.appendChild(doc.importNode(printableReceipt(card), true));
