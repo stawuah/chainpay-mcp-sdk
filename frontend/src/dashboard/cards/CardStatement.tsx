@@ -11,6 +11,7 @@ import { statementEvidence } from "./evidence";
 import { MISMATCH_COPY, STATEMENT_STATE_LABEL, STATEMENT_STEPS } from "./lifecycle";
 import { newOperationId, type CardStatements, type CardsSource } from "./source";
 import { statementAmountDue } from "./statementMath";
+import { PrivateRepayOptIn } from "./PrivateRepayOptIn";
 import { errorText } from "./shared";
 import { formatDay, shortKey } from "./ui";
 
@@ -205,6 +206,9 @@ function statementName(statement: StatementView): string {
 
 function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, onDone }: { source: CardsSource; card: CardView; statement: StatementView; mandates: MandateOption[]; wallet: string; onClose: () => void; onDone: () => void }) {
   const target = source.repaymentTarget(statement);
+  // Two methods: the transparent execute_payment (default) and, when ChainPay offers it, MagicBlock private payments.
+  const privateActions = useMemo(() => source.privateRepay(card, statement), [source, card, statement]);
+  const [method, setMethod] = useState<"transparent" | "private">("transparent");
   const eligible = useMemo(() => mandates.filter((mandate) => mandate.status === "active" && mandate.approvedAgent === wallet && mandate.allowedMint === target.mint), [mandates, wallet, target.mint]);
   const [mandate, setMandate] = useState(eligible[0]?.address ?? "");
   const [receiptPda, setReceiptPda] = useState("");
@@ -255,6 +259,15 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
           <LayoutContent>
             <div className="cp-repay" data-testid="repayment-dialog">
               <p className="cp-sim-strip">{SIMULATED_CREDIT_LABEL}</p>
+              {privateActions && (
+                <div className="cp-repay-methods" role="radiogroup" aria-label="How to pay">
+                  <Button type="button" variant={method === "transparent" ? "primary" : "secondary"} label="From a spending permission" aria-checked={method === "transparent"} role="radio" onClick={() => setMethod("transparent")} />
+                  <Button type="button" variant={method === "private" ? "primary" : "secondary"} label="Privately with MagicBlock" aria-checked={method === "private"} role="radio" onClick={() => setMethod("private")} />
+                </div>
+              )}
+              {method === "private" && privateActions ? (
+                <PrivateRepayOptIn amountCents={total.toString()} {...privateActions} onDone={() => onDone()} onBack={() => setMethod("transparent")} />
+              ) : <>
               <div className="mandate-summary">
                 <div><span>Amount</span><strong>{formatUsdCents(total)} <small className="cp-sub">= {baseUnits.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")} USDC base units</small></strong></div>
                 <div><span>Token</span><strong>USDC on Solana Devnet</strong></div>
@@ -279,11 +292,12 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
               )}
               {target.conflict && <div className="builder-error" role="alert"><b>Can't pay here</b><span>{target.conflict}</span></div>}
               {error && <div className="builder-error" role="alert"><b>{paid ? "Not confirmed yet" : "Not paid"}</b><span>{error}</span></div>}
+              </>}
             </div>
           </LayoutContent>
         }
         footer={
-          <LayoutFooter>
+          method === "private" ? undefined : <LayoutFooter>
             <div className="cp-dialog-footer">
             <Button type="button" variant="secondary" label={busy === "check" ? "Checking…" : "Check my receipt"} isDisabled={Boolean(busy) || !receiptPda.trim() || !mandatePda.trim()} onClick={() => void check()} />
             <Button type="button" variant="primary" label={busy === "pay" ? "Waiting for wallet…" : `Pay ${formatUsdCents(total)}`} isDisabled={Boolean(busy) || Boolean(paid) || !mandate || !target.recipientTokenAccount || Boolean(target.conflict) || !statement.digest} onClick={() => void pay()} />

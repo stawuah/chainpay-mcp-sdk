@@ -167,6 +167,9 @@ export type StatementView = {
   repayment?: { receiptPda?: string; mandatePda?: string; verifiedAt?: string; mismatch?: string[] };
   partner?: { confirmedAt?: string; ref?: string };
   payWith?: StatementPayWith;
+  /** Opt-in MagicBlock Private Payments repayment (contracts §7.3). The payer is never verified. */
+  payPrivately?: { method: "magicblock_private_payments"; prepare: string; cluster: "devnet"; verification: "settlement_to_partner_only"; payerVerified: false };
+  privateRepayment?: { attempts?: { attemptId?: string; state?: string }[] } | null;
   history?: { state: string; at: string }[];
   /** Always true: the credit facility is a labelled simulation. */
   simulatedCredit: true;

@@ -1088,6 +1088,14 @@ async fn checkout_capabilities_are_scoped_single_use_and_merchant_bound() {
         "simulate/authorize went through our ASA"
     );
     assert_eq!(h.txn(&token).await["state"], "reserved");
+    // The consumed intent is closed on PER after the reply, returning its rent.
+    for _ in 0..50 {
+        if h.program_count("close_checkout_intent") > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(h.program_count("close_checkout_intent"), 1, "consumed intent closed");
     let (status, used) = h
         .call(
             "POST",

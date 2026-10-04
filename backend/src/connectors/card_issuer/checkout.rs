@@ -339,7 +339,7 @@ async fn resume(
                 )),
             }
         }
-        Some("redeemed" | "consumed") => Err(CardsError::conflict(
+        Some("redeemed" | "consumed" | "closed") => Err(CardsError::conflict(
             "capability_used",
             "This checkout was already used",
         )),

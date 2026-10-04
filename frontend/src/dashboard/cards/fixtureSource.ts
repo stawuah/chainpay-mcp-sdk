@@ -346,6 +346,7 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
       await wait(delay * 2);
       return { receiptPda: "4RcptStatementFixture11111111111111111111", mandatePda: mandateAddress, signature: "FixtureRepaymentSignature" };
     },
+    privateRepay() { return null; },
     async submitRepayment(cardId, statementId) {
       await wait(delay);
       const list = statements.get(cardId) ?? [];

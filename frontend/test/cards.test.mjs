@@ -394,3 +394,30 @@ test("running statement: the owner can close it early, and it becomes a payable 
   assert.equal(statements.open.lineCount, 0);
   await unmount();
 });
+
+test("repayment offers both methods when ChainPay does, and the private one says the payer isn't verified", async () => {
+  globalThis.CSS ??= { supports: () => false, escape: (value) => String(value) };
+  dom.window.CSS ??= globalThis.CSS;
+  const D = dom.window.HTMLDialogElement?.prototype;
+  if (D && !D.showModal) { D.showModal = function () { this.setAttribute("open", ""); }; D.show = D.showModal; D.close = function () { this.removeAttribute("open"); }; }
+  const source = m.createFixtureCardsSource({ delayMs: 0 });
+  const [card] = await source.listCards();
+  const statements = await source.statements(card.cardId);
+  statements.closed[0] = { ...statements.closed[0], payPrivately: { method: "magicblock_private_payments", prepare: "/x", cluster: "devnet", verification: "settlement_to_partner_only", payerVerified: false } };
+  let prepared = 0;
+  source.privateRepay = (_c, statement) => statement.payPrivately ? { prepare: async () => { prepared += 1; throw new Error("not in tests"); }, check: async () => ({}), pay: async () => ({ transferOutcome: "sent" }), wait: async () => ({}) } : null;
+  const { host, unmount } = await render(createElement(m.CardStatement, { source, card, statements, mandates: [], wallet: "w", onChanged() {} }));
+  await click(button(host, "Pay $188.36"));
+  await settle(10);
+  const dialog = document.querySelector('[data-testid="repayment-dialog"]');
+  assert.ok(dialog, "repayment dialog");
+  assert.ok(button(document.body, "From a spending permission"), "transparent method offered");
+  await click(button(document.body, "Privately with MagicBlock"));
+  await settle(10);
+  const text = document.querySelector('[data-testid="repayment-dialog"]').textContent;
+  assert.match(text, /can't check who paid/);
+  assert.match(text, /still public/);
+  assert.doesNotMatch(text, /untraceable|anonymous/i);
+  assert.equal(prepared, 0, "nothing is prepared before the owner opts in");
+  await unmount();
+});

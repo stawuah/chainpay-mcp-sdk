@@ -664,9 +664,49 @@ async fn persist(
     if decision.result == APPROVED && decision.state != "account_verification" {
         if let Some(intent_id) = &decision.intent_id {
             mark_intent(cards, intent_id, "consumed", Some(&request.token)).await;
+            if let Some(card_id) = updated.record["cardId"].as_str() {
+                close_intent_later(cards.clone(), card_id.to_owned(), intent_id.clone());
+            }
         }
     }
     Ok(())
+}
+
+/// A consumed intent has no further use: close it (and its permission) on
+/// PER after the reply so its rent returns to the card's prefund. Without
+/// this every checkout permanently spends prefund and a busy card stops
+/// opening intents (seen live after ~136 authorizations). Best effort: a
+/// lost close only leaves rent parked, never changes a decision.
+fn close_intent_later(cards: Arc<CardsConnector>, card_id: String, intent_id: String) {
+    tokio::spawn(async move {
+        let Some(id) = program::unhex::<16>(&intent_id) else {
+            return;
+        };
+        let Ok(Some(card)) = cards.card(&card_id).await else {
+            return;
+        };
+        let Some(policy) = card.record["policyPda"]
+            .as_str()
+            .and_then(|v| v.parse::<solana_address::Address>().ok())
+        else {
+            return;
+        };
+        let intent = program::intent_pda(&policy, &id);
+        let outcome = cards
+            .per
+            .submit(
+                vec![program::close_checkout_intent(
+                    &cards.authorizer(),
+                    &policy,
+                    &intent,
+                )],
+                Instant::now() + Duration::from_secs(8),
+            )
+            .await;
+        if matches!(outcome, TxOutcome::Confirmed { .. }) {
+            mark_intent(&cards, &intent_id, "closed", None).await;
+        }
+    });
 }
 
 pub async fn mark_intent(

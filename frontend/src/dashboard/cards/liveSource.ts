@@ -43,6 +43,7 @@ import {
 import { authorizedFetch } from "../../session";
 import { BACKEND_URL, CARD_PARTNER_TOKEN_ACCOUNT, CARD_POLICY_PROGRAM_ID, DEVNET_USDC_MINT, MCP_URL } from "../../config/public";
 import { registerMcpConnection } from "../../owner/runtime";
+import { payStatementPrivately, preparePrivateRepayment, submitPrivateRepayment, waitForPrivateRepayment, type ChainPayRoutesOptions } from "@chainpay/sdk/cards/private-repayment";
 import { chainpayClient } from "../../config/client";
 import { sha256Hex, submitSignedTransaction } from "../../owner/runtime";
 import { checkTeeAttestation } from "./teeAttestation";
@@ -389,6 +390,45 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
         throw new Error(body?.error ?? "The payment wasn't confirmed. Check Payments before trying again.");
       }
       return { receiptPda: prepared.receiptAddress, mandatePda: mandateAddress, signature: body.signature };
+    },
+
+    privateRepay(card, statement) {
+      if (!statement.payPrivately || statement.payPrivately.payerVerified !== false) return null;
+      // Owner session only, through authorizedFetch (the token never leaves session.ts).
+      const routes: ChainPayRoutesOptions = {
+        baseUrl: BACKEND_URL,
+        ownerSession: "owner-session",
+        fetch: ((input: RequestInfo | URL, init?: RequestInit) => authorizedFetch(String(input), init ?? {})) as typeof fetch,
+      };
+      const attemptOp = `card-private-repay-${statement.statementId.slice(-24).replace(/[^A-Za-z0-9_.:-]/g, "")}`;
+      return {
+        prepare: () => preparePrivateRepayment(routes, card.cardId, statement.statementId, attemptOp),
+        check: (attempt) => submitPrivateRepayment(routes, card.cardId, statement.statementId, attempt.attemptId),
+        wait: (attempt) => waitForPrivateRepayment(routes, card.cardId, statement.statementId, attempt.attemptId),
+        pay: async (attempt) => {
+          const signTransaction = deps.signTransaction;
+          const signMessage = deps.signMessage;
+          if (!signTransaction || !signMessage) throw new Error("This wallet can't sign the private payment.");
+          const result = await payStatementPrivately({
+            attempt,
+            signer: {
+              publicKey: deps.wallet,
+              signMessage,
+              async signTransaction(b64) {
+                // MagicBlock builds legacy transactions on Devnet (no lookup tables).
+                const signed = await signTransaction(Transaction.from(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
+                return btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
+              },
+            },
+            sendBase: async (signedB64, built) => {
+              const signature = await chainpayClient.connection.sendRawTransaction(Uint8Array.from(atob(signedB64), (c) => c.charCodeAt(0)));
+              await chainpayClient.connection.confirmTransaction({ signature, blockhash: built.recentBlockhash, lastValidBlockHeight: built.lastValidBlockHeight }, "confirmed");
+              return signature;
+            },
+          });
+          return { transferOutcome: result.transferOutcome };
+        },
+      };
     },
 
     submitRepayment: (cardId, statementId, input) => guard(() => api.submitRepayment(cardId, statementId, { ...input, cluster: "devnet" })),

@@ -380,3 +380,4 @@
 .cp-agent-config { margin: 0; padding: 12px; border-radius: 10px; background: #f5f7fb; border: 1px solid var(--line, #e3e8f0); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 .cp-recovery-pending { display: grid; gap: 8px; justify-items: start; margin-top: 8px; }
 .cp-agent-connect, .cp-agent-connect pre { text-align: left; }
+.cp-repay-methods { display: flex; flex-wrap: wrap; gap: 8px; }

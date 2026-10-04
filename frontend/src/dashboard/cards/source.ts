@@ -10,6 +10,7 @@ import type {
   StatementView,
   TeeRead,
 } from "@chainpay/sdk";
+import type { PrivateRepaymentAttempt, PrivateRepaymentResult } from "@chainpay/sdk/cards/private-repayment";
 
 /*
  * Everything the Cards area needs, behind one interface. The live source wraps
@@ -109,6 +110,14 @@ export const CARD_AGENT_TOOLS = ["request_card_checkout", "get_card_activity", "
 
 export type RepaymentResult = { receiptPda: string; mandatePda: string; signature?: string };
 
+/** MagicBlock Private Payments repayment (contracts §7.3). The payer is not verifiable; deposit and payout timing are public. */
+export type PrivateRepayActions = {
+  prepare: () => Promise<PrivateRepaymentAttempt>;
+  check: (attempt: PrivateRepaymentAttempt) => Promise<PrivateRepaymentResult>;
+  pay: (attempt: PrivateRepaymentAttempt) => Promise<{ transferOutcome: "sent" | "unknown" }>;
+  wait: (attempt: PrivateRepaymentAttempt) => Promise<PrivateRepaymentResult>;
+};
+
 export type ReaderMember = { pubkey: string; role: "owner" | "approver" | "reader" };
 
 export interface CardsSource {
@@ -150,6 +159,8 @@ export interface CardsSource {
   repaymentTarget(statement?: StatementView): RepaymentTarget;
   payStatement(card: CardView, statement: StatementView, mandateAddress: string): Promise<RepaymentResult>;
   submitRepayment(cardId: string, statementId: string, input: { receiptPda: string; mandatePda: string }): Promise<{ state: StatementState }>;
+  /** Opt-in private repayment for one statement; null when ChainPay doesn't offer it for this statement. */
+  privateRepay(card: CardView, statement: StatementView): PrivateRepayActions | null;
 
   restore(card: CardView, report: RecoveryReport): Promise<void>;
   confirmReconciled(card: CardView, report: RecoveryReport): Promise<void>;
