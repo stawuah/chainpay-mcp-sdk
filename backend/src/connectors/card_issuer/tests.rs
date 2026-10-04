@@ -36,6 +36,7 @@ struct Harness {
     responses: Arc<std::sync::Mutex<Vec<String>>>,
     asa_seq: std::sync::atomic::AtomicU64,
     chain: Chain,
+    txs: Txs,
     commitments: Arc<std::sync::Mutex<Vec<String>>>,
     owner_key: ed25519_dalek::SigningKey,
 }
@@ -63,20 +64,57 @@ fn config(mode: AttestationMode) -> CardsConfig {
     }
 }
 
-/// Simulated partner's token account in tests (any valid address).
-pub(super) const PARTNER_TOKEN_ACCOUNT: &str = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+/// Simulated partner's token account in tests: the Devnet partner's USDC
+/// associated token account (private repayment checks it is the ATA).
+pub(super) const PARTNER_TOKEN_ACCOUNT: &str = "3burs6CNFvrQW8US2C5W84do8J1EezWsQfsoBAvHF5q6";
 
 /// Base-layer accounts served by the test RPC: address -> (owner, data).
 pub(super) type Chain = Arc<std::sync::Mutex<HashMap<String, (String, Vec<u8>)>>>;
 
-async fn base_rpc(chain: Chain, commitments: Arc<std::sync::Mutex<Vec<String>>>) -> String {
+/// Finalized base-layer transactions served by the test RPC, oldest first:
+/// (signature, slot, jsonParsed transaction). All of them touch the
+/// simulated partner token account (private repayment settlements).
+pub(super) type Txs = Arc<std::sync::Mutex<Vec<(String, u64, Value)>>>;
+
+async fn base_rpc(
+    chain: Chain,
+    commitments: Arc<std::sync::Mutex<Vec<String>>>,
+    txs: Txs,
+) -> String {
     use axum::{Json as AxJson, Router};
     use base64::Engine;
     let app = Router::new().fallback(move |AxJson(body): AxJson<Value>| {
         let chain = chain.clone();
         let commitments = commitments.clone();
+        let txs = txs.clone();
         async move {
             match body["method"].as_str() {
+                Some("getSignaturesForAddress") => {
+                    let opts = &body["params"][1];
+                    let limit = opts["limit"].as_u64().unwrap_or(1000) as usize;
+                    let list = txs.lock().unwrap().clone();
+                    let mut out = Vec::new();
+                    let mut started = opts["before"].is_null();
+                    for (sig, slot, _) in list.iter().rev() {
+                        if opts["until"].as_str() == Some(sig.as_str()) {
+                            break;
+                        }
+                        if !started {
+                            started = opts["before"].as_str() == Some(sig.as_str());
+                            continue;
+                        }
+                        out.push(json!({"signature": sig, "slot": slot, "err": null, "blockTime": 1}));
+                        if out.len() >= limit {
+                            break;
+                        }
+                    }
+                    AxJson(json!({"jsonrpc":"2.0","id":1,"result": out}))
+                }
+                Some("getTransaction") => {
+                    let sig = body["params"][0].as_str().unwrap_or_default();
+                    let tx = txs.lock().unwrap().iter().find(|(s, _, _)| s == sig).map(|(_, _, t)| t.clone());
+                    AxJson(json!({"jsonrpc":"2.0","id":1,"result": tx}))
+                }
                 Some("getLatestBlockhash") => AxJson(json!({"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":{"blockhash":"11111111111111111111111111111111","lastValidBlockHeight":100}}})),
                 Some("getAccountInfo") => {
                     let address = body["params"][0].as_str().unwrap_or_default();
@@ -119,9 +157,10 @@ impl Harness {
             store.clone(),
         ));
         let chain: Chain = Arc::default();
+        let txs: Txs = Arc::default();
         let commitments: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
         let mut backend = BackendConfig::from_env().unwrap();
-        backend.rpc.url = base_rpc(chain.clone(), commitments.clone()).await;
+        backend.rpc.url = base_rpc(chain.clone(), commitments.clone(), txs.clone()).await;
         let mut state = BackendState::new(backend, store.clone()).unwrap();
         state.cards = Some(cards.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -169,6 +208,7 @@ impl Harness {
             responses: Arc::new(std::sync::Mutex::new(Vec::new())),
             asa_seq: std::sync::atomic::AtomicU64::new(0),
             chain,
+            txs,
             commitments,
             owner_key,
         };
@@ -1559,5 +1599,7 @@ async fn a_freeze_retried_with_the_same_operation_finishes_an_unconfirmed_freeze
     assert_eq!(h.program_count("freeze"), before);
 }
 
+#[path = "tests_private_repay.rs"]
+mod private_repay_tests;
 #[path = "tests_statements.rs"]
 mod statements_tests;

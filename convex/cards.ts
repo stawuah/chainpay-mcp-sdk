@@ -89,8 +89,31 @@ export function validateCardRecord(kind: CardKind, text: string): Record<string,
   for (const field of SENSITIVE[kind]) {
     if (record[field] !== undefined && record[field] !== null && !isEnvelope(record[field])) return fail("invalid_argument", `Card record field ${field} must be encrypted`);
   }
+  if (kind === "card_statements") privateRepaymentSealed(record);
   walk(kind, record, "record");
   return record;
+}
+
+/**
+ * Private statement repayment (contracts.md §7.3): the attempt reference,
+ * history cursor and settlement signatures link the owner to a public payout,
+ * the one link that method keeps off the chain, so they only ever arrive
+ * sealed. Plaintext copies are refused.
+ */
+function privateRepaymentSealed(record: Record<string, any>): void {
+  const plain = ["clientRefId", "partnerCursor", "settlementSignatures", "settlementSlot"];
+  const attempts = record.privateRepayment?.attempts;
+  if (attempts !== undefined && !Array.isArray(attempts)) return fail("invalid_argument", "Private repayment attempts must be a list");
+  for (const attempt of attempts ?? []) {
+    if (!attempt || typeof attempt !== "object") return fail("invalid_argument", "Private repayment attempt must be an object");
+    for (const key of plain) if (key in attempt) return fail("invalid_argument", `Private repayment field ${key} must be encrypted`);
+    if (attempt.secret !== undefined && attempt.secret !== null && !isEnvelope(attempt.secret)) return fail("invalid_argument", "Private repayment secret must be encrypted");
+  }
+  const repayment = record.repayment;
+  if (repayment && typeof repayment === "object") {
+    for (const key of plain) if (key in repayment) return fail("invalid_argument", `Private repayment field ${key} must be encrypted`);
+    if (repayment.settlement !== undefined && repayment.settlement !== null && !isEnvelope(repayment.settlement)) return fail("invalid_argument", "Private repayment settlement must be encrypted");
+  }
 }
 
 function kindOf(value: unknown): CardKind {

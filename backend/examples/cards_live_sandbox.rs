@@ -59,8 +59,11 @@ async fn main() {
         Some("teardown") => teardown().await,
         Some("statement") => statement(&args[2]).await,
         Some("repay") => repay(&args[2], &args[3], &args[4], &args[5]).await,
+        Some("private-prepare") => private_prepare(&args[2], &args[3], &args[4]).await,
+        Some("private-submit") => private_submit(&args[2], &args[3], &args[4]).await,
+        Some("private-verify") => private_verify(&args[2], &args[3], &args[4], &args[5]).await,
         _ => eprintln!(
-            "usage: setup <public url> <secrets file> | run <results.json> | teardown | statement <out.json> | repay <state.json> <receipt> <mandate> <label>"
+            "usage: setup <public url> <secrets file> | run <results.json> | teardown | statement <out.json> | repay <state.json> <receipt> <mandate> <label> | private-prepare <state.json> <attempt.json> <label> | private-submit <state.json> <attemptId> <label>"
         ),
     }
 }
@@ -920,4 +923,145 @@ async fn repay(state_path: &str, receipt: &str, mandate: &str, label: &str) {
     });
     std::fs::write(state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
     println!("{}", serde_json::to_string_pretty(&state[label]).unwrap());
+}
+
+/// Private repayment (MagicBlock Private Payments): get or create the open
+/// attempt and write it for `scripts/pay-card-statement-private.mjs`.
+async fn private_prepare(state_path: &str, attempt_path: &str, label: &str) {
+    let http = reqwest::Client::new();
+    let url = env("RELAY_URL");
+    let owner = keypair(&env("OWNER_KEYPAIR"));
+    let session = login(&http, &url, &owner).await;
+    let relay = Relay {
+        http,
+        url,
+        session,
+        agent: String::new(),
+    };
+    let mut state: Value =
+        serde_json::from_str(&std::fs::read_to_string(state_path).unwrap()).unwrap();
+    let card_id = state["card"]["cardId"].as_str().unwrap().to_owned();
+    let statement_id = state["statement"]["statementId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, before) = relay
+        .owner(
+            "GET",
+            &format!("/v1/cards/{card_id}/statements/{statement_id}"),
+            None,
+        )
+        .await;
+    let (status, attempt) = relay
+        .owner(
+            "POST",
+            &format!("/v1/cards/{card_id}/statements/{statement_id}/repayment/private"),
+            Some(json!({"clientOperationId": format!("live-private-{label}")})),
+        )
+        .await;
+    assert_eq!(status, 200, "prepare: {attempt}");
+    std::fs::write(
+        attempt_path,
+        serde_json::to_string_pretty(&attempt).unwrap(),
+    )
+    .unwrap();
+    state[format!("{label}Prepare")] =
+        json!({"payPrivately": before["payPrivately"], "attempt": attempt});
+    std::fs::write(state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+    println!("{}", serde_json::to_string_pretty(&attempt).unwrap());
+}
+
+/// Ask Axum to verify the attempt's settlement, polling past
+/// `settlement_pending` for up to 120 s, then read PER as the owner.
+async fn private_submit(state_path: &str, attempt_id: &str, label: &str) {
+    let http = reqwest::Client::new();
+    let url = env("RELAY_URL");
+    let owner = keypair(&env("OWNER_KEYPAIR"));
+    let session = login(&http, &url, &owner).await;
+    let relay = Relay {
+        http,
+        url,
+        session,
+        agent: String::new(),
+    };
+    let mut state: Value =
+        serde_json::from_str(&std::fs::read_to_string(state_path).unwrap()).unwrap();
+    let card_id = state["card"]["cardId"].as_str().unwrap().to_owned();
+    let statement_id = state["statement"]["statementId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let started = Instant::now();
+    let mut polls = 0;
+    let (status, body) = loop {
+        polls += 1;
+        let (status, body) = relay
+            .owner(
+                "POST",
+                &format!("/v1/cards/{card_id}/statements/{statement_id}/repayment"),
+                Some(json!({"method": "magicblock_private_payments", "attemptId": attempt_id, "cluster": "devnet"})),
+            )
+            .await;
+        if status == 409
+            && body["code"] == "settlement_pending"
+            && started.elapsed() < Duration::from_secs(120)
+        {
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            continue;
+        }
+        break (status, body);
+    };
+    let policy: Address = state["card"]["accounts"]["policy"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let owner_tee = TeeClient::new(DEVNET_TEE_URL, owner.clone()).unwrap();
+    let digest: [u8; 32] = program::unhex(state["statement"]["digest"].as_str().unwrap()).unwrap();
+    let per = match owner_tee
+        .read_account(&policy, Duration::from_secs(10))
+        .await
+    {
+        TeeRead::Visible { data, .. } => {
+            let p = program::decode_policy(&data).unwrap();
+            json!({"statementOutstandingCents": p.statement_outstanding_cents.to_string(), "repaymentRecorded": p.repayment_recorded(&digest)})
+        }
+        _ => json!("not_visible"),
+    };
+    let s = &body["statement"];
+    state[label] = json!({
+        "attemptId": attempt_id, "status": status, "polls": polls, "ms": started.elapsed().as_millis(),
+        "state": body["state"], "mismatch": body["mismatch"], "code": body["code"],
+        "statementState": s["state"], "repayment": s["repayment"], "privateRepayment": s["privateRepayment"],
+        "partner": s["partner"], "discharge": s["discharge"], "history": s["history"],
+        "amountDueCents": s["amountDueCents"], "per": per,
+    });
+    std::fs::write(state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+    println!("{}", serde_json::to_string_pretty(&state[label]).unwrap());
+}
+
+/// Read-only: run Axum's settlement scan + match (the exact code the route
+/// uses) against live Devnet for a reference, without the relay or Lithic.
+/// `cursor` = a partner signature older than the payout ("-" for none).
+async fn private_verify(partner: &str, cursor: &str, reference: &str, base_units: &str) {
+    use chainpay_backend::connectors::card_issuer::private_repay;
+    let rpc =
+        chainpay_backend::rpc::RpcClient::new(chainpay_backend::rpc::RpcConfig::default()).unwrap();
+    let base = chainpay_backend::connectors::card_issuer::statements::BaseChain {
+        rpc,
+        chainpay_program: "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4".into(),
+        cluster: "devnet",
+    };
+    let cursor = (cursor != "-").then_some(cursor);
+    let want: u64 = base_units.parse().unwrap();
+    let mint = chainpay_backend::connectors::card_issuer::statements::DEVNET_USDC_MINT;
+    let out = match private_repay::scan(&base, partner, cursor, reference).await {
+        private_repay::Scan::Found(found, slot) => {
+            let verdict = private_repay::check(&found, want, mint, partner);
+            json!({"found": found.iter().map(|(sig, s)| json!({"signature": sig, "amount": s.amount.to_string(), "mint": s.mint, "destination": s.destination, "clientRefId": s.client_ref_id})).collect::<Vec<_>>(), "slot": slot, "verdict": match verdict { Ok((sig, amount)) => json!({"verified": sig, "amountBaseUnits": amount.to_string()}), Err(m) => json!({"mismatch": m}) }})
+        }
+        private_repay::Scan::Pending { advance } => json!({"pending": true, "advance": advance}),
+        private_repay::Scan::Unavailable => json!({"unavailable": true}),
+    };
+    println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }

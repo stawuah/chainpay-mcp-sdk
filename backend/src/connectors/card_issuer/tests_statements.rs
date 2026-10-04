@@ -18,7 +18,12 @@ fn addr(bytes: [u8; 32]) -> solana_address::Address {
 
 impl Harness {
     /// Approve an authorization for `amount` and deliver its issuer events.
-    async fn purchase(&self, txn: &str, amount: u64, events: &[(&str, &str, u64, &str)]) {
+    pub(super) async fn purchase(
+        &self,
+        txn: &str,
+        amount: u64,
+        events: &[(&str, &str, u64, &str)],
+    ) {
         let (status, body) = self.intent("demo-approved", &amount.to_string()).await;
         assert_eq!(status, 200, "{body}");
         let (_, result) = self
@@ -74,7 +79,7 @@ impl Harness {
         body
     }
 
-    fn outstanding(&self) -> u64 {
+    pub(super) fn outstanding(&self) -> u64 {
         self.per.with_card(&self.policy, |c| c.policy.outstanding)
     }
 
@@ -84,7 +89,7 @@ impl Harness {
 
     /// Put a ChainPay receipt (and its mandate and the mint) on the fake base
     /// layer, exactly as `execute_payment` would leave them.
-    fn pay(&self, statement: &Value, p: Payment) -> (String, String) {
+    pub(super) fn pay(&self, statement: &Value, p: Payment) -> (String, String) {
         let digest: [u8; 32] = program::unhex(statement["digest"].as_str().unwrap()).unwrap();
         let invoice = p.invoice.unwrap_or(digest);
         let mandate = addr(p.mandate_seed);
@@ -134,7 +139,7 @@ impl Harness {
         (receipt.to_string(), mandate.to_string())
     }
 
-    async fn repay(
+    pub(super) async fn repay(
         &self,
         statement: &Value,
         receipt: &str,
@@ -155,17 +160,17 @@ impl Harness {
 }
 
 #[derive(Default)]
-struct Payment {
-    mandate_seed: [u8; 32],
-    invoice: Option<[u8; 32]>,
-    mint: Option<&'static str>,
-    recipient: Option<&'static str>,
-    base_units: Option<u64>,
-    payer: Option<solana_address::Address>,
-    skip_receipt: bool,
+pub(super) struct Payment {
+    pub(super) mandate_seed: [u8; 32],
+    pub(super) invoice: Option<[u8; 32]>,
+    pub(super) mint: Option<&'static str>,
+    pub(super) recipient: Option<&'static str>,
+    pub(super) base_units: Option<u64>,
+    pub(super) payer: Option<solana_address::Address>,
+    pub(super) skip_receipt: bool,
 }
 
-fn seed(n: u8) -> [u8; 32] {
+pub(super) fn seed(n: u8) -> [u8; 32] {
     let mut s = [n; 32];
     s[0] = 200;
     s
@@ -1117,6 +1122,7 @@ fn repository_fixtures_hold_no_card_numbers() {
         "scripts/card-sim",
         "scripts/card-sim/scenarios",
         "backend/examples",
+        "backend/src/connectors/card_issuer/testdata",
     ] {
         if let Ok(entries) = std::fs::read_dir(root.join(dir)) {
             files.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_file()));

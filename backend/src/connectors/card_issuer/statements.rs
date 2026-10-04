@@ -1088,7 +1088,8 @@ pub fn statement_view(cards: &CardsConnector, row: &StoredCardRecord) -> Value {
         "creditForwardCents": r["creditForwardCents"],
         "digest": r["digest"],
         "lines": lines,
-        "repayment": r["repayment"],
+        "repayment": super::private_repay::owner_repayment(cards, row),
+        "privateRepayment": super::private_repay::owner_attempts(cards, row),
         "partner": r["partner"],
         "discharge": r["discharge"],
         "history": r["history"],
@@ -1105,6 +1106,15 @@ pub fn statement_view(cards: &CardsConnector, row: &StoredCardRecord) -> Value {
             "invoiceHash": r["digest"],
             "amountCents": cents(amount_due),
             "note": "Pay from your own spending permission; ChainPay never pays a statement by itself.",
+        });
+        // Opt-in alternative (contracts.md §7.3): the owner's client must show
+        // the vault model before preparing an attempt.
+        view["payPrivately"] = json!({
+            "method": super::private_repay::METHOD,
+            "prepare": format!("/v1/cards/{}/statements/{}/repayment/private", r["cardId"].as_str().unwrap_or(""), statement_id_of(row)),
+            "cluster": "devnet",
+            "verification": "settlement_to_partner_only",
+            "payerVerified": false,
         });
     }
     view
@@ -1134,8 +1144,16 @@ pub async fn list(
         .collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.record["statementSeq"].as_u64().unwrap_or(0)));
     let open = open_view(cards, &card).await?;
+    let agent_view = !caller.is_owner_session();
+    let view = |row: &StoredCardRecord| {
+        let mut v = statement_view(cards, row);
+        if agent_view {
+            super::private_repay::redact_for_agent(&mut v);
+        }
+        v
+    };
     Ok(json!({
-        "statements": rows.iter().map(|row| statement_view(cards, row)).collect::<Vec<_>>(),
+        "statements": rows.iter().map(|row| view(row)).collect::<Vec<_>>(),
         "open": open,
         "label": SIMULATED_LABEL,
         "simulatedCredit": true,
@@ -1178,10 +1196,14 @@ pub async fn get(
 ) -> Result<Value, CardsError> {
     readable_card(cards, caller, card_id, "get_statement").await?;
     let row = statement_row(cards, card_id, statement_id).await?;
-    Ok(statement_view(cards, &row))
+    let mut view = statement_view(cards, &row);
+    if !caller.is_owner_session() {
+        super::private_repay::redact_for_agent(&mut view);
+    }
+    Ok(view)
 }
 
-async fn statement_row(
+pub(super) async fn statement_row(
     cards: &CardsConnector,
     card_id: &str,
     statement_id: &str,
@@ -1297,6 +1319,10 @@ pub async fn close_now(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RepaymentRequest {
+    /// Optional echo of `payWith.method`; only the transparent label is
+    /// accepted here (the private method has its own body).
+    #[serde(default)]
+    pub method: Option<String>,
     pub receipt_pda: String,
     pub mandate_pda: String,
     pub cluster: String,
@@ -1501,7 +1527,7 @@ fn push_history(record: &mut Value, state: &str, extra: Value) {
 }
 
 /// Compare-and-swap a statement through one state-machine event.
-async fn apply_event(
+pub(super) async fn apply_event(
     cards: &CardsConnector,
     key: &str,
     event: StatementEvent,
@@ -1586,6 +1612,16 @@ pub async fn submit_repayment(
     body: RepaymentRequest,
 ) -> Result<Value, CardsError> {
     let card = owned_card(cards, caller, card_id).await?;
+    if body
+        .method
+        .as_deref()
+        .is_some_and(|m| m != "chainpay_execute_payment")
+    {
+        return Err(CardsError::bad(
+            "invalid_body",
+            "Request body does not match the contract schema",
+        ));
+    }
     if !is_address(&body.receipt_pda) || !is_address(&body.mandate_pda) {
         return Err(CardsError::bad(
             "invalid_body",
@@ -1731,19 +1767,31 @@ pub async fn partner_confirm(
     let Some(base) = cards.base() else {
         return Ok(None);
     };
-    let receipt = row.record["repayment"]["receiptPda"]
-        .as_str()
-        .unwrap_or("")
-        .to_owned();
-    let mandate = row.record["repayment"]["mandatePda"]
-        .as_str()
-        .unwrap_or("")
-        .to_owned();
-    let expected = expected_for(cards, &base, card, row, &receipt, &mandate, "devnet")?;
-    let Verification::Verified { .. } = verify_receipt(&base, &expected).await else {
-        cards.metrics.count("repayment_discrepancies");
-        return Ok(None);
+    let private = row.record["repayment"]["method"] == super::private_repay::METHOD;
+    // Evidence the partner books against: the receipt PDA (transparent) or
+    // the settlement signatures it re-read itself (private).
+    let evidence = if private {
+        let Some(signatures) = super::private_repay::partner_reverify(cards, row).await? else {
+            return Ok(None);
+        };
+        super::private_repay::ledger_evidence(cards, &signatures)
+    } else {
+        let receipt = row.record["repayment"]["receiptPda"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
+        let mandate = row.record["repayment"]["mandatePda"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
+        let expected = expected_for(cards, &base, card, row, &receipt, &mandate, "devnet")?;
+        let Verification::Verified { .. } = verify_receipt(&base, &expected).await else {
+            cards.metrics.count("repayment_discrepancies");
+            return Ok(None);
+        };
+        receipt
     };
+    let receipt = evidence;
     let digest = row.record["digest"].as_str().unwrap_or("").to_owned();
     let key = format!("partner:{digest}");
     let at = rfc3339(now_ms());
@@ -1757,7 +1805,9 @@ pub async fn partner_confirm(
         "statementKey": row.key,
         "digest": digest,
         "amountCents": row.record["amountDueCents"],
-        "receiptPda": receipt,
+        "receiptPda": if private { Value::Null } else { json!(receipt) },
+        "evidence": receipt,
+        "method": if private { super::private_repay::METHOD } else { "chainpay_execute_payment" },
         "confirmedAt": at,
         "ref": partner_ref,
     });
@@ -1788,7 +1838,10 @@ pub async fn partner_confirm(
     };
     if booked.record["statementKey"] != row.key.as_str()
         || booked.record["amountCents"] != row.record["amountDueCents"]
-        || booked.record["receiptPda"] != receipt.as_str()
+        || booked.record["evidence"]
+            .as_str()
+            .or(booked.record["receiptPda"].as_str())
+            != Some(receipt.as_str())
     {
         cards.metrics.count("repayment_discrepancies");
         return Ok(None);
@@ -2035,6 +2088,7 @@ async fn advance_pending(
     }) {
         let _ = advance(cards, card, row).await;
     }
+    super::private_repay::advance_open_attempts(cards, card, &rows).await;
     Ok(())
 }
 

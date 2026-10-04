@@ -34,6 +34,7 @@ pub(crate) mod fake_per;
 pub mod lithic;
 pub mod metrics;
 pub mod per;
+pub mod private_repay;
 pub mod program;
 pub mod reconcile;
 pub mod recovery;
