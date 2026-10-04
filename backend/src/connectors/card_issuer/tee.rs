@@ -541,7 +541,7 @@ impl AttestationStatus {
     }
 }
 
-fn mode_name(mode: AttestationMode) -> &'static str {
+pub fn mode_name(mode: AttestationMode) -> &'static str {
     match mode {
         AttestationMode::Report => "report",
         AttestationMode::Enforce => "enforce",

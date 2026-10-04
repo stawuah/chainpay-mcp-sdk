@@ -41,7 +41,7 @@ import {
   type TeeSession,
 } from "@chainpay/sdk";
 import { authorizedFetch } from "../../session";
-import { BACKEND_URL, CARD_PARTNER_TOKEN_ACCOUNT, CARD_POLICY_PROGRAM_ID, DEVNET_USDC_MINT, MCP_URL } from "../../config/public";
+import { BACKEND_URL, CARD_PARTNER_TOKEN_ACCOUNT, CARD_POLICY_PROGRAM_ID, DEVNET_SEND_RPC_URL, DEVNET_USDC_MINT, MCP_URL } from "../../config/public";
 import { registerMcpConnection } from "../../owner/runtime";
 import { payStatementPrivately, preparePrivateRepayment, submitPrivateRepayment, waitForPrivateRepayment, type ChainPayRoutesOptions } from "@chainpay/sdk/cards/private-repayment";
 import { chainpayClient } from "../../config/client";
@@ -437,9 +437,13 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
                 return btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
               },
             },
+            // The relay's RPC proxy never forwards sendTransaction, and MagicBlock's send endpoint
+            // refused base-layer deposits live, so base sends go straight to a Devnet RPC.
             sendBase: async (signedB64, built) => {
-              const signature = await chainpayClient.connection.sendRawTransaction(Uint8Array.from(atob(signedB64), (c) => c.charCodeAt(0)));
-              await chainpayClient.connection.confirmTransaction({ signature, blockhash: built.recentBlockhash, lastValidBlockHeight: built.lastValidBlockHeight }, "confirmed");
+              const connection = new Connection(DEVNET_SEND_RPC_URL, "confirmed");
+              const signature = await connection.sendRawTransaction(Uint8Array.from(atob(signedB64), (c) => c.charCodeAt(0)));
+              const result = await connection.confirmTransaction({ signature, blockhash: built.recentBlockhash, lastValidBlockHeight: built.lastValidBlockHeight }, "confirmed");
+              if (result.value.err) throw new Error("The deposit was rejected on Solana. Nothing was paid.");
               return signature;
             },
           });

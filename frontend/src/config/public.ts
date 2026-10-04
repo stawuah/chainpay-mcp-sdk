@@ -23,3 +23,10 @@ export type CardIssuerEnvironment = "sandbox" | "production";
 export const CARD_ISSUER_ENV: CardIssuerEnvironment = import.meta.env.VITE_CHAINPAY_CARD_ISSUER_ENV === "production" ? "production" : "sandbox";
 /** Simulated credit partner's Devnet USDC token account. Statement repayment is unavailable until it is set. */
 export const CARD_PARTNER_TOKEN_ACCOUNT: string | null = import.meta.env.VITE_CHAINPAY_CARD_PARTNER_TOKEN_ACCOUNT || null;
+
+/**
+ * Devnet RPC the browser sends MagicBlock private-repayment deposits through. The relay's RPC
+ * proxy never forwards sendTransaction, and MagicBlock's own send endpoint refused base-layer
+ * deposits in the live run. Devnet only: private repayment is a Devnet sandbox feature.
+ */
+export const DEVNET_SEND_RPC_URL = import.meta.env.VITE_CHAINPAY_DEVNET_SEND_RPC_URL || "https://api.devnet.solana.com";

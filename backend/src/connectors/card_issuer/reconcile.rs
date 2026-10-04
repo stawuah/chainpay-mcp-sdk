@@ -299,6 +299,7 @@ pub async fn run(cards: &Arc<CardsConnector>, budget: Duration) -> ReconcileRepo
 /// Durable gauges for the ops route, recomputed from storage (bounded: the
 /// first 50 cards). Counts only; never ids, amounts or merchants.
 pub async fn ops_metrics(cards: &Arc<CardsConnector>) -> Value {
+    let attestation = cards.attestation().await;
     let mut unresolved = 0u64;
     let mut unpaired = 0u64;
     let mut mismatches = 0u64;
@@ -370,7 +371,11 @@ pub async fn ops_metrics(cards: &Arc<CardsConnector>) -> Value {
             "freezesAwaitingIssuerAck": awaiting_freeze_ack,
             "cardsInRecovery": in_recovery,
         },
-        "attestation": {"mode": cards.config.attestation_mode == super::tee::AttestationMode::Enforce},
+        "attestation": {
+            "mode": super::tee::mode_name(cards.config.attestation_mode),
+            "hardware": attestation.hardware,
+            "measurements": attestation.measurements,
+        },
     })
 }
 
