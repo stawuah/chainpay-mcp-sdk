@@ -185,20 +185,23 @@ try {
 
   // Rent case the LiteSVM suite can't cover: A rotates to an empty wallet and
   // is owed less than rent-exempt minimum. Only A's payout may fail.
-  const empty = Keypair.generate().publicKey;
+  // The new wallet co-signs the rotation; it holds no SOL, so A pays the fee.
+  const emptyKey = Keypair.generate();
+  const empty = emptyKey.publicKey;
   await send(
     [
       new TransactionInstruction({
         programId: accounts.programId,
         keys: [
           { pubkey: A.publicKey, isSigner: true, isWritable: false },
+          { pubkey: empty, isSigner: true, isWritable: false },
           { pubkey: accounts.vault, isSigner: false, isWritable: true },
           { pubkey: accounts.vaultUsdc, isSigner: false, isWritable: false },
         ],
         data: Buffer.concat([disc("rotate_recipient"), Buffer.from([0]), empty.toBuffer()]),
       }),
     ],
-    [A],
+    [A, emptyKey],
   );
   await send(support.contributionInstructions({ donor: donor.publicKey, asset: "SOL", amount: 1_000n, note: "", hideAddress: false, accounts }), [donor]);
   await assert.rejects(
