@@ -9,6 +9,21 @@ pub const CARD_COMMITMENT_SEED: &[u8] = b"card_commit";
 /// Per-card replay guard for closed reservations (ephemeral, PER only).
 pub const AUTH_GUARD_SEED: &[u8] = b"auth_guard";
 
+/// Base-layer, lamport-only, system-owned PDA `[REPAY_AGENT_SEED, binding]`.
+/// It is the `approved_agent` of the owner's ChainPay repayment mandate and
+/// signs `execute_payment` only inside `repay_statement`.
+pub const REPAY_AGENT_SEED: &[u8] = b"repay_agent";
+/// ChainPay receipt PDA seeds: `[b"receipt", mandate, invoice_hash]`.
+pub const CHAINPAY_RECEIPT_SEED: &[u8] = b"receipt";
+/// `8 + PaymentReceipt::LEN` in programs/chainpay/src/state.rs (v2 receipt).
+pub const CHAINPAY_RECEIPT_SPACE: usize = 8 + 32 * 8 + 8 * 2 + 2 + 1 + 8 * 7 + 32;
+/// `RECEIPT_STATUS_SETTLED` in the chainpay program.
+pub const CHAINPAY_RECEIPT_SETTLED: u8 = 1;
+/// Domains for the receipt's `payment_id` / `signature_reference`, derived from
+/// the card and the statement digest so a retry produces the same receipt.
+pub const REPAY_PAYMENT_ID_DOMAIN: &[u8] = b"chainpay-card-repay-id:v1\n";
+pub const REPAY_SIGNATURE_REF_DOMAIN: &[u8] = b"chainpay-card-repay-ref:v1\n";
+
 /// Delegation-program escrow index used for the checkpoint Magic Action.
 pub const ACTION_ESCROW_INDEX: u8 = 255;
 
@@ -110,6 +125,12 @@ pub const EV_RESOLVE_EXCEPTION: u8 = 16;
 pub const EV_CONFIRM_RECONCILED: u8 = 17;
 /// Appended in final fixes: a terminal reservation was closed (rent returned).
 pub const EV_CLOSE_RESERVATION: u8 = 18;
+
+// `EV_REPAYMENT.state_after`: how the repayment was proven.
+/// A ChainPay `execute_payment` receipt made by this card's repay agent.
+pub const REPAYMENT_CHAINPAY_RECEIPT: u8 = 1;
+/// MagicBlock private payment, attested by the authorizer (no on-chain receipt).
+pub const REPAYMENT_PRIVATE_ATTESTED: u8 = 2;
 
 // Dispute states (Reservation.dispute_state).
 pub const DISPUTE_OPEN: u8 = 1;

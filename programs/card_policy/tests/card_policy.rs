@@ -7,7 +7,14 @@
 //! policy logic, account checks and state transitions are the deployed ones.
 //! Privacy itself is proven live on Devnet (scripts/per-integration.ts).
 //!
-//! Build first: `cargo build-sbf --features litesvm-mock --sbf-out-dir target/mock`
+//! Repayment tests also load the real ChainPay program (the CPI target of
+//! `repay_statement`), and the owner-permission test loads MagicBlock's
+//! permission program as deployed on Devnet.
+//!
+//! Build first (`make card-policy-test` does all three):
+//!   cargo build-sbf --features litesvm-mock --sbf-out-dir target/mock
+//!   cargo build-sbf --manifest-path ../chainpay/Cargo.toml --sbf-out-dir target/chainpay
+//!   solana program dump -u devnet ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1 target/permission/permission.so
 
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::{AccountDeserialize, InstructionData, ToAccountMetas};
@@ -19,7 +26,7 @@ use card_policy::state::{
     reservation_state as rs, AuthGuard, CardBinding, CardCommitment, CardPeriod, CardPolicy,
     CheckoutIntent, Reservation,
 };
-use card_policy::{accounts, instruction};
+use card_policy::{accounts, chainpay, instruction};
 use ephemeral_rollups_sdk::access_control::structs::PERMISSION_SEED;
 use ephemeral_rollups_sdk::consts::{EPHEMERAL_VAULT_ID, MAGIC_CONTEXT_ID, PERMISSION_PROGRAM_ID};
 use litesvm::LiteSVM;
@@ -90,6 +97,10 @@ fn err_code(name: &str) -> u32 {
         "RefundExceedsCapture",
         "CaptureLimit",
         "BudgetBelowCommitted",
+        "InvalidRepaymentReceipt",
+        "RepaymentRecipientMismatch",
+        "RepaymentExceedsReceipt",
+        "InvalidRepaymentMandate",
     ];
     6000 + NAMES.iter().position(|n| *n == name).expect("known error") as u32
 }
@@ -116,6 +127,21 @@ struct Card {
     period: Pubkey,
     commitment: Pubkey,
     logs: Vec<String>,
+    chainpay: Option<Repay>,
+}
+
+/// ChainPay accounts for repayment tests: a 6-decimal USD stablecoin, the
+/// owner's funded source account, the partner's token account, and a mandate
+/// whose approved agent is this card's repay agent PDA.
+struct Repay {
+    mint: Pubkey,
+    source: Pubkey,
+    partner: Pubkey,
+    stranger_account: Pubkey,
+    config: Pubkey,
+    asset: Pubkey,
+    mandate: Pubkey,
+    nonce_seq: u8,
 }
 
 fn pda(seeds: &[&[u8]]) -> Pubkey {
@@ -136,6 +162,8 @@ impl Card {
         let so = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/mock/card_policy.so");
         svm.add_program_from_file(card_policy::ID, &so)
             .expect("build the mock binary first: cargo build-sbf --features litesvm-mock --sbf-out-dir target/mock");
+        svm.add_program_from_file(chainpay::ID, chainpay_so())
+            .expect("build ChainPay first: cargo build-sbf --manifest-path ../chainpay/Cargo.toml --sbf-out-dir target/chainpay");
         let owner = Keypair::new();
         let authorizer = Keypair::new();
         let stranger = Keypair::new();
@@ -154,6 +182,7 @@ impl Card {
             authorizer,
             stranger,
             logs: vec![],
+            chainpay: None,
         };
         card.set_clock(NOW);
         let ix = card.ix(
@@ -1306,31 +1335,22 @@ fn repayment_reduces_exposure_once_per_statement() {
     let mut card = Card::ready();
     card.buy(1, 1, 2_000).unwrap();
     card.capture(1, 2_000, 1).unwrap();
-    let repay = |card: &mut Card, digest: u64, amount: u64| {
-        let ix = card.ix(
-            card.freeze_accounts("authorizer"),
-            instruction::RecordRepayment {
-                statement_digest: hash("stmt", digest),
-                amount_cents: amount,
-            },
-        );
-        card.send_as(ix, "authorizer")
-    };
+    card.repay_statement(1, cents_to_units(2_010)).unwrap();
     assert_eq!(
-        repay(&mut card, 1, 2_011),
-        Err(err_code("RepaymentExceedsOutstanding"))
+        card.record_repayment("authorizer", 1, 2_011),
+        Err(err_code("RepaymentExceedsReceipt"))
     );
-    repay(&mut card, 1, 2_010).unwrap();
+    card.record_repayment("authorizer", 1, 2_010).unwrap();
     assert_eq!(card.policy().statement_outstanding_cents, 0);
-    assert_eq!(repay(&mut card, 1, 1), Err(err_code("DuplicateRepayment")));
-    let ix = card.ix(
-        card.freeze_accounts("owner"),
-        instruction::RecordRepayment {
-            statement_digest: hash("stmt", 2),
-            amount_cents: 1,
-        },
+    assert_eq!(
+        card.record_repayment("authorizer", 1, 1),
+        Err(err_code("DuplicateRepayment"))
     );
-    assert_eq!(card.send_as(ix, "owner"), Err(err_code("Unauthorized")));
+    card.repay_statement(2, cents_to_units(1)).unwrap();
+    assert_eq!(
+        card.record_repayment("owner", 2, 1),
+        Err(err_code("Unauthorized"))
+    );
 }
 
 // ===================================================== recovery (matrix)
@@ -1521,14 +1541,8 @@ fn wipe_requires_frozen_no_holds_no_debt_then_close() {
         card.send_as(ix, "owner"),
         Err(err_code("OutstandingBalance"))
     );
-    let ix = card.ix(
-        card.freeze_accounts("authorizer"),
-        instruction::RecordRepayment {
-            statement_digest: hash("stmt", 1),
-            amount_cents: 1_005,
-        },
-    );
-    card.send_as(ix, "authorizer").unwrap();
+    card.repay_statement(1, cents_to_units(1_005)).unwrap();
+    card.record_repayment("authorizer", 1, 1_005).unwrap();
 
     let close_ix = |card: &Card| {
         card.ix(
@@ -2080,14 +2094,8 @@ fn late_capture_after_close_counts_without_review_and_needs_no_reservation() {
 // ======================================================= review fixes (2026-10-04)
 
 fn repay_as(card: &mut Card, who: &str, digest: u64, amount: u64) -> Result<(), u32> {
-    let ix = card.ix(
-        card.freeze_accounts(who),
-        instruction::RecordRepayment {
-            statement_digest: hash("stmt", digest),
-            amount_cents: amount,
-        },
-    );
-    card.send_as(ix, who)
+    card.repay_statement(digest, cents_to_units(amount))?;
+    card.record_repayment(who, digest, amount)
 }
 
 /// Review F1 / X4: the owner alone can't install a second wallet as authorizer
@@ -2271,4 +2279,737 @@ fn debits_without_a_hold_never_push_billed_spend_past_the_budget() {
     assert_eq!(card.capture(1, 6_000, 1), Err(err_code("BudgetExceeded")));
     card.capture(1, 5_000, 1).unwrap(); // 2000 over the hold, still in budget
     assert!(card.policy().statement_outstanding_cents <= max_owed);
+}
+
+// ============================================ repayment through ChainPay (CPI)
+
+const DECIMALS: u8 = 6;
+const SPL_TOKEN: Pubkey = anchor_lang::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const MINT_SPACE: u64 = 82;
+const TOKEN_ACCOUNT_SPACE: u64 = 165;
+/// 1,000 USDC in the owner's source account.
+const SOURCE_BALANCE: u64 = 1_000_000_000;
+
+fn cents_to_units(cents: u64) -> u64 {
+    cents * 10u64.pow(DECIMALS as u32 - 2)
+}
+
+fn chainpay_so() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/chainpay/chainpay.so")
+}
+
+fn chainpay_ix<A: ToAccountMetas, D: InstructionData>(accounts: A, data: D) -> Instruction {
+    Instruction {
+        program_id: chainpay::ID,
+        accounts: accounts.to_account_metas(None),
+        data: data.data(),
+    }
+}
+
+fn system_create(
+    from: &Pubkey,
+    to: &Pubkey,
+    lamports: u64,
+    space: u64,
+    owner: &Pubkey,
+) -> Instruction {
+    let mut data = 0u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&lamports.to_le_bytes());
+    data.extend_from_slice(&space.to_le_bytes());
+    data.extend_from_slice(owner.as_ref());
+    Instruction {
+        program_id: SYSTEM,
+        accounts: vec![AccountMeta::new(*from, true), AccountMeta::new(*to, true)],
+        data,
+    }
+}
+
+fn token_ix(accounts: Vec<AccountMeta>, data: Vec<u8>) -> Instruction {
+    Instruction {
+        program_id: SPL_TOKEN,
+        accounts,
+        data,
+    }
+}
+
+fn mandate_nonce(seq: u8) -> Pubkey {
+    let mut bytes = [0u8; 32];
+    bytes[..8].copy_from_slice(b"CPNONCE!");
+    bytes[8] = seq;
+    Pubkey::new_from_array(bytes)
+}
+
+fn token_amount(card: &Card, account: &Pubkey) -> u64 {
+    let data = card.svm.get_account(account).unwrap().data;
+    u64::from_le_bytes(data[64..72].try_into().unwrap())
+}
+
+impl Card {
+    fn repay_agent(&self) -> Pubkey {
+        card_policy::instructions::repay_agent_address(&self.binding).0
+    }
+
+    /// Creates a funded token account owned by `owner` for the test mint.
+    fn token_account(&mut self, owner: &Pubkey) -> Pubkey {
+        let account = Keypair::new();
+        let mint = self.chainpay.as_ref().unwrap().mint;
+        let rent = self
+            .svm
+            .minimum_balance_for_rent_exemption(TOKEN_ACCOUNT_SPACE as usize);
+        let mut init = vec![18u8];
+        init.extend_from_slice(owner.as_ref());
+        let payer = self.owner.insecure_clone();
+        self.send_signed(
+            vec![
+                system_create(
+                    &payer.pubkey(),
+                    &account.pubkey(),
+                    rent,
+                    TOKEN_ACCOUNT_SPACE,
+                    &SPL_TOKEN,
+                ),
+                token_ix(
+                    vec![
+                        AccountMeta::new(account.pubkey(), false),
+                        AccountMeta::new_readonly(mint, false),
+                    ],
+                    init,
+                ),
+            ],
+            &[&payer, &account],
+        )
+        .expect("token account");
+        account.pubkey()
+    }
+
+    /// ChainPay config, a registered 6-decimal mint, the owner's funded source
+    /// account, the partner's account and the repayment mandate.
+    fn with_chainpay(&mut self) -> &Repay {
+        if self.chainpay.is_some() {
+            return self.chainpay.as_ref().unwrap();
+        }
+        let admin = Keypair::new();
+        self.svm.airdrop(&admin.pubkey(), 10_000_000_000).unwrap();
+        let mint = Keypair::new();
+        let rent = self
+            .svm
+            .minimum_balance_for_rent_exemption(MINT_SPACE as usize);
+        let mut init_mint = vec![20u8, DECIMALS];
+        init_mint.extend_from_slice(admin.pubkey().as_ref());
+        init_mint.push(0);
+        self.send_signed(
+            vec![
+                system_create(
+                    &admin.pubkey(),
+                    &mint.pubkey(),
+                    rent,
+                    MINT_SPACE,
+                    &SPL_TOKEN,
+                ),
+                token_ix(vec![AccountMeta::new(mint.pubkey(), false)], init_mint),
+            ],
+            &[&admin, &mint],
+        )
+        .expect("mint");
+        let config = Pubkey::find_program_address(&[b"config"], &chainpay::ID).0;
+        let asset =
+            Pubkey::find_program_address(&[b"asset", mint.pubkey().as_ref()], &chainpay::ID).0;
+        self.chainpay = Some(Repay {
+            mint: mint.pubkey(),
+            source: Pubkey::default(),
+            partner: Pubkey::default(),
+            stranger_account: Pubkey::default(),
+            config,
+            asset,
+            mandate: Pubkey::default(),
+            nonce_seq: 0,
+        });
+        let owner = self.owner.pubkey();
+        let source = self.token_account(&owner);
+        let partner = self.token_account(&Pubkey::new_unique());
+        let stranger = self.stranger.pubkey();
+        let stranger_account = self.token_account(&stranger);
+        let mut mint_to = vec![7u8];
+        mint_to.extend_from_slice(&SOURCE_BALANCE.to_le_bytes());
+        self.send_signed(
+            vec![
+                chainpay_ix(
+                    chainpay::client::accounts::InitializeConfig {
+                        config,
+                        authority: admin.pubkey(),
+                        system_program: SYSTEM,
+                    },
+                    chainpay::client::args::InitializeConfig {
+                        supported_mints: [mint.pubkey(), Pubkey::default(), Pubkey::default()],
+                    },
+                ),
+                chainpay_ix(
+                    chainpay::client::accounts::RegisterAsset {
+                        config,
+                        asset,
+                        authority: admin.pubkey(),
+                        mint_account: mint.pubkey(),
+                        token_program: SPL_TOKEN,
+                        system_program: SYSTEM,
+                    },
+                    chainpay::client::args::RegisterAsset {
+                        mint: mint.pubkey(),
+                    },
+                ),
+                token_ix(
+                    vec![
+                        AccountMeta::new(mint.pubkey(), false),
+                        AccountMeta::new(source, false),
+                        AccountMeta::new_readonly(admin.pubkey(), true),
+                    ],
+                    mint_to,
+                ),
+            ],
+            &[&admin],
+        )
+        .expect("chainpay config");
+        {
+            let repay = self.chainpay.as_mut().unwrap();
+            repay.source = source;
+            repay.partner = partner;
+            repay.stranger_account = stranger_account;
+        }
+        let owner_kp = self.owner.insecure_clone();
+        let agent = self.repay_agent();
+        let mandate = self
+            .create_mandate(&owner_kp, source, agent)
+            .expect("mandate");
+        self.chainpay.as_mut().unwrap().mandate = mandate;
+        self.chainpay.as_ref().unwrap()
+    }
+
+    /// A ChainPay mandate over `source` (owned by `owner`) for `agent`, with the
+    /// whole source balance approved to it.
+    fn create_mandate(
+        &mut self,
+        owner: &Keypair,
+        source: Pubkey,
+        agent: Pubkey,
+    ) -> Result<Pubkey, u32> {
+        let (config, asset, mint, seq) = {
+            let repay = self.chainpay.as_mut().unwrap();
+            repay.nonce_seq += 1;
+            (repay.config, repay.asset, repay.mint, repay.nonce_seq)
+        };
+        let nonce = mandate_nonce(seq);
+        let mandate = Pubkey::find_program_address(
+            &[
+                b"mandate",
+                owner.pubkey().as_ref(),
+                mint.as_ref(),
+                nonce.as_ref(),
+            ],
+            &chainpay::ID,
+        )
+        .0;
+        let slot = self.svm.get_sysvar::<anchor_lang::prelude::Clock>().slot;
+        let mut approve = vec![4u8];
+        approve.extend_from_slice(&SOURCE_BALANCE.to_le_bytes());
+        self.send_signed(
+            vec![
+                chainpay_ix(
+                    chainpay::client::accounts::CreateMandate {
+                        config,
+                        asset_registry: asset,
+                        mandate,
+                        owner: owner.pubkey(),
+                        allowed_mint: mint,
+                        source_token_account: source,
+                        token_program: SPL_TOKEN,
+                        system_program: SYSTEM,
+                    },
+                    chainpay::client::args::CreateMandate {
+                        params: chainpay::types::MandateParams {
+                            approved_agent: agent,
+                            source_token_account: source,
+                            allowed_mint: mint,
+                            max_per_payment: SOURCE_BALANCE,
+                            total_limit: SOURCE_BALANCE,
+                            expires_at_slot: slot + 1_000_000,
+                            max_payment_count: 0,
+                            cooldown_slots: 0,
+                            mandate_nonce: nonce,
+                        },
+                    },
+                ),
+                token_ix(
+                    vec![
+                        AccountMeta::new(source, false),
+                        AccountMeta::new_readonly(mandate, false),
+                        AccountMeta::new_readonly(owner.pubkey(), true),
+                    ],
+                    approve,
+                ),
+            ],
+            &[owner],
+        )?;
+        Ok(mandate)
+    }
+
+    fn receipt_key(&self, mandate: &Pubkey, digest: u64) -> Pubkey {
+        Pubkey::find_program_address(
+            &[b"receipt", mandate.as_ref(), &hash("stmt", digest)],
+            &chainpay::ID,
+        )
+        .0
+    }
+
+    fn repay_statement_ix(
+        &self,
+        mandate: Pubkey,
+        recipient: Pubkey,
+        digest: u64,
+        amount: u64,
+    ) -> Instruction {
+        let repay = self.chainpay.as_ref().unwrap();
+        self.ix(
+            accounts::RepayStatement {
+                owner: self.owner.pubkey(),
+                binding: self.binding,
+                repay_agent: self.repay_agent(),
+                chainpay_config: repay.config,
+                asset_registry: repay.asset,
+                mandate,
+                receipt: self.receipt_key(&mandate, digest),
+                allowed_mint: repay.mint,
+                source_token_account: repay.source,
+                recipient_token_account: recipient,
+                token_program: SPL_TOKEN,
+                system_program: SYSTEM,
+                chainpay_program: chainpay::ID,
+            },
+            instruction::RepayStatement {
+                statement_digest: hash("stmt", digest),
+                amount,
+            },
+        )
+    }
+
+    /// Owner pays statement `digest` to the partner through the card's mandate.
+    fn repay_statement(&mut self, digest: u64, amount: u64) -> Result<(), u32> {
+        let (mandate, partner) = {
+            let repay = self.with_chainpay();
+            (repay.mandate, repay.partner)
+        };
+        let ix = self.repay_statement_ix(mandate, partner, digest, amount);
+        self.send_as(ix, "owner")
+    }
+
+    fn record_repayment_with(
+        &mut self,
+        who: &str,
+        digest: u64,
+        amount_cents: u64,
+        receipt: Pubkey,
+        recipient: Pubkey,
+    ) -> Result<(), u32> {
+        let mint = self.with_chainpay().mint;
+        let ix = self.ix(
+            accounts::RecordRepayment {
+                signer: self.signer(who).pubkey(),
+                policy: self.policy,
+                period: self.period,
+                receipt,
+                recipient_token_account: recipient,
+                mint,
+            },
+            instruction::RecordRepayment {
+                statement_digest: hash("stmt", digest),
+                amount_cents,
+            },
+        );
+        self.send_as(ix, who)
+    }
+
+    /// The authorizer records statement `digest` against its receipt.
+    fn record_repayment(&mut self, who: &str, digest: u64, amount_cents: u64) -> Result<(), u32> {
+        let (mandate, partner) = {
+            let repay = self.with_chainpay();
+            (repay.mandate, repay.partner)
+        };
+        let receipt = self.receipt_key(&mandate, digest);
+        self.record_repayment_with(who, digest, amount_cents, receipt, partner)
+    }
+}
+
+/// $20 purchase + 50 bps fee: $20.10 outstanding.
+fn card_owing_2010() -> Card {
+    let mut card = Card::ready();
+    card.buy(1, 1, 2_000).unwrap();
+    card.capture(1, 2_000, 1).unwrap();
+    assert_eq!(card.policy().statement_outstanding_cents, 2_010);
+    card
+}
+
+#[test]
+fn repay_statement_pays_through_chainpay_and_clears_the_statement() {
+    let mut card = card_owing_2010();
+    let repay = card.with_chainpay();
+    let (mandate, partner, source) = (repay.mandate, repay.partner, repay.source);
+    let agent = card.repay_agent();
+    let owner_before = card.lamports(&card.owner.pubkey());
+
+    card.repay_statement(1, cents_to_units(2_010)).unwrap();
+
+    // ChainPay moved the tokens, enforced the mandate and wrote the receipt.
+    assert_eq!(token_amount(&card, &partner), cents_to_units(2_010));
+    assert_eq!(
+        token_amount(&card, &source),
+        SOURCE_BALANCE - cents_to_units(2_010)
+    );
+    let receipt_key = card.receipt_key(&mandate, 1);
+    let account = card.svm.get_account(&receipt_key).expect("receipt");
+    assert_eq!(account.owner, chainpay::ID);
+    assert_eq!(account.data.len(), CHAINPAY_RECEIPT_SPACE);
+    let receipt: chainpay::accounts::PaymentReceipt = card.get(&receipt_key);
+    assert_eq!(receipt.mandate, mandate);
+    assert_eq!(receipt.invoice_hash, hash("stmt", 1));
+    assert_eq!(receipt.agent, agent);
+    assert_eq!(receipt.recipient_token_account, partner);
+    assert_eq!(receipt.amount, cents_to_units(2_010));
+    let (payment_id, signature_reference) =
+        card_policy::instructions::repayment_references(&card.binding, &hash("stmt", 1));
+    assert_eq!(receipt.payment_id, payment_id);
+    assert_eq!(receipt.signature_reference, signature_reference);
+    let m: chainpay::accounts::PaymentMandate = card.get(&mandate);
+    assert_eq!(
+        (m.amount_spent, m.payment_count),
+        (cents_to_units(2_010), 1)
+    );
+    // The owner paid the receipt rent through the repay agent, which ends empty.
+    assert_eq!(card.lamports(&agent), 0);
+    assert!(owner_before - card.lamports(&card.owner.pubkey()) >= account.lamports);
+
+    // Nothing private changed on the base payment.
+    assert_eq!(card.policy().statement_outstanding_cents, 2_010);
+    let head = card.policy().ledger_head;
+    card.record_repayment("authorizer", 1, 2_010).unwrap();
+    let policy = card.policy();
+    assert_eq!(policy.statement_outstanding_cents, 0);
+    assert!(policy.repayment_digests.contains(&hash("stmt", 1)));
+    assert_ne!(policy.ledger_head, head);
+}
+
+#[test]
+fn repay_statement_needs_the_owners_mandate_for_this_cards_repay_agent() {
+    let mut card = card_owing_2010();
+    let repay = card.with_chainpay();
+    let (source, partner) = (repay.source, repay.partner);
+    let owner = card.owner.insecure_clone();
+    // The owner's mandate for an ordinary agent (here: the owner's own key).
+    let ordinary = card.create_mandate(&owner, source, owner.pubkey()).unwrap();
+    let ix = card.repay_statement_ix(ordinary, partner, 1, cents_to_units(2_010));
+    assert_eq!(
+        card.send_as(ix, "owner"),
+        Err(err_code("InvalidRepaymentMandate"))
+    );
+    // Someone else's mandate naming this card's repay agent.
+    let stranger = card.stranger.insecure_clone();
+    let stranger_source = card.with_chainpay().stranger_account;
+    let agent = card.repay_agent();
+    let foreign = card
+        .create_mandate(&stranger, stranger_source, agent)
+        .unwrap();
+    let ix = card.repay_statement_ix(foreign, partner, 1, cents_to_units(2_010));
+    assert_eq!(
+        card.send_as(ix, "owner"),
+        Err(err_code("InvalidRepaymentMandate"))
+    );
+    // Only the card's owner can start a repayment.
+    let mandate = card.with_chainpay().mandate;
+    let mut ix = card.repay_statement_ix(mandate, partner, 1, cents_to_units(2_010));
+    ix.accounts[0].pubkey = card.stranger.pubkey();
+    assert!(card.send_as(ix, "stranger").is_err());
+    assert_eq!(token_amount(&card, &partner), 0);
+
+    // A receipt from an ordinary mandate (not this card's repay agent) for the
+    // same digest never clears the statement.
+    let receipt = card.receipt_key(&ordinary, 1);
+    let mint = card.with_chainpay().mint;
+    let (config, asset) = (card.with_chainpay().config, card.with_chainpay().asset);
+    let ix = chainpay_ix(
+        chainpay::client::accounts::ExecutePayment {
+            config,
+            asset_registry: asset,
+            mandate: ordinary,
+            receipt,
+            agent: owner.pubkey(),
+            allowed_mint: mint,
+            source_token_account: source,
+            recipient_token_account: partner,
+            token_program: SPL_TOKEN,
+            system_program: SYSTEM,
+        },
+        chainpay::client::args::ExecutePayment {
+            params: chainpay::types::PaymentParams {
+                invoice_hash: hash("stmt", 1),
+                payment_id: [1; 32],
+                signature_reference: [2; 32],
+                amount: cents_to_units(2_010),
+            },
+        },
+    );
+    card.send_as(ix, "owner").unwrap();
+    assert_eq!(
+        card.record_repayment_with("authorizer", 1, 2_010, receipt, partner),
+        Err(err_code("InvalidRepaymentReceipt"))
+    );
+    assert_eq!(card.policy().statement_outstanding_cents, 2_010);
+}
+
+#[test]
+fn a_repayment_to_another_account_never_clears_the_statement() {
+    let mut card = card_owing_2010();
+    let repay = card.with_chainpay();
+    let (mandate, partner, elsewhere) = (repay.mandate, repay.partner, repay.stranger_account);
+    let ix = card.repay_statement_ix(mandate, elsewhere, 1, cents_to_units(2_010));
+    card.send_as(ix, "owner").unwrap();
+    let receipt = card.receipt_key(&mandate, 1);
+    assert_eq!(
+        card.record_repayment_with("authorizer", 1, 2_010, receipt, partner),
+        Err(err_code("RepaymentRecipientMismatch"))
+    );
+    // Naming the receipt's recipient instead isn't enough: it must be a token
+    // account of the receipt's mint (here: not a token account at all).
+    assert_eq!(
+        card.record_repayment_with("authorizer", 1, 2_010, receipt, card.policy),
+        Err(err_code("RepaymentRecipientMismatch"))
+    );
+    assert_eq!(card.policy().statement_outstanding_cents, 2_010);
+}
+
+#[test]
+fn a_statement_digest_pays_and_records_once() {
+    let mut card = card_owing_2010();
+    card.repay_statement(1, cents_to_units(1_000)).unwrap();
+    // ChainPay refuses a second receipt for the same mandate and digest.
+    assert!(card.repay_statement(1, cents_to_units(1_000)).is_err());
+    card.record_repayment("authorizer", 1, 1_000).unwrap();
+    assert_eq!(
+        card.record_repayment("authorizer", 1, 1_000),
+        Err(err_code("DuplicateRepayment"))
+    );
+    // A second mandate can make a second receipt for the digest; the ring
+    // still refuses to record it.
+    let repay = card.with_chainpay();
+    let (source, partner) = (repay.source, repay.partner);
+    let owner = card.owner.insecure_clone();
+    let agent = card.repay_agent();
+    let second = card.create_mandate(&owner, source, agent).unwrap();
+    let ix = card.repay_statement_ix(second, partner, 1, cents_to_units(1_000));
+    card.send_as(ix, "owner").unwrap();
+    let receipt = card.receipt_key(&second, 1);
+    assert_eq!(
+        card.record_repayment_with("authorizer", 1, 1_000, receipt, partner),
+        Err(err_code("DuplicateRepayment"))
+    );
+    assert_eq!(card.policy().statement_outstanding_cents, 1_010);
+}
+
+#[test]
+fn a_repayment_never_records_more_than_outstanding_or_paid() {
+    let mut card = card_owing_2010();
+    card.repay_statement(1, cents_to_units(3_000)).unwrap();
+    assert_eq!(
+        card.record_repayment("authorizer", 1, 2_011),
+        Err(err_code("RepaymentExceedsOutstanding"))
+    );
+    card.repay_statement(2, cents_to_units(500) + 9_999)
+        .unwrap(); // $5.009999
+    assert_eq!(
+        card.record_repayment("authorizer", 2, 501),
+        Err(err_code("RepaymentExceedsReceipt"))
+    );
+    card.record_repayment("authorizer", 2, 500).unwrap();
+    assert_eq!(card.policy().statement_outstanding_cents, 1_510);
+    assert_eq!(
+        card.record_repayment("authorizer", 3, 0),
+        Err(err_code("InvalidRepaymentReceipt"))
+    );
+}
+
+#[test]
+fn a_receipt_owned_by_another_program_is_refused() {
+    let mut card = card_owing_2010();
+    card.repay_statement(1, cents_to_units(2_010)).unwrap();
+    let mandate = card.with_chainpay().mandate;
+    let receipt = card.receipt_key(&mandate, 1);
+    let mut account = card.svm.get_account(&receipt).unwrap();
+    // Same bytes at the same address, owned by card_policy (or anyone else).
+    for owner in [card_policy::ID, SYSTEM, Pubkey::new_unique()] {
+        account.owner = owner;
+        card.svm.set_account(receipt, account.clone()).unwrap();
+        assert_eq!(
+            card.record_repayment("authorizer", 1, 2_010),
+            Err(err_code("InvalidRepaymentReceipt"))
+        );
+    }
+    // A ChainPay-owned copy at an address that isn't the receipt PDA.
+    account.owner = chainpay::ID;
+    let fake = Pubkey::new_unique();
+    card.svm.set_account(fake, account).unwrap();
+    let partner = card.with_chainpay().partner;
+    assert_eq!(
+        card.record_repayment_with("authorizer", 1, 2_010, fake, partner),
+        Err(err_code("InvalidRepaymentReceipt"))
+    );
+    assert_eq!(card.policy().statement_outstanding_cents, 2_010);
+}
+
+#[test]
+fn private_repayment_is_authorizer_attested_and_shares_the_digest_ring() {
+    let mut card = card_owing_2010();
+    let private = |card: &mut Card, who: &str, digest: u64, amount: u64| {
+        let ix = card.ix(
+            card.freeze_accounts(who),
+            instruction::RecordPrivateRepayment {
+                statement_digest: hash("stmt", digest),
+                amount_cents: amount,
+            },
+        );
+        card.send_as(ix, who)
+    };
+    assert_eq!(
+        private(&mut card, "owner", 1, 10),
+        Err(err_code("Unauthorized"))
+    );
+    assert_eq!(
+        private(&mut card, "authorizer", 1, 2_011),
+        Err(err_code("RepaymentExceedsOutstanding"))
+    );
+    private(&mut card, "authorizer", 1, 1_010).unwrap();
+    assert_eq!(card.policy().statement_outstanding_cents, 1_000);
+    // One digest, one repayment, whichever path recorded it.
+    card.repay_statement(1, cents_to_units(1_000)).unwrap();
+    assert_eq!(
+        card.record_repayment("authorizer", 1, 1_000),
+        Err(err_code("DuplicateRepayment"))
+    );
+}
+
+// ============================== owner can't edit card permissions directly
+
+const PERMISSION_CREATE: u64 = 0;
+const PERMISSION_UPDATE: u64 = 1;
+
+fn permission_program_so() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/permission/permission.so")
+}
+
+fn members_args(members: &[(u8, Pubkey)]) -> Vec<u8> {
+    let mut out = vec![1u8];
+    out.extend_from_slice(&(members.len() as u32).to_le_bytes());
+    for (flags, key) in members {
+        out.push(*flags);
+        out.extend_from_slice(key.as_ref());
+    }
+    out
+}
+
+fn permission_ix(tag: u64, accounts: Vec<AccountMeta>, members: &[(u8, Pubkey)]) -> Instruction {
+    let mut data = tag.to_le_bytes().to_vec();
+    data.extend_from_slice(&members_args(members));
+    Instruction {
+        program_id: PERMISSION_PROGRAM_ID,
+        accounts,
+        data,
+    }
+}
+
+/// Runs MagicBlock's permission program (dumped from Devnet) on a permission
+/// with the exact member flags `init_permission` writes. Its base-layer
+/// Create/UpdatePermission share the authority rule with the ephemeral ones the
+/// rollup uses: a member may rewrite the list only with `AUTHORITY_FLAG`.
+#[test]
+fn owner_cannot_rewrite_card_permission_members() {
+    use card_policy::er::{AUTHORIZER_FLAGS, OWNER_FLAGS, READER_FLAGS};
+    use ephemeral_rollups_sdk::access_control::structs::AUTHORITY_FLAG;
+
+    // What the program stores and passes to the permission program.
+    let card = Card::ready();
+    let policy = card.policy();
+    assert_eq!(policy.members[0], card.owner.pubkey());
+    assert_eq!(policy.member_flags[0], OWNER_FLAGS);
+    assert_eq!(policy.member_flags[1], AUTHORIZER_FLAGS);
+    assert!(policy.member_flags.iter().all(|f| f & AUTHORITY_FLAG == 0));
+
+    let mut svm = LiteSVM::new();
+    svm.add_program_from_file(PERMISSION_PROGRAM_ID, permission_program_so())
+        .expect("dump the permission program first: solana program dump -u devnet ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1 target/permission/permission.so");
+    let (owner, authorizer, payer) = (Keypair::new(), Keypair::new(), Keypair::new());
+    for k in [&owner, &payer] {
+        svm.airdrop(&k.pubkey(), 10_000_000_000).unwrap();
+    }
+    let send = |svm: &mut LiteSVM, ix: Instruction, signers: &[&Keypair]| {
+        svm.expire_blockhash();
+        let msg = Message::new(&[ix], Some(&signers[0].pubkey()));
+        svm.send_transaction(Transaction::new(signers, msg, svm.latest_blockhash()))
+            .is_ok()
+    };
+    // `owner_flags` = what the owner holds on a card permission.
+    let mut attempt = |owner_flags: u8| -> (bool, bool) {
+        let permissioned = Keypair::new(); // stands in for the card PDA
+        let permission = permission(&permissioned.pubkey());
+        let members = [
+            (owner_flags, owner.pubkey()),
+            (AUTHORIZER_FLAGS, authorizer.pubkey()),
+        ];
+        let created = send(
+            &mut svm,
+            permission_ix(
+                PERMISSION_CREATE,
+                vec![
+                    AccountMeta::new_readonly(permissioned.pubkey(), true),
+                    AccountMeta::new(permission, false),
+                    AccountMeta::new(payer.pubkey(), true),
+                    AccountMeta::new_readonly(SYSTEM, false),
+                ],
+                &members,
+            ),
+            &[&payer, &permissioned],
+        );
+        assert!(created, "create permission");
+        // The owner alone drops the authorizer and adds a reader of its choice.
+        let rewritten = [
+            (owner_flags, owner.pubkey()),
+            (READER_FLAGS, Pubkey::new_unique()),
+        ];
+        let by_owner = send(
+            &mut svm,
+            permission_ix(
+                PERMISSION_UPDATE,
+                vec![
+                    AccountMeta::new_readonly(owner.pubkey(), true),
+                    AccountMeta::new_readonly(permissioned.pubkey(), false),
+                    AccountMeta::new(permission, false),
+                ],
+                &rewritten,
+            ),
+            &[&owner],
+        );
+        // The permissioned account (the card PDA, signing by seeds in the
+        // program) can still update it: that's the program's own path.
+        let by_card = send(
+            &mut svm,
+            permission_ix(
+                PERMISSION_UPDATE,
+                vec![
+                    AccountMeta::new_readonly(permissioned.pubkey(), true),
+                    AccountMeta::new_readonly(permissioned.pubkey(), true),
+                    AccountMeta::new(permission, false),
+                ],
+                &members,
+            ),
+            &[&payer, &permissioned],
+        );
+        (by_owner, by_card)
+    };
+    assert_eq!(attempt(OWNER_FLAGS), (false, true));
+    // Control: with the old flags the owner could rewrite the list.
+    assert_eq!(attempt(OWNER_FLAGS | AUTHORITY_FLAG), (true, true));
 }
