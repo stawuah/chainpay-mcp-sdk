@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
@@ -9,7 +9,7 @@ import { centsToTokenBaseUnits, formatUsdCents, parseSignedCents, type CardView,
 import { CardEvidenceCard } from "../../receipts/CardEvidenceCard";
 import { statementEvidence } from "./evidence";
 import { MISMATCH_COPY, STATEMENT_STATE_LABEL, STATEMENT_STEPS } from "./lifecycle";
-import { newOperationId, type CardStatements, type CardsSource } from "./source";
+import { newOperationId, type CardStatements, type CardsSource, type RepaymentLookup } from "./source";
 import { statementAmountDue } from "./statementMath";
 import { PrivateRepayOptIn } from "./PrivateRepayOptIn";
 import { errorText } from "./shared";
@@ -216,18 +216,64 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
   const [busy, setBusy] = useState<"" | "pay" | "check">("");
   // Once money moved, keep the receipt: a failed confirmation must never read as "not paid".
   const [paid, setPaid] = useState<{ receiptPda: string; mandatePda: string; signature?: string } | null>(null);
+  // Earlier attempts at this statement under ANY permission. Pay stays off until this says "none".
+  const [lookup, setLookup] = useState<RepaymentLookup | { state: "checking" } | { state: "check_failed"; message: string }>({ state: "checking" });
+  const [unknownReason, setUnknownReason] = useState("");
   const [error, setError] = useState("");
   const total = statementAmountDue(statement);
   const baseUnits = centsToTokenBaseUnits(total, target.decimals);
+  const ownAddresses = useMemo(() => mandates.map((item) => item.address), [mandates]);
+
+  const prefill = (found: { receiptPda: string; mandatePda: string }) => {
+    setReceiptPda(found.receiptPda);
+    setMandatePda(found.mandatePda);
+  };
+
+  // Latest props for the reconcile loop, so a parent re-render never restarts it.
+  const latest = useRef({ source, statement, ownAddresses, cardId: card.cardId, onDone });
+  latest.current = { source, statement, ownAddresses, cardId: card.cardId, onDone };
+
+  /** Reconcile by statement: a receipt on Solana closes it; an expired, receipt-less attempt reopens Pay. */
+  const reconcile = useCallback(async () => {
+    const { source, statement, ownAddresses, cardId, onDone } = latest.current;
+    try {
+      const found = await source.repaymentStatus(statement, ownAddresses);
+      setLookup(found);
+      if (found.state === "none") return;
+      prefill(found);
+      if (found.state === "paid") {
+        setPaid({ receiptPda: found.receiptPda, mandatePda: found.mandatePda });
+        await source.submitRepayment(cardId, statement.statementId, { receiptPda: found.receiptPda, mandatePda: found.mandatePda });
+        onDone();
+      }
+    } catch (cause) {
+      // A failed check never reopens Pay: an unknown or paid state stays, anything else waits for a retry.
+      setLookup((current) => current.state === "paid" || current.state === "unknown" ? current : { state: "check_failed", message: errorText(cause) });
+    }
+  }, []);
+
+  useEffect(() => { void reconcile(); }, [reconcile, statement.digest]);
+  // While an outcome is unknown, keep checking on its own.
+  useEffect(() => {
+    if (lookup.state !== "unknown") return;
+    const timer = window.setInterval(() => void reconcile(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [lookup.state, reconcile]);
 
   async function pay() {
     setBusy("pay");
     setError("");
     try {
       const result = await source.payStatement(card, statement, mandate);
+      prefill(result);
+      if (result.outcome === "unknown") {
+        // Signed and handed off with no answer: never "not paid", and no second payment.
+        setUnknownReason(result.reason);
+        setLookup({ state: "unknown", receiptPda: result.receiptPda, mandatePda: result.mandatePda });
+        return;
+      }
       setPaid(result);
-      setReceiptPda(result.receiptPda);
-      setMandatePda(result.mandatePda);
+      setLookup({ state: "paid", receiptPda: result.receiptPda, mandatePda: result.mandatePda });
       await source.submitRepayment(card.cardId, statement.statementId, { receiptPda: result.receiptPda, mandatePda: result.mandatePda });
       onDone();
     } catch (cause) {
@@ -241,6 +287,11 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
     setBusy("check");
     setError("");
     try {
+      // Unresolved or unchecked: look on Solana first, by statement, across every permission.
+      if (lookup.state === "unknown" || lookup.state === "check_failed" || !receiptPda.trim() || !mandatePda.trim()) {
+        await reconcile();
+        return;
+      }
       await source.submitRepayment(card.cardId, statement.statementId, { receiptPda: receiptPda.trim(), mandatePda: mandatePda.trim() });
       onDone();
     } catch (cause) {
@@ -268,6 +319,16 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
               {method === "private" && privateActions ? (
                 <PrivateRepayOptIn amountCents={total.toString()} {...privateActions} onDone={() => onDone()} onBack={() => setMethod("transparent")} />
               ) : <>
+              {lookup.state === "checking" && <p className="owner-muted" aria-busy="true" data-testid="repay-checking">Checking whether this statement was already paid…</p>}
+              {lookup.state === "check_failed" && (
+                <div className="builder-error" role="alert" data-testid="repay-check-failed"><b>Couldn't check earlier payments</b><span>{lookup.message} Pay stays off until ChainPay can confirm this statement wasn't already paid. Use “Check my receipt” below to try again.</span></div>
+              )}
+              {lookup.state === "unknown" && !paid && (
+                <div className="cp-repay-unknown" role="status" data-testid="repay-unknown">
+                  <b>Outcome unknown — checking</b>
+                  <span>{unknownReason || "You signed a payment for this statement, but no answer came back."} Don't pay again. ChainPay keeps checking Solana for receipt <span className="mono">{shortKey(lookup.receiptPda)}</span> from permission <span className="mono">{shortKey(lookup.mandatePda)}</span>. Pay stays off until it's settled one way or the other.</span>
+                </div>
+              )}
               <div className="mandate-summary">
                 <div><span>Amount</span><strong>{formatUsdCents(total)} <small className="cp-sub">= {baseUnits.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")} USDC base units</small></strong></div>
                 <div><span>Token</span><strong>USDC on Solana Devnet</strong></div>
@@ -291,7 +352,7 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
                 </div>
               )}
               {target.conflict && <div className="builder-error" role="alert"><b>Can't pay here</b><span>{target.conflict}</span></div>}
-              {error && <div className="builder-error" role="alert"><b>{paid ? "Not confirmed yet" : "Not paid"}</b><span>{error}</span></div>}
+              {error && <div className="builder-error" role="alert"><b>{paid || lookup.state === "unknown" || lookup.state === "paid" ? "Not confirmed yet" : "Not paid"}</b><span>{error}</span></div>}
               </>}
             </div>
           </LayoutContent>
@@ -299,8 +360,8 @@ function RepaymentDialog({ source, card, statement, mandates, wallet, onClose, o
         footer={
           method === "private" ? undefined : <LayoutFooter>
             <div className="cp-dialog-footer">
-            <Button type="button" variant="secondary" label={busy === "check" ? "Checking…" : "Check my receipt"} isDisabled={Boolean(busy) || !receiptPda.trim() || !mandatePda.trim()} onClick={() => void check()} />
-            <Button type="button" variant="primary" label={busy === "pay" ? "Waiting for wallet…" : `Pay ${formatUsdCents(total)}`} isDisabled={Boolean(busy) || Boolean(paid) || !mandate || !target.recipientTokenAccount || Boolean(target.conflict) || !statement.digest} onClick={() => void pay()} />
+            <Button type="button" variant="secondary" label={busy === "check" ? "Checking…" : "Check my receipt"} isDisabled={Boolean(busy) || ((!receiptPda.trim() || !mandatePda.trim()) && lookup.state !== "check_failed" && lookup.state !== "unknown")} onClick={() => void check()} />
+            <Button type="button" variant="primary" label={busy === "pay" ? "Waiting for wallet…" : `Pay ${formatUsdCents(total)}`} isDisabled={Boolean(busy) || Boolean(paid) || lookup.state !== "none" || !mandate || !target.recipientTokenAccount || Boolean(target.conflict) || !statement.digest} onClick={() => void pay()} />
           </div></LayoutFooter>
         }
       />

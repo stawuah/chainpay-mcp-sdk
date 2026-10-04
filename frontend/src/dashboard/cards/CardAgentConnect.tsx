@@ -65,7 +65,7 @@ export function CardAgentConnect({ source, card }: { source: CardsSource; card: 
                 {!connection ? (
                   <>
                     <p>The agent can pay at the shops on this card, inside your limits. It never sees the card number or your limits, and it can't unfreeze the card or pay the statement.</p>
-                    <TextInput label="Agent name" value={name} onChange={setName} placeholder="Research agent" description="Only you see it, in Agents." />
+                    <TextInput label="Agent name" value={name} onChange={setName} placeholder="Research agent" description="Shows in Agents." />
                     <ul className="cp-agent-tools">
                       {Object.entries(TOOL_COPY).map(([tool, copy]) => <li key={tool}><code>{tool}</code> {copy}</li>)}
                     </ul>
