@@ -25,6 +25,7 @@ import { waitForPayment } from "./tools/wait_for_payment.js";
 import { executeX402Payment, prepareX402Payment } from "./tools/x402.js";
 import { toolResult } from "./tools/common.js";
 import { prepareCrossmintPayment, executeCrossmintPayment, crossmintPaymentStatus } from "./tools/crossmint.js";
+import { freezeAgentCard, getCardActivity, getStatement, prepareAgentCard, requestCardCheckout } from "./tools/cards.js";
 
 export { TOOL_DEFINITIONS };
 export type { ChainPayMcpContext };
@@ -174,6 +175,16 @@ async function dispatchTool(
       return revokeMandate(context, args);
     case "update_mandate":
       return updateMandate(context, args);
+    case "prepare_agent_card":
+      return prepareAgentCard(context, args);
+    case "request_card_checkout":
+      return requestCardCheckout(context, args);
+    case "get_card_activity":
+      return getCardActivity(context, args);
+    case "get_statement":
+      return getStatement(context, args);
+    case "freeze_agent_card":
+      return freezeAgentCard(context, args);
     default:
       throw new Error(`Unknown ChainPay tool: ${name}`);
   }

@@ -16,6 +16,10 @@
     "./known-assets": {
       "types": "./src/known-assets.ts",
       "import": "./dist/known-assets.js"
+    },
+    "./cards/private-repayment": {
+      "types": "./src/cards/private-repayment.ts",
+      "import": "./dist/cards/private-repayment.js"
     }
   },
   "scripts": {

@@ -1,3 +1,5 @@
+#[path = "server_cards.rs"]
+mod card_routes;
 #[path = "server_delivery.rs"]
 mod delivery_routes;
 #[path = "server_mandate_requests.rs"]
@@ -201,6 +203,8 @@ pub struct BackendState {
     pub rpc: RpcClient,
     pub store: StatusStore,
     pub signer_provider: Option<PrivySignerProvider>,
+    /// Private agent card connector; `None` unless `CARDS_CONNECTOR_ENABLED=true`.
+    pub cards: Option<std::sync::Arc<crate::connectors::card_issuer::CardsConnector>>,
 }
 
 #[derive(Debug, Error)]
@@ -211,6 +215,8 @@ pub enum BackendStateError {
     Signer(#[from] SignerConfigError),
     #[error("CHAINPAY_HTTP_AUTH_TOKEN is required when managed signing is enabled")]
     MissingManagedPaymentAuth,
+    #[error("card connector configuration error: {0}")]
+    Cards(String),
 }
 
 impl BackendState {
@@ -220,11 +226,14 @@ impl BackendState {
         if signer_provider.is_some() && config.auth_token.is_empty() {
             return Err(BackendStateError::MissingManagedPaymentAuth);
         }
+        let cards = crate::connectors::card_issuer::CardsConnector::from_env(store.clone())
+            .map_err(|error| BackendStateError::Cards(error.to_string()))?;
         Ok(Self {
             config,
             rpc,
             store,
             signer_provider,
+            cards,
         })
     }
 }
@@ -322,6 +331,13 @@ pub fn build_router(state: BackendState) -> Router {
 }
 
 fn build_router_with_pet(state: BackendState, pet_enabled: bool) -> Router {
+    if let Some(cards) = &state.cards {
+        cards.attach_base(
+            state.rpc.clone(),
+            state.config.program_id.clone(),
+            state.config.cluster,
+        );
+    }
     let origins = state.config.allowed_origins.clone();
     let auth_state = state.clone();
     Router::new()
@@ -407,6 +423,7 @@ fn build_router_with_pet(state: BackendState, pet_enabled: bool) -> Router {
         .route("/v1/transactions/submit", post(submit_transaction))
         .route("/v1/transactions/{transaction_id}", get(get_transaction))
         .route("/rpc", post(proxy_rpc))
+        .merge(card_routes::router())
         .with_state(state)
         .layer(Extension(pet_routes::PetEnabled(pet_enabled)))
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
@@ -531,6 +548,7 @@ async fn auth_middleware(
                 | "/v1/auth/challenge"
                 | "/v1/auth/session"
         )
+        || card_routes::is_self_authenticated(path)
         || delivery_routes::is_public_delivery_path(request.method(), path)
         || pet_routes::is_public_pet_path(request.method(), path)
     {
@@ -543,6 +561,13 @@ async fn auth_middleware(
     match auth::identify(&state, request.headers()).await {
         Ok(principal) => {
             let mut request = request;
+            let connection = principal
+                .scope
+                .as_ref()
+                .and_then(|_| auth::connection_hash(request.headers()));
+            request
+                .extensions_mut()
+                .insert(card_routes::ConnectionHash(connection));
             request.extensions_mut().insert(principal);
             let mut response = next.run(request).await;
             response
@@ -1983,7 +2008,12 @@ async fn submit_transaction(
         &decode_transaction(&request.signed_transaction)?,
         "signed_transaction",
     )?;
-    validate_owner_transaction(&transaction, &principal.wallet, &state.config.program_id)?;
+    if card_routes::is_card_setup(&transaction) {
+        transactions::common(&transaction)?;
+        card_routes::validate_card_setup(&state, &principal.wallet, &transaction).await?;
+    } else {
+        validate_owner_transaction(&transaction, &principal.wallet, &state.config.program_id)?;
+    }
     let key = format!("{}:{}", principal.wallet, request.idempotency_key);
     let id = deterministic_id("transaction", &key);
     let mut receipts = Vec::new();
@@ -2150,6 +2180,9 @@ async fn validate_owner_live(
     principal: &Principal,
     transaction: &VersionedTransaction,
 ) -> Result<(), ApiError> {
+    if card_routes::is_card_setup(transaction) {
+        return card_routes::validate_card_setup(state, &principal.wallet, transaction).await;
+    }
     let instructions = transactions::payload_instructions(transaction);
     let first = instructions
         .first()
@@ -2655,7 +2688,8 @@ async fn verify_finalized_receipt(
     Ok(())
 }
 
-fn verify_receipt_account(
+/// Also the gate for card statement repayments (`card_issuer::statements`).
+pub(crate) fn verify_receipt_account(
     account: &RpcAccount,
     record: &PaymentRecord,
     program_id: &str,

@@ -161,10 +161,10 @@ test("DashboardNav renders ordered workspace and secondary destinations", async 
       }));
     });
     const labels = [...host.querySelectorAll("button")].map((button) => button.textContent ?? "");
-    for (const label of ["Overview", "Agents", "Spending permissions", "Requests", "Payments", "Settings", "Back to site"]) {
+    for (const label of ["Overview", "Agents", "Spending permissions", "Cards", "Requests", "Payments", "Settings", "Back to site"]) {
       assert.ok(labels.some((text) => text.includes(label)), `missing ${label}`);
     }
-    assert.deepEqual(labels.slice(0, 6), ["Overview", "Agents", "Spending permissions", "Requests", "Payments", "Settings"]);
+    assert.deepEqual(labels.slice(0, 7), ["Overview", "Agents", "Spending permissions", "Cards", "Requests", "Payments", "Settings"]);
     // connect-mcp stays a compatibility route and out of the nav, so the sidebar
     // must not offer it. Keeping this from the stack: nav.ts deliberately filters
     // it via SIDEBAR_DASHBOARD_TABS, and dashboardNavCoversAllTabs() counts on it.

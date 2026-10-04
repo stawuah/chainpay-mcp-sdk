@@ -16,7 +16,7 @@ import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, bytesToHex, createMandateN
 import type { Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, TokenProgram } from "@chainpay/sdk";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import solWalletImage from "../assets/brands/solana.svg";
-import { buildPath, type DashboardTab } from "../routing/paths";
+import { buildPath, type CardSection, type DashboardTab } from "../routing/paths";
 import { useRoute } from "../routing/useRoute";
 import { RecordDetails } from "../ui/RecordDetails";
 import { InboxReceipt, LoadedReceiptCard } from "../receipts/InboxReceipt";
@@ -44,6 +44,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Arrow, Shield, shortAddress } from "../ui/marks";
 import { DashboardMobileNav, DashboardNav } from "./DashboardNav";
 import { PageHeader } from "./PageHeader";
+import { CardsArea } from "./cards/CardsArea";
 import { SpendMeter } from "./charts/SpendMeter";
 import { tabCopy } from "./tabCopy";
 import { TOOL_GROUPS, requiredParams, toolGroup } from "./toolGroups";
@@ -207,7 +208,11 @@ export type DashboardProps = {
   receiptDetail?: string;
   /** `/app/requests/permission#req=…`: read the signed request from the URL fragment. */
   permissionRequest?: boolean;
-  onTabChange: (tab: DashboardTab, options?: { mandateBuilder?: boolean; mandateDetail?: string; receiptDetail?: string }) => void;
+  /** Cards area routes (`/app/cards/new`, `/app/cards/<id>[/<section>]`). */
+  cardsNew?: boolean;
+  cardId?: string;
+  cardSection?: CardSection;
+  onTabChange: (tab: DashboardTab, options?: { mandateBuilder?: boolean; mandateDetail?: string; receiptDetail?: string; cardsNew?: boolean; cardId?: string; cardSection?: CardSection }) => void;
   onNavigateHome: () => void;
   onRefresh: (preferredMandateAddress?: string) => Promise<void>;
   onSelectMandate: (mandate: Mandate) => void;
@@ -253,6 +258,9 @@ export function Dashboard({
   mandateBuilder = false,
   receiptDetail,
   permissionRequest = false,
+  cardsNew,
+  cardId,
+  cardSection,
   onTabChange,
   onNavigateHome,
 }: DashboardProps) {
@@ -1109,7 +1117,7 @@ export function Dashboard({
             </div>
           </header>
           <div className="dashboard-page">
-          <PageHeader
+          {tab !== "cards" && <PageHeader
             copy={tabCopy(tab, { hasMandates: mandates.length > 0, mandateCreateOpen })}
             action={
               ["tools", "protocol", "connect-mcp"].includes(tab) ? <Button label="Back to settings" variant="secondary" icon={<ArrowLeft size={16} />} onClick={() => { setAdvancedSettingsOpen(true); selectTab("settings"); }} />
@@ -1125,9 +1133,9 @@ export function Dashboard({
               : ["receipts", "payments", "settings", "assistant", "agents", "connect-mcp"].includes(tab) ? null
               : <Button type="button" variant="secondary" className="refresh-button" label="Refresh" icon={<RefreshCw size={16} />} isDisabled={integrationStatus === "loading"} onClick={() => void onRefresh()} />
             }
-          />
+          />}
 
-          {ownerSignIn.status !== "ready" && (mandates.length > 0 || tab !== "overview") && (
+          {tab !== "cards" && ownerSignIn.status !== "ready" && (mandates.length > 0 || tab !== "overview") && (
             <div className="cp-workspace-signin is-compact">
               <div><p>Sign in to load agent tools. A login message is not a spending approval.</p></div>
               {ownerSignIn.error && <p role="alert">{ownerSignIn.error}</p>}
@@ -1137,7 +1145,7 @@ export function Dashboard({
           <PendingSettlements wallet={wallet} />
 
 
-          <div>{tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} inbox={agentInbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} attachments={agentAttachments} attachmentError={attachmentError} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} mandate={mandate} sessionReady={ownerSignIn.status === "ready"} onSignIn={() => void ownerSignIn.signIn()} onAsk={() => void askChainPay()} onVoice={startVoice} onLoadDemoInvoice={() => void loadDemoPaymentRequest()} onApprove={approveAgentRequest} onAddAttachments={addAgentAttachments} onRemoveAttachment={removeAgentAttachment} onArchive={archiveInboxItemById} onRestore={restoreInboxItemById} onCallMcp={onCallMcp} permissionRequests={{ focusId: focusedRequestId, retryingHash: retryingLinkHash, symbolFor: requestSymbol, onReview: reviewPermissionRequest, onDecline: declinePermissionRequestById, onRetryLink: (record) => void retryPermissionLink(record) }} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} loadStatus={mandateLoadStatus} createOpen={mandateCreateOpen} onCreateOpenChange={(open) => { if (open) openMandateCreate(); else closeMandateBuilder(); }} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onOpenPayments={() => selectTab("payments")} onOpenAgents={() => selectTab("agents")} onRefresh={onRefresh} onPermissionRequestCreated={permissionRequestCreated} /> : tab === "payments" ? <PaymentsWorkspace wallet={wallet} history={<ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} preparedReceiptAddresses={preparedReceiptAddresses} onCallMcp={onCallMcp} />} form={<PaymentPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} stablecoinOptions={stablecoinOptions} onSelectMandate={onSelectMandate} onCallMcp={onCallMcp} onAskAgent={(message) => { selectTab("assistant"); void askChainPay(message); }} onRefresh={onRefresh} onOpenMandateBuilder={openMandateCreate} onOpenAgents={() => selectTab("agents")} />} /> : agentsTabActive ? <AgentsTabPanel connectionStatus={connectionStatus} serverUrl={MCP_URL} wallet={wallet} mandates={mandates} stablecoinOptions={stablecoinOptions} connections={connections} hostedAssistantStatus={hostedAssistantStatus} connectDialogInitiallyOpen={tab === "connect-mcp"} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} onCreateMandate={openMandateCreate} onOpenAssistant={() => selectTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} preparedReceiptAddresses={preparedReceiptAddresses} receiptDetail={receiptDetail} onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "settings" ? <SettingsPanel advancedOpen={advancedSettingsOpen} onAdvancedOpenChange={setAdvancedSettingsOpen} onAdvanced={(destination) => selectTab(destination)} wallet={wallet} walletName={walletName} walletIcon={walletIcon} walletCapabilities={walletCapabilities} stablecoinOptions={stablecoinOptions} activeMandateCount={revocableMandateCount} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} onChangeWallet={onChangeWallet} /> : (
+          <div>{tab === "cards" ? <CardsArea wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} onCallMcp={onCallMcp} mandates={mandates} cardsNew={cardsNew} cardId={cardId} cardSection={cardSection} notice={ownerSignIn.status !== "ready" ? <div className="cp-workspace-signin is-compact"><div><p>Sign in to load your cards. A login message is not a spending approval.</p></div>{ownerSignIn.error && <p role="alert">{ownerSignIn.error}</p>}</div> : undefined} onNavigate={(target) => { setMobileNav(false); onTabChange("cards", target); }} /> : tab === "assistant" ? <AssistantPanel prompt={prompt} setPrompt={setPrompt} reply={reply} thinking={thinking} listening={listening} agentToolsUsed={agentToolsUsed} inbox={agentInbox} approvalStatuses={approvalStatuses} approvalErrors={approvalErrors} attachments={agentAttachments} attachmentError={attachmentError} stablecoinOptions={stablecoinOptions} mandateDecimals={mandateDecimals} mandate={mandate} sessionReady={ownerSignIn.status === "ready"} onSignIn={() => void ownerSignIn.signIn()} onAsk={() => void askChainPay()} onVoice={startVoice} onLoadDemoInvoice={() => void loadDemoPaymentRequest()} onApprove={approveAgentRequest} onAddAttachments={addAgentAttachments} onRemoveAttachment={removeAgentAttachment} onArchive={archiveInboxItemById} onRestore={restoreInboxItemById} onCallMcp={onCallMcp} permissionRequests={{ focusId: focusedRequestId, retryingHash: retryingLinkHash, symbolFor: requestSymbol, onReview: reviewPermissionRequest, onDecline: declinePermissionRequestById, onRetryLink: (record) => void retryPermissionLink(record) }} /> : tab === "protocol" ? <ProtocolPanel wallet={wallet} walletSigner={walletSigner} config={protocolConfig} onCreated={onRefresh} /> : tab === "mandates" ? <MandatesPanel wallet={wallet} walletSigner={walletSigner} walletMessageSigner={walletMessageSigner} mandates={mandates} mandate={mandate} mandateDecimals={mandateDecimals} stablecoinOptions={stablecoinOptions} protocolConfig={protocolConfig} loadStatus={mandateLoadStatus} createOpen={mandateCreateOpen} onCreateOpenChange={(open) => { if (open) openMandateCreate(); else closeMandateBuilder(); }} onMandateAction={runMandateAction} onSelectMandate={onSelectMandate} onOpenPayments={() => selectTab("payments")} onOpenAgents={() => selectTab("agents")} onRefresh={onRefresh} onPermissionRequestCreated={permissionRequestCreated} /> : tab === "payments" ? <PaymentsWorkspace wallet={wallet} history={<ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} preparedReceiptAddresses={preparedReceiptAddresses} onCallMcp={onCallMcp} />} form={<PaymentPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} mandate={mandate} stablecoinOptions={stablecoinOptions} onSelectMandate={onSelectMandate} onCallMcp={onCallMcp} onAskAgent={(message) => { selectTab("assistant"); void askChainPay(message); }} onRefresh={onRefresh} onOpenMandateBuilder={openMandateCreate} onOpenAgents={() => selectTab("agents")} />} /> : agentsTabActive ? <AgentsTabPanel connectionStatus={connectionStatus} serverUrl={MCP_URL} wallet={wallet} mandates={mandates} stablecoinOptions={stablecoinOptions} connections={connections} hostedAssistantStatus={hostedAssistantStatus} connectDialogInitiallyOpen={tab === "connect-mcp"} onConnected={(connection) => setConnections((current) => [connection, ...current])} onRevoked={async (id) => { await revokeMcpConnection(wallet, id); setConnections((current) => current.filter((connection) => connection.id !== id)); }} onCreateMandate={openMandateCreate} onOpenAssistant={() => selectTab("assistant")} /> : tab === "receipts" ? <ReceiptPanel mandates={mandates} stablecoinOptions={stablecoinOptions} preparedReceiptAddresses={preparedReceiptAddresses} receiptDetail={receiptDetail} onCallMcp={onCallMcp} /> : tab === "tools" ? <ToolsPanel mcpTools={mcpTools} /> : tab === "settings" ? <SettingsPanel advancedOpen={advancedSettingsOpen} onAdvancedOpenChange={setAdvancedSettingsOpen} onAdvanced={(destination) => selectTab(destination)} wallet={wallet} walletName={walletName} walletIcon={walletIcon} walletCapabilities={walletCapabilities} stablecoinOptions={stablecoinOptions} activeMandateCount={revocableMandateCount} dangerStatus={dangerStatus} onRevokeAll={() => void revokeAllMandates()} onDisconnect={onDisconnect} onChangeWallet={onChangeWallet} /> : (
             <>
               {integrationStatus === "loading" ? (
                 <section className="dashboard-card"><span className="section-kicker">LOADING PERMISSIONS</span><h2>Reading on-chain mandates…</h2><p className="t-body">ChainPay is discovering spending permissions for this wallet. First-run setup appears only after a successful read returns zero mandates.</p></section>

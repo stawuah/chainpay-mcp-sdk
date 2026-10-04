@@ -1,0 +1,15 @@
+{
+  "name": "reorder",
+  "description": "A later webhook arrives before an earlier one. Processing re-fetches issuer truth, so events apply once, in issuer order, whatever the delivery order.",
+  "steps": [
+    {"intent": {"as": "i", "merchant": "demo-approved", "amountCents": "2500"}},
+    {"asa": {"txn": "t1", "amountCents": 2500, "merchant": "demo-approved"}, "expect": "APPROVED"},
+    {"event": {"txn": "t1", "id": "e1", "type": "AUTHORIZATION_REVERSAL", "amountCents": 500}},
+    {"snapshot": {"txn": "t1", "as": "old"}},
+    {"event": {"txn": "t1", "id": "e2", "type": "CLEARING", "amountCents": 2000}},
+    {"deliver": {"txn": "t1", "webhookId": "w2"}},
+    {"deliver": {"txn": "t1", "webhookId": "w1", "snapshot": "old"}, "note": "older body delivered last"},
+    {"expect": {"txn": "t1", "state": "captured", "capturedCents": "2000", "reversedCents": "500", "reservedCents": "0"}},
+    {"expectProgram": {"reverse": 1, "capture": 1}}
+  ]
+}
