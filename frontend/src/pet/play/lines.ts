@@ -28,7 +28,7 @@ export const COOLING_LINES: Partial<Record<PetAction, (m: number) => string>> = 
 };
 
 export const GREETINGS = {
-  first: "oh hi. i'm new here. no name yet.",
+  first: "oh hi. i'm bam bam.",
   back: "oh hey. you came back.",
   streak: (days: number) => `welcome back. day ${days} in a row.`,
 } as const;
