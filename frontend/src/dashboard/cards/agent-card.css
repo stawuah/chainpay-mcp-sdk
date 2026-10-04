@@ -93,6 +93,18 @@
 .cp-agent-card-chip i:nth-child(2) { grid-row: 2 / 4; border-width: 0 .5px 0 0; }
 .cp-agent-card-chip i:nth-child(3) { grid-row: 2 / 4; border-width: 0; }
 .cp-agent-card-wave { width: 7cqw; height: 7cqw; opacity: .85; }
+/* Sandbox mark: small, quiet, always there while the issuer is a sandbox. White on the face stays >= 4.5:1. */
+.cp-agent-card-sandbox {
+  margin-left: auto;
+  padding: 1cqw 2.4cqw;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .55);
+  color: #fff;
+  font: 600 2.9cqw/1 Inter, sans-serif;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
 .cp-agent-card-bottom { align-items: flex-end; }
 .cp-agent-card-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 4.6cqw/1.2 Inter, sans-serif; letter-spacing: -.01em; }
 .cp-agent-card-number { display: grid; justify-items: end; gap: .6cqw; flex-shrink: 0; }

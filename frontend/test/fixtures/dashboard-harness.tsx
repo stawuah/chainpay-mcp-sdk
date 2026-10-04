@@ -264,7 +264,7 @@ if (FIXTURE_APPROVAL) {
 
 const EMPTY = new URLSearchParams(location.search).has("empty");
 
-// Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1]`.
+// Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1][&attest=verified|challenge_bound|mismatch|failed]`.
 // ILLUSTRATIVE fixtures through the same CardsSource interface the live SDK
 // client implements. Nothing signs or reaches a network.
 const CARD_QUERY = new URLSearchParams(location.search);
@@ -273,6 +273,7 @@ setCardsSourceOverride(createFixtureCardsSource({
   unlocked: CARD_QUERY.get("cards") !== "locked",
   statement: (CARD_QUERY.get("statement") as never) ?? undefined,
   freezeAck: CARD_QUERY.has("ack"),
+  attestation: (CARD_QUERY.get("attest") as never) ?? undefined,
 }));
 const CARD_KEY = CARD_QUERY.get("card") as keyof typeof FIXTURE_CARD_IDS | null;
 type CardRoute = { cardsNew?: boolean; cardId?: string; cardSection?: CardSection };

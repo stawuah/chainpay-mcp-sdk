@@ -33,7 +33,7 @@ await esbuild.build({
   entryPoints: ["test/fixtures/cards-test-entry.ts"],
   bundle: true, format: "esm", platform: "browser", jsx: "automatic", outfile,
   loader: { ".css": "empty", ".png": "empty", ".svg": "empty", ".webp": "empty" },
-  external: ["react", "react-dom", "react/jsx-runtime", "react-dom/client", "@chainpay/sdk", "@solana/web3.js", "buffer"],
+  external: ["react", "react-dom", "react/jsx-runtime", "react-dom/client", "@chainpay/sdk", "@solana/web3.js", "buffer", "@phala/dcap-qvl"],
   define: { "import.meta.env": "{}" },
   logLevel: "error",
 });
@@ -119,12 +119,90 @@ test("lifecycle states are distinct words, and an exception is never shown as ap
 test("restore refuses values the owner wasn't shown", () => {
   const report = { digest: "ab".repeat(32), detectedAt: "", reason: "", snapshotLedgerSeq: "1", issuerEventsReplayed: 0, numbers: [
     { key: "budget", label: "Budget", cents: "200000" }, { key: "captured", label: "Charged", cents: "12000" }, { key: "reserved", label: "Held", cents: "0" },
-    { key: "refunded", label: "Refunded", cents: "0" }, { key: "purchases", label: "Purchases", count: 3 }, { key: "outstanding", label: "Owed", cents: "5025" },
+    { key: "refunded", label: "Refunded", cents: "0" }, { key: "purchases", label: "Purchases", count: 3 }, { key: "exceptions", label: "Needs review", cents: "150" },
+    { key: "outstanding", label: "Owed", cents: "5025" },
   ] };
-  const args = { policy: { budgetCents: 200000n }, capturedCents: 12000n, reservedCents: 0n, refundedCents: 0n, purchasesCount: 3, statementOutstandingCents: 5025n };
+  const args = { policy: { budgetCents: 200000n }, capturedCents: 12000n, reservedCents: 0n, refundedCents: 0n, purchasesCount: 3, exceptionCents: 150n, statementOutstandingCents: 5025n };
   m.assertRestoreMatchesReport(args, report);
   assert.throws(() => m.assertRestoreMatchesReport({ ...args, capturedCents: 0n, statementOutstandingCents: 0n }, report), /doesn't match the numbers you reviewed/);
   assert.throws(() => m.assertRestoreMatchesReport(args, { ...report, numbers: report.numbers.slice(1) }), /doesn't match/);
+});
+
+test("co-signed restore: signs only the reviewed values, for this card, already signed by the authorizer", async () => {
+  const { Keypair, PublicKey, Transaction, TransactionInstruction } = await import("@solana/web3.js");
+  const sdk = await import("@chainpay/sdk");
+  const owner = Keypair.generate();
+  const authorizer = Keypair.generate();
+  const cardId = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
+  const programId = sdk.CARD_POLICY_PROGRAM_ID;
+  const digest = "cd".repeat(32);
+  const report = { digest, detectedAt: "", reason: "", snapshotLedgerSeq: "1", issuerEventsReplayed: 0, numbers: [
+    { key: "budget", label: "Budget", cents: "50000" }, { key: "captured", label: "Charged", cents: "12000" }, { key: "reserved", label: "Held", cents: "0" },
+    { key: "refunded", label: "Refunded", cents: "0" }, { key: "purchases", label: "Purchases", count: 3 }, { key: "exceptions", label: "Needs review", cents: "150" },
+    { key: "outstanding", label: "Owed", cents: "5025" },
+  ] };
+  const restore = (o = {}) => ({
+    policy: { budgetCents: 50_000n, maxPurchaseCents: 4_000n, maxPurchasesPerPeriod: 0, periodSeconds: 2_592_000, currency: "USD", merchantIdHashes: [new Uint8Array(32).fill(1)], mccs: [], expiresAt: 0n, recurringAllowed: false, feeBps: 50, authorizer: authorizer.publicKey.toBase58() },
+    periodIndex: 2, capturedCents: 12_000n, reservedCents: 0n, refundedCents: 0n, purchasesCount: 3, exceptionCents: 150n, statementOutstandingCents: 5_025n,
+    ledgerHead: new Uint8Array(32).fill(4), ledgerSeq: 9n, reconDigest: Uint8Array.from(Buffer.from(digest, "hex")), ...o,
+  });
+  const tx = ({ args = restore(), signer = authorizer, sign = true, feePayer = owner.publicKey, extra = [] } = {}) => {
+    const ix = sdk.buildRestoreInstruction({ owner: owner.publicKey.toBase58(), cardId, authorizer: signer.publicKey.toBase58(), restore: args }, programId);
+    const t = new Transaction({ feePayer, recentBlockhash: "11111111111111111111111111111111" });
+    t.add(new TransactionInstruction({ programId: new PublicKey(ix.programId), keys: ix.keys.map((k) => ({ pubkey: new PublicKey(k.address), isSigner: k.isSigner, isWritable: k.isWritable })), data: Buffer.from(ix.data) }), ...extra);
+    if (sign) t.partialSign(signer);
+    return t;
+  };
+  const input = { owner: owner.publicKey.toBase58(), cardId, programId, report };
+  assert.equal(m.assertCoSignedRestore(tx(), input).exceptionCents, 150n);
+  // What the owner actually gets: Axum's wire bytes, read back (fee payer comes out writable).
+  const wire = (t) => Transaction.from(t.serialize({ requireAllSignatures: false, verifySignatures: false }));
+  assert.equal(m.assertCoSignedRestore(wire(tx()), input).exceptionCents, 150n);
+  assert.throws(() => m.assertCoSignedRestore(wire(tx({ args: restore({ capturedCents: 1n }) })), input), /doesn't match/);
+  assert.throws(() => m.assertCoSignedRestore(wire(tx({ sign: false })), input), /isn't signed yet/);
+  assert.throws(() => m.assertCoSignedRestore(tx({ args: restore({ exceptionCents: 0n }) }), input), /doesn't match the numbers you reviewed/);
+  assert.throws(() => m.assertCoSignedRestore(tx({ args: restore({ reconDigest: new Uint8Array(32).fill(9) }) }), input), /doesn't match/);
+  assert.throws(() => m.assertCoSignedRestore(tx({ sign: false }), input), /isn't signed yet/);
+  assert.throws(() => m.assertCoSignedRestore(tx({ feePayer: authorizer.publicKey }), input), /doesn't match/);
+  assert.throws(() => m.assertCoSignedRestore(tx(), { ...input, cardId: new Uint8Array(32).fill(7) }), /doesn't match/, "another card's accounts");
+  const sneaky = new TransactionInstruction({ programId: new PublicKey(programId), keys: [], data: Buffer.alloc(8) });
+  assert.throws(() => m.assertCoSignedRestore(tx({ extra: [sneaky] }), input), /doesn't match/);
+});
+
+test("card number: human-only Lithic frame, never rendered by ChainPay", async () => {
+  assert.equal(m.safeEmbedUrl("https://sandbox.lithic.com/v1/embed?session=abc&type=PAN"), "https://sandbox.lithic.com/v1/embed?session=abc&type=PAN");
+  assert.equal(m.safeEmbedUrl("https://evil.example/v1/embed?session=abc"), null);
+  assert.equal(m.safeEmbedUrl("javascript:alert(1)"), null);
+  assert.equal(m.safeEmbedUrl("https://sandbox.lithic.com/v1/cards"), null);
+  const live = { cardNumberSession: async () => ({ embedUrl: "https://sandbox.lithic.com/v1/embed?session=s1&type=PAN", expiresAt: new Date(Date.now() + 30_000).toISOString() }) };
+  const { host, unmount } = await render(createElement(m.CardNumberReveal, { source: live, card }));
+  await click(button(host, "Show card number"));
+  await settle();
+  const frame = host.querySelector("iframe");
+  assert.equal(frame.getAttribute("src"), "https://sandbox.lithic.com/v1/embed?session=s1&type=PAN");
+  assert.equal(frame.getAttribute("sandbox"), "allow-scripts allow-same-origin");
+  assert.equal(frame.getAttribute("referrerpolicy"), "no-referrer");
+  assert.doesNotMatch(host.textContent, /\d{13,19}/, "no digits rendered by ChainPay");
+  await click(button(host, "Hide card number"));
+  assert.equal(host.querySelector("iframe"), null);
+  await unmount();
+  const evil = { cardNumberSession: async () => ({ embedUrl: "https://evil.example/v1/embed", expiresAt: new Date().toISOString() }) };
+  const refused = await render(createElement(m.CardNumberReveal, { source: evil, card }));
+  await click(button(refused.host, "Show card number"));
+  await settle();
+  assert.equal(refused.host.querySelector("iframe"), null);
+  assert.match(refused.host.textContent, /unexpected link/);
+  await refused.unmount();
+  // A slow session for card A must not open under card B.
+  let release;
+  const slow = { cardNumberSession: () => new Promise((resolve) => { release = () => resolve({ embedUrl: "https://sandbox.lithic.com/v1/embed?session=A", expiresAt: new Date(Date.now() + 30_000).toISOString() }); }) };
+  const switching = await render(createElement(m.CardNumberReveal, { source: slow, card }));
+  await click(button(switching.host, "Show card number"));
+  await act(async () => { switching.root.render(createElement(m.CardNumberReveal, { source: slow, card: { ...card, cardId: "b2".repeat(32), label: "Other card" } })); });
+  await act(async () => { release(); });
+  await settle();
+  assert.equal(switching.host.querySelector("iframe"), null, "stale session dropped");
+  await switching.unmount();
 });
 
 test("dollar input is exact and statement lines add up to the cent", () => {
@@ -191,7 +269,7 @@ test("Read as another wallet: null is shown as hidden, never as missing", async 
         owner: [{ label: "Card rules", state: "visible", raw: "value: { … }", summary: "Rules version 2" }],
         stranger: { wallet: "Str4ngerWa11et1111111111111111111111111111", reads: [{ label: "Card rules", state: "not_visible", raw: "value: null" }, { label: "This period", state: "not_visible", raw: "value: null" }] },
         publicChain: { address: "Po1icy1111111111111111111111111111111111111", bytes: 695, nonZeroAfterOwnerLink: 0, preview: "card + owner link, then 623 zero bytes", state: "empty" },
-        attestation: { hardware: "verified", measurements: "pending", label: "Hardware verified, measurements pending" },
+        attestation: { hardware: "verified", measurements: "matched", label: "Genuine TDX hardware and expected MagicBlock build verified (Devnet)", provenance: "confirmed by MagicBlock to ChainPay, 2026-10-04 (direct, unsigned)" },
       };
     },
     unlock: async () => {}, isUnlocked: () => true,
@@ -205,11 +283,45 @@ test("Read as another wallet: null is shown as hidden, never as missing", async 
   assert.match(stranger.textContent, /Hidden from this wallet/);
   assert.doesNotMatch(stranger.textContent, /missing|does not exist|doesn't exist|not found/i);
   assert.match(host.querySelector('[data-testid="null-note"]').textContent, /Null means this wallet can't see it\. It doesn't mean the card is missing\./);
-  assert.match(host.textContent, /Genuine TDX hardware verified; workload measurements pending from MagicBlock\./);
+  const attestation = host.querySelector('[data-testid="attestation"]');
+  assert.equal(attestation.dataset.passed, "true");
+  assert.match(attestation.textContent, /Genuine TDX hardware and expected MagicBlock build verified \(Devnet\)\./);
+  assert.match(attestation.textContent, /Expected build values: confirmed by MagicBlock to ChainPay, 2026-10-04 \(direct, unsigned\)\./);
   assert.equal(m.readVerdict({ state: "not_visible" }), "Hidden from this wallet");
-  assert.equal(m.attestationCopy({ hardware: "verified", measurements: "pending", label: "" }), m.MEASUREMENTS_PENDING_COPY);
-  assert.doesNotMatch(m.attestationCopy({ hardware: "failed", measurements: "unavailable", label: "" }), /verified/);
   await unmount();
+});
+
+test("attestation copy claims the verified build only when both halves passed", () => {
+  const pass = { hardware: "verified", measurements: "matched", label: "x" };
+  assert.equal(m.attestationCopy(pass), m.ATTESTATION_VERIFIED_COPY);
+  assert.equal(m.ATTESTATION_VERIFIED_COPY, "Genuine TDX hardware and expected MagicBlock build verified (Devnet).");
+  const failing = [
+    { hardware: "challenge_bound", measurements: "matched", label: "The private rollup answered a fresh challenge with MagicBlock's expected Devnet build. Intel's hardware signature wasn't checked here." },
+    { hardware: "verified", measurements: "mismatch", label: "The private rollup is running a build that isn't MagicBlock's confirmed Devnet build, so approvals are paused" },
+    { hardware: "verified", measurements: "unavailable", label: "Hardware verified, but the workload couldn't be checked, so approvals are paused" },
+    { hardware: "failed", measurements: "unavailable", label: "" },
+    { hardware: "not_checked", measurements: "unavailable", label: "This browser couldn't run the hardware check" },
+  ];
+  for (const a of failing) {
+    assert.equal(m.attestationPassed(a), false);
+    assert.notEqual(m.attestationCopy(a), m.ATTESTATION_VERIFIED_COPY);
+    assert.doesNotMatch(m.attestationCopy(a), /build verified/);
+  }
+  assert.match(m.attestationCopy(failing[1]), /isn't MagicBlock's confirmed Devnet build, so approvals are paused\.$/);
+  assert.match(m.attestationCopy(failing[3]), /Couldn't confirm/);
+});
+
+test("card face carries a Sandbox mark while the issuer is a sandbox, and no back", async () => {
+  const { host, unmount } = await render(createElement(m.AgentCard, { label: "Data API credits", lastFour: "4821" }));
+  const figure = host.querySelector("figure");
+  assert.equal(figure.dataset.issuerEnv, "sandbox", "defaults to sandbox when no env says production");
+  assert.equal(host.querySelector('[data-testid="card-sandbox-mark"]').textContent, "Sandbox");
+  assert.match(figure.getAttribute("aria-label"), /sandbox card ending 4821/);
+  assert.doesNotMatch(host.innerHTML, /flip|card-back/i);
+  await unmount();
+  const live = await render(createElement(m.AgentCard, { label: "Data API credits", lastFour: "4821", issuerEnvironment: "production" }));
+  assert.equal(live.host.querySelector('[data-testid="card-sandbox-mark"]'), null);
+  await live.unmount();
 });
 
 test("/verify/card checks disclosed fields against the on-chain commitment, with the exact copy", async () => {

@@ -22,8 +22,9 @@ export type CardPrivateRead = {
   period: TeeRead<CardPeriod>;
 };
 
-export type RecoveryNumberKey = "budget" | "captured" | "reserved" | "refunded" | "purchases" | "outstanding";
-export const RECOVERY_NUMBER_KEYS: readonly RecoveryNumberKey[] = ["budget", "captured", "reserved", "refunded", "purchases", "outstanding"];
+export type RecoveryNumberKey = "budget" | "captured" | "reserved" | "refunded" | "purchases" | "exceptions" | "outstanding";
+/** Every counter `restore` writes; Axum's report must show each one (key "exceptions" = exception debits this period). */
+export const RECOVERY_NUMBER_KEYS: readonly RecoveryNumberKey[] = ["budget", "captured", "reserved", "refunded", "purchases", "exceptions", "outstanding"];
 
 /** Exact numbers for an owner-assisted restore (contracts §8.2). */
 export type RecoveryReport = {
@@ -71,7 +72,17 @@ export type PrivacyCheckResult = {
   owner: ReadResult[];
   stranger: { wallet: string; reads: ReadResult[] };
   publicChain: { address: string; bytes: number; nonZeroAfterOwnerLink: number; preview: string; state: "empty" | "has_data" | "missing" | "rpc_error" };
-  attestation: { hardware: "verified" | "failed" | "not_checked"; measurements: "matched" | "mismatch" | "pending" | "unavailable"; label: string };
+  /**
+   * TEE attestation from one fresh quote (sdk verifyTee). `verified` = Intel DCAP chain checked;
+   * `challenge_bound` = the quote answered our challenge but its chain wasn't checked.
+   */
+  attestation: {
+    hardware: "verified" | "challenge_bound" | "failed" | "not_checked";
+    measurements: "matched" | "mismatch" | "pending" | "unavailable";
+    label: string;
+    /** Where the expected build values come from (shown next to a match or mismatch). */
+    provenance?: string;
+  };
 };
 
 export type RepaymentTarget = {
@@ -121,6 +132,11 @@ export interface CardsSource {
   confirmReconciled(card: CardView, report: RecoveryReport): Promise<void>;
 
   privacyCheck(card: CardView): Promise<PrivacyCheckResult>;
+  /**
+   * Owner only: a single-use Lithic embedded-card session. `embedUrl` is framed
+   * as-is and never read by ChainPay code; null in fixtures (no card number exists).
+   */
+  cardNumberSession(cardId: string): Promise<{ embedUrl: string | null; expiresAt: string }>;
   /** Builds a disclosure bundle for the picked fields. */
   disclose(card: CardView, indices: number[]): Promise<DisclosureBundle>;
 }

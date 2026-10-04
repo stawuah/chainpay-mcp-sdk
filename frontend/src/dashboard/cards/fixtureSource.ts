@@ -3,8 +3,8 @@ import {
   buildDisclosureBundle,
   cardPolicyView,
   commitmentRoot,
-  DEVNET_TEE_VALIDATOR,
   formatUsdCents,
+  MAGICBLOCK_DEVNET_TEE_MEASUREMENTS,
   type CardActivityRow,
   type CardCommitment,
   type CardPeriod,
@@ -30,6 +30,16 @@ export type CardsFixtureOptions = {
   freezeAck?: boolean;
   /** Milliseconds each fake step waits (0 in tests). */
   delayMs?: number;
+  /** Privacy-check attestation outcome to show (default: what the live Devnet check returned on 2026-10-04). */
+  attestation?: "verified" | "challenge_bound" | "mismatch" | "failed";
+};
+
+const FIXTURE_PROVENANCE = MAGICBLOCK_DEVNET_TEE_MEASUREMENTS.provenance;
+const FIXTURE_ATTESTATION: Record<NonNullable<CardsFixtureOptions["attestation"]>, PrivacyCheckResult["attestation"]> = {
+  verified: { hardware: "verified", measurements: "matched", label: "Genuine TDX hardware and expected MagicBlock build verified (Devnet)", provenance: FIXTURE_PROVENANCE },
+  challenge_bound: { hardware: "challenge_bound", measurements: "matched", label: "The private rollup answered a fresh challenge with MagicBlock's expected Devnet build. Intel's hardware signature wasn't checked here.", provenance: FIXTURE_PROVENANCE },
+  mismatch: { hardware: "verified", measurements: "mismatch", label: "The private rollup is running a build that isn't MagicBlock's confirmed Devnet build, so approvals are paused", provenance: FIXTURE_PROVENANCE },
+  failed: { hardware: "failed", measurements: "unavailable", label: "Couldn't confirm the private rollup runs on genuine secure hardware." },
 };
 
 const key = (fill: number) => new PublicKey(new Uint8Array(32).fill(fill)).toBase58();
@@ -183,6 +193,7 @@ const RECOVERY_REPORT: RecoveryReport = {
     { key: "reserved", label: "Held right now", cents: "0" },
     { key: "refunded", label: "Refunded this period", cents: "0" },
     { key: "purchases", label: "Purchases this period", count: 3 },
+    { key: "exceptions", label: "Needs-review charges this period", cents: "0" },
     { key: "outstanding", label: "Owed on the statement", cents: "41467" },
   ],
 };
@@ -247,6 +258,11 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
       }
       unlocked = true;
       return FIXTURE_CARD_IDS.data;
+    },
+    async cardNumberSession(cardId) {
+      find(cardId);
+      await wait(delay / 3);
+      return { embedUrl: null, expiresAt: new Date(Date.now() + 60_000).toISOString() };
     },
     async freeze(cardId) {
       const card = find(cardId);
@@ -321,7 +337,7 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
           ],
         },
         publicChain: { address: key(41), bytes: 695, nonZeroAfterOwnerLink: 0, preview: "card + owner link, then 623 zero bytes", state: "empty" },
-        attestation: { hardware: "verified", measurements: "pending", label: `Validator ${DEVNET_TEE_VALIDATOR.slice(0, 4)}…` },
+        attestation: FIXTURE_ATTESTATION[options.attestation ?? "verified"],
       };
     },
     async disclose(card, indices) {

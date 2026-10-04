@@ -1,6 +1,7 @@
 import { Clock3, Lock, Snowflake, Wrench } from "lucide-react";
 import type { CardView } from "@chainpay/sdk";
 import { CONNECTION_PATH } from "../../brand/Brand";
+import { CARD_ISSUER_ENV, type CardIssuerEnvironment } from "../../config/public";
 import { cardStatus } from "./lifecycle";
 import { Money } from "./ui";
 import "./agent-card.css";
@@ -11,6 +12,10 @@ import "./agent-card.css";
  * full number, expiry or CVV, and no card-network logo. Frozen cards are
  * frosted, and the frost is redundant coding: the freeze lines and the status
  * pill around it always carry the same fact in words.
+ *
+ * While the issuer is a sandbox (Lithic sandbox today) the face carries a
+ * small "Sandbox" mark, so a screenshot of the card never reads as a live
+ * card. There is no card back and no flip (nothing honest to put there).
  */
 
 export type AgentCardFrost = "none" | "frozen" | "freeze_pending" | "needs_restore";
@@ -51,6 +56,8 @@ export type AgentCardProps = {
   size?: "mini" | "standard";
   /** Short caption under the face's top-right corner while creating. */
   pendingNote?: string;
+  /** Issuer environment. Defaults to VITE_CHAINPAY_CARD_ISSUER_ENV (sandbox unless it says production). */
+  issuerEnvironment?: CardIssuerEnvironment;
   className?: string;
 };
 
@@ -60,15 +67,16 @@ const FROST_COPY: Record<Exclude<AgentCardFrost, "none">, { icon: typeof Snowfla
   needs_restore: { icon: Wrench, label: "Needs restore" },
 };
 
-export function AgentCard({ label, lastFour, frost = "none", leftCents = null, size = "standard", pendingNote, className }: AgentCardProps) {
+export function AgentCard({ label, lastFour, frost = "none", leftCents = null, size = "standard", pendingNote, issuerEnvironment = CARD_ISSUER_ENV, className }: AgentCardProps) {
+  const sandbox = issuerEnvironment === "sandbox";
   const digits = lastFour && /^\d{4}$/.test(lastFour) ? lastFour : "····";
   const frostCopy = frost === "none" ? null : FROST_COPY[frost];
   const FrostIcon = frostCopy?.icon;
-  const description = `${label || "New card"}, card ending ${lastFour ?? "not issued yet"}${frostCopy ? `, ${frostCopy.label.toLowerCase()}` : ""}`;
+  const description = `${label || "New card"}, ${sandbox ? "sandbox " : ""}card ending ${lastFour ?? "not issued yet"}${frostCopy ? `, ${frostCopy.label.toLowerCase()}` : ""}`;
 
   if (size === "mini") {
     return (
-      <span className={`cp-agent-card is-mini${frost !== "none" ? " is-frosted" : ""}${className ? ` ${className}` : ""}`} data-frost={frost} aria-hidden="true">
+      <span className={`cp-agent-card is-mini${frost !== "none" ? " is-frosted" : ""}${className ? ` ${className}` : ""}`} data-frost={frost} data-issuer-env={issuerEnvironment} aria-hidden="true">
         <span className="cp-agent-card-face">
           <LogoTile />
           <span className="cp-agent-card-digits">{digits}</span>
@@ -79,7 +87,7 @@ export function AgentCard({ label, lastFour, frost = "none", leftCents = null, s
   }
 
   return (
-    <figure className={`cp-agent-card${frost !== "none" ? " is-frosted" : ""}${className ? ` ${className}` : ""}`} data-frost={frost} aria-label={description} role="img">
+    <figure className={`cp-agent-card${frost !== "none" ? " is-frosted" : ""}${className ? ` ${className}` : ""}`} data-frost={frost} data-issuer-env={issuerEnvironment} aria-label={description} role="img">
       <span className="cp-agent-card-face">
         <span className="cp-agent-card-top">
           <span className="cp-agent-card-brand"><LogoTile /><span className="cp-agent-card-word">chainpay</span></span>
@@ -92,6 +100,7 @@ export function AgentCard({ label, lastFour, frost = "none", leftCents = null, s
         <span className="cp-agent-card-mid">
           <span className="cp-agent-card-chip"><i /><i /><i /></span>
           <Contactless />
+          {sandbox && <span className="cp-agent-card-sandbox" data-testid="card-sandbox-mark">Sandbox</span>}
         </span>
         <span className="cp-agent-card-bottom">
           <span className="cp-agent-card-name">{label || "Name your card"}</span>

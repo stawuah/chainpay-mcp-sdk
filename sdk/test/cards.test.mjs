@@ -91,7 +91,8 @@ test("instruction and account discriminators are Anchor sha256 prefixes", () => 
   for (const [name, disc] of Object.entries(CARD_ACCOUNT_DISCRIMINATORS)) {
     assert.deepEqual([...disc], sha8(`account:${name[0].toUpperCase()}${name.slice(1)}`), name);
   }
-  assert.equal(Object.keys(CARD_POLICY_DISCRIMINATORS).length, 27);
+  assert.equal(Object.keys(CARD_POLICY_DISCRIMINATORS).length, 28);
+  assert.equal(cardPolicyErrorName(6044), "EphemeralAccountsOpen");
   assert.equal(cardPolicyErrorName(6016), "BudgetExceeded");
   assert.equal(cardPolicyErrorName(6032), "DuplicateRepayment");
   assert.equal(cardPolicyErrorName(5999), undefined);
@@ -193,7 +194,8 @@ test("PDA helpers use the contract seeds and refuse an unconfigured program", ()
   assert.equal(deriveReservationAddress(accounts.policy, auth, PROGRAM), PublicKey.findProgramAddressSync([Buffer.from("res"), new PublicKey(accounts.policy).toBuffer(), Buffer.from(auth)], programKey)[0].toBase58());
   assert.equal(deriveCheckoutIntentAddress(accounts.policy, bytes(16, 1), PROGRAM), PublicKey.findProgramAddressSync([Buffer.from("intent"), new PublicKey(accounts.policy).toBuffer(), Buffer.from(bytes(16, 1))], programKey)[0].toBase58());
   assert.throws(() => deriveCheckoutIntentAddress(accounts.policy, bytes(32, 1), PROGRAM), /16 bytes/);
-  assert.throws(() => deriveCardBindingAddress(owner, cardId), /not configured/);
+  assert.equal(deriveCardBindingAddress(owner, cardId), deriveCardBindingAddress(owner, cardId, "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F"));
+  assert.throws(() => deriveCardBindingAddress(owner, cardId, ""), /not configured/);
   assert.equal(cardIdToHex(cardIdFromHex("ab".repeat(32))), "ab".repeat(32));
   assert.throws(() => cardIdFromHex("xyz"), /hex/);
 });
@@ -216,6 +218,7 @@ test("every instruction's data round-trips with exact Borsh sizes", () => {
     setPolicy: [{ policy: policyArgs({ merchantIdHashes: [h(1), h(2)], mccs: [1, 2, 3] }) }, 8 + 8 + 8 + 2 + 4 + 3 + 4 + 64 + 4 + 6 + 8 + 1 + 2 + 32],
     openCheckoutIntent: [{ intentId: bytes(16, 1), agent: key(), merchantIdHash: h(3), mcc: 5734, maxAmountCents: 2_000n, currency: "USD", expiresAt: 1_759_000_600n }, 8 + 16 + 32 + 32 + 2 + 8 + 3 + 8],
     cancelCheckoutIntent: [{}, 8],
+    closeCheckoutIntent: [{}, 8],
     authorize: [{ authIdHash: h(4), intentId: bytes(16, 2), amountCents: 2_000n, currency: "USD", merchantIdHash: h(3), mcc: 5734, merchantInitiated: false, singleMessage: true }, 8 + 32 + 16 + 8 + 3 + 32 + 2 + 1 + 1],
     adjustReservation: [{ newAmountCents: 1n }, 16],
     capture: [{ amountCents: 1_999n, captureIdHash: h(5) }, 48],
@@ -228,7 +231,7 @@ test("every instruction's data round-trips with exact Borsh sizes", () => {
     freeze: [{ reason: 2 }, 9],
     unfreeze: [{}, 8],
     recoveryFreeze: [{ reason: 3 }, 9],
-    restore: [{ restore: { policy: policyArgs(), periodIndex: 2, capturedCents: 1n, reservedCents: 2n, refundedCents: 3n, purchasesCount: 4, statementOutstandingCents: 5n, ledgerHead: h(7), ledgerSeq: 6n, reconDigest: h(8) } }, null],
+    restore: [{ restore: { policy: policyArgs(), periodIndex: 2, capturedCents: 1n, reservedCents: 2n, refundedCents: 3n, purchasesCount: 4, exceptionCents: 9n, statementOutstandingCents: 5n, ledgerHead: h(7), ledgerSeq: 6n, reconDigest: h(8) } }, null],
     confirmReconciled: [{ reconDigest: h(8) }, 40],
     checkpoint: [{ masterSalt: h(9), seq: 5n }, 48],
     writeCommitment: [{ root: h(10), seq: 5n, policyVersion: 3, periodIndex: 2 }, 56],
@@ -262,7 +265,9 @@ test("owner builders validate before anything is signed", () => {
   assert.deepEqual(policyArgsProblems(policyArgs({ budgetCents: 2_000_000n, maxPurchaseCents: 1n, currency: "EUR", feeBps: 2_000, periodSeconds: 60, mccs: [1, 1] })).length, 5);
   assert.throws(() => buildDelegateCardInstruction({ owner, cardId, validator: key() }, PROGRAM), /allowed TEE validator/);
   assert.throws(() => buildUpdatePermissionInstruction({ owner, cardId, op: { kind: "make_public", pubkey: key() } }, PROGRAM), /Only add_reader/);
-  assert.throws(() => buildSetPolicyInstruction({ owner, cardId, policy: policyArgs() }), /not configured/);
+  // Defaults to the deployed Devnet program; a blank override still refuses.
+  assert.equal(buildSetPolicyInstruction({ owner, cardId, policy: policyArgs() }).programId, "Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F");
+  assert.throws(() => buildSetPolicyInstruction({ owner, cardId, policy: policyArgs() }, " "), /not configured/);
 });
 
 test("write_commitment keeps the contract's fixed account order", () => {
@@ -436,9 +441,9 @@ test("wallet-adapter signer accepts adapter and wallet-standard shapes and rejec
   assert.equal(base58Encode(Uint8Array.of(0, 0, 1)), "112");
 });
 
-test("attestation reports 'hardware verified, measurements pending' until an allowlist exists", async () => {
+test("attestation reports 'hardware verified, measurements pending' with an empty allowlist", async () => {
   const ok = { verifyRpcIntegrity: async () => {}, verifyIntegrity: async () => {} };
-  const pending = await verifyTee({ mode: "report", provider: ok });
+  const pending = await verifyTee({ mode: "report", provider: ok, allowlist: [] });
   assert.equal(pending.label, "Hardware verified, measurements pending");
   assert.equal(pending.measurements, "pending");
   assert.equal(pending.ok, true);
@@ -524,8 +529,10 @@ test("review fixes: identifiers survive redaction, enforce fails closed, credits
   assert.equal(redactCardNumbers("cpcap_v1_abc-1234567890123"), "cpcap_v1_abc-1234567890123");
   assert.equal(redactCardNumbers("id_1234567890123456"), "id_1234567890123456");
   assert.equal(redactCardNumbers("pay 4111-1111-1111-1111."), "pay [redacted].");
-  const empty = await verifyTee({ mode: "enforce", provider: { verifyRpcIntegrity: async () => {} } });
+  const empty = await verifyTee({ mode: "enforce", provider: { verifyRpcIntegrity: async () => {} }, allowlist: [] });
   assert.equal(empty.ok, false);
+  // Devnet default allowlist, but no way to read the build: enforce still fails closed.
+  assert.equal((await verifyTee({ mode: "enforce", provider: { verifyRpcIntegrity: async () => {} } })).ok, false);
   assert.equal(parseSignedCents("-1005"), -1005n);
   assert.equal(formatUsdCents("-1005"), "-$10.05");
   assert.throws(() => parseSignedCents("--5"), /cents/);

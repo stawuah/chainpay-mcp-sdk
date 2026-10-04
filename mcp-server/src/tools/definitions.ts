@@ -452,7 +452,7 @@ export const TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         cardId: { type: "string", description: "Card id, 64 lowercase hex characters" },
-        merchantRef: { type: "string", description: "Registered merchant reference" },
+        merchantRef: { type: "string", description: "Registered shop reference. Sandbox shops: demo-approved (ChainPay demo shop, sells data API credits) and demo-unapproved (Unlisted test shop, a card should decline it unless the owner allowed it)." },
         amountCents: { type: "string", description: "Exact amount in whole US cents" },
         currency: { type: "string", enum: ["USD"] },
         description: { type: "string", description: "Optional note, at most 80 characters" },

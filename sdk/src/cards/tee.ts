@@ -22,8 +22,8 @@ import { availableCents, centsToString, maxObligationCents } from "./math.js";
  *   you". It is indistinguishable from "does not exist" on the wire, so it
  *   is never reported as missing.
  * - `verifyTeeRpcIntegrity` proves genuine TDX hardware, not which code runs.
- *   Until MagicBlock publishes MRTD/RTMR values the result says "hardware
- *   verified, measurements pending".
+ *   `verifyTee` adds the workload check: MRTD/RTMR0-3/MROWNER of the same
+ *   fresh quote against MAGICBLOCK_DEVNET_TEE_MEASUREMENTS (pinned below).
  */
 
 const DAY_MS = 86_400_000;
@@ -437,7 +437,26 @@ export function requireVisible<T>(read: TeeRead<T>, what: string): T {
 
 // -------------------------------------------------------------- attestation
 
-export type TeeMeasurement = { mrTd: string; rtMr0: string; rtMr1: string; rtMr2: string; label?: string };
+export type TeeMeasurement = {
+  mrTd: string;
+  rtMr0: string;
+  rtMr1: string;
+  rtMr2: string;
+  /** Optional extra registers. When an allowlist entry pins one, the observed quote must match it too. */
+  rtMr3?: string;
+  mrOwner?: string;
+  label?: string;
+};
+
+/** What one fresh TDX quote showed. */
+export type TeeQuoteAttestation = {
+  /**
+   * `verified`: Intel's DCAP signature chain checked and the quote echoes our fresh challenge.
+   * `challenge_bound`: the quote echoes our fresh challenge, but its signature chain wasn't checked.
+   */
+  hardware: "verified" | "challenge_bound";
+  measurements: TeeMeasurement;
+};
 
 export type TeeIntegrityProvider = {
   /** Fresh-challenge quote check (genuine TDX hardware). Throws on failure. */
@@ -445,24 +464,35 @@ export type TeeIntegrityProvider = {
   verifyIntegrity?(teeUrl: string): Promise<void>;
   /** Parse MRTD/RTMR0-2 from a fresh quote. Optional: only needed once an allowlist exists. */
   readMeasurements?(teeUrl: string): Promise<TeeMeasurement>;
+  /**
+   * Preferred: one fresh quote gives both the hardware verdict and the measurements,
+   * so the build we compare is the one whose signature was checked. Throws on failure.
+   */
+  attestQuote?(teeUrl: string): Promise<TeeQuoteAttestation>;
 };
 
 export type AttestationMode = "report" | "enforce";
 
 export type AttestationResult = {
   mode: AttestationMode;
-  hardware: "verified" | "failed";
+  hardware: "verified" | "challenge_bound" | "failed";
   measurements: "matched" | "mismatch" | "pending" | "unavailable";
   /** Whether an authorizer may keep approving purchases. */
   ok: boolean;
   label: string;
   checkedAt: string;
+  /** Which pinned entry matched (`current` / `previous` label), when one did. */
+  matchedLabel?: string;
 };
 
 export type VerifyTeeOptions = {
   mode: AttestationMode;
   teeUrl?: string;
-  /** Allowed workload measurements (current + previous). Empty or absent means "pending" (gate G-MB). */
+  /**
+   * Allowed workload measurements (current + previous). Omitted: the pinned
+   * MagicBlock values for the Devnet TEE, nothing for any other URL. An empty
+   * list means "pending" (and fails closed in enforce mode).
+   */
   allowlist?: readonly TeeMeasurement[];
   provider?: TeeIntegrityProvider;
   now?: () => number;
@@ -470,23 +500,186 @@ export type VerifyTeeOptions = {
 
 const MEASUREMENT_HEX = /^[0-9a-f]{96}$/;
 
-/** Parse `CARDS_TEE_MEASUREMENTS` (JSON list). Rejects anything that isn't 48-byte lowercase hex. */
+/**
+ * MagicBlock Devnet TEE validator measurements (gate G-MB).
+ *
+ * Observed by ChainPay in a fresh quote from devnet-tee.magicblock.app on
+ * 2026-10-03 (and again 2026-10-04), then confirmed by MagicBlock directly to
+ * Dre on 2026-10-04. That confirmation is not a signed or published source, so
+ * the provenance label says so.
+ *
+ * Rotation: when MagicBlock upgrades the validator, move `current` to
+ * `previous`, pin the new values as `current`, and drop `previous` once the
+ * old build is gone. Deployments can also pass an extra entry through
+ * `teeMeasurementAllowlist(extra)` (Axum: `CARDS_TEE_MEASUREMENTS`; frontend:
+ * `VITE_CHAINPAY_TEE_MEASUREMENTS_PREVIOUS`) without a release.
+ * Mirrored for Axum in shared/cards/tee-measurements.json (a test keeps them equal).
+ */
+export const MAGICBLOCK_DEVNET_TEE_MEASUREMENTS: {
+  readonly teeUrl: string;
+  readonly validator: Address;
+  readonly provenance: string;
+  readonly current: Required<Omit<TeeMeasurement, "label">> & { label: string };
+  readonly previous: (TeeMeasurement & { label: string }) | null;
+} = {
+  teeUrl: DEVNET_TEE_URL,
+  validator: "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo",
+  provenance: "confirmed by MagicBlock to ChainPay, 2026-10-04 (direct, unsigned)",
+  current: {
+    label: "current",
+    mrTd: "c1ee9c16e3afc506cfe042c5b846a368528f3b37618eafb27469bc114cf914e9222c91618470e7f2b28ac360968270a5",
+    rtMr0: "c1f1f2bff33b16d1469134987fcdf0ea3bd9707350cc70e73f086c635a5fc4e96e0d214a7f775608e64d251382f20564",
+    rtMr1: "b4fe8751e5d96b726a0dabb86ba821783626d80638caf6ca0045f31f5e4c4e90e20aee96fca711421db5bdc60e5c91ed",
+    rtMr2: "51c09b72276c8bcd0e274865a7e0a408ee956a6ccfae8b4edd43467d7585ff352bb89e28f5cb62105114cad7225e11ef",
+    rtMr3: "0".repeat(96),
+    mrOwner: "44eeaee2768dd9b3a52b41747367e5751b18f7653f087febd7de11bffabbd1d75d4ff353a68154541215863ee7fc2903",
+  },
+  previous: null,
+};
+
+/** The pinned Devnet allowlist: `current`, then `previous` if a rotation is in progress, then any `extra` entries. */
+export function teeMeasurementAllowlist(extra: readonly TeeMeasurement[] = []): TeeMeasurement[] {
+  const pinned = MAGICBLOCK_DEVNET_TEE_MEASUREMENTS;
+  return [pinned.current, ...(pinned.previous ? [pinned.previous] : []), ...extra];
+}
+
+function isDevnetTee(teeUrl: string): boolean {
+  return teeUrl.replace(/\/+$/, "") === DEVNET_TEE_URL;
+}
+
+/**
+ * Parse an allowlist (JSON list). Accepts the SDK keys (`mrTd`, `rtMr0`…) and
+ * Axum's `CARDS_TEE_MEASUREMENTS` keys (`mrtd`, `rtmr0`…). Rejects anything
+ * that isn't 48-byte hex.
+ */
 export function parseMeasurementAllowlist(json: string | undefined): TeeMeasurement[] {
   if (!json || !json.trim()) return [];
   const parsed = JSON.parse(json) as unknown;
   if (!Array.isArray(parsed)) throw new Error("CARDS_TEE_MEASUREMENTS must be a JSON list");
   return parsed.map((entry, i) => {
-    const m = entry as Partial<TeeMeasurement>;
-    for (const field of ["mrTd", "rtMr0", "rtMr1", "rtMr2"] as const) {
-      const value = typeof m[field] === "string" ? m[field]!.toLowerCase() : "";
-      if (!MEASUREMENT_HEX.test(value)) throw new Error(`CARDS_TEE_MEASUREMENTS[${i}].${field} must be 48 bytes of hex`);
-    }
-    return { mrTd: m.mrTd!.toLowerCase(), rtMr0: m.rtMr0!.toLowerCase(), rtMr1: m.rtMr1!.toLowerCase(), rtMr2: m.rtMr2!.toLowerCase(), ...(m.label ? { label: String(m.label) } : {}) };
+    const m = (entry ?? {}) as Record<string, unknown>;
+    const field = (name: string, alias: string, required: boolean): string | undefined => {
+      const raw = m[name] ?? m[alias];
+      if (raw === undefined && !required) return undefined;
+      const value = typeof raw === "string" ? raw.toLowerCase() : "";
+      if (!MEASUREMENT_HEX.test(value)) throw new Error(`CARDS_TEE_MEASUREMENTS[${i}].${name} must be 48 bytes of hex`);
+      return value;
+    };
+    const rtMr3 = field("rtMr3", "rtmr3", false);
+    const mrOwner = field("mrOwner", "mrowner", false);
+    return {
+      mrTd: field("mrTd", "mrtd", true)!,
+      rtMr0: field("rtMr0", "rtmr0", true)!,
+      rtMr1: field("rtMr1", "rtmr1", true)!,
+      rtMr2: field("rtMr2", "rtmr2", true)!,
+      ...(rtMr3 ? { rtMr3 } : {}),
+      ...(mrOwner ? { mrOwner } : {}),
+      ...(m.label ? { label: String(m.label) } : {}),
+    };
   });
 }
 
 function measurementMatches(actual: TeeMeasurement, allowed: TeeMeasurement): boolean {
-  return (["mrTd", "rtMr0", "rtMr1", "rtMr2"] as const).every((field) => actual[field].toLowerCase() === allowed[field].toLowerCase());
+  const required = (["mrTd", "rtMr0", "rtMr1", "rtMr2"] as const).every((field) => actual[field].toLowerCase() === allowed[field].toLowerCase());
+  const pinned = (["rtMr3", "mrOwner"] as const).every((field) => allowed[field] === undefined || actual[field]?.toLowerCase() === allowed[field]!.toLowerCase());
+  return required && pinned;
+}
+
+// ------------------------------------------------------------ TDX quotes
+
+const TDX_QUOTE_HEADER = 48;
+const TD10_REPORT_LENGTH = 584;
+const TDX_TEE_TYPE = 0x81;
+
+function hexOf(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Read the TD 1.0 report of a TDX quote (v4 or v5 with a TD10 body): MRTD,
+ * MROWNER, RTMR0-3 and the 64-byte report data. Parsing only; it proves
+ * nothing about who signed the quote.
+ */
+export function parseTdxQuote(raw: Uint8Array): { measurements: Required<Omit<TeeMeasurement, "label">>; reportData: Uint8Array } {
+  if (raw.length < TDX_QUOTE_HEADER + TD10_REPORT_LENGTH) throw new Error("TDX quote is truncated");
+  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+  const version = view.getUint16(0, true);
+  const teeType = view.getUint32(4, true);
+  if (teeType !== TDX_TEE_TYPE) throw new Error("Not a TDX quote");
+  // v5 inserts a 6-byte body descriptor (type u16 + size u32) before the report.
+  let offset = TDX_QUOTE_HEADER;
+  if (version === 5) {
+    if (view.getUint16(TDX_QUOTE_HEADER, true) !== 2) throw new Error("Unsupported TDX quote body");
+    offset += 6;
+  } else if (version !== 4) {
+    throw new Error(`Unsupported TDX quote version ${version}`);
+  }
+  const body = raw.subarray(offset, offset + TD10_REPORT_LENGTH);
+  // TEE_TCB_SVN 16, MRSEAM 48, MRSIGNERSEAM 48, SEAMATTRIBUTES 8, TDATTRIBUTES 8, XFAM 8,
+  // MRTD 48, MRCONFIGID 48, MROWNER 48, MROWNERCONFIG 48, RTMR0..3 48 each, REPORTDATA 64.
+  const mrtd = 16 + 48 + 48 + 8 + 8 + 8;
+  const mrowner = mrtd + 96;
+  const rtmr0 = mrtd + 48 * 4;
+  const reportData = rtmr0 + 48 * 4;
+  const at = (start: number) => hexOf(body.subarray(start, start + 48));
+  return {
+    measurements: { mrTd: at(mrtd), mrOwner: at(mrowner), rtMr0: at(rtmr0), rtMr1: at(rtmr0 + 48), rtMr2: at(rtmr0 + 96), rtMr3: at(rtmr0 + 144) },
+    reportData: body.slice(reportData, reportData + 64),
+  };
+}
+
+function base64Encode(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64Decode(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
+export type TdxQuoteProviderOptions = {
+  fetch?: typeof fetch;
+  /**
+   * Verifies Intel's DCAP signature chain over the raw quote (e.g.
+   * `@phala/dcap-qvl` getCollateral + verify). Throws when the quote isn't
+   * genuine. Without it the provider reports `challenge_bound` only.
+   */
+  verifyQuote?: (raw: Uint8Array) => Promise<void>;
+  /** Test hook for the 64-byte challenge. */
+  randomBytes?: (length: number) => Uint8Array;
+};
+
+/**
+ * Attestation from one fresh quote: GET `{tee}/quote?challenge=<base64 64 bytes>`
+ * (the endpoint MagicBlock's verifyTeeRpcIntegrity uses), require the report
+ * data to equal our challenge, optionally verify the DCAP chain, and return
+ * the measurements of that same quote.
+ */
+export function createTdxQuoteProvider(options: TdxQuoteProviderOptions = {}): TeeIntegrityProvider {
+  const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const random = options.randomBytes ?? ((length: number) => globalThis.crypto.getRandomValues(new Uint8Array(length)));
+  const attestQuote = async (teeUrl: string): Promise<TeeQuoteAttestation> => {
+    const challenge = random(64);
+    const response = await doFetch(`${teeUrl.replace(/\/+$/, "")}/quote?challenge=${encodeURIComponent(base64Encode(challenge))}`);
+    const body = await response.json().catch(() => null) as { quote?: unknown } | null;
+    if (!response.ok || typeof body?.quote !== "string") throw new Error("The TEE didn't return a quote");
+    const raw = base64Decode(body.quote);
+    const { measurements, reportData } = parseTdxQuote(raw);
+    if (reportData.length !== challenge.length || reportData.some((byte, i) => byte !== challenge[i])) throw new Error("Quote doesn't answer our challenge");
+    if (options.verifyQuote) {
+      await options.verifyQuote(raw);
+      return { hardware: "verified", measurements };
+    }
+    return { hardware: "challenge_bound", measurements };
+  };
+  return {
+    attestQuote,
+    async verifyRpcIntegrity(teeUrl) {
+      if ((await attestQuote(teeUrl)).hardware !== "verified") throw new Error("Quote signature wasn't verified");
+    },
+    readMeasurements: async (teeUrl) => (await attestQuote(teeUrl)).measurements,
+  };
 }
 
 /**
@@ -509,45 +702,59 @@ export async function loadMagicBlockIntegrityProvider(): Promise<TeeIntegrityPro
   };
 }
 
+/** Plain-language result. Claims only what the check established. */
+function attestationLabel(hardware: "verified" | "challenge_bound", measurements: "matched" | "mismatch" | "pending" | "unavailable", mode: AttestationMode, devnet: boolean): string {
+  const build = devnet ? "MagicBlock's confirmed Devnet build" : "an allowlisted build";
+  const paused = mode === "enforce" ? ", so approvals are paused" : " (report only)";
+  if (measurements === "pending") return mode === "enforce" ? "Enforce mode has no measurement allowlist, so approvals are paused" : "Hardware verified, measurements pending";
+  if (measurements === "unavailable") return `Hardware verified, but the workload couldn't be checked${paused}`;
+  if (measurements === "mismatch") return `The private rollup is running a build that isn't ${build}${paused}`;
+  if (hardware === "verified") return devnet ? "Genuine TDX hardware and expected MagicBlock build verified (Devnet)" : "Genuine TDX hardware and allowlisted workload verified";
+  return devnet
+    ? "The private rollup answered a fresh challenge with MagicBlock's expected Devnet build. Intel's hardware signature wasn't checked here."
+    : "The TEE answered a fresh challenge with an allowlisted build. Intel's hardware signature wasn't checked here.";
+}
+
 export async function verifyTee(options: VerifyTeeOptions): Promise<AttestationResult> {
   const teeUrl = (options.teeUrl ?? DEVNET_TEE_URL).replace(/\/+$/, "");
+  const devnet = isDevnetTee(teeUrl);
   const checkedAt = new Date((options.now ?? Date.now)()).toISOString();
-  const allowlist = options.allowlist ?? [];
+  const allowlist = options.allowlist ?? (devnet ? teeMeasurementAllowlist() : []);
   const base = { mode: options.mode, checkedAt };
+  const hardwareFailed: AttestationResult = { ...base, hardware: "failed", measurements: "unavailable", ok: false, label: "Couldn't confirm the private rollup runs on genuine secure hardware." };
   let provider: TeeIntegrityProvider;
+  let hardware: "verified" | "challenge_bound";
+  let actual: TeeMeasurement | undefined;
   try {
     provider = options.provider ?? await loadMagicBlockIntegrityProvider();
-    await provider.verifyRpcIntegrity(teeUrl);
-    if (provider.verifyIntegrity) await provider.verifyIntegrity(teeUrl);
+    if (provider.attestQuote) {
+      const attested = await provider.attestQuote(teeUrl);
+      hardware = attested.hardware;
+      actual = attested.measurements;
+    } else {
+      await provider.verifyRpcIntegrity(teeUrl);
+      if (provider.verifyIntegrity) await provider.verifyIntegrity(teeUrl);
+      hardware = "verified";
+    }
   } catch {
-    return { ...base, hardware: "failed", measurements: "unavailable", ok: false, label: "Couldn't confirm the private rollup runs on genuine secure hardware." };
+    return hardwareFailed;
   }
   if (allowlist.length === 0) {
     // Enforce without an allowlist is a misconfiguration: fail closed.
-    if (options.mode === "enforce") return { ...base, hardware: "verified", measurements: "pending", ok: false, label: "Enforce mode has no measurement allowlist, so approvals are paused" };
-    return { ...base, hardware: "verified", measurements: "pending", ok: true, label: "Hardware verified, measurements pending" };
+    return { ...base, hardware, measurements: "pending", ok: options.mode === "report", label: attestationLabel(hardware, "pending", options.mode, devnet) };
   }
-  let actual: TeeMeasurement;
-  try {
-    if (!provider.readMeasurements) throw new Error("no measurement reader");
-    actual = await provider.readMeasurements(teeUrl);
-  } catch {
-    return {
-      ...base,
-      hardware: "verified",
-      measurements: "unavailable",
-      ok: options.mode === "report",
-      label: options.mode === "report" ? "Hardware verified, measurements couldn't be read (report only)" : "Hardware verified, but the workload couldn't be checked, so approvals are paused",
-    };
+  if (!actual) {
+    try {
+      if (!provider.readMeasurements) throw new Error("no measurement reader");
+      actual = await provider.readMeasurements(teeUrl);
+    } catch {
+      return { ...base, hardware, measurements: "unavailable", ok: options.mode === "report", label: attestationLabel(hardware, "unavailable", options.mode, devnet) };
+    }
   }
-  if (allowlist.some((allowed) => measurementMatches(actual, allowed))) {
-    return { ...base, hardware: "verified", measurements: "matched", ok: true, label: "Hardware and workload verified" };
+  const matched = allowlist.find((allowed) => measurementMatches(actual!, allowed));
+  if (matched) {
+    // Enforce needs Intel's signature chain: an unsigned quote is just bytes the endpoint chose.
+    return { ...base, hardware, measurements: "matched", ok: options.mode === "report" || hardware === "verified", label: attestationLabel(hardware, "matched", options.mode, devnet), ...(matched.label ? { matchedLabel: matched.label } : {}) };
   }
-  return {
-    ...base,
-    hardware: "verified",
-    measurements: "mismatch",
-    ok: options.mode === "report",
-    label: options.mode === "report" ? "Hardware verified, workload doesn't match the allowlist (report only)" : "Workload doesn't match the allowlist, so approvals are paused",
-  };
+  return { ...base, hardware, measurements: "mismatch", ok: options.mode === "report", label: attestationLabel(hardware, "mismatch", options.mode, devnet) };
 }

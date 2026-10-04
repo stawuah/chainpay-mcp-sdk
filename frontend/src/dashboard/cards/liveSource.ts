@@ -5,6 +5,7 @@ import {
   buildInitPermissionInstruction,
   buildResolveExceptionInstruction,
   buildRestoreInstruction,
+  decodeCardInstructionData,
   buildSetPolicyInstruction,
   buildUnfreezeInstruction,
   buildUpdatePermissionInstruction,
@@ -21,14 +22,12 @@ import {
   DELEGATION_PROGRAM_ID,
   getTeeSession,
   keypairSigner,
-  loadMagicBlockIntegrityProvider,
   merchantIdHashesForRefs,
   readCardPeriod,
   readCardPolicy,
   readTeeAccount,
   toWeb3Instruction,
   toWeb3Transaction,
-  verifyTee,
   walletAdapterSigner,
   type CardActivityRow,
   type CardView,
@@ -43,6 +42,7 @@ import { authorizedFetch } from "../../session";
 import { BACKEND_URL, CARD_PARTNER_TOKEN_ACCOUNT, CARD_POLICY_PROGRAM_ID, DEVNET_USDC_MINT } from "../../config/public";
 import { chainpayClient } from "../../config/client";
 import { sha256Hex, submitSignedTransaction } from "../../owner/runtime";
+import { checkTeeAttestation } from "./teeAttestation";
 import {
   CardsNotEnabledError,
   type CardPrivateRead,
@@ -155,16 +155,11 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
     }
   }
 
-  /** Owner co-signs an authorizer-signed PER transaction after checking it is exactly one card_policy `restore` with the reviewed args. */
-  async function sendCoSignedTee(step: string, encoded: string, expected: RestoreArgs, cardId: string): Promise<string> {
+  /** Owner co-signs an authorizer-signed PER transaction after checking it is exactly one card_policy `restore` with the reviewed values. */
+  async function sendCoSignedTee(step: string, encoded: string, report: RecoveryReport, cardId: string): Promise<string> {
     if (!deps.signTransaction) throw new Error("This wallet can't sign transactions.");
     const transaction = Transaction.from(Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0)));
-    const want = buildRestoreInstruction({ ...cardRef(cardId), restore: expected }, programId);
-    const [only] = transaction.instructions;
-    const sameData = only && Buffer.from(only.data).equals(Buffer.from(want.data));
-    if (transaction.instructions.length !== 1 || !only.programId.equals(new PublicKey(programId)) || !sameData) {
-      throw new Error("The restore ChainPay prepared doesn't match the numbers you reviewed, so it wasn't signed.");
-    }
+    assertCoSignedRestore(transaction, { ...cardRef(cardId), programId, report });
     const tee = await ensureSession();
     const signed = await deps.signTransaction(transaction);
     try {
@@ -293,6 +288,7 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
     },
 
     freeze: (cardId, reason, operationId) => guard(() => api.freezeCard(cardId, reason, operationId)),
+    cardNumberSession: (cardId) => guard(() => api.createEmbedSession(cardId)),
 
     async unfreeze(card, policyVersion, operationId) {
       await sendTee("Unfreeze", [buildUnfreezeInstruction(cardRef(card.cardId), programId)]);
@@ -359,14 +355,13 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
 
     async restore(card, report) {
       const prepared = await guard(() => api.prepareRestore(card.cardId, { clientOperationId: `card-restore-${report.digest.slice(0, 32)}`, reconReportDigest: report.digest }));
-      // card_policy (Lane 1 review fix) requires owner + authorizer co-sign on restore.
-      // Axum returns the PER transaction already signed by the authorizer; the owner
-      // checks it carries exactly the reviewed values, adds a signature and sends it.
-      if (typeof prepared.transaction === "string") {
-        await sendCoSignedTee("Approve restore", prepared.transaction, parseRestoreArgs(prepared, report), card.cardId);
-        return;
-      }
-      await sendTee("Approve restore", [buildRestoreInstruction({ ...cardRef(card.cardId), restore: parseRestoreArgs(prepared, report) }, programId)]);
+      // card_policy requires owner + authorizer co-sign on restore, so there is no
+      // owner-only path. Axum returns the PER transaction already signed by the
+      // authorizer (`restoreTx`); the owner checks it writes exactly the reviewed
+      // values, adds a signature and sends it.
+      const encoded = typeof prepared.restoreTx === "string" ? prepared.restoreTx : typeof prepared.transaction === "string" ? prepared.transaction : null;
+      if (!encoded) throw new Error("ChainPay didn't return the co-signed restore yet. Nothing was signed; try again in a moment.");
+      await sendCoSignedTee("Approve restore", encoded, report, card.cardId);
     },
 
     async confirmReconciled(card, report) {
@@ -400,11 +395,9 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
 
       let attestation: PrivacyCheckResult["attestation"];
       try {
-        const provider = await loadMagicBlockIntegrityProvider();
-        const result = await verifyTee({ mode: "report", teeUrl: DEVNET_TEE_URL, provider });
-        attestation = { hardware: result.hardware, measurements: result.measurements, label: result.label };
+        attestation = await checkTeeAttestation();
       } catch {
-        attestation = { hardware: "not_checked", measurements: "unavailable", label: "This browser can't run the hardware check. ChainPay's server runs it every 10 minutes." };
+        attestation = { hardware: "not_checked", measurements: "unavailable", label: "This browser couldn't run the hardware check" };
       }
 
       return {
@@ -440,46 +433,43 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
   };
 }
 
-/** Axum's prepared restore args (cent strings, hex hashes) → SDK RestoreArgs. Anything unexpected stops the restore. */
-export function parseRestoreArgs(value: Record<string, unknown>, report: RecoveryReport): RestoreArgs {
-  const reconDigest = report.digest;
-  const cents = (v: unknown, name: string) => {
-    if (typeof v !== "string" || !/^(0|[1-9][0-9]{0,15})$/.test(v)) throw new Error(`Restore value "${name}" is malformed`);
-    return BigInt(v);
-  };
-  const int = (v: unknown, name: string) => {
-    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) throw new Error(`Restore value "${name}" is malformed`);
-    return v;
-  };
-  const p = value.policy as Record<string, unknown> | undefined;
-  if (!p || typeof p !== "object") throw new Error("Restore values are missing the card's rules");
-  if (value.reconDigest !== reconDigest) throw new Error("Restore values don't match the report you reviewed");
-  const args: RestoreArgs = {
-    policy: {
-      budgetCents: cents(p.budgetCents, "budget"),
-      maxPurchaseCents: cents(p.maxPurchaseCents, "max purchase"),
-      maxPurchasesPerPeriod: int(p.maxPurchasesPerPeriod, "purchase count"),
-      periodSeconds: int(p.periodSeconds, "period"),
-      currency: "USD",
-      merchantIdHashes: (Array.isArray(p.merchantIdHashes) ? p.merchantIdHashes : []).map((h) => hexBytesStrict(h)),
-      mccs: (Array.isArray(p.mccs) ? p.mccs : []).map((m) => int(m, "category")),
-      expiresAt: BigInt(int(p.expiresAt ?? 0, "end date")),
-      recurringAllowed: p.recurringAllowed === true,
-      feeBps: int(p.feeBps, "fee"),
-      authorizer: new PublicKey(String(p.authorizer)).toBase58(),
-    },
-    periodIndex: int(value.periodIndex, "period number"),
-    capturedCents: cents(value.capturedCents, "charged"),
-    reservedCents: cents(value.reservedCents, "held"),
-    refundedCents: cents(value.refundedCents, "refunded"),
-    purchasesCount: int(value.purchasesCount, "purchases"),
-    statementOutstandingCents: cents(value.statementOutstandingCents, "owed"),
-    ledgerHead: hexBytesStrict(value.ledgerHead),
-    ledgerSeq: cents(value.ledgerSeq, "log position"),
-    reconDigest: hexBytesStrict(reconDigest),
-  };
-  assertRestoreMatchesReport(args, report);
+const RESTORE_MISMATCH = "The restore ChainPay prepared doesn't match the numbers you reviewed, so it wasn't signed.";
+
+/**
+ * The co-signed restore must be exactly one card_policy `restore` for this card,
+ * paid by the owner, already signed by an authorizer other than the owner, with
+ * the account list the program expects, and every value it writes equal to a
+ * number in the report the owner reviewed. Checks what will actually be signed.
+ */
+export function assertCoSignedRestore(transaction: Transaction, input: { owner: string; cardId: Uint8Array; programId: string; report: RecoveryReport }): RestoreArgs {
+  const [only] = transaction.instructions;
+  if (transaction.instructions.length !== 1 || !only.programId.equals(new PublicKey(input.programId))) throw new Error(RESTORE_MISMATCH);
+  if (!transaction.feePayer || transaction.feePayer.toBase58() !== input.owner) throw new Error(RESTORE_MISMATCH);
+  let decoded: ReturnType<typeof decodeCardInstructionData>;
+  try {
+    decoded = decodeCardInstructionData(only.data);
+  } catch {
+    throw new Error(RESTORE_MISMATCH);
+  }
+  if (decoded.name !== "restore") throw new Error(RESTORE_MISMATCH);
+  const args = decoded.args.restore;
+  if (bytesToHexLower(args.reconDigest) !== input.report.digest) throw new Error(RESTORE_MISMATCH);
+  assertRestoreMatchesReport(args, input.report);
+  const authorizer = only.keys[1]?.pubkey.toBase58();
+  if (!authorizer || authorizer === input.owner) throw new Error(RESTORE_MISMATCH);
+  const want = buildRestoreInstruction({ owner: input.owner, cardId: input.cardId, authorizer, restore: args }, input.programId);
+  // A deserialized transaction marks the fee payer (the owner) writable, so the owner's
+  // writable flag is not compared; every other key must match exactly.
+  const sameKeys = only.keys.length === want.keys.length && want.keys.every((key, i) =>
+    only.keys[i].pubkey.toBase58() === key.address && only.keys[i].isSigner === key.isSigner && (key.address === input.owner || only.keys[i].isWritable === key.isWritable));
+  if (!sameKeys || !Buffer.from(only.data).equals(Buffer.from(want.data))) throw new Error(RESTORE_MISMATCH);
+  const authorizerSigned = transaction.signatures.some((entry) => entry.publicKey.toBase58() === authorizer && entry.signature !== null);
+  if (!authorizerSigned) throw new Error("ChainPay's half of the restore isn't signed yet, so it wasn't signed.");
   return args;
+}
+
+function bytesToHexLower(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** Every value the restore writes must equal a number the owner was shown (report.numbers). */
@@ -491,6 +481,7 @@ export function assertRestoreMatchesReport(args: RestoreArgs, report: RecoveryRe
     reserved: args.reservedCents.toString(),
     refunded: args.refundedCents.toString(),
     purchases: String(args.purchasesCount),
+    exceptions: args.exceptionCents.toString(),
     outstanding: args.statementOutstandingCents.toString(),
   };
   for (const key of RECOVERY_NUMBER_KEYS) {
@@ -503,9 +494,4 @@ function assertBaseTransactionWith(allowed: Set<string>, owner: string, transact
   for (const instruction of transaction.instructions) {
     if (!allowed.has(instruction.programId.toBase58())) throw new Error("ChainPay sent a card setup step for an unexpected program, so it wasn't signed.");
   }
-}
-
-function hexBytesStrict(value: unknown): Uint8Array {
-  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new Error("Restore hash is malformed");
-  return Uint8Array.from(value.match(/../g)!, (pair) => parseInt(pair, 16));
 }

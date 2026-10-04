@@ -167,7 +167,9 @@
 .cp-null-note { margin: 0; font-size: 14px; font-weight: 500; }
 .cp-attestation { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 13px; color: #3d4757; }
 .cp-attestation svg { flex-shrink: 0; margin-top: 2px; }
-.cp-attestation[data-hardware="verified"] svg { color: var(--cp-good, #0a7a48); }
+.cp-attestation[data-passed="true"] svg { color: var(--cp-good, #0a7a48); }
+.cp-attestation[data-hardware="failed"] svg, .cp-attestation[data-measurements="mismatch"] svg { color: var(--cp-bad, #b3141f); }
+.cp-attestation-source { display: block; margin-top: 2px; color: var(--body); font-size: 12px; }
 
 /* Recovery */
 .cp-recovery { display: grid; gap: 8px; }
@@ -246,6 +248,15 @@
 /* Detail hero: the card + one number (P3) */
 .cp-card-hero { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 32px; align-items: center; padding: 28px !important; }
 .cp-card-hero-card { justify-self: center; }
+.cp-card-hero-object { display: grid; gap: 10px; justify-items: center; min-width: 0; width: 100%; }
+.cp-card-number-reveal { display: grid; gap: 6px; justify-items: center; text-align: center; width: 100%; }
+.cp-card-number-reveal small { font-size: 12px; max-width: 320px; }
+.cp-link-button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 0; border-radius: 8px; background: none; color: var(--cp-info, #0049df); font: 500 13px/1.4 Inter, sans-serif; cursor: pointer; }
+.cp-link-button:hover:not(:disabled) { background: var(--cp-info-bg, #edf3ff); }
+.cp-link-button:focus-visible { outline: 2px solid #0052ff; outline-offset: 2px; }
+.cp-link-button:disabled { color: var(--body); cursor: default; }
+.cp-card-number-frame { width: 100%; max-width: 320px; height: 190px; border: 1px solid #e3e8f0; border-radius: 12px; background: #fff; }
+.cp-card-number-frame.is-illustrative { display: grid; place-items: center; padding: 16px; box-sizing: border-box; color: var(--body); font-size: 13px; background: repeating-linear-gradient(135deg, #f6f8fb 0 8px, #fff 8px 16px); }
 .cp-card-hero-body { display: grid; gap: 20px; min-width: 0; }
 .cp-card-hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .cp-card-hero-text { display: grid; gap: 10px; justify-items: start; }

@@ -29,16 +29,14 @@ import {
 } from "./pda.js";
 
 /**
- * Instruction data follows contracts.md §1.3 exactly (Anchor discriminator +
- * Borsh args in the listed order). The contract pins account order only for
- * `write_commitment`; every other account list mirrors the card_policy
- * `#[derive(Accounts)]` structs on branch dre/cards-program as of
- * 2026-10-03 (InitCard, DelegateCard, CardPermissions, OwnerCardEvent,
- * FreezeCard, CancelCheckoutIntent, WipeCard, CloseCard). Re-check against
- * the generated IDL when the program deploys; the `#[delegate]` expansion
- * order in particular comes from the MagicBlock macro, not our source.
+ * Instruction data follows contracts.md §1.3 (Anchor discriminator + Borsh
+ * args in the listed order). Account lists, discriminators and arg layouts
+ * are checked against the deployed program's IDL
+ * (programs/card_policy/idl/card_policy.json, Devnet
+ * Cz9vYKFZFwx8Bqag95xZtw8dqUjS4k9AoyMh1pFo82F) by test/cards-idl.test.mjs,
+ * including the `#[delegate]` macro accounts of `delegate_card`.
  */
-export const CARD_POLICY_ACCOUNT_ORDER_PROVISIONAL = true;
+export const CARD_POLICY_ACCOUNT_ORDER_PROVISIONAL = false;
 
 export type PolicyArgs = {
   budgetCents: bigint;
@@ -63,6 +61,8 @@ export type RestoreArgs = {
   reservedCents: bigint;
   refundedCents: bigint;
   purchasesCount: number;
+  /** Exception debits booked this period (program 1A review: after `purchases_count`). */
+  exceptionCents: bigint;
   statementOutstandingCents: bigint;
   ledgerHead: Uint8Array;
   ledgerSeq: bigint;
@@ -80,6 +80,7 @@ export type CardInstructionArgs = {
   setPolicy: { policy: PolicyArgs };
   openCheckoutIntent: { intentId: Uint8Array; agent: Address; merchantIdHash: Uint8Array; mcc: number; maxAmountCents: bigint; currency: string; expiresAt: bigint };
   cancelCheckoutIntent: Record<string, never>;
+  closeCheckoutIntent: Record<string, never>;
   authorize: { authIdHash: Uint8Array; intentId: Uint8Array; amountCents: bigint; currency: string; merchantIdHash: Uint8Array; mcc: number; merchantInitiated: boolean; singleMessage: boolean };
   adjustReservation: { newAmountCents: bigint };
   capture: { amountCents: bigint; captureIdHash: Uint8Array };
@@ -171,6 +172,7 @@ const CODECS: { [K in CardPolicyInstructionName]: Codec<CardInstructionArgs[K]> 
     decode: (r) => ({ intentId: r.fixed(16, "intentId"), agent: r.pubkey("agent"), merchantIdHash: r.fixed(32, "merchantIdHash"), mcc: r.u16("mcc"), maxAmountCents: r.u64("maxAmountCents"), currency: String.fromCharCode(...r.fixed(3, "currency")), expiresAt: r.i64("expiresAt") }),
   },
   cancelCheckoutIntent: empty,
+  closeCheckoutIntent: empty,
   authorize: {
     encode: (w, a) => { w.fixed(a.authIdHash, 32, "authIdHash").fixed(a.intentId, 16, "intentId").u64(a.amountCents, "amountCents").fixed(currencyBytes(a.currency), 3, "currency").fixed(a.merchantIdHash, 32, "merchantIdHash").u16(a.mcc, "mcc").bool(a.merchantInitiated).bool(a.singleMessage); },
     decode: (r) => ({ authIdHash: r.fixed(32, "authIdHash"), intentId: r.fixed(16, "intentId"), amountCents: r.u64("amountCents"), currency: String.fromCharCode(...r.fixed(3, "currency")), merchantIdHash: r.fixed(32, "merchantIdHash"), mcc: r.u16("mcc"), merchantInitiated: r.bool("merchantInitiated"), singleMessage: r.bool("singleMessage") }),
@@ -209,7 +211,7 @@ const CODECS: { [K in CardPolicyInstructionName]: Codec<CardInstructionArgs[K]> 
       const s = a.restore;
       writePolicy(w, s.policy);
       w.u32(s.periodIndex, "periodIndex").u64(s.capturedCents, "capturedCents").u64(s.reservedCents, "reservedCents").u64(s.refundedCents, "refundedCents")
-        .u16(s.purchasesCount, "purchasesCount").u64(s.statementOutstandingCents, "statementOutstandingCents")
+        .u16(s.purchasesCount, "purchasesCount").u64(s.exceptionCents, "exceptionCents").u64(s.statementOutstandingCents, "statementOutstandingCents")
         .fixed(s.ledgerHead, 32, "ledgerHead").u64(s.ledgerSeq, "ledgerSeq").fixed(s.reconDigest, 32, "reconDigest");
     },
     decode: (r) => ({
@@ -220,6 +222,7 @@ const CODECS: { [K in CardPolicyInstructionName]: Codec<CardInstructionArgs[K]> 
         reservedCents: r.u64("reservedCents"),
         refundedCents: r.u64("refundedCents"),
         purchasesCount: r.u16("purchasesCount"),
+        exceptionCents: r.u64("exceptionCents"),
         statementOutstandingCents: r.u64("statementOutstandingCents"),
         ledgerHead: r.fixed(32, "ledgerHead"),
         ledgerSeq: r.u64("ledgerSeq"),
@@ -362,10 +365,19 @@ export function buildInitPermissionInstruction(input: CardRef & { authorizer: Ad
   return build("initPermission", "init_permission", programId, permissionKeys(input.owner, input.cardId, programId), { authorizer: input.authorizer });
 }
 
-/** PER. Owner adds or removes a read-only finance reader. There is no "make public" op. */
-export function buildUpdatePermissionInstruction(input: CardRef & { op: PermissionOp }, programId?: Address): ChainPayInstruction {
+/** `[ephemeral account, its permission]` pairs, as `wipe_card` and `update_permission` take them in remaining_accounts. */
+function ephemeralPairs(accounts: readonly Address[] | undefined) {
+  return (accounts ?? []).flatMap((account) => [meta(account, true), meta(derivePermissionAddress(account), true)]);
+}
+
+/**
+ * PER. Owner adds or removes a read-only finance reader. There is no "make public" op.
+ * `ephemeralAccounts` (open Reservations/CheckoutIntents) are re-synced in the same
+ * transaction, so removing a reader also revokes their view of open holds at once.
+ */
+export function buildUpdatePermissionInstruction(input: CardRef & { op: PermissionOp; ephemeralAccounts?: Address[] }, programId?: Address): ChainPayInstruction {
   if (input.op.kind !== "add_reader" && input.op.kind !== "remove_reader") throw new Error("Only add_reader and remove_reader are allowed");
-  return build("updatePermission", "update_permission", programId, permissionKeys(input.owner, input.cardId, programId), { op: input.op });
+  return build("updatePermission", "update_permission", programId, [...permissionKeys(input.owner, input.cardId, programId), ...ephemeralPairs(input.ephemeralAccounts)], { op: input.op });
 }
 
 /** PER. The owner signs this over their own TEE connection. Rejects a policy the program would reject. */
@@ -402,9 +414,38 @@ export function buildCancelCheckoutIntentInstruction(input: CardRef & { intentId
   ], {});
 }
 
-export function buildRestoreInstruction(input: CardRef & { restore: RestoreArgs }, programId?: Address): ChainPayInstruction {
+/**
+ * PER. Co-signed: owner and the card's member authorizer must both sign
+ * (program 1A review), so the owner alone can't rewrite counters or debt.
+ * Axum signs as authorizer first; the owner checks and adds a signature.
+ */
+export function buildRestoreInstruction(input: CardRef & { authorizer: Address; restore: RestoreArgs }, programId?: Address): ChainPayInstruction {
+  if (input.authorizer === input.owner) throw new Error("The authorizer can't be the owner");
   const a = deriveCardAccounts(input.owner, input.cardId, programId);
-  return build("restore", "restore", programId, ownerEventKeys(input.owner, a), { restore: input.restore });
+  return build("restore", "restore", programId, [
+    meta(input.owner, false, true),
+    meta(input.authorizer, false, true),
+    meta(a.policy, true),
+    meta(a.period, true),
+  ], { restore: input.restore });
+}
+
+/**
+ * PER. Owner or authorizer closes a consumed, cancelled or expired intent and
+ * its permission, returning the rent to the card prefund.
+ */
+export function buildCloseCheckoutIntentInstruction(input: CardRef & { intentId: Uint8Array; signer?: Address }, programId?: Address): ChainPayInstruction {
+  const a = deriveCardAccounts(input.owner, input.cardId, programId);
+  const intent = deriveCheckoutIntentAddress(a.policy, input.intentId, programId);
+  return build("closeCheckoutIntent", "close_checkout_intent", programId, [
+    meta(input.signer ?? input.owner, false, true),
+    meta(a.policy, true),
+    meta(intent, true),
+    meta(derivePermissionAddress(intent), true),
+    meta(EPHEMERAL_VAULT_ID, true),
+    meta(MAGIC_PROGRAM_ID),
+    meta(PERMISSION_PROGRAM_ID),
+  ], {});
 }
 
 export function buildConfirmReconciledInstruction(input: CardRef & { reconDigest: Uint8Array }, programId?: Address): ChainPayInstruction {
@@ -419,7 +460,7 @@ export function buildConfirmReconciledInstruction(input: CardRef & { reconDigest
  */
 export function buildWipeCardInstruction(input: CardRef & { ephemeralAccounts?: Address[] }, programId?: Address): ChainPayInstruction {
   const a = deriveCardAccounts(input.owner, input.cardId, programId);
-  const remaining = (input.ephemeralAccounts ?? []).flatMap((account) => [meta(account, true), meta(derivePermissionAddress(account), true)]);
+  const remaining = ephemeralPairs(input.ephemeralAccounts);
   return build("wipeCard", "wipe_card", programId, [
     meta(input.owner, true, true),
     meta(a.policy, true),

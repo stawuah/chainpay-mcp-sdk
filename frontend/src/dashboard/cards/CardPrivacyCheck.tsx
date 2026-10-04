@@ -7,15 +7,25 @@ import { errorText } from "./shared";
 import { UnlockStrip } from "./Unlock";
 import { formatWhen, shortKey } from "./ui";
 
-export const MEASUREMENTS_PENDING_COPY = "Genuine TDX hardware verified; workload measurements pending from MagicBlock.";
+export const ATTESTATION_VERIFIED_COPY = "Genuine TDX hardware and expected MagicBlock build verified (Devnet).";
+
+/** True only when both halves passed: Intel's signature chain and the pinned MagicBlock build. */
+export function attestationPassed(attestation: PrivacyCheckResult["attestation"]): boolean {
+  return attestation.hardware === "verified" && attestation.measurements === "matched";
+}
 
 /** Attestation line for the proof panel (contracts CD-6). Never claims more than was checked. */
 export function attestationCopy(attestation: PrivacyCheckResult["attestation"]): string {
-  if (attestation.hardware === "verified" && attestation.measurements === "pending") return MEASUREMENTS_PENDING_COPY;
-  if (attestation.hardware === "verified" && attestation.measurements === "matched") return "Genuine TDX hardware verified, and the workload matches MagicBlock's published measurements.";
-  if (attestation.hardware === "verified") return `Genuine TDX hardware verified. ${attestation.label}`;
+  if (attestationPassed(attestation)) return ATTESTATION_VERIFIED_COPY;
   if (attestation.hardware === "failed") return "Couldn't confirm the private rollup runs on genuine secure hardware.";
-  return attestation.label;
+  // Everything else (build mismatch, chain not checked, browser can't run it) is the check's own plain label.
+  return /[.!?]$/.test(attestation.label) ? attestation.label : `${attestation.label}.`;
+}
+
+function AttestationIcon({ attestation }: { attestation: PrivacyCheckResult["attestation"] }) {
+  if (attestationPassed(attestation)) return <CircleCheck size={16} aria-hidden="true" />;
+  if (attestation.hardware === "failed" || attestation.measurements === "mismatch") return <CircleX size={16} aria-hidden="true" />;
+  return <Cpu size={16} aria-hidden="true" />;
 }
 
 /** A null answer means "this wallet can't see it", never "the card is missing" (contracts CD-4). */
@@ -96,9 +106,14 @@ export function CardPrivacyCheck({ source, card, unlocked, onUnlocked }: { sourc
               </article>
             </div>
             <p className="cp-null-note" data-testid="null-note">Null means this wallet can't see it. It doesn't mean the card is missing.</p>
-            <p className="cp-attestation" data-hardware={result.attestation.hardware} data-measurements={result.attestation.measurements}>
-              {result.attestation.hardware === "verified" ? <CircleCheck size={16} aria-hidden="true" /> : result.attestation.hardware === "failed" ? <CircleX size={16} aria-hidden="true" /> : <Cpu size={16} aria-hidden="true" />}
-              <span>{attestationCopy(result.attestation)}</span>
+            <p className="cp-attestation" data-testid="attestation" data-passed={attestationPassed(result.attestation) ? "true" : "false"} data-hardware={result.attestation.hardware} data-measurements={result.attestation.measurements}>
+              <AttestationIcon attestation={result.attestation} />
+              <span>
+                {attestationCopy(result.attestation)}
+                {result.attestation.provenance && (result.attestation.measurements === "matched" || result.attestation.measurements === "mismatch") && (
+                  <small className="cp-attestation-source">Expected build values: {result.attestation.provenance}.</small>
+                )}
+              </span>
             </p>
             <small className="owner-muted">Checked {formatWhen(result.checkedAt)}</small>
           </>

@@ -16,6 +16,7 @@ import { CardStatement } from "./CardStatement";
 import { CardSharing } from "./CardSharing";
 import { CardPrivacyCheck } from "./CardPrivacyCheck";
 import { RecoveryBanner } from "./CardRecovery";
+import { CardNumberReveal } from "./CardNumberReveal";
 
 const SECTION_LABELS: Record<CardSection, string> = { activity: "Activity", statement: "Statement", sharing: "Sharing", privacy: "Privacy check" };
 const FREEZE_POLL_MS = 3_000;
@@ -173,7 +174,10 @@ export function CardDetail(props: CardDetailProps) {
         <RecoveryBanner source={source} card={card} recovery={recovery} onChanged={async () => { const next = await reload(); if (next) void refreshPrivate(next); }} />
       )}
       <section className="dashboard-card cp-card-hero" data-status={status.key}>
-        <AgentCard className="cp-card-hero-card is-lift" label={card.label} lastFour={card.lastFour} frost={frostFor(card)} leftCents={left} />
+        <div className="cp-card-hero-object">
+          <AgentCard className="cp-card-hero-card is-lift" label={card.label} lastFour={card.lastFour} frost={frostFor(card)} leftCents={left} />
+          <CardNumberReveal source={source} card={card} />
+        </div>
         <div className="cp-card-hero-body">
           <div className="cp-card-hero-top">
             <div className="cp-card-hero-text">

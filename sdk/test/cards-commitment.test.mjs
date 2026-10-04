@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import {
   CARD_SANDBOX_MERCHANTS,
+  MAX_ACCEPTOR_ID_LENGTH,
+  cardMerchantByAcceptorId,
   buildDisclosureBundle,
   cardDraftDigest,
   commitmentRoot,
@@ -128,4 +130,26 @@ test("sandbox shops hash to the merchant allowlist the program checks", async ()
   const [hash] = await merchantIdHashesForRefs(["demo-approved"]);
   assert.deepEqual(hash, await merchantIdHash(CARD_SANDBOX_MERCHANTS[0].acceptorId));
   await assert.rejects(() => merchantIdHashesForRefs(["nope"]), /isn't a registered shop/);
+});
+
+test("sandbox shops match the Lithic connector byte for byte", async () => {
+  // Fixed vectors: sha256("chainpay-merchant:v1\n" || UPPER(trim(acceptor_id))), the same
+  // bytes as program::merchant_id_hash in backend/src/connectors/card_issuer/program.rs
+  // (dre/cards-connector). Computed independently with `printf ... | shasum -a 256`.
+  const expected = {
+    "demo-approved": { acceptorId: "DEMO-DATAAPI", mcc: 5734, descriptor: "DATA API CREDITS", hash: "c641205da7b4735f8b074cd50780e178cc28433179e3d34a9807df9dc5874a6e" },
+    "demo-unapproved": { acceptorId: "DEMO-OTHERSHOP", mcc: 5999, descriptor: "UNAPPROVED SHOP", hash: "bf1ff5b21426217893bab740bd3d1b18fd67f32b52e1f4dff6b6ce4dad72bc24" },
+  };
+  assert.deepEqual(CARD_SANDBOX_MERCHANTS.map((m) => m.ref), Object.keys(expected));
+  for (const merchant of CARD_SANDBOX_MERCHANTS) {
+    const want = expected[merchant.ref];
+    assert.equal(merchant.acceptorId, want.acceptorId);
+    assert.equal(merchant.mcc, want.mcc);
+    assert.equal(merchant.descriptor, want.descriptor);
+    assert.ok(merchant.acceptorId.length <= MAX_ACCEPTOR_ID_LENGTH, "Lithic caps merchant_acceptor_id at 15 characters");
+    assert.equal(Buffer.from(await merchantIdHash(merchant.acceptorId)).toString("hex"), want.hash);
+    assert.equal(Buffer.from(await merchantIdHash(` ${merchant.acceptorId.toLowerCase()} `)).toString("hex"), want.hash, "trim + uppercase like the connector");
+    assert.equal(cardMerchantByAcceptorId(merchant.acceptorId.toLowerCase())?.ref, merchant.ref);
+  }
+  assert.deepEqual((await merchantIdHashesForRefs(["demo-approved"])).map((h) => Buffer.from(h).toString("hex")), [expected["demo-approved"].hash]);
 });
