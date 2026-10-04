@@ -18,6 +18,7 @@ export default [
   a("invoices-matched-to-payments", "two white paper cards side by side — an invoice with grey lines and a receipt with grey lines — joined by a glowing blue link between them and a small blue check badge where they meet"),
   a("approve-big-buys", "a large soft-3D blue approval button on a white rounded base, with a small white toggle beside it switched to the left; a gentle highlight on the button"),
   a("one-tap-stop", "a chunky soft-3D white toggle switch with a blue pause symbol on the knob, switched off; a few small blue chips resting still beside it as if frozen mid-motion"),
+  a("private-agent-card", "a soft-3D white payment card with the ChainPay logo tile from image 1 on it, half behind a frosted translucent pale-blue glass panel that blurs the card's details, one small blue lock chip on the glass edge; the small robot stands behind the card, only its head visible", true),
   a("spend-overview-anywhere", "a white rounded dashboard panel with a soft blue bar chart of five bars and one thin spend-limit line across them, tilted slightly, floating above a second smaller panel"),
   a("get-paid-by-agents", "a white soft-3D shop door with a small blue sign labelled \"402\" on it, slightly open with blue light coming through; the small robot waits politely in front of it", true),
   a("purchase-order-link", "a white envelope opened at an angle with a blue link chain icon card sliding out of it, the card shows a small blue chip labelled \"PO\""),
