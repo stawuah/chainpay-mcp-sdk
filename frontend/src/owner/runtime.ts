@@ -1,4 +1,4 @@
-import { beginSettlement, awaitSettlement, forgetUnsentOperation, rejectBeforeSubmission, publishSettlement, PendingSettlementError, type Operation, type Settlement } from "../settlement";
+import { beginSettlement, awaitSettlement, dismissSettlement, forgetUnsentOperation, rejectBeforeSubmission, publishSettlement, PendingSettlementError, type Operation, type Settlement } from "../settlement";
 import { authorizedFetch, RequestNotSentError, type WalletBinding } from "../session";
 import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, buildCreateAssociatedTokenAccountInstruction, bytesToHex, createMandateNonce, deriveAssociatedTokenAddress, deriveConfigAddress, deriveMandateAddress, deriveVersionedMandateAddress, toWeb3Transaction } from "@chainpay/sdk";
 import type { ChainPayInstruction, Mandate, PaymentReceipt, PreparedMandate, PreparedPayment, PreparedTransaction, SupportedAsset, TokenProgram } from "@chainpay/sdk";
@@ -773,7 +773,7 @@ export function preparedTransactionFromAgentApproval(approval: AgentApproval): P
   };
 }
 
-export async function submitSignedTransaction(idempotencyKey: string, signedTransaction: Uint8Array) {
+export async function submitSignedTransaction(idempotencyKey: string, signedTransaction: Uint8Array, options: { dismissOnConfirm?: boolean } = {}) {
   if (!BACKEND_URL) throw new Error("VITE_CHAINPAY_BACKEND_URL is not configured.");
   const operation = await beginSettlement(BACKEND_URL, "transactions", idempotencyKey, Buffer.from(signedTransaction).toString("base64"));
   let response: Response;
@@ -796,7 +796,11 @@ export async function submitSignedTransaction(idempotencyKey: string, signedTran
     if ([400, 401, 403, 404, 422].includes(response.status)) throw new Error(payload.error ?? "Request rejected before submission");
     return awaitSettlement(operation, undefined, 0);
   }
-  return awaitSettlement(operation, payload);
+  const settled = await awaitSettlement(operation, payload);
+  // Setup steps that report their own progress (card creation) clear their row from
+  // "Payment & approval updates" once confirmed; anything unresolved stays there.
+  if (options.dismissOnConfirm) dismissSettlement(operation.id);
+  return settled;
 }
 
 /**

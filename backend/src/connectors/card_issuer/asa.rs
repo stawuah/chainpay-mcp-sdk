@@ -336,7 +336,22 @@ async fn evaluate(
     if request.cash_cents > 0 {
         return Decision::decline(UNAUTHORIZED_MERCHANT, "declined", "merchant_not_allowed");
     }
-    let attestation = cards.attestation().await;
+    let mut attestation = cards.attestation().await;
+    if !attestation.permits_approval(cards.config.attestation_mode, now_ms())
+        && cards.config.attestation_mode == super::tee::AttestationMode::Enforce
+        && attestation.hardware != "failed"
+        && attestation.measurements != "mismatch"
+    {
+        // Cold start or a stale check (not a failed one): attest now, inside a
+        // bounded slice of the ASA budget, instead of declining every first
+        // authorization after a deploy. A failure or timeout still declines.
+        let slice = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(900));
+        if let Ok(fresh) = tokio::time::timeout(slice, cards.refresh_attestation()).await {
+            attestation = fresh;
+        }
+    }
     if !attestation.permits_approval(cards.config.attestation_mode, now_ms()) {
         return Decision::decline(SUSPECTED_FRAUD, "declined_internal", "internal");
     }

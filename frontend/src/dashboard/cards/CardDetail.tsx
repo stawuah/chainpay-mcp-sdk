@@ -83,6 +83,14 @@ export function CardDetail(props: CardDetailProps) {
     void reloadStatements();
   }, [reload, reloadActivity, reloadStatements]);
 
+  // Switching tabs shows fresh rows: purchases and statements change while the owner looks elsewhere.
+  const firstSection = useRef(true);
+  useEffect(() => {
+    if (firstSection.current) { firstSection.current = false; return; }
+    if (section === "activity") void reloadActivity();
+    if (section === "statement") void reloadStatements();
+  }, [section, reloadActivity, reloadStatements]);
+
   const refreshPrivate = useCallback(async (target: CardView) => {
     if (!source.isUnlocked()) return;
     const next = await source.readPrivate(target);
@@ -226,7 +234,7 @@ export function CardDetail(props: CardDetailProps) {
       </TabList>
       <div id={`card-section-${section}`} role="tabpanel" className="cp-card-section">
         {section === "activity" && <CardActivity source={source} card={card} rows={activity} onChanged={() => { void reloadActivity(); void refreshPrivate(card); }} />}
-        {section === "statement" && <CardStatement source={source} card={card} statements={statements} mandates={props.mandates} wallet={props.wallet} onChanged={() => void reloadStatements()} />}
+        {section === "statement" && <CardStatement source={source} card={card} statements={statements} mandates={props.mandates} wallet={props.wallet} onChanged={() => { void reloadStatements(); void refreshPrivate(card); }} />}
         {section === "sharing" && <CardSharing source={source} card={card} read={read} unlocked={unlocked} onUnlocked={onUnlocked} onChanged={() => void refreshPrivate(card)} />}
         {section === "privacy" && <CardPrivacyCheck source={source} card={card} unlocked={unlocked} onUnlocked={onUnlocked} />}
       </div>

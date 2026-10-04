@@ -13,6 +13,7 @@ import {
   CardsApiClient,
   CardsApiError,
   centsToTokenBaseUnits,
+  CARD_POLICY_LENGTH,
   commitmentRoot,
   decodeCardCommitment,
   decodeCardPeriod,
@@ -284,7 +285,7 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
           transaction.recentBlockhash = (await chainpayClient.connection.getLatestBlockhash("confirmed")).blockhash;
         }
         const signed = await deps.signTransaction(transaction);
-        await submitSignedTransaction(`card-base:${prepared.cardId}:${index}`, signed.serialize());
+        await submitSignedTransaction(`card-base:${prepared.cardId}:${index}`, signed.serialize(), { dismissOnConfirm: true });
         attempt.baseDone = index + 1;
       }
       progress("base", "done");
@@ -439,8 +440,14 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
         if (!info) throw Object.assign(new Error("missing"), { missing: true });
         const data = info.data;
         const after = Array.from(data.slice(8 + 64));
-        const nonZero = after.filter((byte) => byte !== 0).length;
-        publicChain = { address: a.policy, bytes: data.length, nonZeroAfterOwnerLink: nonZero, preview: `card + owner link, then ${after.length - nonZero} zero bytes`, state: nonZero === 0 ? "empty" : "has_data" };
+        // The last byte of the base layout is the account's PDA bump, which anyone can derive
+        // from its public address. It is excluded only when it equals the canonical bump.
+        const bumpOffset = CARD_POLICY_LENGTH - 1 - (8 + 64);
+        const [, canonicalBump] = PublicKey.findProgramAddressSync([new TextEncoder().encode("card_policy"), new PublicKey(a.binding).toBytes()], new PublicKey(programId));
+        const bumpIsCanonical = after[bumpOffset] === canonicalBump;
+        const nonZero = after.filter((byte, i) => byte !== 0 && !(i === bumpOffset && bumpIsCanonical)).length;
+        const zeros = after.length - nonZero - (bumpIsCanonical ? 1 : 0);
+        publicChain = { address: a.policy, bytes: data.length, nonZeroAfterOwnerLink: nonZero, preview: `card + owner link${bumpIsCanonical ? " + address bump" : ""}, then ${zeros} zero bytes`, state: nonZero === 0 ? "empty" : "has_data" };
       } catch (error) {
         // A missing account proves nothing about privacy; never report it as "no limits".
         publicChain = { address: a.policy, bytes: 0, nonZeroAfterOwnerLink: 0, preview: "", state: (error as { missing?: boolean }).missing ? "missing" : "rpc_error" };
