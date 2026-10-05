@@ -196,9 +196,20 @@ function formatApprovalRequired(record: RecordLike): string {
   );
   const mint = pickString(payment?.mint, challenge?.mint, record.mint);
   const receiptAddress = pickString(record.receiptAddress, record.receipt_address);
+  // A Crossmint order is reviewed by what it buys: Crossmint names the item, not a locator.
+  const crossmintItems = isRecord(record.crossmint) && Array.isArray(record.crossmint.items)
+    ? record.crossmint.items.filter(isRecord).flatMap((item) => {
+      const name = pickString(item.name);
+      if (!name) return [];
+      const quantity = typeof item.quantity === "number" ? ` × ${item.quantity}` : "";
+      const to = pickString(item.deliveryRecipient);
+      return [`- Item: **${name}**${quantity}${to ? `, delivered to \`${shortAddress(to)}\`` : ""}`];
+    })
+    : [];
 
   const lines = [
     "**Approval required** — review before signing.",
+    ...crossmintItems,
     ...(humanAmount ? [`- Amount: **${humanAmount} ${symbol}**`] : []),
     ...(!humanAmount && baseUnits
       ? [`- Amount: **${baseUnits}** base units${mint ? ` of \`${shortAddress(mint)}\`` : ""} (exact on-chain value)`]

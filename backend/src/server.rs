@@ -2847,7 +2847,11 @@ fn validate_single_signer_transaction(
             "managed signer must be the only required signer and fee payer".to_owned(),
         ));
     }
-    if transactions::payload_instructions(transaction).len() != 1 {
+    // One execute_payment, plus the authorized Crossmint order memo when the
+    // terms bind one; `transactions::payment` checks what each one contains.
+    if transactions::payload_instructions(transaction).len()
+        != transactions::payment_instruction_count(request)?
+    {
         return Err(ApiError::BadRequest(
             "managed payments may contain only one ChainPay execute_payment instruction".to_owned(),
         ));

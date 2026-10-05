@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import { deriveCrossmintPaymentReferences, crossmintFieldsToPreparePaymentInput, crossmintTermsToPrepareFields, validateCrossmintCheckoutOrder, type CrossmintPaymentTerms } from "@chainpay/sdk";
+import { deriveCrossmintPaymentReferences, crossmintFieldsToPreparePaymentInput, crossmintPaymentTransaction, crossmintTermsToPrepareFields, validateCrossmintCheckoutOrder, type CrossmintPaymentTerms } from "@chainpay/sdk";
 import { authorizeMandate } from "../authorization.js";
 import { materializeUnsignedTransaction, serializeTransaction, solanaAddress, toolResult } from "./common.js";
 import type { ChainPayMcpContext } from "./context.js";
@@ -11,12 +11,18 @@ function backend(context: ChainPayMcpContext) {
   if (!context.principal || !context.backendUrl || !context.backendAuthToken) throw new Error("Crossmint requires an authenticated caller and Axum relay");
   return { url: context.backendUrl.replace(/\/$/, ""), headers: { Authorization: `Bearer ${context.backendAuthToken}`, "Content-Type": "application/json" } };
 }
+/**
+ * What the owner approved. The memo is included because it is what makes the
+ * payment Crossmint's order and not an anonymous transfer to its shared treasury:
+ * a re-fetched order with a different memo needs a fresh review.
+ */
 export function crossmintTermsFingerprint(terms: CrossmintPaymentTerms): string {
-  return createHash("sha256").update(JSON.stringify([terms.orderId, terms.mint, terms.recipient, terms.amount, terms.decimals, terms.tokenProgram, terms.payerAddress, terms.crossmintSourceTokenAccount, terms.lineItemLocators, terms.items ?? null])).digest("hex");
+  return createHash("sha256").update(JSON.stringify([terms.orderId, terms.mint, terms.recipient, terms.amount, terms.decimals, terms.tokenProgram, terms.payerAddress, terms.crossmintSourceTokenAccount, terms.lineItemLocators, terms.items ?? null, terms.memo ?? null])).digest("hex");
 }
-/** What the owner reviews: the price and also who receives which item, and how many. */
+/** What the owner reviews: the price and also which item, who receives it, and how many. */
 function requestView(terms: CrossmintPaymentTerms) {
-  return { orderId: terms.orderId, quoteCheck: terms.quoteCheck, quotedAmount: terms.amount, phase: terms.phase, items: (terms.items ?? []).map(item => ({ locator: item.locator, quantity: item.quantity, deliveryRecipient: item.deliveryRecipient })) };
+  const names = (terms.items ?? []).map(item => item.name).filter((name): name is string => typeof name === "string");
+  return { orderId: terms.orderId, quoteCheck: terms.quoteCheck, quotedAmount: terms.amount, phase: terms.phase, ...(names.length ? { itemLabel: names.join(", ") } : {}), items: (terms.items ?? []).map(item => ({ name: item.name, locator: item.locator, quantity: item.quantity, deliveryRecipient: item.deliveryRecipient })) };
 }
 const DELIVERY_STATES = new Set(["delivered", "pending", "failed", "unknown"]);
 type CrossmintObservation = { orderPhase?: string; evidenceSource?: string; reportedAtMs?: number; paymentStatus?: string; delivery?: string; refunded?: { amount?: string; currency?: string } | null; deliveries?: Array<{ status?: string; failureCode?: string }> };
@@ -59,7 +65,10 @@ async function preparedOrder(context: ChainPayMcpContext, args: Record<string, u
   const terms = validateCrossmintCheckoutOrder(order, { orderId: args.orderId, owner: context.principal!.wallet, source: mandate.sourceTokenAccount, mint: mandate.allowedMint });
   const fields = await crossmintTermsToPrepareFields(terms);
   const input = crossmintFieldsToPreparePaymentInput(mandateAddress, fields);
-  const prepared = await context.client.preparePayment(input, agent);
+  const payment = await context.client.preparePayment(input, agent);
+  // Crossmint matches a payment to its order only by the memo, so the signed
+  // transaction is execute_payment followed by Crossmint's exact memo.
+  const prepared = { ...payment, transaction: crossmintPaymentTransaction(payment.transaction, terms) };
   return { terms, fields, input, prepared, agent, fingerprint: crossmintTermsFingerprint(terms), expiresAtMs: Math.min(Date.parse(order.quoteExpiresAt!), Date.now() + 120_000).toString() };
 }
 export async function prepareCrossmintPayment(context: ChainPayMcpContext, args: Record<string, unknown>) {
@@ -72,7 +81,7 @@ export async function prepareCrossmintPayment(context: ChainPayMcpContext, args:
 
 /** The re-fetched order no longer matches what the owner reviewed. */
 class ReviewRequired extends Error {
-  constructor() { super("Crossmint order changed (price, item, quantity or delivery wallet) or was not reviewed. Prepare and review it again; nothing was submitted."); }
+  constructor() { super("Crossmint order changed (price, item, quantity, delivery wallet or order memo) or was not reviewed. Prepare and review it again; nothing was submitted."); }
 }
 
 export async function executeCrossmintPayment(context: ChainPayMcpContext, args: Record<string, unknown>) {

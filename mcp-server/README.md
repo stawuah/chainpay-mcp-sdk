@@ -110,10 +110,43 @@ cannot fabricate Crossmint metadata and bypass the connector through Axum.
 
 Current executable preparation is intentionally narrow: canonical Devnet USDC,
 Solana staging, a valid unexpired matching quote, the mandate's exact source,
-and exactly one TransferChecked instruction without extra reference accounts.
-Other tokens, unchecked transfers, lookup tables, additional instructions and
-missing/changed terms fail closed. A newly required provider instruction needs
-an explicitly reviewed adapter, not an instruction-discarding fallback.
+and Crossmint's real Solana preparation shape, which is exactly two
+instructions in a legacy transaction with no lookup tables:
+
+1. SPL Token `TransferChecked` from the payer's USDC account to Crossmint's
+   treasury USDC account, for `transactionParameters.amount`. Every order pays
+   the same treasury account (`8m5x…fCJuU` on staging), so the destination
+   alone does not identify the order.
+2. SPL Memo (`MemoSq4g…fcHr`) whose text is
+   `------BEGIN MEMO------<JWT>------END MEMO------`. The only account it may
+   name is the payer, as a signer.
+
+**The memo rule.** The memo is the only link from a payment to its order, so
+checkout requires it. `transactionParameters.memo` and the transaction's memo
+must be byte-identical, at most 512 bytes, and the JWT payload's
+`orderIdentifier` must equal the order id. ChainPay does not check the JWT
+signature, which only Crossmint can verify. The memo is bound into the
+reviewed terms, the `expectedTerms` fingerprint and the relay's HMAC payload;
+a re-fetched order with a different memo needs a fresh owner review.
+
+Crossmint's line items name the item through `metadata` and carry no
+collection or template locator. Each line binds its name, description, image
+URL, chain, quantity, execution mode, delivery wallet and line price, plus the
+locator when Crossmint returns one. A missing or unreadable name or delivery
+wallet fails closed. The owner review shows the item name.
+
+ChainPay never submits Crossmint's transaction. It signs
+`[execute_payment, memo]`: the unchanged mandate payment, then Crossmint's exact
+memo as a top-level SPL Memo instruction that names **no** accounts. The agent
+cannot sign as the payer, and the memo program accepts an unsigned memo.
+Axum allows that second instruction only when the authorized Crossmint terms
+bind that exact memo for that order. Every other payment keeps the
+single-`execute_payment` rule. The receipt PDA and invoice hash are unchanged.
+
+Other tokens, unchecked transfers, lookup tables, any other instruction, a
+second memo and missing or changed terms fail closed. A newly required
+provider instruction needs an explicitly reviewed adapter, not an
+instruction-discarding fallback.
 
 Resume `get_crossmint_payment` with the original relay `payment_id`. This never
 prepares, signs or pays again and remains available if new checkout is disabled.
@@ -125,8 +158,13 @@ Keep the server and `VITE_CHAINPAY_CROSSMINT` visibility flags off until the
 operator has separately authorized and documented a staging acceptance payment:
 matching final receipt, provider order advancement, and recovery evidence.
 The provider's documented prepared-transaction workflow does not establish
-that replacing its transfer with ChainPay CPI will be recognized. Passing local
-fixtures proves the software paths, not that provider compatibility assumption.
+that replacing its transfer with ChainPay CPI will be recognized. In the
+mandate payment the token transfer is an inner (CPI) instruction, and its
+authority and fee payer are not Crossmint's `payerAddress`. **Whether Crossmint
+credits such a payment, even with the exact memo, is unproven** until one
+explicitly approved Devnet acceptance payment settles and Crossmint advances
+that order. Passing local fixtures, including a real staging order response,
+proves the software paths, not that provider compatibility assumption.
 
 ## Verify changes
 
