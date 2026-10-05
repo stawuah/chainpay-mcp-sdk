@@ -1527,6 +1527,18 @@ fn crossmint_order_response(
 ) -> CrossmintOrderResponse {
     let (amount, mint) = classify_crossmint_terms(&record.challenge);
     let order_phase = crossmint_order_phase(&record);
+    let observed = |field: &str| {
+        record
+            .proof
+            .as_ref()
+            .and_then(|proof| proof.get(field))
+            .filter(|value| !value.is_null())
+            .cloned()
+    };
+    let order_payment_status =
+        observed("paymentStatus").and_then(|v| v.as_str().map(str::to_owned));
+    let order_delivery = observed("delivery").and_then(|v| v.as_str().map(str::to_owned));
+    let order_refund = observed("refunded");
     let order_url = record
         .resource
         .starts_with("https://")
@@ -1544,6 +1556,9 @@ fn crossmint_order_response(
         mint,
         status: x402_status_label(record.status),
         order_phase,
+        order_payment_status,
+        order_delivery,
+        order_refund,
         receipt_address: record.receipt_address,
         transaction_signature: record.transaction_signature,
         error: record.error,
@@ -1777,7 +1792,7 @@ async fn record_crossmint_order_proof(
     }
     let body: Value = serde_json::from_slice(&bytes)
         .map_err(|_| ApiError::BadRequest("Invalid Crossmint response".into()))?;
-    let (phase, proof) = crossmint_observation(&body, order_id, &principal.wallet)?;
+    let (phase, proof) = crossmint_observation(&body, order_id, &principal.wallet, &job.challenge)?;
     request.order_phase = phase;
     request.proof = proof;
     request.response_status = 200;
@@ -1785,52 +1800,342 @@ async fn record_crossmint_order_proof(
     persist_crossmint_observation(State(state), Extension(principal), Json(request)).await
 }
 
+const CROSSMINT_MAX_LINE_ITEMS: usize = 32;
+
+fn bounded_str(value: &Value, max: usize) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= max)
+        .map(str::to_owned)
+}
+
+/// `{amount, currency}` exactly as Crossmint stated it, or nothing.
+fn crossmint_money(value: &Value) -> Option<Value> {
+    let amount = bounded_str(&value["amount"], 64)?;
+    let mut money = json!({ "amount": amount });
+    if let Some(currency) = bounded_str(&value["currency"], 32) {
+        money["currency"] = Value::String(currency);
+    }
+    Some(money)
+}
+
+/// A Solana delivery wallet from `walletAddress` or a `solana:` locator. Both
+/// stated and different is ambiguous, which is never read as a match.
+fn crossmint_delivery_wallet(recipient: &Value) -> Option<Result<String, ()>> {
+    let from_locator = |locator: &str| locator.strip_prefix("solana:").map(str::to_owned);
+    let wallet = bounded_str(&recipient["walletAddress"], 64);
+    let locator = bounded_str(&recipient["locator"], 256);
+    match (wallet, locator) {
+        (None, None) => None,
+        (Some(w), None) => Some(Ok(w)),
+        (None, Some(l)) => Some(from_locator(&l).ok_or(())),
+        (Some(w), Some(l)) => Some(if from_locator(&l).as_deref() == Some(w.as_str()) {
+            Ok(w)
+        } else {
+            Err(())
+        }),
+    }
+}
+
+/// Read what Crossmint reports about a settled order, field by field.
+///
+/// Payment status, each line's delivery and any refund are kept separately:
+/// Crossmint documents orders whose phase is `completed` while delivery failed
+/// and the payment was refunded. The order counts as fulfilled only when the
+/// payment completed, every line was delivered to the wallet the owner
+/// reviewed, and no refund is reported.
+///
+/// After settlement Crossmint may no longer return `payment.preparation`. The
+/// payer is then checked against the immutable saved binding for this order
+/// (the terms ChainPay authorized before paying) together with this
+/// authenticated readback, instead of failing or trusting the payload alone.
 fn crossmint_observation(
     body: &Value,
     order_id: &str,
     owner: &str,
+    binding: &Value,
 ) -> Result<(String, Value), ApiError> {
+    let mismatch =
+        || ApiError::BadRequest("Crossmint order identity or payer did not match".into());
     let order = body.get("order").unwrap_or(body);
     if order
         .get("orderId")
         .or_else(|| order.get("id"))
         .and_then(Value::as_str)
         != Some(order_id)
-        || order["payment"]["preparation"]["payerAddress"].as_str() != Some(owner)
-        || order["payment"]["method"].as_str() != Some("solana")
+        || binding["orderId"].as_str() != Some(order_id)
+        || binding["payerAddress"].as_str() != Some(owner)
     {
-        return Err(ApiError::BadRequest(
-            "Crossmint order identity or payer did not match".into(),
-        ));
+        return Err(mismatch());
+    }
+    let payment = &order["payment"];
+    match &payment["preparation"]["payerAddress"] {
+        Value::Null => {}
+        Value::String(payer) if payer == owner => {}
+        _ => return Err(mismatch()),
+    }
+    match &payment["method"] {
+        Value::Null => {}
+        Value::String(method) if method == "solana" => {}
+        _ => return Err(mismatch()),
     }
     let phase = order["phase"]
         .as_str()
         .filter(|p| matches!(*p, "quote" | "payment" | "delivery" | "completed"))
         .ok_or_else(|| ApiError::BadRequest("Unknown Crossmint order phase".into()))?;
-    Ok((
-        phase.into(),
-        json!({"orderId":order_id,"orderPhase":phase,"evidenceSource":"crossmint-staging-orders-api","reportedAtMs":now_ms()}),
-    ))
+    let payment_status = payment["status"]
+        .as_str()
+        .filter(|s| {
+            matches!(
+                *s,
+                "draft"
+                    | "requires-quote"
+                    | "requires-crypto-payer-address"
+                    | "requires-email"
+                    | "requires-kyc"
+                    | "manual-kyc"
+                    | "failed-kyc"
+                    | "crypto-payer-insufficient-funds"
+                    | "crypto-payer-insufficient-funds-for-gas"
+                    | "awaiting-payment"
+                    | "in-progress"
+                    | "completed"
+            )
+        })
+        .unwrap_or("unknown");
+    let refunded = crossmint_money(&payment["refunded"]);
+    let received = crossmint_money(&payment["received"]);
+    let bound_items = binding["items"].as_array();
+    let mut deliveries = Vec::new();
+    let mut all_delivered = true;
+    let mut any_failed = false;
+    let mut any_unknown = false;
+    let lines = order["lineItems"].as_array().cloned().unwrap_or_default();
+    if lines.is_empty() || lines.len() > CROSSMINT_MAX_LINE_ITEMS {
+        any_unknown = true;
+    }
+    for (index, line) in lines.iter().take(CROSSMINT_MAX_LINE_ITEMS).enumerate() {
+        let delivery = &line["delivery"];
+        let status = delivery["status"]
+            .as_str()
+            .filter(|s| {
+                matches!(
+                    *s,
+                    "draft" | "awaiting-payment" | "in-progress" | "failed" | "completed"
+                )
+            })
+            .unwrap_or("unknown");
+        let bound = bound_items
+            .and_then(|items| items.get(index))
+            .and_then(|item| item["deliveryRecipient"].as_str());
+        let recipient_matches = match (crossmint_delivery_wallet(&delivery["recipient"]), bound) {
+            (Some(Ok(wallet)), Some(bound)) => Some(wallet == bound),
+            (Some(Err(())), _) => Some(false),
+            // Older bindings predate delivery binding; nothing to compare.
+            (_, None) => None,
+            (None, Some(_)) => None,
+        };
+        let mut entry = json!({ "status": status });
+        if let Some(code) = bounded_str(&delivery["failureReason"]["code"], 64) {
+            entry["failureCode"] = Value::String(code);
+        }
+        if let Some(tx) = bounded_str(&delivery["txId"], 128) {
+            entry["txId"] = Value::String(tx);
+        }
+        if let Some(matches) = recipient_matches {
+            entry["recipientMatches"] = Value::Bool(matches);
+        }
+        deliveries.push(entry);
+        match status {
+            "failed" => any_failed = true,
+            "completed" => {}
+            "unknown" => any_unknown = true,
+            _ => {}
+        }
+        if status != "completed" || recipient_matches != Some(true) {
+            all_delivered = false;
+        }
+        if recipient_matches == Some(false) {
+            any_unknown = true;
+        }
+    }
+    if bound_items.map(Vec::len) != Some(lines.len()) {
+        // Lines added or dropped since review cannot be called delivered.
+        any_unknown = true;
+        all_delivered = false;
+    }
+    let delivery = if any_failed {
+        "failed"
+    } else if any_unknown {
+        "unknown"
+    } else if all_delivered {
+        "delivered"
+    } else {
+        "pending"
+    };
+    let fulfilled = payment_status == "completed" && delivery == "delivered" && refunded.is_none();
+    let mut proof = json!({
+        "orderId": order_id,
+        "orderPhase": phase,
+        "paymentStatus": payment_status,
+        "delivery": delivery,
+        "deliveries": deliveries,
+        "refunded": refunded,
+        "fulfilled": fulfilled,
+        "evidenceSource": "crossmint-staging-orders-api",
+        "reportedAtMs": now_ms(),
+    });
+    if let Some(received) = received {
+        proof["received"] = received;
+    }
+    Ok((phase.into(), proof))
 }
 
 #[cfg(test)]
 mod crossmint_observation_tests {
     use super::*;
+
+    const OWNER: &str = "Owner1111111111111111111111111111111111111";
+    const DELIVERY: &str = "Delivery11111111111111111111111111111111111";
+
+    fn binding() -> Value {
+        json!({"orderId":"order_1","payerAddress":OWNER,"items":[{"locator":"solana:token","quantity":1,"deliveryRecipient":DELIVERY}]})
+    }
+
+    fn line(status: &str) -> Value {
+        json!({"chain":"solana","quantity":1,"delivery":{"status":status,"recipient":{"locator":format!("solana:{DELIVERY}"),"walletAddress":DELIVERY,"email":"private@example.com"}}})
+    }
+
+    fn order(phase: &str, payment: Value, lines: Vec<Value>) -> Value {
+        json!({"clientSecret":"private","order":{"orderId":"order_1","phase":phase,"lineItems":lines,"payment":payment}})
+    }
+
     #[test]
     fn provider_observation_requires_matching_identity_and_drops_private_payload() {
-        let body = json!({"clientSecret":"private", "order":{"orderId":"order_1", "phase":"delivery", "payment":{"method":"solana", "preparation":{"payerAddress":"owner"}}, "recipient":{"email":"private@example.com"}}});
-        let (phase, proof) = crossmint_observation(&body, "order_1", "owner").unwrap();
+        let body = order(
+            "delivery",
+            json!({"method":"solana","status":"completed","preparation":{"payerAddress":OWNER}}),
+            vec![line("in-progress")],
+        );
+        let (phase, proof) = crossmint_observation(&body, "order_1", OWNER, &binding()).unwrap();
         assert_eq!(phase, "delivery");
         assert_eq!(proof["evidenceSource"], "crossmint-staging-orders-api");
+        assert_eq!(proof["delivery"], "pending");
+        assert_eq!(proof["fulfilled"], false);
         assert!(!proof.to_string().contains("private"));
-        assert!(crossmint_observation(&body, "another_order", "owner").is_err());
-        assert!(crossmint_observation(&body, "order_1", "another_owner").is_err());
+        assert!(crossmint_observation(&body, "another_order", OWNER, &binding()).is_err());
+        assert!(crossmint_observation(&body, "order_1", "another_owner", &binding()).is_err());
         let mut malformed = body.clone();
         malformed["order"]["phase"] = json!("something_new");
-        assert!(crossmint_observation(&malformed, "order_1", "owner").is_err());
+        assert!(crossmint_observation(&malformed, "order_1", OWNER, &binding()).is_err());
         malformed["order"]["phase"] = json!("completed");
         malformed["order"]["payment"]["method"] = json!("ethereum");
-        assert!(crossmint_observation(&malformed, "order_1", "owner").is_err());
+        assert!(crossmint_observation(&malformed, "order_1", OWNER, &binding()).is_err());
+        let mut other_payer = body.clone();
+        other_payer["order"]["payment"]["preparation"]["payerAddress"] = json!("someone_else");
+        assert!(crossmint_observation(&other_payer, "order_1", OWNER, &binding()).is_err());
+    }
+
+    #[test]
+    fn documented_completed_order_with_failed_delivery_and_refund_is_not_fulfilled() {
+        // Crossmint's documented `orders.delivery.failed` example, on Solana:
+        // phase completed, payment completed, delivery failed, payment refunded.
+        let mut failed = line("failed");
+        failed["delivery"]["failureReason"] = json!({"code":"slippage-tolerance-exceeded"});
+        let body = order(
+            "completed",
+            json!({"status":"completed","method":"solana","currency":"usdc","received":{"amount":"5","currency":"usdc"},"refunded":{"amount":"5","currency":"usdc"}}),
+            vec![failed],
+        );
+        let (phase, proof) = crossmint_observation(&body, "order_1", OWNER, &binding()).unwrap();
+        assert_eq!(phase, "completed");
+        assert_eq!(proof["paymentStatus"], "completed");
+        assert_eq!(proof["delivery"], "failed");
+        assert_eq!(
+            proof["deliveries"][0]["failureCode"],
+            "slippage-tolerance-exceeded"
+        );
+        assert_eq!(proof["refunded"], json!({"amount":"5","currency":"usdc"}));
+        assert_eq!(proof["received"], json!({"amount":"5","currency":"usdc"}));
+        assert_eq!(proof["fulfilled"], false);
+    }
+
+    #[test]
+    fn refund_alone_or_failed_delivery_alone_is_never_fulfilled() {
+        let refunded_only = order(
+            "completed",
+            json!({"status":"completed","refunded":{"amount":"5","currency":"usdc"}}),
+            vec![line("completed")],
+        );
+        let (_, proof) =
+            crossmint_observation(&refunded_only, "order_1", OWNER, &binding()).unwrap();
+        assert_eq!(proof["delivery"], "delivered");
+        assert_eq!(proof["fulfilled"], false);
+        let failed_only = order(
+            "completed",
+            json!({"status":"completed"}),
+            vec![line("failed")],
+        );
+        let (_, proof) = crossmint_observation(&failed_only, "order_1", OWNER, &binding()).unwrap();
+        assert_eq!(proof["refunded"], Value::Null);
+        assert_eq!(proof["fulfilled"], false);
+    }
+
+    #[test]
+    fn settled_readback_without_preparation_uses_the_saved_binding() {
+        // After settlement Crossmint may drop payment.preparation and method.
+        let body = order(
+            "completed",
+            json!({"status":"completed"}),
+            vec![line("completed")],
+        );
+        let (_, proof) = crossmint_observation(&body, "order_1", OWNER, &binding()).unwrap();
+        assert_eq!(proof["delivery"], "delivered");
+        assert_eq!(proof["fulfilled"], true);
+        // The saved binding is what authenticates the payer; a binding for
+        // another owner or order is not.
+        let mut foreign = binding();
+        foreign["payerAddress"] = json!("someone_else");
+        assert!(crossmint_observation(&body, "order_1", OWNER, &foreign).is_err());
+        let mut other_order = binding();
+        other_order["orderId"] = json!("order_2");
+        assert!(crossmint_observation(&body, "order_1", OWNER, &other_order).is_err());
+    }
+
+    #[test]
+    fn delivery_to_an_unreviewed_wallet_or_missing_lines_is_not_delivered() {
+        let mut moved = line("completed");
+        moved["delivery"]["recipient"] =
+            json!({"walletAddress":"Elsewhere1111111111111111111111111111111111"});
+        let body = order("completed", json!({"status":"completed"}), vec![moved]);
+        let (_, proof) = crossmint_observation(&body, "order_1", OWNER, &binding()).unwrap();
+        assert_eq!(proof["deliveries"][0]["recipientMatches"], false);
+        assert_eq!(proof["delivery"], "unknown");
+        assert_eq!(proof["fulfilled"], false);
+        let mut ambiguous = line("completed");
+        ambiguous["delivery"]["recipient"]["locator"] =
+            json!("solana:Elsewhere1111111111111111111111111111111111");
+        let body = order("completed", json!({"status":"completed"}), vec![ambiguous]);
+        assert_eq!(
+            crossmint_observation(&body, "order_1", OWNER, &binding())
+                .unwrap()
+                .1["fulfilled"],
+            false
+        );
+        let empty = order("completed", json!({"status":"completed"}), vec![]);
+        let (_, proof) = crossmint_observation(&empty, "order_1", OWNER, &binding()).unwrap();
+        assert_eq!(proof["delivery"], "unknown");
+        assert_eq!(proof["fulfilled"], false);
+        let unknown_status = order(
+            "completed",
+            json!({"status":"something-new"}),
+            vec![line("completed")],
+        );
+        let (_, proof) =
+            crossmint_observation(&unknown_status, "order_1", OWNER, &binding()).unwrap();
+        assert_eq!(proof["paymentStatus"], "unknown");
+        assert_eq!(proof["fulfilled"], false);
     }
 }
 
@@ -1886,7 +2191,10 @@ async fn persist_crossmint_observation(
         crossmint_read_operation(&principal),
     )
     .await?;
-    let order_advanced = matches!(request.order_phase.as_str(), "delivery" | "completed");
+    // The phase alone never verifies an order: Crossmint reports `completed`
+    // for failed and refunded deliveries too. Only a readback whose payment
+    // completed and whose every line reached the reviewed wallet counts.
+    let fulfilled = request.proof["fulfilled"] == Value::Bool(true);
     let mut proof = request.proof;
     if let Some(object) = proof.as_object_mut() {
         object.insert("orderPhase".to_owned(), Value::String(request.order_phase));
@@ -1894,7 +2202,7 @@ async fn persist_crossmint_observation(
     record.proof = Some(proof);
     record.response_status = Some(request.response_status);
     record.error = request.error;
-    record.status = if (200..300).contains(&request.response_status) && order_advanced {
+    record.status = if (200..300).contains(&request.response_status) && fulfilled {
         X402PaymentStatus::Verified
     } else {
         X402PaymentStatus::Confirmed

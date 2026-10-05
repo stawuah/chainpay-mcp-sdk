@@ -1192,10 +1192,33 @@ mod tests {
             .idempotency_key
             .strip_prefix(&format!("{}:", principal.wallet))
             .unwrap();
-        for (phase, expected_status) in [
-            ("payment", X402PaymentStatus::Confirmed),
-            ("delivery", X402PaymentStatus::Verified),
-            ("completed", X402PaymentStatus::Verified),
+        // The phase alone never verifies: only a readback whose payment
+        // completed and whose delivery reached the reviewed wallet does, and
+        // a later refund or failed delivery is shown again as not fulfilled.
+        let refunded = json!({"orderId":"order_once","fulfilled":false,"delivery":"failed","refunded":{"amount":"5","currency":"usdc"}});
+        for (phase, proof, expected_status) in [
+            (
+                "payment",
+                json!({"orderId":"order_once"}),
+                X402PaymentStatus::Confirmed,
+            ),
+            (
+                "delivery",
+                json!({"orderId":"order_once"}),
+                X402PaymentStatus::Confirmed,
+            ),
+            (
+                "completed",
+                json!({"orderId":"order_once"}),
+                X402PaymentStatus::Confirmed,
+            ),
+            ("completed", refunded.clone(), X402PaymentStatus::Confirmed),
+            (
+                "completed",
+                json!({"orderId":"order_once","fulfilled":true,"delivery":"delivered"}),
+                X402PaymentStatus::Verified,
+            ),
+            ("completed", refunded, X402PaymentStatus::Confirmed),
         ] {
             let Json(updated) = persist_crossmint_observation(
                 State(state.clone()),
@@ -1203,7 +1226,7 @@ mod tests {
                 Json(CrossmintOrderProofRequest {
                     mandate: request.mandate.clone(),
                     idempotency_key: user_key.into(),
-                    proof: json!({"orderId":"order_once"}),
+                    proof,
                     order_phase: phase.into(),
                     response_status: 200,
                     error: None,

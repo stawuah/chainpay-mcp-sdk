@@ -167,6 +167,15 @@ pub struct CrossmintOrderResponse {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order_phase: Option<String>,
+    /// Crossmint's payment status, read separately from the order phase.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_payment_status: Option<String>,
+    /// delivered, pending, failed or unknown. `completed` phase is not delivery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_delivery: Option<String>,
+    /// The refund Crossmint reports, exactly as stated. The receipt is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_refund: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receipt_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -402,6 +402,7 @@ test("checkout rejects unsafe preparation while generic decoding remains descrip
   raw.order.payment.preparation.chain = "solana";
   raw.order.quote.status = "valid";
   raw.order.quote.expiresAt = "2030-01-01T00:00:00Z";
+  raw.order.lineItems = [{ chain: "solana", tokenLocator: "solana:token-address", quantity: 1, delivery: { status: "awaiting-payment", recipient: { locator: `solana:${owner}`, walletAddress: owner } } }];
   const order = parseCrossmintOrder(raw);
   const expected = { orderId: order.orderId, owner, source: transfer.source, mint, now: 1 };
   assert.equal(validateCrossmintCheckoutOrder(order, expected).amount, "1234567");
@@ -415,4 +416,70 @@ test("checkout rejects unsafe preparation while generic decoding remains descrip
   assert.throws(() => validateCrossmintCheckoutOrder(order, { ...expected, source: address() }), /source/);
   const extra = new TransactionInstruction({ programId: new PublicKey(SYSTEM_PROGRAM), keys: [], data: Buffer.from([1]) });
   assert.throws(() => validateCrossmintCheckoutOrder({ ...order, serializedTransaction: serializedTransaction([extra, transfer.instruction]) }, expected), /cannot preserve/);
+});
+
+function checkoutFixture() {
+  const owner = address();
+  const mint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const transfer = transferCheckedInstruction({ mint, amount: "1234567" });
+  const raw = crossmintOrder({ serialized: serializedTransaction([transfer.instruction]), quoteAmount: "1.234567" });
+  raw.order.payment.preparation.payerAddress = owner;
+  raw.order.payment.preparation.chain = "solana";
+  raw.order.quote.status = "valid";
+  raw.order.quote.expiresAt = "2030-01-01T00:00:00Z";
+  const delivery = address();
+  raw.order.lineItems = [{
+    chain: "solana", tokenLocator: "solana:token-address", quantity: 1, callData: { quantity: 1 },
+    quote: { status: "valid", totalPrice: { amount: "1.234567", currency: "usdc" } },
+    delivery: { status: "awaiting-payment", recipient: { locator: `solana:${delivery}`, walletAddress: delivery, email: "private@example.com" } },
+  }];
+  return { raw, delivery, expected: { orderId: raw.order.orderId, owner, source: transfer.source, mint, now: 1 } };
+}
+
+test("checkout binds each item's delivery wallet, quantity and price, never the email", () => {
+  const { raw, delivery, expected } = checkoutFixture();
+  const terms = validateCrossmintCheckoutOrder(parseCrossmintOrder(raw), expected);
+  assert.deepEqual(terms.items, [{
+    locator: "solana:token-address", chain: "solana", executionMode: null, quantity: 1, deliveryRecipient: delivery,
+    totalPrice: { amount: "1.234567", currency: "usdc" },
+  }]);
+  assert(!JSON.stringify(terms).includes("private@example.com"));
+});
+
+test("checkout fails closed when delivery or quantity is missing or ambiguous", () => {
+  const cases = [
+    (item) => { delete item.delivery; },
+    (item) => { item.delivery.recipient = { email: "buyer@example.com" }; },
+    (item) => { item.delivery.recipient.walletAddress = address(); },
+    (item) => { item.delivery.recipient.locator = "ethereum:0x24573a80ae60c0e75735843f119ab4623a45e523"; },
+    (item) => { delete item.quantity; delete item.callData; },
+    (item) => { item.callData.quantity = 2; },
+    (item) => { item.quantity = 1.5; },
+    (item) => { item.quantity = "many"; },
+    (item) => { delete item.tokenLocator; },
+    (item) => { item.chain = "base"; },
+  ];
+  for (const mutate of cases) {
+    const { raw, expected } = checkoutFixture();
+    mutate(raw.order.lineItems[0]);
+    assert.throws(() => validateCrossmintCheckoutOrder(parseCrossmintOrder(raw), expected),
+      (error) => error instanceof CrossmintOrderError && error.code === "terms_unavailable");
+  }
+  for (const lineItems of [[], undefined, ["not-an-item"]]) {
+    const { raw, expected } = checkoutFixture();
+    raw.order.lineItems = lineItems;
+    assert.throws(() => validateCrossmintCheckoutOrder(parseCrossmintOrder(raw), expected), /line items/);
+  }
+});
+
+test("a changed delivery wallet or quantity at the same price changes the bound items", () => {
+  const base = checkoutFixture();
+  const original = validateCrossmintCheckoutOrder(parseCrossmintOrder(base.raw), base.expected).items;
+  const moved = structuredClone(base.raw);
+  const elsewhere = address();
+  moved.order.lineItems[0].delivery.recipient = { locator: `solana:${elsewhere}`, walletAddress: elsewhere };
+  assert.notDeepEqual(validateCrossmintCheckoutOrder(parseCrossmintOrder(moved), base.expected).items, original);
+  const more = structuredClone(base.raw);
+  more.order.lineItems[0].quantity = 2; more.order.lineItems[0].callData.quantity = 2;
+  assert.notDeepEqual(validateCrossmintCheckoutOrder(parseCrossmintOrder(more), base.expected).items, original);
 });

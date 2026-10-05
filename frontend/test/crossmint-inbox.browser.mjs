@@ -60,6 +60,7 @@ try {
         ["Mad Lads #1230", "Crossmint reports order complete"],
         ["Mad Lads #1231", "Waiting for Crossmint"],
         ["Mad Lads #1229", "Crossmint reports a refund"],
+        ["Mad Lads #1228", "Crossmint reports delivery failed"],
       ]) {
         const row = await expand(title);
         const receipt = row.locator(".receipt-card");

@@ -213,7 +213,7 @@ test("share helper reports copy, cancel, and failure separately", async () => {
 
 test("Crossmint's order status takes the seller slot and is never shown as verified", () => {
   const stamp = (state) => model.sellerStamp({ status: "crossmint", refunded: false, ...state });
-  const complete = stamp({ phase: "completed", reportedAt: "2026-10-02T14:02:00.000Z" });
+  const complete = stamp({ phase: "completed", delivery: "delivered", reportedAt: "2026-10-02T14:02:00.000Z" });
   assert.equal(complete.label, "Crossmint reports order complete");
   assert.match(complete.detail, /^Reported by Crossmint at .+\. Not checked on Solana\.$/);
   assert.equal(stamp({ phase: "delivery" }).label, "Waiting for Crossmint");
@@ -223,6 +223,24 @@ test("Crossmint's order status takes the seller slot and is never shown as verif
   const refund = stamp({ phase: "completed", refunded: true });
   assert.equal(refund.label, "Crossmint reports a refund");
   assert.equal(refund.tone, "unknown");
+  // Crossmint's documented example: phase completed, payment completed,
+  // delivery failed, refund issued. Neither shape may read as complete.
+  const failed = stamp({ phase: "completed", delivery: "failed" });
+  assert.equal(failed.label, "Crossmint reports delivery failed");
+  assert.equal(failed.tone, "unknown");
+  assert.equal(stamp({ phase: "completed", delivery: "failed", refunded: true }).label, "Crossmint reports a refund");
+  // A completed phase without a reported delivery is still waiting.
+  for (const delivery of [undefined, "pending", "unknown"]) {
+    const waiting = stamp({ phase: "completed", delivery });
+    assert.equal(waiting.label, "Waiting for Crossmint");
+    assert.match(waiting.detail, /has not reported the item delivered/);
+  }
+  for (const delivery of [undefined, "delivered", "pending", "failed", "unknown"]) {
+    for (const refunded of [false, true]) {
+      if (delivery === "delivered" && !refunded) continue;
+      assert.notEqual(stamp({ phase: "completed", delivery, refunded }).label, "Crossmint reports order complete");
+    }
+  }
   // A third party's report never wears the green tone that Allowed and Paid use.
   for (const phase of ["completed", "delivery", "payment", ""]) {
     for (const refunded of [false, true]) {

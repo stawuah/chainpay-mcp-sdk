@@ -71,7 +71,8 @@ export function crossmintSellerStatement(request: CrossmintRequest): SellerState
   return {
     status: "crossmint",
     phase: request.phase ?? "",
-    refunded: Boolean(request.refunded),
+    refunded: Boolean(request.refunded || request.refund),
+    ...(request.delivery ? { delivery: request.delivery } : {}),
     ...(request.reportedAt ? { reportedAt: request.reportedAt } : {}),
   };
 }

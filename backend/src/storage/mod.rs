@@ -868,6 +868,13 @@ impl StatusStore {
         &self,
         record: &X402PaymentRecord,
     ) -> Result<(), StorageError> {
+        // Verification is monotonic against stale or older-phase polls. A
+        // provider-reported failed delivery or refund is a new fact, not an
+        // older phase, so it is the one thing allowed to clear it.
+        let reverses = record
+            .proof
+            .as_ref()
+            .is_some_and(|proof| proof["delivery"] == "failed" || proof["refunded"].is_object());
         match &self.backend {
             StorageBackend::Convex(client) => {
                 client
@@ -892,7 +899,7 @@ impl StatusStore {
                         old.error = record.error.clone();
                         // Verification that the order advanced is monotonic,
                         // even if a later poll fails or returns an older phase.
-                        if old.status != X402PaymentStatus::Verified {
+                        if old.status != X402PaymentStatus::Verified || reverses {
                             old.status = record.status;
                         }
                         old.updated_at_ms = record.updated_at_ms;
@@ -904,7 +911,7 @@ impl StatusStore {
                     r#"
                     UPDATE x402_payments SET
                         proof = $2, response_status = $3, error = $4,
-                        status = CASE WHEN status = 'verified' THEN status ELSE $5 END,
+                        status = CASE WHEN status = 'verified' AND NOT $7 THEN status ELSE $5 END,
                         updated_at = TO_TIMESTAMP($6::DOUBLE PRECISION / 1000.0)
                     WHERE x402_payment_id = $1 AND connector = 'crossmint'
                       AND status IN ('confirmed', 'verified')
@@ -917,6 +924,7 @@ impl StatusStore {
                 .bind(&record.error)
                 .bind(x402_status_name(record.status))
                 .bind(to_i64(Some(record.updated_at_ms), "updated_at_ms")?)
+                .bind(reverses)
                 .execute(pool)
                 .await?;
             }
