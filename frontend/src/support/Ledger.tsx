@@ -44,6 +44,7 @@ export function Ledger({ data, failed, vault }: { data: TrackerData | null; fail
     <section className="ledger page-width" aria-labelledby="ledger-title">
       <div className="ledger-head">
         <h2 id="ledger-title" className="ledger-title">Supporters</h2>
+        <span className="ledger-tag">Devnet test tokens</span>
         {data && data.contributionCount > 0 ? <span className="ledger-count">{data.contributionCount.toLocaleString("en-US")}</span> : null}
       </div>
 
@@ -52,7 +53,7 @@ export function Ledger({ data, failed, vault }: { data: TrackerData | null; fail
       ) : data.recent.length === 0 ? (
         <div className="ledger-empty">
           <img src="/support/empty-400.webp" srcSet="/support/empty-400.webp 400w, /support/empty-800.webp 800w" sizes="200px" width={200} height={150} loading="lazy" alt="An empty tip jar" />
-          <p>Be the first to buy us a coffee.</p>
+          <p>No test tips yet.</p>
         </div>
       ) : (
         <ul className="ledger-list">
@@ -71,7 +72,7 @@ export function Ledger({ data, failed, vault }: { data: TrackerData | null; fail
               </div>
               <div className="ledger-meta">
                 <span className="ledger-amount">{amountLabel(item.amount, item.asset)}</span>
-                <a className="ledger-time" href={explorerTx(item.signature)} target="_blank" rel="noreferrer" aria-label={`View transaction from ${timeAgo(item.blockTime)}`}>
+                <a className="ledger-time" href={explorerTx(item.signature)} target="_blank" rel="noreferrer" aria-label={`View Devnet transaction from ${timeAgo(item.blockTime)}`}>
                   {timeAgo(item.blockTime)} <span aria-hidden="true">↗</span>
                 </a>
               </div>
@@ -82,8 +83,8 @@ export function Ledger({ data, failed, vault }: { data: TrackerData | null; fail
 
       {vault ? (
         <p className="ledger-foot">
-          Tips are held by an open-source program on Solana that splits each one 50/50 between the two maintainers' personal wallets.{" "}
-          <a href={explorerAddress(vault)} target="_blank" rel="noreferrer">Verify on-chain ↗</a>
+          Test tips are held by an open-source program on Solana Devnet that splits each one 50/50 between the two maintainers' wallets. Devnet tokens have no real value, and a tip is not a ChainPay payment receipt.{" "}
+          <a href={explorerAddress(vault)} target="_blank" rel="noreferrer">Verify on the Devnet explorer ↗</a>
         </p>
       ) : null}
     </section>

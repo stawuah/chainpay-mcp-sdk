@@ -263,3 +263,42 @@ export function summarize(rows: StoredEvent[], live: boolean) {
     recentPayouts: newestFirst.filter((r) => r.kind === "payout").slice(0, 10).map((r) => ({ ...pick(r), side: r.side })),
   };
 }
+
+// --- Server config (Devnet-only release, audit 2026-10-05 R4) ---------------
+// The tracker, the browser relay and the web page must all point at the same
+// Devnet program, vault and mint. Anything else fails closed.
+export const SUPPORT_DEVNET = {
+  cluster: "devnet",
+  genesisHash: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  usdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+} as const;
+
+export type SupportEnv = Partial<Record<"SUPPORT_CLUSTER" | "SUPPORT_RPC_URL" | "SUPPORT_PROGRAM_ID" | "SUPPORT_VAULT" | "SUPPORT_VAULT_USDC", string>>;
+export type SupportServerConfig = { rpc: string; accounts: SupportAccounts };
+
+const isAddress = (value: string | undefined): value is string => !!value && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value) && !/^1+$/.test(value);
+
+/** The tracker's config, or why it can't run. Only SUPPORT_CLUSTER=devnet is accepted in this release. */
+export function supportServerConfig(env: SupportEnv): { ok: true; config: SupportServerConfig } | { ok: false; reason: string } {
+  const { SUPPORT_CLUSTER: cluster, SUPPORT_RPC_URL: rpc, SUPPORT_PROGRAM_ID: programId, SUPPORT_VAULT: vault, SUPPORT_VAULT_USDC: vaultUsdc } = env;
+  if (!rpc || !programId || !vault || !vaultUsdc) return { ok: false, reason: "SUPPORT_RPC_URL, SUPPORT_PROGRAM_ID, SUPPORT_VAULT or SUPPORT_VAULT_USDC not set" };
+  if (cluster !== SUPPORT_DEVNET.cluster) return { ok: false, reason: "SUPPORT_CLUSTER must be devnet (support tips are Devnet only in this release)" };
+  if (![programId, vault, vaultUsdc].every(isAddress) || new Set([programId, vault, vaultUsdc]).size !== 3) return { ok: false, reason: "SUPPORT_PROGRAM_ID, SUPPORT_VAULT and SUPPORT_VAULT_USDC must be three different addresses" };
+  return { ok: true, config: { rpc, accounts: { programId, vault, vaultUsdc } } };
+}
+
+export type IndexerTarget = {
+  genesisHash: string;
+  vaultOwner: string | null; // owner program of SUPPORT_VAULT
+  vaultUsdc: { mint: string; owner: string } | null; // parsed SPL token account at SUPPORT_VAULT_USDC
+};
+
+/** Why the configured RPC/accounts aren't the Devnet splitter vault, or null when they are. */
+export function indexerTargetProblem(target: IndexerTarget, accounts: SupportAccounts): string | null {
+  if (target.genesisHash !== SUPPORT_DEVNET.genesisHash) return "SUPPORT_RPC_URL is not a Devnet RPC";
+  if (target.vaultOwner !== accounts.programId) return "SUPPORT_VAULT is not owned by SUPPORT_PROGRAM_ID";
+  if (!target.vaultUsdc) return "SUPPORT_VAULT_USDC is not a token account";
+  if (target.vaultUsdc.mint !== SUPPORT_DEVNET.usdcMint) return "SUPPORT_VAULT_USDC does not hold Devnet USDC";
+  if (target.vaultUsdc.owner !== accounts.vault) return "SUPPORT_VAULT_USDC is not owned by SUPPORT_VAULT";
+  return null;
+}
