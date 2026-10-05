@@ -109,26 +109,22 @@ Responsibility:
 MCP is the interface. ChainPay is the settlement and policy system underneath
 it.
 
-MCP tools:
+MCP tools (33 at `c936067`, counted from `TOOL_DEFINITIONS` in
+[`mcp-server/src/tools/definitions.ts`](../mcp-server/src/tools/definitions.ts),
+the list `tools/list` returns). Read schemas through `tools/list`; do not copy
+this list into other documents.
 
-~~~
-get_mandate
-get_spend_overview
-get_protocol_config
-get_asset
-create_mandate
-update_mandate
-prepare_payment
-quote_payment
-verify_payment_request
-prepare_x402_payment
-execute_payment
-list_receipts
-get_payment
-wait_for_payment
-pause_mandate
-revoke_mandate
-~~~
+| Group | Tools |
+| --- | --- |
+| Permissions (read) | `list_mandates`, `find_compatible_mandate`, `get_mandate`, `get_spend_overview` |
+| Permissions (owner) | `create_mandate`, `update_mandate`, `pause_mandate`, `revoke_mandate` |
+| Protocol and assets | `get_protocol_config`, `get_asset`, `get_supported_assets`, `prepare_token_accounts` |
+| Payment requests | `quote_payment_request`, `create_demo_payment_request`, `verify_payment_request`, `check_payment_requirements`, `quote_payment` |
+| Payments | `prepare_payment`, `execute_payment` |
+| x402 | `prepare_x402_payment`, `execute_x402_payment` |
+| Receipts and status | `list_receipts`, `export_receipts`, `get_payment`, `wait_for_payment` |
+| Agent Cards | `prepare_agent_card`, `request_card_checkout`, `get_card_activity`, `get_statement`, `freeze_agent_card` |
+| Crossmint (off until provider acceptance) | `prepare_crossmint_payment`, `execute_crossmint_payment`, `get_crossmint_payment` |
 
 ### 5. Backend Orchestration Layer
 
