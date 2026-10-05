@@ -22,6 +22,49 @@ function checkLithicSandboxOnly(context, env) {
   // Unset means on. The relay fails closed on anything else; the release check names the typo.
   if (env.CARDS_NEW_ACTIVATION_ENABLED !== undefined && !["true", "false"].includes(env.CARDS_NEW_ACTIVATION_ENABLED)) throw new Error("CARDS_NEW_ACTIVATION_ENABLED must be true or false");
 }
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+/** Decodes base58, or null for anything that isn't. */
+function base58Bytes(text) {
+  if (typeof text !== "string" || !text) return null;
+  let value = 0n;
+  for (const char of text) { const digit = B58.indexOf(char); if (digit < 0) return null; value = value * 58n + BigInt(digit); }
+  const bytes = [];
+  while (value > 0n) { bytes.unshift(Number(value & 0xffn)); value >>= 8n; }
+  for (const char of text) { if (char !== "1") break; bytes.unshift(0); }
+  return bytes;
+}
+// The support splitter's test-config throwaway keys and mint. Never real config.
+const SUPPORT_TEST_KEYS = new Set(["7v54NWdBtkjuAFJrLGsS2SXnuk8nKam81mZJeeYxVFi9", "6TcyBfPdBt1kjsvDZLzmBFnuMaLWiTaAt4RjUr9VA5YD", "AB3FQHskSYuWVw4M9EpGdxNzrAjBNiYGpbH4CVzLFene"]);
+/**
+ * Support tips (/support) are Devnet test tokens only in this release (audit 2026-10-05, R4).
+ * Opening the page needs the explicit Devnet cluster, the deployed program, the tracker and
+ * both verified recipients; mainnet support is refused whether or not it is live.
+ */
+function checkSupportDevnetOnly(env) {
+  if (env.VITE_SUPPORT_CLUSTER !== undefined && env.VITE_SUPPORT_CLUSTER !== "" && env.VITE_SUPPORT_CLUSTER !== "devnet") throw new Error("Support tips are Devnet only in this release (VITE_SUPPORT_CLUSTER=devnet)");
+  if (env.VITE_SUPPORT_LIVE === undefined || env.VITE_SUPPORT_LIVE === "" || env.VITE_SUPPORT_LIVE === "false") return;
+  if (env.VITE_SUPPORT_LIVE !== "true") throw new Error("VITE_SUPPORT_LIVE must be true or false");
+  if (env.VITE_SUPPORT_CLUSTER !== "devnet") throw new Error("VITE_SUPPORT_LIVE=true needs VITE_SUPPORT_CLUSTER=devnet (support tips are Devnet only in this release)");
+  const key = name => {
+    const value = env[name];
+    if (!value) throw new Error(`${name} is required when VITE_SUPPORT_LIVE=true`);
+    const bytes = base58Bytes(value);
+    if (!bytes || bytes.length !== 32 || bytes.every(b => b === 0) || SUPPORT_TEST_KEYS.has(value)) throw new Error(`${name} must be a real public key, not a placeholder or test key`);
+    return value;
+  };
+  key("VITE_SUPPORT_PROGRAM_ID");
+  if (key("VITE_SUPPORT_RECIPIENT_A") === key("VITE_SUPPORT_RECIPIENT_B")) throw new Error("VITE_SUPPORT_RECIPIENT_A and VITE_SUPPORT_RECIPIENT_B must differ");
+  const trackerText = env.VITE_SUPPORT_TRACKER_URL;
+  if (!trackerText) throw new Error("VITE_SUPPORT_TRACKER_URL is required when VITE_SUPPORT_LIVE=true");
+  const tracker = new URL(trackerText);
+  if (tracker.protocol !== "https:" || tracker.username || tracker.password || tracker.search || tracker.hash || tracker.pathname !== "/support/v1" || !tracker.hostname.endsWith(".convex.site")) throw new Error("VITE_SUPPORT_TRACKER_URL must be https://<deployment>.convex.site/support/v1");
+  if (env.VITE_SUPPORT_RPC_URL) {
+    // Everything in VITE_* ships to the browser: a keyed RPC URL would leak its key.
+    const rpc = new URL(env.VITE_SUPPORT_RPC_URL);
+    if (rpc.protocol !== "https:" || rpc.username || rpc.password || rpc.search || rpc.hash) throw new Error("VITE_SUPPORT_RPC_URL must be a public, keyless HTTPS URL");
+    if (/mainnet/i.test(rpc.hostname)) throw new Error("VITE_SUPPORT_RPC_URL must be a Devnet RPC");
+  }
+}
 export function checkReleaseEnvironment(service, env) {
   if (!["frontend", "backend", "mcp"].includes(service)) throw new Error("Unknown service");
   const required = name => { if (!env[name]) throw new Error(`${name} is required`); return env[name]; };
@@ -34,6 +77,7 @@ export function checkReleaseEnvironment(service, env) {
   checkLithicSandboxOnly(context, env);
   if (service === "frontend") {
     for (const key of ["VITE_CHAINPAY_BACKEND_URL", "VITE_CHAINPAY_RPC_URL", "VITE_CHAINPAY_MCP_URL", "VITE_CHAINPAY_AGENT_URL"]) origin(key);
+    checkSupportDevnetOnly(env);
     const backend = origin("VITE_CHAINPAY_BACKEND_URL"), mcp = origin("VITE_CHAINPAY_MCP_URL");
     if (backend.pathname !== "/" || mcp.pathname !== "/mcp" || origin("VITE_CHAINPAY_RPC_URL").href !== new URL("/rpc", backend).href || origin("VITE_CHAINPAY_AGENT_URL").href !== new URL("/agent/chat", mcp).href) throw new Error("Frontend service URLs must describe one relay and one MCP service");
   } else {

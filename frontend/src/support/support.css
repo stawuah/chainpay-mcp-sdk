@@ -245,6 +245,9 @@
 
 /* P7 — thank-you */
 .support2 .tip-done { display: grid; justify-items: center; gap: 12px; padding: 12px 0 4px; text-align: center; }
+.support2 .tip-status { display: grid; justify-items: center; gap: 12px; padding: 12px 0 4px; text-align: center; }
+.support2 .tip-soon { display: grid; justify-items: center; gap: 12px; }
+.support2 .tip-soon .tip-primary { width: 100%; }
 .support2 .tip-done-art { width: 160px; height: 160px; border-radius: 32px; animation: s2-thanks .32s var(--s2-ease); }
 @keyframes s2-thanks { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
 .support2 .tip-done-amount { font-size: 22px; color: var(--body); }
@@ -254,6 +257,7 @@
 .support2 .ledger { max-width: 720px; padding-top: 72px; }
 .support2 .ledger-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .support2 .ledger-title { margin: 0; font-size: 24px; font-weight: 600; color: var(--ink); letter-spacing: -.02em; }
+.support2 .ledger-tag { padding: 3px 10px; border-radius: var(--radius-control); border: 1px solid var(--strong); font: 600 12px/1.4 var(--mono); color: var(--body); }
 .support2 .ledger-count { padding: 3px 10px; border-radius: var(--radius-control); background: var(--strong); font: 600 13px/1.4 var(--mono); color: var(--ink); }
 .support2 .ledger-muted { color: var(--body); }
 .support2 .ledger-list { margin: 0; padding: 0; list-style: none; }

@@ -75,3 +75,36 @@ test("real Lithic production endpoints and keys are refused in every environment
   // Frontend and MCP builds get the same scan.
   assert.throws(() => checkReleaseEnvironment("frontend", {...env, VITE_LITHIC_URL: "https://api.lithic.com"}), /Lithic production API/);
 });
+
+const frontendBase = {...env, VITE_CHAINPAY_BACKEND_URL:"https://relay.example.com", VITE_CHAINPAY_RPC_URL:"https://relay.example.com/rpc", VITE_CHAINPAY_MCP_URL:"https://mcp.example.com/mcp", VITE_CHAINPAY_AGENT_URL:"https://mcp.example.com/agent/chat"};
+const supportLive = {...frontendBase, VITE_SUPPORT_LIVE:"true", VITE_SUPPORT_CLUSTER:"devnet", VITE_SUPPORT_PROGRAM_ID:"D1DvnVq37696mcFB5JeVWZy22wjxZ5xPJmZazbfPK7BH", VITE_SUPPORT_TRACKER_URL:"https://example-123.convex.site/support/v1", VITE_SUPPORT_RECIPIENT_A:"3yS1JFVT284y8z1LC9MRoWxZjzFrdoD5axKsZiyMsfC7", VITE_SUPPORT_RECIPIENT_B:"4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt"};
+
+test("support tips stay closed unless fully configured for Devnet; mainnet support is refused", () => {
+  // Off (unset or false) needs none of the support config.
+  assert.equal(checkReleaseEnvironment("frontend", frontendBase).service, "frontend");
+  assert.equal(checkReleaseEnvironment("frontend", {...frontendBase, VITE_SUPPORT_LIVE:"false"}).service, "frontend");
+  assert.equal(checkReleaseEnvironment("frontend", supportLive).service, "frontend");
+  assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_LIVE:"yes"}), /true or false/);
+  // Mainnet (or anything but devnet) is refused, live or not; an absent cluster can't go live.
+  for (const cluster of ["mainnet", "mainnet-beta", "Devnet", "testnet"]) {
+    assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_CLUSTER:cluster}), /Devnet only/, cluster);
+    assert.throws(() => checkReleaseEnvironment("frontend", {...frontendBase, VITE_SUPPORT_CLUSTER:cluster}), /Devnet only/, `${cluster} while off`);
+  }
+  assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_CLUSTER:undefined}), /VITE_SUPPORT_CLUSTER=devnet/);
+  // Program, tracker and both recipients are required, real and distinct.
+  for (const key of ["VITE_SUPPORT_PROGRAM_ID", "VITE_SUPPORT_TRACKER_URL", "VITE_SUPPORT_RECIPIENT_A", "VITE_SUPPORT_RECIPIENT_B"]) {
+    assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, [key]:""}), new RegExp(key), key);
+  }
+  for (const bad of ["11111111111111111111111111111111", "7v54NWdBtkjuAFJrLGsS2SXnuk8nKam81mZJeeYxVFi9", "not-a-key", "0OIl"]) {
+    assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_RECIPIENT_A:bad}), /real public key/, bad);
+    assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_PROGRAM_ID:bad}), /real public key/, bad);
+  }
+  assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_RECIPIENT_B:supportLive.VITE_SUPPORT_RECIPIENT_A}), /must differ/);
+  for (const url of ["http://example-123.convex.site/support/v1", "https://example-123.convex.site/support", "https://evil.example.com/support/v1", "https://example-123.convex.site/support/v1?x=1"]) {
+    assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_TRACKER_URL:url}), /convex\.site\/support\/v1/, url);
+  }
+  // An RPC override must be keyless and Devnet: everything in VITE_* ships to the browser.
+  assert.equal(checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_RPC_URL:"https://api.devnet.solana.com"}).service, "frontend");
+  assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_RPC_URL:"https://devnet.helius-rpc.com/?api-key=secret"}), /keyless/);
+  assert.throws(() => checkReleaseEnvironment("frontend", {...supportLive, VITE_SUPPORT_RPC_URL:"https://api.mainnet-beta.solana.com"}), /Devnet RPC/);
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { advanceCursor, parseSupportMemo, parseSupportTx, planPage, summarize, type RpcTransaction, type StoredEvent, type SupportCursor } from './supportParse';
+import { SUPPORT_DEVNET, advanceCursor, indexerTargetProblem, parseSupportMemo, parseSupportTx, planPage, summarize, supportServerConfig, type RpcTransaction, type StoredEvent, type SupportCursor } from './supportParse';
 
 const PROGRAM = 'Sp1itter1111111111111111111111111111111111';
 const VAULT = 'Vau1t11111111111111111111111111111111111111';
@@ -177,5 +177,24 @@ describe('support storage', () => {
     expect(s.contributionCount).toBe(1);
     expect(s.totals.sol.contributed).toBe('5');
     expect(s.live).toBe(false);
+  });
+});
+
+describe('support server config (Devnet only)', () => {
+  const env = { SUPPORT_CLUSTER: 'devnet', SUPPORT_RPC_URL: 'https://rpc.invalid', SUPPORT_PROGRAM_ID: PROGRAM, SUPPORT_VAULT: VAULT, SUPPORT_VAULT_USDC: VAULT_USDC };
+  it('accepts a complete Devnet config and nothing else', () => {
+    expect(supportServerConfig(env)).toEqual({ ok: true, config: { rpc: 'https://rpc.invalid', accounts } });
+    for (const change of [{ SUPPORT_CLUSTER: 'mainnet' }, { SUPPORT_CLUSTER: undefined }, { SUPPORT_CLUSTER: 'Devnet' }, { SUPPORT_RPC_URL: '' }, { SUPPORT_VAULT: '' }, { SUPPORT_VAULT: '11111111111111111111111111111111' }, { SUPPORT_VAULT_USDC: VAULT }, { SUPPORT_PROGRAM_ID: 'not a key' }]) {
+      expect(supportServerConfig({ ...env, ...change }).ok, JSON.stringify(change)).toBe(false);
+    }
+  });
+  it('indexes only the Devnet splitter vault and its Devnet USDC account', () => {
+    const good = { genesisHash: SUPPORT_DEVNET.genesisHash, vaultOwner: PROGRAM, vaultUsdc: { mint: SUPPORT_DEVNET.usdcMint, owner: VAULT } };
+    expect(indexerTargetProblem(good, accounts)).toBeNull();
+    expect(indexerTargetProblem({ ...good, genesisHash: '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d' }, accounts)).toMatch(/Devnet RPC/);
+    expect(indexerTargetProblem({ ...good, vaultOwner: null }, accounts)).toMatch(/SUPPORT_VAULT/);
+    expect(indexerTargetProblem({ ...good, vaultUsdc: null }, accounts)).toMatch(/token account/);
+    expect(indexerTargetProblem({ ...good, vaultUsdc: { mint: MINT, owner: VAULT } }, accounts)).toMatch(/Devnet USDC/);
+    expect(indexerTargetProblem({ ...good, vaultUsdc: { mint: SUPPORT_DEVNET.usdcMint, owner: DONOR } }, accounts)).toMatch(/owned by SUPPORT_VAULT/);
   });
 });

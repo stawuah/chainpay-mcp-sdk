@@ -5,7 +5,7 @@
 // contents before signing.
 //
 // Because the route is public and shares this Convex deployment, it is bounded:
-//   - off unless SUPPORT_LIVE=true, and it uses its own key (SUPPORT_RELAY_RPC_URL),
+//   - off unless SUPPORT_LIVE=true and SUPPORT_CLUSTER=devnet, and it uses its own key (SUPPORT_RELAY_RPC_URL),
 //     so abuse can't spend the tracker's quota;
 //   - only the calls the tip card makes, each with checked params;
 //   - account reads are capped at MAX_ACCOUNT_BYTES, responses at MAX_RESPONSE_BYTES;
@@ -22,6 +22,7 @@ export const ALLOWED_METHODS = new Set([
   "sendTransaction",
   "getSignatureStatuses",
   "getBlockHeight",
+  "getGenesisHash", // the page checks it is really reading Devnet before it lets anyone sign
 ]);
 
 export const MAX_BODY_BYTES = 8_192; // a full signed transaction is ~1.7 KB base64
@@ -170,6 +171,9 @@ export function checkRelayRequest(text: string, config: RelayConfig): RelayCheck
     case "getBalance":
     case "getTokenAccountBalance":
       if (!isAddress(params[0]) || !optionalConfig(params, 1)) return bad;
+      break;
+    case "getGenesisHash":
+      if (params.length !== 0) return bad;
       break;
     case "getLatestBlockhash":
     case "getBlockHeight":
