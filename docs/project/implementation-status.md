@@ -42,7 +42,7 @@ Stack: `dre/pr-20-owner-onboarding` → `dre/journey-close-j1` (#22) →
 
 | Journey slice | Status | Evidence |
 |---|---|---|
-| J1 last mile (receipt card, `/verify`, inbox archive, CTAs) | Closed | PR #22; shared `ReceiptCard`; landing **See a receipt** → `/verify`; `/app/receipts/:pda` |
+| J1 last mile (receipt card, `/verify`, inbox archive, CTAs) | Closed | PR #22; shared `ReceiptCard`; landing **See a receipt** → demo Devnet receipt `/verify/7R1i…sh2q`; `/verify` accepts a pasted address or full receipt link; `/app/receipts/:pda` |
 | J2 session safety (Back, false-empty, unknown routes, drafts, recovery copy) | Closed | PR #22 + #23; wallet-scoped in-memory drafts; inline settlement recovery (no doc-only dead end) |
 | J3 MCP/outcomes (blocked vs approve, activity, x402 jobs) | Closed | PR #22; frontend tests 83/83 |
 | J4a relay prerequisites | Closed | PR #22 (Kwasi review) |

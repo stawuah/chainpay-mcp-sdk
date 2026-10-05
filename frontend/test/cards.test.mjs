@@ -7,7 +7,6 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createElement, act } from "react";
-import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 
 const frontendRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,6 +25,8 @@ globalThis.matchMedia = dom.window.matchMedia;
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 dom.window.ResizeObserver = globalThis.ResizeObserver;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+// Loaded after the DOM exists: react-dom checks for input events once, at load.
+const { createRoot } = await import("react-dom/client");
 
 const outfile = join(frontendRoot, "test/.tmp-cards.mjs");
 await esbuild.build({
@@ -389,6 +390,131 @@ test("/verify/card checks disclosed fields against the on-chain commitment, with
   }
   m.setCardCommitmentReader(null);
   history.replaceState(null, "", "/");
+});
+
+// Audit 2026-10-05 A6: paste, retry, and verdict-only copy on /verify/card.
+test("/verify/card: an empty page offers a paste field and opens the link locally", async () => {
+  assert.equal(m.disclosureFragmentFromInput("https://chainpay.example/verify/card#disclose=abc_-1"), "disclose=abc_-1");
+  assert.equal(m.disclosureFragmentFromInput("#disclose=abc"), "disclose=abc");
+  assert.equal(m.disclosureFragmentFromInput("disclose=abc"), "disclose=abc");
+  for (const bad of ["", "https://chainpay.example/verify/card", "https://chainpay.example/verify/card#other=1", "disclose="]) {
+    assert.equal(m.disclosureFragmentFromInput(bad), null, bad);
+  }
+  const { encodeDisclosureFragment } = await import("@chainpay/sdk");
+  const source = m.createFixtureCardsSource({ unlocked: true, delayMs: 0 });
+  const bundle = await source.disclose(await source.getCard(m.FIXTURE_CARD_IDS.data), [2, 9]);
+  const commitment = await source.commitmentFor(bundle.binding);
+  m.setCardCommitmentReader(async () => ({ address: "Commit111", commitment }));
+  const fetched = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => { fetched.push(String(url)); throw new Error("no network"); };
+  history.replaceState(null, "", "/verify/card");
+  const { host, unmount } = await render(createElement(m.CardVerifyPage));
+  try {
+    const field = host.querySelector("#card-verify-link");
+    assert.ok(field, "empty state has a paste field");
+    const type = async (value) => act(async () => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set.call(field, value);
+      field.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    const submit = () => act(async () => { host.querySelector("form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); });
+    await type("https://chainpay.example/verify/card");
+    await submit();
+    assert.match(host.querySelector("#card-verify-link-error").textContent, /#disclose=/);
+    await type(`https://someone.example/verify/card#${encodeDisclosureFragment(bundle)}`);
+    await submit();
+    await settle(80);
+    assert.equal(host.querySelector('[data-testid="card-verify-result"]').dataset.check, "verified");
+    assert.equal(location.hash, `#${encodeDisclosureFragment(bundle)}`, "the fragment stays in this tab's URL");
+    assert.deepEqual(fetched, [], "the pasted link is never fetched");
+  } finally {
+    globalThis.fetch = realFetch;
+    await unmount();
+    m.setCardCommitmentReader(null);
+    history.replaceState(null, "", "/");
+  }
+});
+
+test("/verify/card: an RPC failure or a missing checkpoint offers a retry that reads again", async () => {
+  const { encodeDisclosureFragment } = await import("@chainpay/sdk");
+  const source = m.createFixtureCardsSource({ unlocked: true, delayMs: 0 });
+  const bundle = await source.disclose(await source.getCard(m.FIXTURE_CARD_IDS.data), [2, 9]);
+  const commitment = await source.commitmentFor(bundle.binding);
+  for (const kind of ["rpc_error", "no_commitment"]) {
+    let reads = 0;
+    m.setCardCommitmentReader(async () => {
+      reads += 1;
+      if (reads === 1 && kind === "rpc_error") throw new Error("down");
+      return { address: "Commit111", commitment: reads === 1 ? null : commitment };
+    });
+    history.replaceState(null, "", `/verify/card#${encodeDisclosureFragment(bundle)}`);
+    const { host, unmount } = await render(createElement(m.CardVerifyPage));
+    await settle(60);
+    assert.ok(host.querySelector(`[data-kind="${kind}"]`), kind);
+    await click(button(host, "Try again"));
+    await settle(80);
+    assert.equal(reads, 2, `${kind}: retry reads the checkpoint again`);
+    assert.equal(host.querySelector('[data-testid="card-verify-result"]').dataset.check, "verified");
+    await unmount();
+  }
+  m.setCardCommitmentReader(null);
+  history.replaceState(null, "", "/");
+});
+
+test("/verify/card: only a verified check says the values match or points at the owner wallet", async () => {
+  const { encodeDisclosureFragment } = await import("@chainpay/sdk");
+  const source = m.createFixtureCardsSource({ unlocked: true, delayMs: 0 });
+  const bundle = await source.disclose(await source.getCard(m.FIXTURE_CARD_IDS.data), [2, 9]);
+  const commitment = await source.commitmentFor(bundle.binding);
+  const cases = [
+    ["verified", commitment, (b) => b],
+    ["mismatch", commitment, (b) => ({ ...b, leaves: b.leaves.map((l, i) => i === 0 ? { ...l, value: "ffff000000000000" } : l) })],
+    ["superseded", { ...commitment, seq: commitment.seq + 2n }, (b) => b],
+  ];
+  for (const [expected, onChain, mutate] of cases) {
+    m.setCardCommitmentReader(async () => ({ address: "Commit111", commitment: onChain }));
+    history.replaceState(null, "", `/verify/card#${encodeDisclosureFragment(mutate(structuredClone(bundle)))}`);
+    const { host, unmount } = await render(createElement(m.CardVerifyPage));
+    await settle(80);
+    assert.equal(host.querySelector('[data-testid="card-verify-result"]').dataset.check, expected);
+    const note = host.querySelector('[data-testid="card-verify-note"]').textContent;
+    if (expected === "verified") {
+      assert.match(note, /proves they match/);
+      assert.match(note, /owner's wallet address/);
+    } else {
+      assert.doesNotMatch(note, /proves they match|owner's wallet/, expected);
+      assert.match(note, /fresh one/);
+    }
+    await unmount();
+  }
+  m.setCardCommitmentReader(null);
+  history.replaceState(null, "", "/");
+});
+
+// Audit 2026-10-05 A7 (copy): cards switched off point at something that works today.
+test("cards off: honest unavailable copy and a working spending-permission link", async () => {
+  const off = { ...m.createFixtureCardsSource({ delayMs: 0 }), listCards: async () => { throw new m.CardsNotEnabledError(); } };
+  const { host, unmount } = await render(createElement(m.CardList, { source: off, unlocked: false, onUnlocked() {}, onNavigate() {} }));
+  await settle(20);
+  try {
+    assert.ok(host.querySelector('[data-testid="cards-not-enabled"]'));
+    assert.match(host.textContent, new RegExp(m.CARDS_OFF_COPY.title));
+    assert.match(host.textContent, /no card can be made or charged/);
+    assert.equal(button(host, "New card"), undefined, "no way to start a card");
+    const link = host.querySelector('[data-testid="cards-off-permission-link"]');
+    assert.equal(link.getAttribute("href"), "/app/mandates");
+    assert.equal(link.textContent, "Set up a spending permission");
+    let popped = false;
+    const onPop = () => { popped = true; };
+    window.addEventListener("popstate", onPop);
+    await click(link);
+    window.removeEventListener("popstate", onPop);
+    assert.equal(location.pathname, "/app/mandates");
+    assert.equal(popped, true, "same-tab click stays in the app");
+  } finally {
+    await unmount();
+    history.replaceState(null, "", "/");
+  }
 });
 
 test("statement lines as Axum sends them: credits are negative and still add up", () => {

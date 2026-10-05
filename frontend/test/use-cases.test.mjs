@@ -76,3 +76,36 @@ test("the landing teaser and the use-case page read the same entry", async () =>
     assert.ok(detail.includes(field), `detail page must render ${field} from the entry`);
   }
 });
+
+// Audit 2026-10-05 A1, A2, A10: CTAs land somewhere real, and copy claims only what ships.
+test("See a receipt opens the real demo receipt, not an empty lookup", async () => {
+  const demo = await readFile(new URL("../src/receipts/demoReceipt.ts", import.meta.url), "utf8");
+  const pda = demo.match(/DEMO_RECEIPT_PDA = "([1-9A-HJ-NP-Za-km-z]{32,44})"/)?.[1];
+  assert.ok(pda, "demo receipt address missing");
+  assert.equal(data.RECEIPT.href, `/verify/${pda}`);
+  const receipts = data.findUseCase("receipts-for-accounting");
+  assert.equal(receipts.cta.href, `/verify/${pda}`);
+});
+
+test("receipt copy never says every receipt proves the limits at payment", () => {
+  const receipts = data.findUseCase("receipts-for-accounting");
+  const text = [...receipts.why, ...receipts.example.flat()].join(" ");
+  assert.doesNotMatch(text, /limits that allowed it|limits at payment/i);
+});
+
+test("card copy says card records are not payment receipts", () => {
+  const card = data.findUseCase("private-agent-card");
+  assert.doesNotMatch(card.why.join(" "), /lands as a receipt/i);
+  assert.match(card.why.join(" "), /not a Solana payment receipt/);
+});
+
+test("agent shopping stays Coming soon with a CTA that can't start an order", () => {
+  const shopping = data.findUseCase("agent-shopping");
+  assert.equal(shopping.status, "soon");
+  assert.ok(shopping.soonNote, "agent shopping needs its own soon note");
+  assert.match(shopping.soonNote.body, /Crossmint/);
+  assert.match(shopping.soonNote.body, /no order can start/i);
+  assert.deepEqual(shopping.example.find(([label]) => label === "Status"), ["Status", "Coming soon"]);
+  assert.notEqual(shopping.cta.href, "/app");
+  assert.match(shopping.cta.label, /spending limit/i);
+});

@@ -133,3 +133,16 @@ uncertain command replay, hidden-tab polling, concurrent browser sessions,
 discoveries, repeat reactions, and scrapbook pagination during refreshes. The regular unit suite also
 checks shared client state and legacy cross-tab serialization. See the
 [preview guide](../../docs/guides/community-pet.md) for flags and evidence limits.
+
+## Receipt honesty (audit 2026-10-05, R1)
+
+`verify-entry-retry.test.mjs` covers pasted `/verify/<pda>` links (parsed
+locally, never fetched) and the retry generation guard: a retry for receipt A
+that answers after the page moved to B never replaces B, in `VerifyPage`,
+`LoadedReceiptCard` and the shared loader in `receipts/load.ts`.
+`embed-overview.test.mjs` covers the embed's error recovery and that only
+`confirmed` payments show as receipts. `support-page.test.mjs` covers `/support`
+closed and open-on-Devnet copy. `cards.test.mjs` covers the `/verify/card` paste
+field, retry and verdict-only notes, and the cards-off link. The harnesses add
+`card-verify.html?state=rpc_error|no_commitment` and
+`dashboard-harness.html?tab=cards&cards=off` for screenshots.

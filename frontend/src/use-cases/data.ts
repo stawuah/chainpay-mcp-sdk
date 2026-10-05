@@ -32,7 +32,11 @@ export const STATUS_LABEL: Record<UseCaseStatus, string> = {
 };
 
 const DASHBOARD = { label: "Open dashboard", href: "/app" };
-const RECEIPT = { label: "See a receipt", href: "/verify" };
+// A real Devnet receipt, so the button opens a card instead of an empty lookup.
+// Same address as DEMO_RECEIPT_PATH in receipts/demoReceipt.ts (a test pins it);
+// written out because this file stays import-free.
+export const RECEIPT = { label: "See a receipt", href: "/verify/7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q" };
+const SPENDING_PERMISSION = { label: "Set a spending limit", href: "/app/mandates" };
 const MCP_DOCS = { label: "Read the MCP docs", href: "https://chainpay-mcp.vercel.app/docs" };
 const SELLER_GUIDE = {
   label: "Read the seller guide",
@@ -174,10 +178,10 @@ export const USE_CASES: readonly UseCase[] = [
     ],
     why: [
       "Anyone can check a receipt without a wallet.",
-      "Each receipt shows the limits that allowed it.",
+      "Each receipt says if its limits were saved at payment.",
       "CSV drops straight into a spreadsheet.",
     ],
-    example: [["Receipt", "Public verify link"], ["Shows", "Amount, payee, limits at payment"], ["Export", "CSV"]],
+    example: [["Receipt", "Public verify link"], ["Shows", "Amount, payee, limits when recorded"], ["Export", "CSV"]],
     cta: RECEIPT,
     imageAlt: "A paper receipt stamped with the ChainPay logo next to an open ledger.",
   },
@@ -255,7 +259,7 @@ export const USE_CASES: readonly UseCase[] = [
     why: [
       "Limits stay off the public chain. Seen by you, readers you add, ChainPay's approver and the card issuer.",
       "Freeze it in one tap.",
-      "Every purchase lands as a receipt.",
+      "Every purchase leaves a card record, not a Solana payment receipt.",
     ],
     example: [["Bought", "Data API credits"], ["Paid", "$20"], ["Cap per purchase", "$30"]],
     cta: DASHBOARD,
@@ -350,7 +354,7 @@ export const USE_CASES: readonly UseCase[] = [
     audience: "sellers",
     status: "soon",
     title: "Agents that shop online",
-    summary: "Your agent checks out at real online stores, inside your limit, with a receipt at the end.",
+    summary: "Your agent checks out online through a partner, inside your limit, with a receipt at the end.",
     steps: [
       "Your agent finds the product.",
       "It places the order through a checkout partner.",
@@ -361,8 +365,12 @@ export const USE_CASES: readonly UseCase[] = [
       "Order and payment live in one place.",
       "Off by default until it's ready.",
     ],
-    example: [["Checkout partner", "Crossmint"], ["Status", "Built, switched off"]],
-    cta: DASHBOARD,
+    example: [["Checkout partner", "Crossmint"], ["Status", "Coming soon"]],
+    cta: SPENDING_PERMISSION,
+    soonNote: {
+      title: "Coming soon. Switched off for now.",
+      body: "Checkout stays off until Crossmint signs off, so no order can start yet. Meanwhile, set up the spending limit your agent would shop with.",
+    },
     imageAlt: "A shopping bag with the ChainPay logo, the robot behind it.",
   },
   {

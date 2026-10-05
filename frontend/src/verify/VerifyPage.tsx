@@ -1,5 +1,5 @@
 import { BrandLogo } from "../brand/Brand";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { loadPublicReceiptView } from "../receipts/load";
 import {
   classifyReceiptPda,
@@ -15,42 +15,56 @@ import { decodeOrderFragment, verifyOrderForReceipt } from "../receipts/order";
 import { decodePurchaseFragment, verifyPurchaseForReceipt } from "../receipts/purchase";
 import { ReceiptPageState } from "../receipts/ReceiptCard";
 import { configuredDemoReceiptPath } from "../owner/onboarding";
+import { DEMO_RECEIPT_PATH } from "../receipts/demoReceipt";
+import { parseReceiptInput } from "./receiptInput";
 
 export { isPlausibleReceiptPda, classifyReceiptPda } from "../receipts/model";
 
-function VerifyAddressEntry({ onSubmit }: { onSubmit: (address: string) => void }) {
+function VerifyAddressEntry({ onSubmit }: { onSubmit: (address: string, hash: string) => void }) {
   const [value, setValue] = useState("");
-  const demoPath = configuredDemoReceiptPath(import.meta.env?.VITE_CHAINPAY_DEMO_RECEIPT_PDA);
+  const [error, setError] = useState("");
+  const demoPath = configuredDemoReceiptPath(import.meta.env?.VITE_CHAINPAY_DEMO_RECEIPT_PDA) ?? DEMO_RECEIPT_PATH;
 
   return (
     <div className="verify-entry">
-      <p className="t-body">Paste a ChainPay receipt address to verify payment without connecting a wallet.</p>
+      <p className="t-body">Paste a receipt address or a receipt link. No wallet needed.</p>
       <form
         className="verify-entry-form"
+        noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          const trimmed = value.trim();
-          if (trimmed) onSubmit(trimmed);
+          // Parsed here only. A pasted link's site is never contacted.
+          const parsed = parseReceiptInput(value);
+          if (!parsed.ok) {
+            setError(parsed.error);
+            return;
+          }
+          setError("");
+          onSubmit(parsed.receiptPda, parsed.hash);
         }}
       >
-        <label className="verify-entry-label" htmlFor="verify-receipt-pda">Receipt address</label>
+        <label className="verify-entry-label" htmlFor="verify-receipt-pda">Receipt address or link</label>
         <input
           id="verify-receipt-pda"
           className="verify-entry-input mono"
           value={value}
-          onChange={(event) => setValue(event.target.value)}
-          placeholder="Paste a Solana receipt PDA"
+          onChange={(event) => {
+            setValue(event.target.value);
+            if (error) setError("");
+          }}
+          placeholder="Receipt address or https://…/verify/…"
           autoComplete="off"
           spellCheck={false}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? "verify-receipt-error" : undefined}
         />
         <button type="submit" className="button button-primary">Verify receipt</button>
       </form>
-      {demoPath && (
-        <p className="verify-demo-link">
-          <a href={demoPath}>Demo receipt</a>
-          <span> · Illustrative finalized receipt for judges</span>
-        </p>
-      )}
+      {error && <p id="verify-receipt-error" className="verify-entry-error" role="alert">{error}</p>}
+      <p className="verify-demo-link">
+        <a href={demoPath}>Demo receipt</a>
+        <span> · A real payment on Solana Devnet</span>
+      </p>
     </div>
   );
 }
@@ -64,6 +78,9 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
   const [purchase, setPurchase] = useState<PurchaseProofState | undefined>(undefined);
   const [order, setOrder] = useState<OrderLinkState | undefined>(undefined);
   const [hash, setHash] = useState(() => (typeof window === "undefined" ? "" : window.location.hash));
+  // Each load or retry takes a number. Only the newest one may set the page,
+  // so a slow retry for one receipt can't land on another.
+  const loadSeq = useRef(0);
 
   useEffect(() => {
     const onHash = () => setHash(window.location.hash);
@@ -121,22 +138,37 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
       setState({ kind: "malformed", receiptPda: "" });
       return;
     }
+    const seq = ++loadSeq.current;
     const next = initialPageState(trimmed);
     setState(next);
     if (next.kind !== "loading") return;
-    let active = true;
     void loadPublicReceiptView(trimmed).then((result) => {
-      if (active) setState(result);
+      if (loadSeq.current === seq) setState(result);
     });
     return () => {
-      active = false;
+      loadSeq.current += 1;
     };
   }, [trimmed]);
 
-  function navigateToAddress(address: string) {
+  function retry() {
+    const seq = ++loadSeq.current;
+    setState({ kind: "loading", receiptPda: trimmed });
+    void loadPublicReceiptView(trimmed, { refresh: true }).then((result) => {
+      if (loadSeq.current === seq) setState(result);
+    });
+  }
+
+  function navigateToAddress(address: string, nextHash = "") {
     const path = publicReceiptPath(address);
-    window.history.pushState({}, "", path);
+    window.history.pushState({}, "", `${path}${nextHash}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
+    setHash(nextHash);
+  }
+
+  function checkDraftAddress() {
+    const parsed = parseReceiptInput(draftAddress);
+    if (parsed.ok) navigateToAddress(parsed.receiptPda, parsed.hash);
+    else navigateToAddress(draftAddress);
   }
 
   return (
@@ -164,11 +196,8 @@ export function VerifyPage({ receiptPda }: { receiptPda: string }) {
             order={order}
             editableAddress={draftAddress}
             onAddressChange={setDraftAddress}
-            onRetry={() => {
-              setState({ kind: "loading", receiptPda: trimmed });
-              void loadPublicReceiptView(trimmed, { refresh: true }).then(setState);
-            }}
-            onEditAddress={() => navigateToAddress(draftAddress)}
+            onRetry={retry}
+            onEditAddress={checkDraftAddress}
           />
         )}
       </section>

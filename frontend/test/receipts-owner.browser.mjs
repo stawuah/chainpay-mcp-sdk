@@ -44,7 +44,7 @@ assert.deepEqual(JSON.parse(Buffer.from(fragment, "base64url").toString("utf8"))
 
 // v1 receipt: nothing recorded, today's limits instead, no Order match.
 await page.locator(`button[aria-label="Preview USDC receipt ${V1}"]`).click();
-await card.getByText("Not recorded for this receipt. Showing today’s limits.").waitFor();
+await card.getByText("Not recorded for this receipt. These are today’s limits, not the ones at payment.").waitFor();
 text = await card.innerText();
 assert.equal(text.includes("Order match"), false);
 assert.match(text, /Status today/);

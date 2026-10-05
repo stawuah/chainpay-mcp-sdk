@@ -61,6 +61,8 @@ h1, h2, h3 { color: var(--ink); }
 .button-small { min-height: 40px; padding: 10px 18px; font-size: 14px; }
 .button-primary { color: #fff; background: var(--blue); }
 .button-primary:hover { background: var(--blue-active); }
+.button-secondary { color: var(--ink); background: #fff; border: 1px solid var(--hairline); text-decoration: none; }
+.button-secondary:hover { border-color: var(--blue); color: var(--blue); }
 .mobile-menu { display: none; padding: 5px; border: 0; color: var(--ink); background: transparent; font-size: 21px; }
 
 /* Marketing landing page */

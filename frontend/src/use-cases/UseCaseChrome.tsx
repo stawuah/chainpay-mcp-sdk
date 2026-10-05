@@ -22,7 +22,12 @@ export function useInternalLink() {
   };
 }
 
-export function UseCaseChrome({ title, children }: { title: string; children: ReactNode }) {
+export function UseCaseChrome({ title, children, headerAction = "dashboard" }: {
+  title: string;
+  children: ReactNode;
+  /** "home" swaps the dashboard button for a way back, for pages with nothing to do in the app. */
+  headerAction?: "dashboard" | "home";
+}) {
   const onLink = useInternalLink();
 
   useEffect(() => {
@@ -41,7 +46,9 @@ export function UseCaseChrome({ title, children }: { title: string; children: Re
           <a href={MCP_DOCS_URL} target="_blank" rel="noreferrer">MCP docs</a>
         </nav>
         <div className="top-actions">
-          <Button variant="primary" size="sm" label="Open dashboard" isDisabled={false} href="/app" />
+          {headerAction === "home"
+            ? <a className="login-link" href="/" onClick={onLink}>Back to ChainPay</a>
+            : <Button variant="primary" size="sm" label="Open dashboard" isDisabled={false} href="/app" />}
         </div>
       </header>
 

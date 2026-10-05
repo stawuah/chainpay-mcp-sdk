@@ -26,7 +26,7 @@ export function ReceiptExample() {
     <div className="story-document-head"><BrandLogo size="compact" /><span>Payment receipt</span></div>
     <p className="story-overline">Illustrative receipt · no payment made</p><h3 className="story-amount">4.50 <span className="story-token"><AssetMark asset="USDC" />USDC</span></h3>
     <dl className="story-fields"><div><dt>Agent</dt><dd>Research agent</dd></div><div><dt>Recipient</dt><dd>Example service</dd></div><div><dt>Network</dt><dd className="story-token"><AssetMark asset="Solana" />Solana Devnet</dd></div></dl>
-    <div className="story-evidence"><strong>Payment verification</strong><p>A live receipt reports the verified settlement state.</p><strong>No seller statement</strong><p>Seller evidence is separate from payment verification.</p></div>
+    <div className="story-evidence"><strong>Example, not verified</strong><p>Nothing settled here. A real receipt is checked against Solana when you open it.</p><strong>No seller statement</strong><p>Seller evidence is separate from payment verification.</p></div>
     <p className="story-document-note">Public receipts exclude private request text and attachments. Each receipt says whether its limits were recorded at payment or are today’s.</p>
   </article>;
 }
