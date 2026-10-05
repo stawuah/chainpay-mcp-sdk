@@ -31,7 +31,7 @@ export async function runMigrationIntegration(convexFetch) {
     await admin.query('CREATE DATABASE restored');
     const target = await connect("restored");
     const files = (await readdir(join(root, "backend/migrations"))).filter(f => f.endsWith(".sql")).sort();
-    const migrate = async (client, through = 12) => {
+    const migrate = async (client, through = Infinity) => {
       await client.query('CREATE TABLE _sqlx_migrations(version BIGINT PRIMARY KEY, description TEXT NOT NULL, installed_on TIMESTAMPTZ NOT NULL DEFAULT now(), success BOOLEAN NOT NULL, checksum BYTEA NOT NULL, execution_time BIGINT NOT NULL)');
       for (const name of files.filter(name => Number(name.split("_")[0]) <= through)) {
         const sql = await readFile(join(root, "backend/migrations", name));
@@ -63,6 +63,10 @@ export async function runMigrationIntegration(convexFetch) {
     const original = join(dir, "source.ndjson"), imported = join(dir, "convex.ndjson"), restored = join(dir, "restored.ndjson");
     // Export identical timestamps from deliberately different session defaults.
     await admin.query("ALTER ROLE chainpay_fixture SET timezone TO 'Pacific/Honolulu'");
+    // Owner webhook endpoints hold relay-sealed secrets and are never carried across.
+    await source.query(`INSERT INTO webhook_subscriptions(subscription_id,owner_wallet,url,status,secrets,created_at_ms,updated_at_ms) VALUES ('hook-1','owner','https://hooks.invalid/x','active','[]',0,0)`);
+    await assert.rejects(cli(["export-postgres", join(dir, "refused.ndjson")]), /Owner webhook endpoints exist/);
+    await source.query("DELETE FROM webhook_subscriptions");
     const exported = await cli(["export-postgres", original]);
     await admin.query("ALTER ROLE chainpay_fixture SET timezone TO 'Asia/Tokyo'");
     const otherZone = join(dir, "other-zone.ndjson");
