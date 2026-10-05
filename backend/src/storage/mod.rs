@@ -6,11 +6,16 @@
 
 mod cards;
 mod convex;
+mod webhooks;
 pub use cards::{CardIndex, CardKind, CardPut, StoredCardRecord};
 pub(crate) use convex::PetStoreError;
 use convex::{ConvexStore, decode, encode};
 use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
+pub use webhooks::{
+    ClaimedDelivery, DeliveryOutcome, RedeliverResult, WebhookDelivery, WebhookDeliveryState,
+    WebhookEvent, WebhookSubscription, WebhookSubscriptionStatus,
+};
 
 use sqlx::{
     PgPool, Row,
@@ -57,6 +62,9 @@ struct MemoryState {
     observed_policies: HashMap<String, ObservedPolicyRecord>,
     mandate_requests: HashMap<String, serde_json::Value>,
     card_records: HashMap<(CardKind, String), StoredCardRecord>,
+    webhook_subscriptions: HashMap<String, WebhookSubscription>,
+    webhook_events: HashMap<String, WebhookEvent>,
+    webhook_deliveries: HashMap<String, WebhookDelivery>,
 }
 
 /// Outcome of a first-write-wins keyed record put. The caller decides whether
@@ -444,77 +452,9 @@ impl StatusStore {
     }
 
     pub async fn put_payment(&self, record: PaymentRecord) -> Result<(), StorageError> {
-        match &self.backend {
-            StorageBackend::Convex(client) => {
-                client
-                    .call("put_payment", json!({"record_json":encode(&record)?}))
-                    .await
-            }
-            StorageBackend::Memory(state) => {
-                let mut state = state.write().await;
-                if state.payments.get(&record.payment_id).is_some_and(|old| {
-                    matches!(old.status, PaymentStatus::Confirmed | PaymentStatus::Failed)
-                        || (old.updated_at_ms > record.updated_at_ms)
-                }) {
-                    return Ok(());
-                }
-                state.payments.insert(record.payment_id.clone(), record);
-                Ok(())
-            }
-            StorageBackend::Postgres(pool) => {
-                sqlx::query(
-                    r#"
-                    INSERT INTO payments (
-                        payment_id, idempotency_key, mandate, invoice_hash,
-                        receipt_address, agent, mint, recipient, amount,
-                        token_program, signing_mode, signature, slot, status,
-                        error, created_at_ms, updated_at_ms
-                    ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8,
-                        CAST($9 AS NUMERIC), $10, $11, $12, $13, $14,
-                        $15, $16, $17
-                    )
-                    ON CONFLICT (payment_id) DO UPDATE SET
-                        idempotency_key = EXCLUDED.idempotency_key,
-                        mandate = EXCLUDED.mandate,
-                        invoice_hash = EXCLUDED.invoice_hash,
-                        receipt_address = EXCLUDED.receipt_address,
-                        agent = EXCLUDED.agent,
-                        mint = EXCLUDED.mint,
-                        recipient = EXCLUDED.recipient,
-                        amount = EXCLUDED.amount,
-                        token_program = EXCLUDED.token_program,
-                        signing_mode = EXCLUDED.signing_mode,
-                        signature = EXCLUDED.signature,
-                        slot = EXCLUDED.slot,
-                        status = EXCLUDED.status,
-                        error = EXCLUDED.error,
-                        updated_at_ms = EXCLUDED.updated_at_ms
-                    WHERE payments.status NOT IN ('confirmed','failed') AND payments.updated_at_ms <= EXCLUDED.updated_at_ms
-                    "#,
-                )
-                .bind(&record.payment_id)
-                .bind(&record.idempotency_key)
-                .bind(&record.mandate)
-                .bind(&record.invoice_hash)
-                .bind(&record.receipt_address)
-                .bind(&record.agent)
-                .bind(&record.mint)
-                .bind(&record.recipient)
-                .bind(record.amount.map(|value| value.to_string()))
-                .bind(&record.token_program)
-                .bind(signing_mode_name(record.signing_mode))
-                .bind(&record.signature)
-                .bind(to_i64(record.slot, "slot")?)
-                .bind(status_name(record.status))
-                .bind(&record.error)
-                .bind(to_i64(Some(record.created_at_ms), "created_at_ms")?)
-                .bind(to_i64(Some(record.updated_at_ms), "updated_at_ms")?)
-                .execute(pool)
-                .await?;
-                Ok(())
-            }
-        }
+        // Same terminal-state and ordering rules; the outbox side effect
+        // lives with the write (`storage/webhooks.rs`).
+        self.put_payment_with_events(record, &[]).await.map(|_| ())
     }
 
     pub async fn get_transaction(
@@ -568,59 +508,9 @@ impl StatusStore {
     }
 
     pub async fn put_transaction(&self, record: TransactionRecord) -> Result<(), StorageError> {
-        match &self.backend {
-            StorageBackend::Convex(client) => {
-                client
-                    .call("put_transaction", json!({"record_json":encode(&record)?}))
-                    .await
-            }
-            StorageBackend::Memory(state) => {
-                let mut state = state.write().await;
-                if state
-                    .transactions
-                    .get(&record.transaction_id)
-                    .is_some_and(|old| {
-                        matches!(old.status, PaymentStatus::Confirmed | PaymentStatus::Failed)
-                            || (old.updated_at_ms > record.updated_at_ms)
-                    })
-                {
-                    return Ok(());
-                }
-                state
-                    .transactions
-                    .insert(record.transaction_id.clone(), record);
-                Ok(())
-            }
-            StorageBackend::Postgres(pool) => {
-                sqlx::query(
-                    r#"
-                    INSERT INTO transactions (
-                        transaction_id, idempotency_key, signature, slot,
-                        status, error, created_at_ms, updated_at_ms
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    ON CONFLICT (transaction_id) DO UPDATE SET
-                        idempotency_key = EXCLUDED.idempotency_key,
-                        signature = EXCLUDED.signature,
-                        slot = EXCLUDED.slot,
-                        status = EXCLUDED.status,
-                        error = EXCLUDED.error,
-                        updated_at_ms = EXCLUDED.updated_at_ms
-                    WHERE transactions.status NOT IN ('confirmed','failed') AND transactions.updated_at_ms <= EXCLUDED.updated_at_ms
-                    "#,
-                )
-                .bind(&record.transaction_id)
-                .bind(&record.idempotency_key)
-                .bind(&record.signature)
-                .bind(to_i64(record.slot, "slot")?)
-                .bind(status_name(record.status))
-                .bind(&record.error)
-                .bind(to_i64(Some(record.created_at_ms), "created_at_ms")?)
-                .bind(to_i64(Some(record.updated_at_ms), "updated_at_ms")?)
-                .execute(pool)
-                .await?;
-                Ok(())
-            }
-        }
+        self.put_transaction_with_events(record, &[])
+            .await
+            .map(|_| ())
     }
 
     /// List one connector's jobs for one owner wallet. Idempotency keys are

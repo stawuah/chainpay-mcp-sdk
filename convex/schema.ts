@@ -53,4 +53,16 @@ export default defineSchema({
   support_events: defineTable({ signature: v.string(), index: v.number(), slot: v.number(), blockTime: v.union(v.number(), v.null()), kind: v.union(v.literal("contribution"), v.literal("payout"), v.literal("funding"), v.literal("anomaly")), asset: v.union(v.literal("SOL"), v.literal("USDC")), amount: v.string(), donor: v.union(v.string(), v.null()), note: v.union(v.string(), v.null()), side: v.union(v.literal("A"), v.literal("B"), v.null()) }).index("by_signature", ["signature"]).index("by_slot", ["slot"]),
   support_cursors: defineTable({ account: v.string(), cursor: v.object({ newest: v.union(v.string(), v.null()), pending: v.union(v.object({ top: v.string(), before: v.string() }), v.null()) }) }).index("by_account", ["account"]),
   rate_limits: defineTable({ key: v.string(), count: v.number(), expires: v.number() }).index("by_key", ["key"]).index("by_expires", ["expires"]),
+  // Owner webhooks (convex/webhooks.ts). Secrets are AES-GCM envelopes sealed by Axum.
+  webhook_subscriptions: defineTable({ subscription_id: v.string(), owner_wallet: v.string(), url: v.string(), description: v.union(v.string(), v.null()), status: v.union(v.literal("active"), v.literal("disabled")), secrets_json: v.string(), created_at_ms: v.number(), updated_at_ms: v.number() })
+    .index("by_subscription_id", ["subscription_id"]).index("by_owner_created", ["owner_wallet", "created_at_ms"]),
+  webhook_events: defineTable({ event_id: v.string(), owner_wallet: v.string(), event_type: v.string(), version: v.number(), receipt_address: v.string(), body: v.string(), occurred_at_ms: v.number(), created_at_ms: v.number() })
+    .index("by_event_id", ["event_id"]).index("by_receipt_type_version", ["receipt_address", "event_type", "version"]),
+  webhook_deliveries: defineTable({
+    delivery_id: v.string(), event_id: v.string(), subscription_id: v.string(), owner_wallet: v.string(), event_type: v.string(), receipt_address: v.string(),
+    state: v.union(v.literal("pending"), v.literal("delivering"), v.literal("delivered"), v.literal("retry_scheduled"), v.literal("exhausted")),
+    attempts: v.number(), next_attempt_at_ms: v.number(), lease_token: v.union(v.string(), v.null()), lease_expires_at_ms: v.union(v.number(), v.null()),
+    last_status: v.union(v.number(), v.null()), last_error: v.union(v.string(), v.null()), delivered_at_ms: v.union(v.number(), v.null()), created_at_ms: v.number(), updated_at_ms: v.number(),
+  }).index("by_delivery_id", ["delivery_id"]).index("by_state_next", ["state", "next_attempt_at_ms"])
+    .index("by_subscription_created", ["subscription_id", "created_at_ms"]).index("by_subscription_state", ["subscription_id", "state"]),
 });

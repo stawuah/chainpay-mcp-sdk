@@ -1027,6 +1027,7 @@ dependencies = [
  "bs58",
  "dcap-qvl",
  "ed25519-dalek",
+ "futures-core",
  "getrandom 0.3.4",
  "hmac 0.12.1",
  "reqwest",
@@ -1042,6 +1043,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "url",
  "vercel_runtime",
  "wincode",
 ]

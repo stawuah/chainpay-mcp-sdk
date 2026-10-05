@@ -1,0 +1,38 @@
+name: Owner webhooks dispatch
+# Drives owner webhook delivery (docs/guides/owner-webhooks.md). Each run calls
+# one bounded dispatcher pass on the relay: it repairs missing events, leases
+# due deliveries, sends them and records the outcome. Overlapping or duplicate
+# runs are harmless (leases), and GitHub may start a scheduled run late, so
+# delivery is "within minutes", never instant.
+#
+# Off until configured. Needs, in the repository settings:
+#   variable OWNER_WEBHOOKS_DISPATCH_URL  the relay origin, e.g. https://relay.example
+#   secret   OWNER_WEBHOOKS_CRON_SECRET   the relay's CRON_SECRET (16+ characters)
+#   secret   VERCEL_AUTOMATION_BYPASS_SECRET  only if the deployment is protected
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: owner-webhooks-dispatch
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    if: vars.OWNER_WEBHOOKS_DISPATCH_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Run one dispatcher pass
+        env:
+          RELAY: ${{ vars.OWNER_WEBHOOKS_DISPATCH_URL }}
+          CRON_SECRET: ${{ secrets.OWNER_WEBHOOKS_CRON_SECRET }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$CRON_SECRET" || { echo "OWNER_WEBHOOKS_CRON_SECRET is not set"; exit 1; }
+          headers=(-H "authorization: Bearer $CRON_SECRET")
+          if [ -n "$BYPASS" ]; then headers+=(-H "x-vercel-protection-bypass: $BYPASS"); fi
+          # The report is counts only (no URLs, secrets or payloads); print it for the run log.
+          curl -fsS --max-time 90 -X POST "${headers[@]}" "${RELAY%/}/internal/cron/webhooks/dispatch"
+          echo

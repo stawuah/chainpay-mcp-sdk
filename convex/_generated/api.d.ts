@@ -20,6 +20,7 @@ import type * as records from "../records.js";
 import type * as status from "../status.js";
 import type * as storage from "../storage.js";
 import type * as support from "../support.js";
+import type * as webhooks from "../webhooks.js";
 
 import type {
   ApiFromModules,
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   status: typeof status;
   storage: typeof storage;
   support: typeof support;
+  webhooks: typeof webhooks;
 }>;
 
 /**
