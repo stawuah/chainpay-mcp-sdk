@@ -110,6 +110,10 @@
 .cp-freeze-lines li[data-issuer="pending_issuer_confirmation"] { color: var(--ws-warning, #854d0e); }
 .cp-freeze-lines li[data-issuer="confirmed"] svg { color: var(--ws-positive, #166534); }
 .cp-freeze-lines li[data-issuer="failed"] { color: var(--ws-critical, #b91c1c); }
+.cp-activation-lines li[data-state="done"] svg { color: var(--ws-positive, #166534); }
+.cp-activation-lines li[data-state="pending"] { color: var(--ws-warning, #854d0e); }
+.cp-activation-lines li[data-state="failed"], .cp-activation-lines li[data-state="unknown"] { color: var(--ws-critical, #b91c1c); }
+.cp-activation-detail { margin: 0; font-size: 13px; color: var(--body); max-width: 52ch; }
 .cp-card-tabs { margin-top: 4px; }
 .cp-card-section { display: grid; gap: 16px; min-width: 0; }
 

@@ -19,6 +19,8 @@ function checkLithicSandboxOnly(context, env) {
     if (LITHIC_PRODUCTION_KEY.test(name) && value && (context === "production" || name !== "LITHIC_API_KEY")) throw new Error(`${name} is a production Lithic key variable; use LITHIC_SANDBOX_API_KEY`);
   }
   if (env.CARDS_CONNECTOR_ENABLED !== undefined && !["true", "false"].includes(env.CARDS_CONNECTOR_ENABLED)) throw new Error("CARDS_CONNECTOR_ENABLED must be true or false");
+  // Unset means on. The relay fails closed on anything else; the release check names the typo.
+  if (env.CARDS_NEW_ACTIVATION_ENABLED !== undefined && !["true", "false"].includes(env.CARDS_NEW_ACTIVATION_ENABLED)) throw new Error("CARDS_NEW_ACTIVATION_ENABLED must be true or false");
 }
 export function checkReleaseEnvironment(service, env) {
   if (!["frontend", "backend", "mcp"].includes(service)) throw new Error("Unknown service");

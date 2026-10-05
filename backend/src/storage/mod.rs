@@ -6,6 +6,8 @@
 
 mod cards;
 mod convex;
+#[cfg(test)]
+pub(crate) use cards::CardWriteFault;
 pub use cards::{CardIndex, CardKind, CardPut, StoredCardRecord};
 pub(crate) use convex::PetStoreError;
 use convex::{ConvexStore, decode, encode};
@@ -57,6 +59,9 @@ struct MemoryState {
     observed_policies: HashMap<String, ObservedPolicyRecord>,
     mandate_requests: HashMap<String, serde_json::Value>,
     card_records: HashMap<(CardKind, String), StoredCardRecord>,
+    /// Test fault injection: card record puts this predicate matches fail.
+    #[cfg(test)]
+    card_write_fault: Option<cards::CardWriteFault>,
 }
 
 /// Outcome of a first-write-wins keyed record put. The caller decides whether

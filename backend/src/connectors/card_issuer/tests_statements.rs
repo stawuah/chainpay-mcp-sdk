@@ -1239,7 +1239,8 @@ async fn ops_metrics_report_latency_and_gauges_with_opaque_ids_only() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn owners_get_the_checkpoint_disclosure_key_and_nobody_else_does() {
     let h = Harness::new().await;
-    // Activation scheduled checkpoint seq 1 and stored its salt sealed.
+    // Activation scheduled checkpoint seq 1, stored its salt sealed, and
+    // only finished once seq 1 read back from the base layer.
     let (status, body) = h
         .owner(
             "GET",
@@ -1250,7 +1251,7 @@ async fn owners_get_the_checkpoint_disclosure_key_and_nobody_else_does() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["masterSalt"].as_str().unwrap().len(), 64);
     assert_eq!(body["seq"], "1");
-    assert_eq!(body["commitment"]["state"], "pending");
+    assert_eq!(body["commitment"]["state"], "current");
     assert_eq!(
         h.call(
             "GET",

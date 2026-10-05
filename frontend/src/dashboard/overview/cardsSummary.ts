@@ -31,7 +31,7 @@ export type CardsSummaryState =
   | { state: "empty" | "loaded"; summary: CardsSummary; /** The source is example data (the Cards tab shows the same label). */ illustrative: boolean };
 
 /** Card states the owner has to act on or watch: they feed Overview's attention list. */
-export const CARD_ATTENTION_KEYS = ["needs_restore", "freeze_failed", "freeze_pending"] as const;
+export const CARD_ATTENTION_KEYS = ["needs_restore", "freeze_failed", "limits_failed", "freeze_pending", "needs_activation"] as const;
 
 /**
  * What the cards summary contributes to Overview's attention (council R2-P10).

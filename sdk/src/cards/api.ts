@@ -15,6 +15,8 @@ export type CardsApiErrorBody = {
   operationId?: string;
   retryable: boolean;
   evidenceState?: string;
+  /** Fresh card view on a partial failure (e.g. `mirror_failed`): the state the issuer and chain actually reached. */
+  card?: CardView;
 };
 
 export class CardsApiError extends Error {
@@ -23,6 +25,8 @@ export class CardsApiError extends Error {
   readonly retryable: boolean;
   readonly operationId?: string;
   readonly evidenceState?: string;
+  /** Fresh card view Axum attached to a partial failure, when it sent one. */
+  readonly card?: CardView;
 
   constructor(status: number, body: Partial<CardsApiErrorBody>) {
     super(body.message || `Card API request failed (${status})`);
@@ -32,6 +36,7 @@ export class CardsApiError extends Error {
     this.retryable = body.retryable === true;
     this.operationId = body.operationId;
     this.evidenceState = body.evidenceState;
+    this.card = body.card;
   }
 }
 
@@ -64,16 +69,58 @@ export type CardAttestationView = {
   label: string;
 };
 
+/**
+ * Axum's persisted card activation (audit R2). Order: mirror limits at the issuer
+ * (card paused) → checkpoint on PER → base-layer commitment read back → issuer open.
+ * `active` only when all of it holds for `policyVersion`.
+ */
+export type CardActivationState = "mirroring" | "mirror_failed" | "pending_commitment" | "issuer_pending" | "held" | "active" | "superseded";
+
+export type CardActivationView = {
+  state: CardActivationState | string;
+  policyVersion: number;
+  steps?: {
+    mirror?: string;
+    rules?: "pending" | "retired" | "retire_pending" | string;
+    checkpoint?: string | { seq?: string; state?: string };
+    commitment?: "pending" | "confirmed" | string;
+    issuer?: string;
+  };
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  /** e.g. `new_activation_disabled`, `issuer_not_open`, `frozen_on_per`, `policy_version_changed`. */
+  detail?: string;
+};
+
+/**
+ * Public commitment. `state: "confirmed"` only when a base-layer readback matched the
+ * checkpoint ChainPay scheduled (seq, policy version and period). A checkpoint PER
+ * accepted is `checkpoint: "scheduled"` and still `state: "pending"`.
+ */
+export type CardCommitmentView = {
+  seq: string;
+  root?: string;
+  slot?: string;
+  state?: "confirmed" | "pending" | "mismatch" | "unverified" | string;
+  checkpoint?: "pending" | "scheduled" | "failed" | "stalled" | "mismatch" | "confirmed" | string;
+  policyVersion?: number;
+  periodIndex?: number;
+  expectedSeq?: string;
+  source?: "base_readback" | "recorded";
+};
+
 /** No policy values: the owner reads those from the TEE with their own token. */
 export type CardView = {
   cardId: string;
   label: string;
   lastFour: string;
   issuerState: string;
-  mirror: { state: string; acknowledgedAt?: string; policyVersionMirrored?: number };
+  mirror: { state: string; acknowledgedAt?: string; policyVersionMirrored?: number; allMerchantsMirrored?: boolean; rulesRetirePending?: boolean };
   freeze: { onChain: boolean; issuer: IssuerFreezeState };
   accounts?: CardAccountsView;
-  commitment?: { seq: string; root: string; slot: string };
+  commitment?: CardCommitmentView;
+  activation?: CardActivationView;
   /**
    * Axum recovery states: `recovery_frozen` → `restore_prepared` (co-signed restore handed out)
    * → `reconciled_pending_owner_confirm` (issuer events replayed) → `restored`.
