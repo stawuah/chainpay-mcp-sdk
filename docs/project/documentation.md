@@ -12,6 +12,7 @@ to procedures, reference material, and evidence.
 | `guides/` | Agent, SDK, and merchant integration procedures |
 | `reference/` | Architecture, configuration, settlement, networks, receipts, recovery |
 | `project/` | Acceptance, implementation evidence, dependency history, maintenance |
+| `proposals/` | Not-implemented plans awaiting a partner or owner decision |
 | `archive/` | Clearly labeled historical proposals and code explanations |
 
 Component READMEs explain that component and link to shared instructions.

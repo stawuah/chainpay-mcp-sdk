@@ -26,6 +26,7 @@ It takes you from wallet setup to a payment receipt on Solana Devnet.
 - [Implementation status](project/implementation-status.md) distinguishes code, regression tests, and accepted Devnet settlement.
 - [Dependency advisories](project/dependency-advisories.md) records existing dependency risks.
 - [Documentation maintenance](project/documentation.md) records the document map and update rules.
+- [PayPal proposal v2](proposals/paypal-v2.md) is a not-implemented plan for PayPal sandbox invoices, with its [partner briefing PDF](assets/paypal-briefing-v2.pdf).
 
 These guides describe the code in this branch. A running hosted service may
 use a different revision. Health checks establish reachability, not payment
