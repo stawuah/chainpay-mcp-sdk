@@ -1419,10 +1419,33 @@ mod tests {
             .idempotency_key
             .strip_prefix(&format!("{}:", principal.wallet))
             .unwrap();
-        for (phase, status) in [
-            ("payment", X402PaymentStatus::Confirmed),
-            ("delivery", X402PaymentStatus::Verified),
-            ("completed", X402PaymentStatus::Verified),
+        // Same rules as the in-memory store: the phase alone never verifies;
+        // only a completed payment delivered to the reviewed wallet with no
+        // refund does, and a later refund or failed delivery clears Verified.
+        let refunded = json!({"orderId":"order_once","fulfilled":false,"delivery":"failed","refunded":{"amount":"5","currency":"usdc"}});
+        for (phase, proof, status) in [
+            (
+                "payment",
+                json!({"orderId":"order_once"}),
+                X402PaymentStatus::Confirmed,
+            ),
+            (
+                "delivery",
+                json!({"orderId":"order_once"}),
+                X402PaymentStatus::Confirmed,
+            ),
+            (
+                "completed",
+                json!({"orderId":"order_once"}),
+                X402PaymentStatus::Confirmed,
+            ),
+            ("completed", refunded.clone(), X402PaymentStatus::Confirmed),
+            (
+                "completed",
+                json!({"orderId":"order_once","fulfilled":true,"delivery":"delivered"}),
+                X402PaymentStatus::Verified,
+            ),
+            ("completed", refunded, X402PaymentStatus::Confirmed),
         ] {
             let Json(updated) = persist_crossmint_observation(
                 State(another_instance.clone()),
@@ -1430,7 +1453,7 @@ mod tests {
                 Json(CrossmintOrderProofRequest {
                     mandate: winner.mandate.clone(),
                     idempotency_key: user_key.into(),
-                    proof: json!({"orderId":"order_once"}),
+                    proof,
                     order_phase: phase.into(),
                     response_status: 200,
                     error: None,
@@ -1442,6 +1465,10 @@ mod tests {
             assert_eq!(updated.proof.as_ref().unwrap()["orderPhase"], phase);
             assert_eq!(updated.transaction_signature, payment.signature);
             assert_eq!(updated.receipt_address, payment.receipt_address);
+            assert_eq!(
+                updated.payment_id.as_deref(),
+                Some(payment.payment_id.as_str())
+            );
         }
         let rejected = record_x402_proof(
             State(state.clone()),
@@ -1471,6 +1498,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        // The refund that cleared Verified survives the reconnect.
+        assert_eq!(saved.status, X402PaymentStatus::Confirmed);
         assert_eq!(saved.proof.unwrap()["orderPhase"], "completed");
 
         // A historical failed row without a claim also blocks replacement keys.
