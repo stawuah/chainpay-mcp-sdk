@@ -114,8 +114,9 @@ Optional readonly baseline (no new signing):
 Receipt PDA: 7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q
 ```
 
-Set `VITE_CHAINPAY_DEMO_RECEIPT_PDA` locally to label landing **See a receipt**
-with this baseline; do not set in production Render env without confirming.
+Landing **See a receipt** and the `/verify` **Demo receipt** link open this
+receipt. `VITE_CHAINPAY_DEMO_RECEIPT_PDA` still sets the dashboard's demo link and can
+override the `/verify` one; the landing never reads it.
 
 Open **Receipts** → **Look up another settlement** to paste any other PDA.
 Use **Open transaction** for the finalized signature and Explorer record.

@@ -50,17 +50,35 @@ test("landing preserves identity and tells the permission-to-receipt story", asy
   assert.match(text, /Put your first agent on a budget\./);
 });
 
-test("landing CTAs stay on wired callbacks and do not invent a live receipt URL", async () => {
+test("landing CTAs stay on wired callbacks and the receipt CTA opens a real receipt", async () => {
   const text = await source();
   assert.match(text, /from "@astryxdesign\/core\/Button"/);
   assert.match(text, /label="Open dashboard"/);
   assert.match(text, /isDisabled=/);
   assert.match(text, /onClick=\{onOpenDashboard\}/);
   assert.match(text, /onClick=\{onConnect\}|onConnect\(\)/);
-  assert.match(text, /href="\/verify"/);
-  assert.match(text, /See a receipt/);
+  assert.match(text, /label="See a receipt" isDisabled=\{false\} href=\{DEMO_RECEIPT_PATH\}/);
+  assert.match(text, /from "\.\.\/receipts\/demoReceipt"/);
   assert.equal(text.includes("VITE_CHAINPAY_DEMO_RECEIPT_PDA"), false);
   assert.equal(text.includes("VITE_"), false);
+  // The hero keeps one action; the header still opens the dashboard.
+  const hero = text.slice(text.indexOf('className="landing-hero-actions"'), text.indexOf('className="t-body-sm landing-hero-note"'));
+  assert.equal(hero.includes("Open dashboard"), false);
+  assert.match(text, /className="top-actions"[\s\S]*label="Open dashboard"/);
+});
+
+test("the demo receipt is a fixed, real Devnet receipt address, not an env value", async () => {
+  const demo = await readFile(resolve(root, "receipts/demoReceipt.ts"), "utf8");
+  assert.match(demo, /DEMO_RECEIPT_PDA = "7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q"/);
+  assert.match(demo, /DEMO_RECEIPT_PATH = `\/verify\/\$\{DEMO_RECEIPT_PDA\}`/);
+  assert.equal(demo.includes("VITE_"), false);
+  assert.equal(demo.includes("import "), false, "the landing bundle stays free of receipt code");
+});
+
+test("the illustrative receipt never reads as a live verification", async () => {
+  const text = await source();
+  assert.equal(text.includes("A live receipt reports the verified settlement state"), false);
+  assert.match(text, /Example, not verified/);
 });
 
 test("illustrative receipt uses the approved example and never claims payment", async () => {

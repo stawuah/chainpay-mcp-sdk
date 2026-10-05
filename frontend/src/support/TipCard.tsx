@@ -2,7 +2,10 @@
 // swapped to USDC by Jupiter inside the same transaction (swap.ts).
 import { useEffect, useRef, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
-import { SOL_DECIMALS, SUPPORT_PROGRAM_ID, SWAP_ENABLED, USDC_DECIMALS, USDC_MINT, explorerTx } from "./config";
+import { SOL_DECIMALS, SUPPORT_CLUSTER, SUPPORT_PROGRAM_ID, SWAP_ENABLED, USDC_DECIMALS, USDC_MINT, explorerTx } from "./config";
+
+// Devnet tokens have no value, so the card never shows a dollar figure for them.
+const TEST_TOKENS = SUPPORT_CLUSTER === "devnet";
 import {
   NOTE_MAX,
   cleanNote,
@@ -105,10 +108,10 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
   const shownArrives = shownQuote ? `${formatUnits(BigInt(shownQuote.outAmount), USDC_DECIMALS)} USDC` : null;
   const minimum = shownQuote ? `${formatUnits(BigInt(shownQuote.otherAmountThreshold), USDC_DECIMALS)} USDC` : null;
   const feeLamports = swapping ? prepared?.feeLamports ?? null : BASE_FEE_LAMPORTS;
-  const feeUsd = feeLamports !== null ? usdHint("SOL", feeLamports, solUsd) : null;
+  const feeUsd = feeLamports !== null && !TEST_TOKENS ? usdHint("SOL", feeLamports, solUsd) : null;
   const hint = swapping
     ? quoteState === "loading" ? "Getting a price…" : quoteState === "none" ? "No swap route for this amount." : arrives ? `≈ ${arrives} arrives` : null
-    : usdHint(mode, units, solUsd);
+    : TEST_TOKENS ? "Devnet test tokens · no real value" : usdHint(mode, units, solUsd);
   const isCustom = swapping || !PRESETS[mode].includes(amountText);
   const busy = pending !== "";
 
@@ -304,7 +307,7 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
                   <div className="tip-presets" role="group" aria-label="Quick amounts">
                     {PRESETS[mode as SupportAsset].map((preset) => (
                       <button key={preset} type="button" aria-pressed={amountText === preset} onClick={() => setAmountText(preset)}>
-                        {mode === "USDC" ? `$${preset}` : `${preset} SOL`}
+                        {mode === "USDC" ? (TEST_TOKENS ? `${preset} USDC` : `$${preset}`) : `${preset} SOL`}
                       </button>
                     ))}
                     <button

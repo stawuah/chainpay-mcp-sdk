@@ -49,22 +49,50 @@ function useVault(enabled: boolean) {
   return { vault, accounts, refresh };
 }
 
-function raisedLine(data: TrackerData | null) {
+export type SupportMode = "closed" | "devnet" | "mainnet";
+
+export function supportMode(live: boolean, cluster: typeof SUPPORT_CLUSTER): SupportMode {
+  if (!live) return "closed";
+  return cluster === "devnet" ? "devnet" : "mainnet";
+}
+
+/** Hero words per state. Closed and Devnet never ask for real money. */
+export const SUPPORT_HERO: Record<SupportMode, { eyebrow: string; title: string; lede: (a: string, b: string) => string }> = {
+  closed: {
+    eyebrow: "Support ChainPay",
+    title: "Tips are opening soon.",
+    lede: () => "Nothing can be sent from this page yet. When it opens, every tip splits 50/50 on-chain between the two maintainers.",
+  },
+  devnet: {
+    eyebrow: "Support ChainPay · Devnet test",
+    title: "Try a test tip.",
+    lede: (a, b) => `This runs on Devnet test tokens, so nothing here has real value. Each test tip splits 50/50 on-chain to ${a}'s and ${b}'s wallets.`,
+  },
+  mainnet: {
+    eyebrow: "Support ChainPay",
+    title: "Like ChainPay? Buy us a coffee.",
+    lede: (a, b) => `Tips keep ChainPay free, open source and shipping. Every tip is split 50/50 on-chain and paid to ${a}'s and ${b}'s personal wallets.`,
+  },
+};
+
+function raisedLine(data: TrackerData | null, mode: SupportMode) {
   if (!data) return null;
-  if (data.contributionCount === 0) return "Be the first to chip in";
+  if (data.contributionCount === 0) return mode === "devnet" ? "No test tips yet" : "Be the first to chip in";
   const parts = [
     BigInt(data.totals.sol.contributed) > 0n ? amountLabel(data.totals.sol.contributed, "SOL") : "",
     BigInt(data.totals.usdc.contributed) > 0n ? amountLabel(data.totals.usdc.contributed, "USDC") : "",
   ].filter(Boolean);
-  return `${parts.join(" · ")} raised`;
+  return mode === "devnet" ? `${parts.join(" · ")} in Devnet test tokens` : `${parts.join(" · ")} raised`;
 }
 
 export default function SupportPage() {
   const live = supportReady();
+  const mode = supportMode(live, SUPPORT_CLUSTER);
+  const hero = SUPPORT_HERO[mode];
   const tracker = useTracker(live);
   const { vault, accounts, refresh } = useVault(live);
   const walletState = useSupportWallet();
-  const raised = raisedLine(tracker.data);
+  const raised = raisedLine(tracker.data, mode);
 
   const afterSend = () => {
     void refresh();
@@ -73,16 +101,13 @@ export default function SupportPage() {
   };
 
   return (
-    <UseCaseChrome title="Buy us a coffee · ChainPay">
+    <UseCaseChrome title={mode === "mainnet" ? "Buy us a coffee · ChainPay" : "Support · ChainPay"} headerAction={live ? "dashboard" : "home"}>
       <div className="support2">
         <header className="s2-hero page-width">
           <div className="s2-hero-copy">
-            <p className="s2-eyebrow">Support ChainPay</p>
-            <h1 className="s2-h1">Like ChainPay? Buy us a coffee.</h1>
-            <p className="s2-lede">
-              Tips keep ChainPay free, open source and shipping. Every tip is split 50/50 on-chain and paid to{" "}
-              {MAINTAINER_LABELS[0]}'s and {MAINTAINER_LABELS[1]}'s personal wallets.
-            </p>
+            <p className="s2-eyebrow">{hero.eyebrow}</p>
+            <h1 className="s2-h1">{hero.title}</h1>
+            <p className="s2-lede">{hero.lede(MAINTAINER_LABELS[0], MAINTAINER_LABELS[1])}</p>
             {live && raised ? <p className="s2-raised">{raised}</p> : null}
           </div>
           <div className="s2-hero-art">
@@ -105,7 +130,8 @@ export default function SupportPage() {
             ) : (
               <section className="tip-card tip-soon" aria-labelledby="soon-title">
                 <h2 id="soon-title" className="tip-title">Opening soon</h2>
-                <p className="tip-sub">We're putting the finishing touches on it. Check back shortly.</p>
+                <p className="tip-sub">Nothing to send yet. Check back once it's open.</p>
+                <a className="tip-secondary" href="/" data-testid="support-back">Back to ChainPay</a>
               </section>
             )}
           </div>
@@ -114,7 +140,7 @@ export default function SupportPage() {
         {live ? <Ledger data={tracker.data} failed={tracker.failed} vault={accounts?.vault.toBase58() ?? null} /> : null}
         {live ? <PayoutPanel wallet={walletState.wallet} vault={vault} accounts={accounts} onPaid={() => void refresh()} /> : null}
         {live && SUPPORT_CLUSTER === "devnet" ? (
-          <div className="page-width"><p className="s2-devnet">Devnet rehearsal: test tokens only.</p></div>
+          <div className="page-width"><p className="s2-devnet">Devnet test tokens only. Nothing sent here has real value.</p></div>
         ) : null}
       </div>
     </UseCaseChrome>

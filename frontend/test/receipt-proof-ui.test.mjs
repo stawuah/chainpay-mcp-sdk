@@ -112,6 +112,7 @@ test("token units keep every significant digit and drop only trailing zeros", ()
 test("an on-chain snapshot shows the limits at payment in token units", () => {
   const display = model.policyAtPayment(receipt({ policy: { source: "on-chain", limits: LIMITS } }), Date.UTC(2026, 9, 2));
   assert.equal(display.caption, "Recorded on Solana at payment");
+  assert.equal(display.heading, "Spending permission at payment");
   assert.equal(display.rows[0], "4.50 USDC ≤ 5 USDC per payment");
   assert.equal(display.rows[1], "12 of 50 USDC used after this payment");
   assert.equal(display.rows[2], "Payment 3 of 10");
@@ -128,20 +129,41 @@ test("no payment-count row without a cap, and no date without a reference slot",
   assert.equal(display.rows.at(-1), "Paid before expiry");
 });
 
-test("a relay observation is labeled as not stored on Solana", () => {
+test("Paid before expiry needs the snapshot's expiry to be after the payment slot", () => {
+  const at = (executedAtSlot, expiresAtSlot) => model.policyAtPayment(receipt({
+    executedAtSlot,
+    currentSlot: undefined,
+    policy: { source: "on-chain", limits: { ...LIMITS, expiresAtSlot } },
+  })).rows.at(-1);
+  assert.equal(at("399999200", "405000000"), "Paid before expiry");
+  assert.equal(at("405000000", "405000000"), "Expires at slot 405000000", "the program needs expiry > slot");
+  assert.equal(at("405000001", "405000000"), "Expires at slot 405000000");
+  assert.equal(at("not-a-slot", "405000000"), "Expires at slot 405000000");
+  assert.equal(model.paidBeforeExpiryProven(receipt({ policy: { source: "on-chain", limits: LIMITS } })), true);
+  for (const policy of [undefined, { source: "not-recorded" }, { source: "relay-observed", limits: LIMITS, observedAtSlot: "399999300", includesLaterPayments: false }]) {
+    assert.equal(model.paidBeforeExpiryProven(receipt({ policy })), false);
+  }
+});
+
+test("a relay observation is labeled as read after payment and claims nothing about the payment", () => {
   const display = model.policyAtPayment(receipt({
     policy: { source: "relay-observed", limits: LIMITS, observedAtSlot: "399999300", includesLaterPayments: false },
-  }));
-  assert.equal(display.caption, "Seen by the ChainPay relay after payment, not stored on Solana");
+  }), Date.UTC(2026, 9, 2));
+  assert.equal(display.caption, "Seen by the ChainPay relay after payment, not stored on Solana. The limits may have changed since the payment.");
+  assert.equal(display.heading, "Spending permission, read after payment");
+  assert.equal(display.rows[0], "5 USDC per payment, read after this payment");
   assert.ok(display.rows.includes("12 of 50 USDC used after this payment"));
   assert.ok(display.rows.includes("Payment 3 of 10"));
+  assert.match(display.rows.at(-1), /^Expires ≈ [A-Z][a-z]{2} \d{1,2}, 2026, read after this payment$/);
+  assert.equal(display.rows.some((row) => /before expiry|≤|at payment/.test(row)), false);
+  assert.match(model.allowedStampDetail({ source: "relay-observed", limits: LIMITS, observedAtSlot: "1", includesLaterPayments: false }), /not stored on Solana/);
 });
 
 test("a relay observation that includes later payments drops the running totals", () => {
   const display = model.policyAtPayment(receipt({
     policy: { source: "relay-observed", limits: { ...LIMITS, amountSpentAfter: "21000000", paymentCountAfter: "5" }, observedAtSlot: "399999300", includesLaterPayments: true },
-  }));
-  assert.equal(display.rows[0], "4.50 USDC ≤ 5 USDC per payment");
+  }), Date.UTC(2026, 9, 2));
+  assert.equal(display.rows[0], "5 USDC per payment, read after this payment");
   assert.equal(display.rows.some((row) => row.includes("used after this payment")), false);
   assert.equal(display.rows.some((row) => row.startsWith("Payment ")), false);
   assert.equal(display.rows.some((row) => row.includes("21")), false);
@@ -152,7 +174,8 @@ test("not recorded shows no rows and says today's limits are shown instead", () 
     const display = model.policyAtPayment(receipt({ policy }));
     assert.equal(display.source, "not-recorded");
     assert.deepEqual(display.rows, []);
-    assert.equal(display.caption, "Not recorded for this receipt. Showing today’s limits.");
+    assert.equal(display.caption, "Not recorded for this receipt. These are today’s limits, not the ones at payment.");
+    assert.equal(display.heading, "Spending permission today");
   }
 });
 
@@ -475,7 +498,9 @@ test("owner card shows the invoice, line items and Share with details", async ()
 
 test("a not-recorded receipt keeps today's limits and the Paid caveat", async () => {
   const { text } = await renderCard({ receipt: receipt({ policy: { source: "not-recorded" } }) });
-  assert.match(text, /Not recorded for this receipt\. Showing today’s limits\./);
+  assert.match(text, /Spending permission today/);
+  assert.match(text, /Not recorded for this receipt\. These are today’s limits, not the ones at payment\./);
+  assert.equal(/Paid before expiry|Spending permission at payment/.test(text), false, "an old receipt never claims limits at payment");
   assert.match(text, /Status today/);
   assert.match(text, /Per payment5 USDC/);
   assert.match(text, /Changing or pausing this permission does not undo Paid\./);

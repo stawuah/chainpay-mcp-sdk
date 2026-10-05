@@ -214,6 +214,7 @@
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
+.verify-entry-error { margin-top: 10px; color: var(--down, #cf202f); font-size: 13px; }
 .verify-demo-link { margin-top: 18px; color: var(--body); font-size: 13px; }
 .verify-demo-link a { color: var(--blue); }
 .inbox-receipt-actions { display: flex; gap: 10px; margin-top: 12px; }
