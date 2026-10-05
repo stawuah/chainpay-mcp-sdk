@@ -1,6 +1,7 @@
 # ChainPay implementation status
 
-Updated: 2026-09-16
+Updated: 2026-10-05, against upstream master `c936067`. The tables after
+"Current state" are the 2026-09-16 record; rows that changed since are marked.
 
 This file separates implementation/regression evidence from real Devnet
 settlement acceptance. Tests and local HTTP fixtures do not count as settlement.
@@ -8,6 +9,67 @@ PR01 enables RPC preflight after full wire validation. Axum then waits for
 finality and verifies the receipt before reporting success. Local tests cover
 wallet sessions, scope enforcement and official legacy/v0/v1 decoding; they
 do not establish live settlement or a database restart acceptance.
+
+## Current state at master `c936067` (2026-10-05)
+
+Each capability has three separate states. They are not steps of one scale:
+
+- **In master**: the code is on upstream `master` at `c936067af6c8c34d33c65a06f5f0119a405178f6`.
+- **Deployed**: a public check shows that code serving. "Unverified" means nobody
+  outside the hosting accounts can confirm it, usually because it depends on an
+  environment flag. It does not mean "off".
+- **Live-proven**: an end-to-end run on the deployed release, with a link to its
+  evidence. A passing test, a fixture, or a health endpoint is never live proof.
+
+Read-only checks used on 2026-10-05:
+
+- The [Deploy to Vercel run 37219312021](https://github.com/stawuah/chainpay-mcp-sdk/actions/runs/37219312021)
+  (2026-10-04) deployed `c936067`. It pushed Convex functions to `notable-bee-447`,
+  then the relay, MCP and web projects. All four jobs succeeded. A later manual
+  Vercel deploy would not show here, so this is the last *workflow* deploy.
+- `GET https://chainpay-relay.vercel.app/healthz` reports Devnet, program
+  `3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4` and `managed_signing: privy`.
+- MCP `tools/list` at `https://chainpay-mcp.vercel.app/mcp` returns 33 tools.
+- Devnet RPC: the ChainPay program data was last deployed at slot `484104138`
+  (2026-08-15). The program owns 26 receipt accounts of 282 bytes (original
+  layout) and **0** of 371 bytes (layout with the policy snapshot).
+
+| Capability | In master | Deployed | Live-proven | Pending |
+| --- | --- | --- | --- | --- |
+| Spending permissions: create, update, pause, revoke, on-chain limits | Yes | Program on Devnet since 2026-08-15; web and relay from run 37219312021 | Historical Devnet settlements [USDC](https://explorer.solana.com/tx/6vvJgRXdneFkrqxgvedbkCCGqw4SUqTLvYcEgHsKnbzfZX28uWmQrt3U6ToJGmByf7AxK224Uxz8jSczAVi8x7D?cluster=devnet) and [PYUSD](https://explorer.solana.com/tx/3yRhnwna13r5SDUsBf2LJdgqGRro7XAGZtaPHbAARfMLbCmQyFS8BWXdyK6qdtpZ48mpc2srvt2UU7LZ63vBLc7?cluster=devnet), both from before this release. Not yet proven on `c936067` | — |
+| Payment receipt PDA and public `/verify` card | Yes | Web from run 37219312021 | Receipt account [`7R1i…sh2q`](https://explorer.solana.com/address/7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q?cluster=devnet) exists (282 bytes, 0.010000 USDC). The public site's card for it has not been recorded | [#53](https://github.com/stawuah/chainpay-mcp-sdk/pull/53): landing opens that receipt; honest captions |
+| Policy snapshot stored at payment (371-byte receipt) | Yes: program change [#23](https://github.com/stawuah/chainpay-mcp-sdk/pull/23) (`c9f9663`), readers in SDK and web | **No.** The Devnet program predates the change and no 371-byte receipt exists | Not yet proven | Program upgrade (Kwasi). Caption honesty in #53 |
+| Relay-observed limits (read after payment) | Yes | Relay from run 37219312021 | Not yet proven | #53 relabels it "read after payment" |
+| MCP server, 33 tools | Yes | `tools/list` returns 33 | Discovery only. No tool-driven payment recorded on this release | [#55](https://github.com/stawuah/chainpay-mcp-sdk/pull/55) changes Crossmint tool output, not the count |
+| Custom x402: 402 → mandate payment → receipt → 200 | Yes | Relay and MCP from run 37219312021 | Not yet proven. Use the [x402 acceptance checklist](../guides/acceptance-x402-mcp.md) | — |
+| Standard x402 v2 | Quoted; settles only for `CHAINPAY_X402_RECEIPT_MERCHANTS` | Unverified (env) | Not yet proven | — |
+| Delegated (Privy) signing | Yes | `healthz` reports `privy` | Not yet proven | — |
+| Vercel + Convex storage | Yes | Convex `notable-bee-447` functions and services from run 37219312021 | Not yet proven: no payment record read back on this release | — |
+| Seller statements, purchase orders, permission requests | Yes, off-chain | Web and relay from run 37219312021 | Not yet proven (fixtures and harness only) | — |
+| Agent Cards (Lithic sandbox, `card_policy`) | Yes | `card_policy` [`H3ae…B93n`](https://explorer.solana.com/address/H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n?cluster=devnet) is executable on Devnet. The production relay's `POST /v1/cards/lithic/asa` answers `invalid_signature`, so the connector is mounted. Other card flags unverified | Not yet proven. On master, activation can report success before the public commitment exists | [#52](https://github.com/stawuah/chainpay-mcp-sdk/pull/52): activation is "on" only after the commitment reads back; adds `CARDS_NEW_ACTIVATION_ENABLED` |
+| Crossmint checkout | Yes, behind `CHAINPAY_CROSSMINT_ENABLED` / `VITE_CHAINPAY_CROSSMINT` | Unverified (env). The use case says Coming soon | Not yet proven. Crossmint has not accepted a mandate-paid order | [#55](https://github.com/stawuah/chainpay-mcp-sdk/pull/55): bind the delivery recipient; a refund or failed delivery never reads as delivered |
+| Support tips (splitter) | UI, program source and indexer | **No.** The splitter program ID in source has no account on Devnet. `/support` shows Opening soon | Not yet proven | [#56](https://github.com/stawuah/chainpay-mcp-sdk/pull/56): Devnet test tokens only, fails closed (stacked on #53) |
+| Owner webhooks and email | **No.** The read-only Settings → Notifications tab was removed in `3c3569a` | — | — | [#57](https://github.com/stawuah/chainpay-mcp-sdk/pull/57): signed `payment.receipt_ready`, off unless `OWNER_WEBHOOKS_ENABLED=true` (stacked on #55). Email is not planned |
+| PayPal invoices | Use-case page only (Coming soon). No PayPal code | — | — | [#54](https://github.com/stawuah/chainpay-mcp-sdk/pull/54): proposal v2 and site copy, still not implemented |
+| Shared pet room | Yes, behind `CHAINPAY_SHARED_PET` / `VITE_CHAINPAY_SHARED_PET` | Off: `/pet` shows the missing-page screen | Not applicable (no payment) | — |
+
+### Policy snapshots: old and new receipts
+
+- **Old receipts** (282 bytes, the original layout) have no payment-time
+  snapshot. That is every ChainPay receipt on Devnet today, including the demo
+  receipt `7R1i…sh2q`. They can show only today's limits, labeled as today's,
+  or a relay read labeled as taken after payment. Nothing is backfilled.
+- **New receipts** (371 bytes) store the limits in force at payment. They appear
+  only after the program upgrade from #23 is deployed. With #53, a snapshot
+  receipt shows only facts the snapshot supports. For example, "Paid before
+  expiry" appears only when the stored expiry slot is after the payment slot.
+- Fill in the [release manifest](release-manifest.md) for each deploy. It
+  records what is deployed and links the evidence for each gate.
+
+## Settlement-path workstreams (2026-09-16 record)
+
+PostgreSQL/Neon was the store at the time. Production now uses Convex; see
+"Current state" above.
 
 | Workstream | Implementation | Current evidence | Real acceptance still required |
 |---|---|---|---|
@@ -49,12 +111,12 @@ Stack: `dre/pr-20-owner-onboarding` → `dre/journey-close-j1` (#22) →
 | J4b object CRUD + delegate repair + ATA review + revoke chunking | Closed | PR #22 + #23; separate recipient ATA sign step; revoke-all tx chunking |
 | J5 SDK honesty | Closed | PR #22 |
 | J6a human send re-reads pause/revoke | Closed | PR #22 |
-| J6b limits at payment | Addressed, pending deploy | Program writes a policy snapshot into each new receipt (upstream PR #23, open, not deployed). Until it deploys, the relay keeps a post-payment observation for receipts it sees settle (PR #25, labeled "Seen by the ChainPay relay after payment, not stored on Solana", owner session only). Receipt card section **Spending permission at payment** names its source; older receipts read "Not recorded" and show today's limits. Fixture and unit evidence only; no snapshot receipt exists on Devnet yet |
-| J6c owner webhooks / email | **Blocked** | Settings → Notifications is read-only: “There is no webhook or email delivery in this build.” Future delivery is an Axum worker, not a missing Save button |
+| J6b limits at payment | **Updated 2026-10-05:** in master, not deployed | The program change (#23, `c9f9663`) is in master. The Devnet program was last deployed on 2026-08-15, before it, and no 371-byte snapshot receipt exists. The relay's post-payment read (PR #25) is the only source for new payments until the upgrade. [#53](https://github.com/stawuah/chainpay-mcp-sdk/pull/53) makes the captions honest: a relay read is "read after payment", and an old receipt shows today's limits, labeled as today's. See [Policy snapshots](#policy-snapshots-old-and-new-receipts) |
+| J6c owner webhooks / email | **Updated 2026-10-05:** not in master | The read-only Settings → Notifications tab was removed in `3c3569a`. Owner webhooks are in pending [#57](https://github.com/stawuah/chainpay-mcp-sdk/pull/57) (off unless `OWNER_WEBHOOKS_ENABLED=true`). Email is not planned |
 | J7 program asks | **Blocked** | Written asks only — listed below |
 | J8 demo evidence | Partial | Readonly baseline USDC receipt PDA `7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q` loads on `/verify`; MCP/SDK control-layer shipped (x402 parsers in SDK, mandate quote on v2, MPP detect, agent skill, acceptance checklist in [acceptance-x402-mcp.md](../guides/acceptance-x402-mcp.md)); live signed MCP 402 → receipt still requires Dre authorization |
 | DG1 purchase description | Addressed (off-chain) | Optional seller-signed `description` and `lineItems` in the payment request (PR #25). Shown to the owner, and on `/verify` only from an owner-shared audit link after it verifies against the invoice hash. Never invented; absent when the seller signed none |
-| DG2 historical snapshot | Partial | New receipts carry a snapshot once PR #23 deploys; the relay observes receipts it settles after PR #25. No backfill for earlier receipts: they read "Not recorded" |
+| DG2 historical snapshot | Partial (**updated 2026-10-05**) | New receipts carry a snapshot only after the #23 program upgrade is deployed on Devnet; it is in master but not deployed. Earlier receipts are not backfilled and show today's limits |
 | PO purchase orders and budget requests | Addressed (off-chain), fixtures only | Signed mandate request links (`chainpay request-mandate` / `request-budget`, demo merchant **Request permission**) open a **PERMISSION REQUEST** card in Requests; **Review permission** prefills the existing builder (budget request: **Requester's agent signs**, `approvedAgent` = the request's agent); the accepted request is stored per permission (`PUT/GET /v1/mandates/{pda}/request`, migration 0011, owner only). Receipts show **Order match** (Matched / Payee differs / No invoice / No order); audit links can carry the order; CSV adds PO number and Order match; the permission panel has a **Statement**. The expected payee is **not enforced on Solana**: Matched is a check, not a guarantee. Harness and unit evidence only; no accepted request exists on Devnet yet |
 | DG3 agent name | **Blocked** | Agent shown as address unless the program adds a name |
 
@@ -63,14 +125,16 @@ Stack: `dre/pr-20-owner-onboarding` → `dre/journey-close-j1` (#22) →
 Do not implement until agreed:
 
 1. **DuplicateInvoice**: handled off-chain. The SDK and relay refuse a payment whose receipt already exists with a typed `DuplicateInvoice` before anything is built or sent (PR #25). An on-chain error would need manual account creation in place of Anchor `init`; not planned for this build
-2. **PaymentCountExceeded**: in upstream PR #23 (count overflow returns `PaymentCountExceeded`); open, not deployed
-3. **On-chain receipt policy snapshot**: agreed; upstream PR #23, open, not deployed. The J6b relay observation is the fallback until then
+2. **PaymentCountExceeded**: merged in #23 (`c9f9663`); the Devnet program upgrade is not deployed
+3. **On-chain receipt policy snapshot**: merged in #23 (`c9f9663`); the Devnet program upgrade is not deployed. The J6b relay observation is the fallback until then
 4. Optional merchant-signed purchase memo/hash: covered off-chain by the signed request's optional description and line items, bound by the existing invoice hash (PR #25); no program change
-5. Optional on-chain delivery attestation field: 32 reserved bytes in the PR #23 receipt layout; no field yet
+5. Optional on-chain delivery attestation field: 32 reserved bytes in the #23 receipt layout; no field yet
 
 Seller-facing copy remains **“Seller attests response served.”** until an approved on-chain field exists.
 
-On 2026-09-15, the hosted landing showed an earlier interface, headed “The
-universal rail for agent money.” Frontend and MCP/backend health endpoints
-were reachable. The deployed commit and a new end-to-end payment were not
-established by those checks. Use the local fork for the documented interface.
+On 2026-09-15, the hosted landing showed an earlier interface. Production
+now runs on Vercel with Convex `notable-bee-447` (origins in
+[`scripts/production-release.json`](../../scripts/production-release.json)). Deploys go
+through the `Deploy to Vercel` workflow. The deployed revision and the evidence
+for each capability are in [Current state](#current-state-at-master-c936067-2026-10-05)
+above and, per release, in the [release manifest](release-manifest.md).

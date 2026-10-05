@@ -23,7 +23,8 @@ It takes you from wallet setup to a payment receipt on Solana Devnet.
 ## Project status
 
 - [Product scope](scope.md) defines the product and its boundaries.
-- [Implementation status](project/implementation-status.md) distinguishes code, regression tests, and accepted Devnet settlement.
+- [Implementation status](project/implementation-status.md) separates what is in master, what is deployed, and what is live-proven.
+- [Release manifest](project/release-manifest.md) records one release: deploy IDs, database, chain, flags, and the evidence for each acceptance gate.
 - [Dependency advisories](project/dependency-advisories.md) records existing dependency risks.
 - [Documentation maintenance](project/documentation.md) records the document map and update rules.
 - [PayPal proposal v2](proposals/paypal-v2.md) is a not-implemented plan for PayPal sandbox invoices, with its [partner briefing PDF](assets/paypal-briefing-v2.pdf).
