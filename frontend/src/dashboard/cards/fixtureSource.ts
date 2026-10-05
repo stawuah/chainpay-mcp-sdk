@@ -36,6 +36,12 @@ export type CardsFixtureOptions = {
   statement?: StatementView["state"];
   /** Card network has acknowledged the freeze on the frozen card. */
   freezeAck?: boolean;
+  /**
+   * Activation state of the first card (audit R2): `proof_pending` limits copied, public
+   * proof not on Solana yet, card paused; `opening` proof confirmed, card network not open
+   * yet; `limits_failed` the card network refused the limits and still shows the card open.
+   */
+  activation?: "proof_pending" | "opening" | "limits_failed";
   /** Milliseconds each fake step waits (0 in tests). */
   delayMs?: number;
   /** Privacy-check attestation outcome to show (default: what the live Devnet check returned on 2026-10-04). */
@@ -94,16 +100,44 @@ function periodFor(over: Partial<CardPeriod>): CardPeriod {
   };
 }
 
+const ACTIVE_STEPS = { mirror: "acknowledged", rules: "retired", checkpoint: { seq: "5", state: "confirmed" }, commitment: "confirmed", issuer: "OPEN" };
+
+/** The data card's activation fields: active by default, or one honest partial state. */
+function dataActivation(state: CardsFixtureOptions["activation"]): Pick<CardView, "issuerState" | "mirror" | "commitment" | "activation"> {
+  const mirror = { state: "acknowledged", acknowledgedAt: "2026-10-01T09:12:00Z", policyVersionMirrored: 2, allMerchantsMirrored: true };
+  const confirmed = { seq: "5", root: "", slot: "412883104", state: "confirmed", checkpoint: "confirmed", policyVersion: 2, periodIndex: 2, source: "recorded" as const };
+  switch (state) {
+    case "proof_pending":
+      return {
+        issuerState: "PAUSED", mirror,
+        commitment: { seq: "5", state: "pending", checkpoint: "scheduled", policyVersion: 2, periodIndex: 2, source: "recorded" },
+        activation: { state: "pending_commitment", policyVersion: 2, steps: { mirror: "acknowledged", rules: "retired", checkpoint: { seq: "5", state: "scheduled" }, commitment: "pending", issuer: "pending" }, updatedAt: "2026-10-05T09:12:04Z" },
+      };
+    case "opening":
+      return {
+        issuerState: "PAUSED", mirror, commitment: confirmed,
+        activation: { state: "issuer_pending", policyVersion: 2, steps: { ...ACTIVE_STEPS, issuer: "PAUSED" }, detail: "issuer_not_open", updatedAt: "2026-10-05T09:12:40Z" },
+      };
+    case "limits_failed":
+      return {
+        issuerState: "OPEN", mirror: { state: "failed", policyVersionMirrored: 2 },
+        commitment: { ...confirmed, policyVersion: 1 },
+        activation: { state: "mirror_failed", policyVersion: 2, steps: { mirror: "failed", rules: "pending", checkpoint: "pending", commitment: "pending", issuer: "OPEN" }, updatedAt: "2026-10-05T09:12:02Z" },
+      };
+    default:
+      return { issuerState: "OPEN", mirror, commitment: confirmed, activation: { state: "active", policyVersion: 2, steps: ACTIVE_STEPS, completedAt: "2026-10-01T09:12:30Z" } };
+  }
+}
+
 function buildCards(options: CardsFixtureOptions): FixtureCard[] {
   const data = key(11), research = key(12), travel = key(13);
   return [
     {
       binding: data,
       view: {
-        cardId: FIXTURE_CARD_IDS.data, label: "Data API credits", lastFour: "4242", issuerState: "OPEN",
-        mirror: { state: "acknowledged", acknowledgedAt: "2026-10-01T09:12:00Z", policyVersionMirrored: 2 },
+        cardId: FIXTURE_CARD_IDS.data, label: "Data API credits", lastFour: "4242",
         freeze: { onChain: false, issuer: "confirmed" },
-        commitment: { seq: "5", root: "", slot: "412883104" },
+        ...dataActivation(options.activation),
         recovery: { state: "normal" },
         // Axum's own check, as it serves it (`match`, report mode by default).
         attestation: { mode: "report", hardware: "verified", measurements: "match", checkedAt: "2026-10-04T10:12:00Z", label: "Genuine TDX hardware and allowlisted workload verified" },
@@ -117,7 +151,8 @@ function buildCards(options: CardsFixtureOptions): FixtureCard[] {
         cardId: FIXTURE_CARD_IDS.research, label: "Research subscriptions", lastFour: "1881", issuerState: options.freezeAck ? "PAUSED" : "OPEN",
         mirror: { state: "acknowledged", acknowledgedAt: "2026-09-30T16:40:00Z", policyVersionMirrored: 1 },
         freeze: { onChain: true, issuer: options.freezeAck ? "confirmed" : "pending_issuer_confirmation" },
-        commitment: { seq: "3", root: "", slot: "412880511" },
+        commitment: { seq: "3", root: "", slot: "412880511", state: "confirmed", policyVersion: 1, source: "recorded" },
+        activation: { state: "active", policyVersion: 1, steps: { mirror: "acknowledged", rules: "retired", checkpoint: { seq: "3", state: "confirmed" }, commitment: "confirmed", issuer: "OPEN" } },
         recovery: { state: "normal" },
       },
       policy: policyFor(research, { policyVersion: 1, budgetCents: 12_000n, maxPurchaseCents: 2_500n, recurringAllowed: true, frozen: true, freezeReason: "owner", statementOutstandingCents: 4_221n, exceptionsOpen: 0, members: [{ pubkey: FIXTURE_OWNER, flags: 15 }, { pubkey: AUTHORIZER, flags: 6 }] }),
@@ -129,7 +164,8 @@ function buildCards(options: CardsFixtureOptions): FixtureCard[] {
         cardId: FIXTURE_CARD_IDS.travel, label: "Travel booking", lastFour: "0057", issuerState: "PAUSED",
         mirror: { state: "acknowledged", acknowledgedAt: "2026-09-28T08:00:00Z", policyVersionMirrored: 4 },
         freeze: { onChain: true, issuer: "confirmed" },
-        commitment: { seq: "11", root: "", slot: "412870020" },
+        commitment: { seq: "11", root: "", slot: "412870020", state: "confirmed", policyVersion: 4, source: "recorded" },
+        activation: { state: "active", policyVersion: 4, steps: { mirror: "acknowledged", rules: "retired", checkpoint: { seq: "11", state: "confirmed" }, commitment: "confirmed", issuer: "OPEN" } },
         recovery: { state: "recovery_frozen" },
       },
       policy: policyFor(travel, { policyVersion: 4, budgetCents: 200_000n, maxPurchaseCents: 60_000n, frozen: true, freezeReason: "recovery", recoveryState: "recovery_frozen", statementOutstandingCents: 0n, exceptionsOpen: 0 }),
@@ -324,6 +360,12 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
       find(cardId);
       await wait(delay / 3);
       return { embedUrl: null, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+    },
+    async finishActivation(card) {
+      const found = find(card.cardId);
+      await wait(delay);
+      if (found.view.activation?.state !== "mirror_failed") found.view = { ...found.view, ...dataActivation(undefined) };
+      return found.view;
     },
     async freeze(cardId) {
       const card = find(cardId);

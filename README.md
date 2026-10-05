@@ -107,14 +107,16 @@ After a successful payment, the dashboard shows the same human-readable
 **ReceiptCard** as the public verify flow — not Explorer-only success.
 
 - **In-context ops:** MCP `get_spend_overview` / `list_receipts`, `chainpay status` in the terminal, or `/embed/overview/<owner>` — same spend and receipts without opening the dashboard. Pause and revoke still sign in the owner wallet.
-- **Stranger verify:** landing **See a receipt** → `/verify` paste or
-  `/verify/:pda` — no wallet required.
-- **Why it was allowed:** each receipt shows **Spending permission at payment**
-  (amount against the per-payment limit, spent after, payment N of the cap,
-  paid before expiry) and says where those limits came from: recorded on
-  Solana (after the program upgrade in PR #23 deploys), seen by the relay after
-  payment, or not recorded with today's limits instead. One line says whether
-  the same payment would pass today.
+- **Stranger verify:** landing **See a receipt** opens a real Devnet receipt at
+  `/verify/<pda>`. `/verify` takes a pasted receipt address or full
+  `/verify/<pda>` link — no wallet required.
+- **Why it was allowed:** each receipt says where its limits came from. Only a
+  receipt with the program's on-chain snapshot (after the upgrade in PR #23
+  deploys) shows **Spending permission at payment** (amount against the
+  per-payment limit, spent after, payment N of the cap, and paid before expiry
+  when the snapshot's expiry is after the payment slot). A relay read is
+  labeled as read after payment, and an older receipt shows today's limits,
+  labeled as today's. One line says whether the same payment would pass today.
 - **What was bought:** when a seller-signed invoice verifies against the
   receipt, the owner sees **Order match** with its description and line items,
   and can **Share with details** as a `/verify` link that carries the invoice

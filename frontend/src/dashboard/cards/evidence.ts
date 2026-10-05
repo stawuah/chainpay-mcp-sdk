@@ -45,7 +45,8 @@ export function activityEvidence(card: CardView, row: CardActivityRow): CardEvid
       reservedCents: hold,
       lifecycle,
       ...(exception ? { exception } : {}),
-      ...(card.commitment ? { commitment: card.commitment } : {}),
+      // Only a commitment read back from Solana is evidence; a scheduled checkpoint is not.
+      ...(card.commitment?.state === "confirmed" && card.commitment.root && card.commitment.slot ? { commitment: { seq: card.commitment.seq, root: card.commitment.root, slot: card.commitment.slot } } : {}),
       private: true,
     };
   }

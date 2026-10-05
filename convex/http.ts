@@ -76,7 +76,8 @@ http.route({ path: "/support/rpc", method: "POST", handler: httpAction(async (ct
   // Cheap checks first, so a flood costs no database writes or upstream calls.
   const upstream = process.env.SUPPORT_RELAY_RPC_URL;
   const programId = process.env.SUPPORT_PROGRAM_ID;
-  if (process.env.SUPPORT_LIVE !== "true" || !upstream || !programId) return relayError(503, "Support RPC is off");
+  // Devnet only in this release: a relay pointed at any other cluster stays off.
+  if (process.env.SUPPORT_LIVE !== "true" || process.env.SUPPORT_CLUSTER !== "devnet" || !upstream || !programId) return relayError(503, "Support RPC is off");
   const text = await readLimited(req, MAX_BODY_BYTES);
   if (text === null) return relayError(413, "Request too large");
   const check = checkRelayRequest(text, { programId });

@@ -15,6 +15,32 @@ import { PRIVACY_COPY } from "./privacyCopy";
 
 export const CARDS_LIST_COPY = { kicker: "AGENT CARDS", title: "Cards", subtitle: "Give an agent a card. Its limits stay hidden from the public chain." };
 
+/** Cards are off on this relay (404/405/501). Nothing about cards can start here. */
+export const CARDS_OFF_COPY = {
+  title: "Cards aren't available here yet",
+  body: "This workspace has cards switched off, so no card can be made or charged. Your agent can still pay through a spending permission.",
+  link: "Set up a spending permission",
+} as const;
+
+// A plain link that also works without the router: same-tab clicks stay in the app.
+function SpendingPermissionLink() {
+  return (
+    <a
+      className="button button-secondary"
+      href="/app/mandates"
+      data-testid="cards-off-permission-link"
+      onClick={(event) => {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        window.history.pushState(window.history.state, "", "/app/mandates");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }}
+    >
+      {CARDS_OFF_COPY.link}
+    </a>
+  );
+}
+
 type LoadState = { kind: "loading" } | { kind: "ready"; cards: CardView[] } | { kind: "not_enabled" } | { kind: "error"; message: string };
 
 export function CardList({ source, unlocked, onUnlocked, onNavigate, notice }: CardsShared) {
@@ -75,11 +101,11 @@ export function CardList({ source, unlocked, onUnlocked, onNavigate, notice }: C
           state={collection}
           noun="cards"
           icon={state.kind === "not_enabled" ? CreditCard : undefined}
-          title={state.kind === "error" ? "Cards couldn't load" : state.kind === "not_enabled" ? "Cards aren't switched on yet" : undefined}
+          title={state.kind === "error" ? "Cards couldn't load" : state.kind === "not_enabled" ? CARDS_OFF_COPY.title : undefined}
           description={state.kind === "error" ? state.message
-            : state.kind === "not_enabled" ? "Agent cards are coming to this workspace. Your spending permissions keep working as they do today."
+            : state.kind === "not_enabled" ? CARDS_OFF_COPY.body
               : `Give your agent a card with its own limits. ${PRIVACY_COPY} It pays only where you allow, and you can freeze it in one tap.`}
-          action={state.kind === "ready" ? newCard : undefined}
+          action={state.kind === "ready" ? newCard : state.kind === "not_enabled" ? <SpendingPermissionLink /> : undefined}
         >
           {state.kind === "ready" && (
             // Narrow screens and 200% zoom: the table scrolls inside its surface, never the page.

@@ -27,6 +27,85 @@ The splitter becomes permanent once its upgrade authority is removed: nobody can
 | USDC can't be frozen | **No.** Circle keeps issuer controls. |
 | Money only pays for hosting | **No.** Each half lands in a maintainer's personal wallet; the page says so. |
 
+## Devnet-only release (this release)
+
+The first public release of `/support` is **Devnet test tokens only** (audit 2026-10-05, R4). It follows the Devnet half of the gates below and stops there.
+
+**Out of scope for this release, do not run:** the mainnet deploy (gate 3), removing the upgrade authority (gate 4), the mainnet go-live and its real-money contribution (gate 5), Jupiter / "Other token" swaps, and any real-money claim. Devnet tokens have no value, and the page says so on balances, receipts and explorer links. A support tip is not a ChainPay payment receipt.
+
+**Nothing here is automatic.** Deploying, funding a fee payer and every signature are explicit actions by the person who owns that key. Never commit a keypair; only public keys go in the repo or in PR comments.
+
+### 1. Build and check
+
+1. `make splitter-test` is green (throwaway test build in `target/splitter-test/`, never deployed).
+2. Both partners post their **Devnet** recipient addresses through the signed setup process, then run `node programs/support-splitter/scripts/read-setup.mjs <pr> --apply` and both check the diff. Recipients come only from verified, unedited setup comments.
+3. Build the release `.so` with the Devnet mint: `cargo build-sbf --manifest-path programs/support-splitter/Cargo.toml --features devnet`.
+4. `make splitter-release-check SO=target/deploy/support_splitter.so DEVNET=1` must print `OK`. It refuses a test-config build and a build without Circle's Devnet USDC mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`.
+
+### 2. Authorized Devnet deploy
+
+1. Whoever owns the program keypair deploys to Devnet (`solana program deploy -u devnet ...`). The program ID must equal `declare_id!`; the keypair file stays on that person's machine.
+2. Record the program ID, the build's `solana-verify get-executable-hash`, and `solana program show <PROGRAM_ID> -u devnet` (authority) in a `<!-- support-gate:v1 -->` comment.
+
+### 3. Dual-signature initialize (durable nonce)
+
+1. Prepare one `initialize` transaction with a durable nonce: vault PDA (`seeds = ["vault"]`), the vault's USDC ATA for Devnet USDC, both recipients as signers, and a fee payer.
+2. Partner A checks it and signs, then posts the partially signed transaction (base64) as a PR comment. That signature only works for that exact transaction.
+3. Partner B checks the same bytes, signs, and sends it.
+4. Read back: the vault is owned by the program, its `recipients` equal the two verified addresses (A at index 0), and the vault USDC account is the vault's ATA for Devnet USDC with no delegate and no close authority.
+
+### 4. Configure (all values must point at the same Devnet program and vault)
+
+Vercel, web app (public values; nothing secret, no API keys in `VITE_*`):
+
+| Variable | Value |
+|---|---|
+| `VITE_SUPPORT_CLUSTER` | `devnet` (anything else keeps the page closed and fails the release check) |
+| `VITE_SUPPORT_PROGRAM_ID` | the deployed Devnet program ID |
+| `VITE_SUPPORT_RECIPIENT_A`, `VITE_SUPPORT_RECIPIENT_B` | the two verified recipients, A = index 0 |
+| `VITE_SUPPORT_TRACKER_URL` | `https://<convex-deployment>.convex.site/support/v1` (the page derives `/support/rpc` from it) |
+| `VITE_SUPPORT_RPC_URL` | optional; only a public, keyless Devnet URL |
+| `VITE_SUPPORT_LIVE` | `true` **last**, after the rehearsal below |
+
+Convex, the same deployment as the tracker URL (server-side):
+
+| Variable | Value |
+|---|---|
+| `SUPPORT_CLUSTER` | `devnet` (the tracker and the relay refuse anything else) |
+| `SUPPORT_RPC_URL` | Devnet RPC for the tracker (may carry a key) |
+| `SUPPORT_RELAY_RPC_URL` | a separate Devnet RPC for the browser relay |
+| `SUPPORT_PROGRAM_ID`, `SUPPORT_VAULT`, `SUPPORT_VAULT_USDC` | the deployed program, its vault PDA, and the vault's Devnet USDC ATA |
+| `SUPPORT_LIVE` | `true` to open the relay |
+
+`node scripts/check-release-env.mjs frontend` (run by the Vercel build) refuses `VITE_SUPPORT_LIVE=true` without `VITE_SUPPORT_CLUSTER=devnet`, a real program ID, both real and different recipients, and a `*.convex.site/support/v1` tracker URL. It refuses `VITE_SUPPORT_CLUSTER` set to anything but `devnet`, live or not.
+
+Confirm the indexer runs: the Convex dashboard shows the `index support vault contributions` cron every 5 minutes, its `support:sync` logs show no `skipped`/`refused` line, and `GET /support/v1` answers `live: true`. `sync` checks the RPC's genesis hash is Devnet, the vault is owned by the program, and the USDC account holds Devnet USDC and is owned by the vault, before it reads any history.
+
+Even with `VITE_SUPPORT_LIVE=true`, the page blocks signing (with a "Check again" button) until it reads all of that from the chain itself, and checks again right before every signature.
+
+### 5. Rehearsal checklist (with the page live only for the people rehearsing)
+
+Record every signature and exact base-unit amount in a gate comment.
+
+- [ ] Tip Devnet SOL and Devnet USDC from `/support`. Each tip lands on the explorer with `?cluster=devnet`.
+- [ ] Each tip appears on the ledger only after it is **finalized** and the next indexer run. Until then the card says "Pending indexing" and does not offer another tip.
+- [ ] Allocate (the tip already includes it; also call it again by itself and confirm nothing is double counted).
+- [ ] Each recipient pays out their own half from the page. Amounts are exact: an odd lamport or USDC base unit waits for the next allocation.
+- [ ] The same signature indexed twice is still one ledger row.
+- [ ] A pay to the wrong destination is refused.
+- [ ] One side failing doesn't block the other: the rent case from gate 2 step 5 (rotate A to an empty wallet, tip 1,000 lamports, allocate; `pay_sol(A)` fails, `pay_sol(B)` succeeds, A stays owed).
+- [ ] An uncertain send (close the tab right after signing, or drop the network) reopens on "Checking your test tip", re-checks the same signature, and never asks for a new one.
+- [ ] Wallet rejection says nothing was sent. A wallet on mainnet gets the "switch it to Devnet" message.
+- [ ] Narrow/mobile layout.
+
+Only then set `VITE_SUPPORT_LIVE=true` for the public page.
+
+### Off switches (what they do and don't do)
+
+- `VITE_SUPPORT_LIVE=false` (and a redeploy) puts the page back on "Opening soon". No new tip form.
+- Convex `SUPPORT_LIVE=false` closes the browser relay (`/support/rpc` answers 503) and makes `/support/v1` report `live: false`. It does **not** stop the indexer; `sync` keeps reading the vault while `SUPPORT_CLUSTER`, `SUPPORT_RPC_URL`, `SUPPORT_PROGRAM_ID`, `SUPPORT_VAULT` and `SUPPORT_VAULT_USDC` are set. Unset one of those to stop it.
+- None of these revokes a transaction someone already signed, reverses a tip that landed, or erases what the vault owes either side.
+
 ## Gate 1: tests + independent review
 
 1. `make splitter-test` is green. This builds a **test** `.so` with throwaway keys into `target/splitter-test/`; never deploy that file. `make splitter-release-check` refuses it.
@@ -47,6 +126,8 @@ The splitter becomes permanent once its upgrade authority is removed: nobody can
 6. Optional, and outside this repo: if you turn on the fork's watchdog (`tantshirt:dre/support-watchdog`), point it at a preview deploy that requests a malicious transaction and confirm its alerts fire. If you don't, record in the gate comment that tampering with the live page is **not detected**.
 
 ## Gate 3: mainnet deploy + independent verification
+
+> Not part of the Devnet-only release. The current page, release check, tracker and relay accept only Devnet (`VITE_SUPPORT_CLUSTER=devnet`, `SUPPORT_CLUSTER=devnet`), so gates 3–5 need their own reviewed change before they can run.
 
 1. Make a verifiable build with `solana-verify build --library-name support_splitter`. Install it with `cargo install solana-verify` and check `--help` for current flags. Run `make splitter-release-check SO=<the built .so>`; it must print `OK`.
 2. Deploy to mainnet. This costs about 1–2 SOL of rent, paid by the deployer.

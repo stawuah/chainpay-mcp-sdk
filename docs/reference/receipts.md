@@ -6,9 +6,13 @@ seller delivery evidence are separate; the UI must show which was verified.
 ## Read a receipt
 
 Open a receipt from payment history, owner deep link `/app/receipts/<receipt-address>`
-when signed in, or visit `/verify` to paste a PDA / `/verify/<receipt-address>`
-on a deployment running this fork. The public verification page needs no connected
-wallet. Landing **See a receipt** routes to the same flow. The
+when signed in, or visit `/verify/<receipt-address>` on a deployment running this
+fork. `/verify` accepts a pasted receipt address or a full `/verify/<receipt-address>`
+link from any site; the link is parsed in the browser and its site is never
+contacted. A malformed address or a link that isn't a receipt link gets a plain
+error. The public verification page needs no connected wallet. Landing
+**See a receipt** opens a real Devnet receipt (`7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q`,
+an original receipt without a snapshot), fixed in `frontend/src/receipts/demoReceipt.ts`. The
 [SDK guide](../guides/use-the-sdk.md) links to the same receipt reader.
 
 Payment success in the dashboard renders the same **ReceiptCard** component as
@@ -59,17 +63,26 @@ deployed. Until then, and for every receipt written before it, the receipt
 reads `relay-observed` (when the relay saw the payment settle) or
 `not-recorded`.
 
-The receipt card shows this as **Spending permission at payment**, in token
-units: "4.50 USDC ≤ 5 USDC per payment", "12 of 50 USDC used after this
+Only an `on-chain` snapshot is shown as **Spending permission at payment**, in
+token units: "4.50 USDC ≤ 5 USDC per payment", "12 of 50 USDC used after this
 payment", "Payment 3 of 10" (only with a payment-count cap) and "Paid before
-expiry (≈ date)", where the date is estimated from slots. Exact base units and
-slots are under Technical details. A caption names the source:
+expiry (≈ date)". "Paid before expiry" appears only when the snapshot's expiry
+slot is after the receipt's executed slot (the program requires
+`expires_at_slot > slot`); otherwise the line reads "Expires ≈ date". Dates are
+estimated from slots. Exact base units and slots are under Technical details.
+
+A `relay-observed` read is headed **Spending permission, read after payment**.
+Its lines say "read after this payment" ("5 USDC per payment, read after this
+payment", "Expires ≈ date, read after this payment") and never claim the
+payment met a limit or paid before expiry: the mandate may have been edited
+between the payment and the read. A `not-recorded` receipt is headed
+**Spending permission today** and shows today's limits.
 
 | Source | Caption |
 | --- | --- |
 | `on-chain` | Recorded on Solana at payment |
-| `relay-observed` | Seen by the ChainPay relay after payment, not stored on Solana |
-| `not-recorded` | Not recorded for this receipt. Showing today's limits. |
+| `relay-observed` | Seen by the ChainPay relay after payment, not stored on Solana. The limits may have changed since the payment. |
+| `not-recorded` | Not recorded for this receipt. These are today's limits, not the ones at payment. |
 
 A relay observation that already counts later payments shows neither the spent
 amount nor the payment count. Public `/verify` reads only the receipt account:

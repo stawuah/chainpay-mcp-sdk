@@ -22,7 +22,7 @@
     "verify:stack": "node scripts/verify-live-stack.mjs",
     "check": "npm run check:sdk && npm run check:mcp && npm run check:merchant && npm run check:app && npm run check:frontend",
     "check:convex": "tsc --noEmit -p convex/tsconfig.json",
-    "test:convex": "vitest run convex/storage.test.ts convex/pet.test.ts convex/cards.test.ts convex/status.test.ts convex/supportParse.test.ts convex/supportRpc.test.ts convex/webhooks.test.ts",
+    "test:convex": "vitest run convex/storage.test.ts convex/pet.test.ts convex/cards.test.ts convex/status.test.ts convex/supportParse.test.ts convex/supportRpc.test.ts convex/support.test.ts convex/webhooks.test.ts",
     "test:migration": "node --test scripts/migrate-storage.test.mjs",
     "stage:vercel": "node scripts/stage-vercel.mjs",
     "test:migration:integration": "vitest run convex/migration.integration.test.ts"

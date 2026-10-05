@@ -22,7 +22,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import Dashboard from "../../src/dashboard/Dashboard";
 import type { CardSection, DashboardTab } from "../../src/routing/paths";
-import { setCardsSourceOverride } from "../../src/dashboard/cards/source";
+import { CardsNotEnabledError, setCardsSourceOverride } from "../../src/dashboard/cards/source";
 import { createFixtureCardsSource, FIXTURE_CARD_IDS } from "../../src/dashboard/cards/fixtureSource";
 import { cardStatus } from "../../src/dashboard/cards/lifecycle";
 import { CARD_ATTENTION_KEYS } from "../../src/dashboard/overview/cardsSummary";
@@ -391,7 +391,7 @@ if (SIGNED_IN && !FIXTURE_APPROVAL) {
   void ensureSessionReady();
 }
 
-// Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1][&attest=verified|challenge_bound|mismatch|failed][&repay=unknown][&restore=tampered][&reads=unreadable]`.
+// Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1][&attest=verified|challenge_bound|mismatch|failed][&repay=unknown][&restore=tampered][&reads=unreadable][&activation=proof_pending|opening|limits_failed]`.
 // ILLUSTRATIVE fixtures through the same CardsSource interface the live SDK
 // client implements. Nothing signs or reaches a network.
 const CARD_QUERY = new URLSearchParams(location.search);
@@ -401,6 +401,7 @@ const fixtureCards = createFixtureCardsSource({
   empty: CARD_QUERY.get("cards") === "empty" || (EMPTY && SIGNED_IN),
   unlocked: CARD_QUERY.get("cards") !== "locked",
   statement: (CARD_QUERY.get("statement") as never) ?? undefined,
+  activation: (CARD_QUERY.get("activation") as never) ?? undefined,
   freezeAck: CARD_QUERY.has("ack"),
   attestation: (CARD_QUERY.get("attest") as never) ?? undefined,
   repay: (CARD_QUERY.get("repay") as never) ?? undefined,
@@ -410,7 +411,11 @@ const fixtureCards = createFixtureCardsSource({
 // `?clear=1` keeps only cards that need nothing from the owner, so a checked Overview
 // can be clear; `?cards=fail` fails the card list alone (Overview must not call that clear).
 const CARDS_FAIL = FAIL || CARD_QUERY.get("cards") === "fail";
-setCardsSourceOverride(CARDS_FAIL
+// `?cards=off`: the relay answers 404/405/501 for cards, as with the connector switched off.
+const CARDS_OFF = CARD_QUERY.get("cards") === "off";
+setCardsSourceOverride(CARDS_OFF
+  ? { ...fixtureCards, listCards: async () => { throw new CardsNotEnabledError(); } }
+  : CARDS_FAIL
   ? { ...fixtureCards, listCards: async () => { throw new Error("Fixture: cards unavailable"); } }
   : CLEAR
     ? { ...fixtureCards, listCards: async () => (await fixtureCards.listCards()).filter((card) => !(CARD_ATTENTION_KEYS as readonly string[]).includes(cardStatus(card).key)) }

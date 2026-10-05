@@ -27,6 +27,8 @@ const NEGATIVE_CACHE_MS = 60_000;
 const cache = new Map<string, { state: PublicReceiptPageState; cachedAt: number }>();
 const inflight = new Map<string, Promise<PublicReceiptPageState>>();
 const generation = new Map<string, number>();
+/** The newest read started per key, so a superseded read can hand back its answer. */
+const latest = new Map<string, Promise<PublicReceiptPageState>>();
 
 export function tokenLabelForMint(mint: string): string {
   if (mint === DEVNET_USDC_MINT) return "USDC";
@@ -242,22 +244,26 @@ export function loadPublicReceiptView(
 ): Promise<PublicReceiptPageState> {
   const trimmed = receiptPda.trim();
   const key = cacheKey(trimmed);
-  const nextGeneration = (generation.get(key) ?? 0) + 1;
-  generation.set(key, nextGeneration);
+  const refresh = Boolean(options.refresh);
 
-  const hit = cacheHit(key, Boolean(options.refresh));
-  if (hit?.kind === "verified" && !options.refresh) {
-    return Promise.resolve(hit);
-  }
-  if (hit && hit.kind !== "verified" && !options.refresh) {
-    return Promise.resolve(hit);
-  }
+  const hit = cacheHit(key, refresh);
+  if (hit) return Promise.resolve(hit);
 
   const pending = inflight.get(key);
-  if (pending && !options.refresh) return pending;
+  if (pending && !refresh) return pending;
 
-  const request = readPageState(trimmed, Boolean(options.refresh)).then((state) => {
-    if (generation.get(key) !== nextGeneration) return state;
+  // Only a read that actually starts takes a new generation. A cache hit or a
+  // shared in-flight read must not orphan the read already running.
+  const myGeneration = (generation.get(key) ?? 0) + 1;
+  generation.set(key, myGeneration);
+
+  const request: Promise<PublicReceiptPageState> = readPageState(trimmed, refresh).then((state) => {
+    if (generation.get(key) !== myGeneration) {
+      // A newer read (a retry) or an invalidation replaced this one. Never hand
+      // the older answer back: callers would show it over the newer one.
+      const newer = latest.get(key);
+      return newer && newer !== request ? newer : loadPublicReceiptView(trimmed);
+    }
     if (state.kind === "rpc_error") {
       cache.delete(key);
     } else {
@@ -266,10 +272,11 @@ export function loadPublicReceiptView(
     inflight.delete(key);
     return state;
   }, (error) => {
-    if (generation.get(key) === nextGeneration) inflight.delete(key);
+    if (generation.get(key) === myGeneration) inflight.delete(key);
     throw error;
   });
   inflight.set(key, request);
+  latest.set(key, request);
   return request;
 }
 
@@ -280,5 +287,7 @@ export function peekPublicReceiptCache(receiptPda: string): PublicReceiptPageSta
 export function invalidatePublicReceiptCache(receiptPda: string): void {
   const key = cacheKey(receiptPda.trim());
   cache.delete(key);
+  inflight.delete(key);
+  latest.delete(key);
   generation.set(key, (generation.get(key) ?? 0) + 1);
 }

@@ -14,10 +14,12 @@ export function recipientSide(vault: VaultView | null, address: string | undefin
   return index === 0 || index === 1 ? index : null;
 }
 
-export function PayoutPanel({ wallet, vault, accounts, onPaid }: {
+export function PayoutPanel({ wallet, vault, accounts, ensureReady, onPaid }: {
   wallet: ChainPayWallet | null;
   vault: VaultView | null;
   accounts: SupportAccounts | null;
+  /** Re-reads the chain right before signing. Returns why signing is blocked, or null. */
+  ensureReady: () => Promise<string | null>;
   onPaid: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -33,12 +35,17 @@ export function PayoutPanel({ wallet, vault, accounts, onPaid }: {
     setBusy(true);
     setMessage("");
     try {
+      const blockedBy = await ensureReady();
+      if (blockedBy) {
+        setMessage(`${blockedBy} Nothing was sent.`);
+        return;
+      }
       const payer = new PublicKey(wallet.address);
       const recipient = new PublicKey(vault.recipients[side]);
       const assets = (["SOL", "USDC"] as const).filter((asset) => (asset === "SOL" ? owedSol : owedUsdc) > 0n);
       const signed = await signForSupport(wallet, assets.flatMap((asset) => payoutInstructions({ asset, side, recipient, payer, accounts })));
       const outcome = await sendSigned(signed);
-      setMessage(outcome.status === "confirmed" ? "Paid out." : outcome.status === "failed" ? outcome.message : "Not confirmed yet. Check your wallet history before retrying.");
+      setMessage(outcome.status === "confirmed" ? "Paid out." : outcome.status === "failed" ? outcome.message : `Not confirmed yet. Check ${outcome.signature.slice(0, 8)}… on the Devnet explorer before paying out again.`);
       onPaid();
     } catch (cause) {
       setMessage(friendlyError(cause));
@@ -51,7 +58,7 @@ export function PayoutPanel({ wallet, vault, accounts, onPaid }: {
     <section className="payout page-width" aria-label="Your balance">
       <div className="payout-card">
         <div>
-          <p className="payout-label">Your balance</p>
+          <p className="payout-label">Your balance · Devnet test tokens</p>
           <p className="payout-amount">{amountLabel(owedSol, "SOL")} · {amountLabel(owedUsdc, "USDC")}</p>
         </div>
         <button type="button" className="tip-primary payout-button" disabled={busy || nothing} onClick={() => void payOut()}>

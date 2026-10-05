@@ -2,10 +2,20 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { RATE_LIMITS } from "./supportRpc";
-import { advanceCursor, parseSupportTx, planPage, summarize, type RpcTransaction, type SignatureInfo, type StoredEvent, type SupportCursor } from "./supportParse";
+import { advanceCursor, indexerTargetProblem, parseSupportTx, planPage, summarize, supportServerConfig, type RpcTransaction, type SignatureInfo, type StoredEvent, type SupportCursor } from "./supportParse";
 
-// Reads the support vault's history from a mainnet RPC every few minutes.
+// Reads the support vault's history from a Devnet RPC every five minutes (the
+// "index support vault contributions" cron in crons.ts runs `sync`, which reads
+// SUPPORT_VAULT and SUPPORT_VAULT_USDC, so it targets exactly the configured vault).
 // The RPC URL (it may carry an API key) lives only in Convex env, never in the browser.
+//
+// Off switches, precisely:
+//   - SUPPORT_LIVE=false closes the browser relay (/support/rpc answers 503, see http.ts)
+//     and makes /support/v1 report live=false. It does NOT stop this indexer: `sync`
+//     keeps reading the vault while the config below is set, so the ledger stays true.
+//   - Unsetting SUPPORT_CLUSTER, SUPPORT_RPC_URL, SUPPORT_PROGRAM_ID, SUPPORT_VAULT or
+//     SUPPORT_VAULT_USDC (or pointing them anywhere but the Devnet vault) stops the indexer.
+//   - Neither reverses a tip that already landed or erases what the vault owes.
 const PAGE = 100;
 const MAX_PAGES_PER_ACCOUNT = 5;
 
@@ -18,8 +28,8 @@ const event = v.object({
 const cursor = v.object({ newest: v.union(v.string(), v.null()), pending: v.union(v.object({ top: v.string(), before: v.string() }), v.null()) });
 
 function config() {
-  const { SUPPORT_RPC_URL: rpc, SUPPORT_PROGRAM_ID: programId, SUPPORT_VAULT: vault, SUPPORT_VAULT_USDC: vaultUsdc } = process.env;
-  return rpc && programId && vault && vaultUsdc ? { rpc, accounts: { programId, vault, vaultUsdc } } : null;
+  const result = supportServerConfig(process.env);
+  return result.ok ? result.config : null;
 }
 
 async function rpcCall<T>(url: string, method: string, params: unknown[]): Promise<T> {
@@ -31,8 +41,23 @@ async function rpcCall<T>(url: string, method: string, params: unknown[]): Promi
 }
 
 export const sync = internalAction({ args: {}, handler: async (ctx) => {
-  const cfg = config();
-  if (!cfg) { console.warn("support sync skipped: SUPPORT_RPC_URL, SUPPORT_PROGRAM_ID, SUPPORT_VAULT or SUPPORT_VAULT_USDC not set"); return { skipped: true }; }
+  const checked = supportServerConfig(process.env);
+  if (!checked.ok) { console.warn(`support sync skipped: ${checked.reason}`); return { skipped: true }; }
+  const cfg = checked.config;
+  // Fail closed: index only when the RPC is Devnet and the accounts are the splitter's
+  // vault and its Devnet USDC account. Three cheap reads per run.
+  const [genesisHash, vaultInfo, usdcInfo] = await Promise.all([
+    rpcCall<string>(cfg.rpc, "getGenesisHash", []),
+    rpcCall<{ value: { owner: string } | null }>(cfg.rpc, "getAccountInfo", [cfg.accounts.vault, { encoding: "base64", dataSlice: { offset: 0, length: 0 }, commitment: "finalized" }]),
+    rpcCall<{ value: { data: { parsed?: { info?: { mint?: string; owner?: string } } } } | null }>(cfg.rpc, "getAccountInfo", [cfg.accounts.vaultUsdc, { encoding: "jsonParsed", commitment: "finalized" }]),
+  ]);
+  const info = usdcInfo.value?.data?.parsed?.info;
+  const problem = indexerTargetProblem({
+    genesisHash,
+    vaultOwner: vaultInfo.value?.owner ?? null,
+    vaultUsdc: info?.mint && info.owner ? { mint: info.mint, owner: info.owner } : null,
+  }, cfg.accounts);
+  if (problem) { console.error(`support sync refused: ${problem}`); return { skipped: true }; }
   let stored = 0;
   for (const account of [cfg.accounts.vault, cfg.accounts.vaultUsdc]) {
     let current: SupportCursor = await ctx.runQuery(internal.support.getCursor, { account });

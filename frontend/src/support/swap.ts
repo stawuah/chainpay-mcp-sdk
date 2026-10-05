@@ -14,6 +14,8 @@ import {
 } from "@solana/web3.js";
 import type { ChainPayWallet, SolanaChain } from "../wallet/connect";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, MEMO_PROGRAM_ID, TOKEN_PROGRAM_ID, USDC_MINT, WALLET_CHAIN } from "./config";
+// Jupiter lists mainnet mints. Swaps are off for the Devnet release (SWAP_ENABLED).
+const JUPITER_LISTED_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 import { allocateIx, buildMemo, type SupportAccounts } from "./donation";
 import { decodeJupiterSwap } from "./jupiter";
 import { base58, supportConnection } from "./send";
@@ -71,7 +73,7 @@ export async function searchTokens(query: string, fetcher: typeof fetch = fetch)
   const list = (await response.json()) as { id: string; symbol: string; name: string; decimals: number; icon?: string; isVerified?: boolean }[];
   return list
     .filter((t) => t.isVerified && typeof t.id === "string" && Number.isInteger(t.decimals))
-    .filter((t) => t.id !== WSOL_MINT && t.id !== USDC_MINT)
+    .filter((t) => t.id !== WSOL_MINT && t.id !== USDC_MINT && t.id !== JUPITER_LISTED_USDC)
     .map((t) => ({ mint: t.id, symbol: t.symbol, name: t.name, decimals: t.decimals, icon: t.icon, verified: true }))
     .slice(0, 12);
 }

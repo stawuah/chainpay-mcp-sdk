@@ -150,7 +150,9 @@ const petState = (page, speaking, perchSelector) => page.evaluate(({ speaking, p
   const text = await page.locator('main').innerText();
   assert.match(text, /Coming soon\. Not built yet\./);
   assert.doesNotMatch(text, /built and waiting/i);
-  assert.match(text, /No money goes through PayPal/);
+  assert.match(text, /separate PayPal sandbox balance/);
+  assert.match(text, /PayPal payout item/);
+  assert.doesNotMatch(text, /No money goes through PayPal|only keeps a record|Moved through PayPal/);
   await page.goto(BASE + '/use-cases', { waitUntil: 'load' });
   const cards = page.locator('.uc-grid > .uc-card');
   await cards.first().waitFor();

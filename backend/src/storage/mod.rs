@@ -7,6 +7,8 @@
 mod cards;
 mod convex;
 mod webhooks;
+#[cfg(test)]
+pub(crate) use cards::CardWriteFault;
 pub use cards::{CardIndex, CardKind, CardPut, StoredCardRecord};
 pub(crate) use convex::PetStoreError;
 use convex::{ConvexStore, decode, encode};
@@ -65,6 +67,9 @@ struct MemoryState {
     webhook_subscriptions: HashMap<String, WebhookSubscription>,
     webhook_events: HashMap<String, WebhookEvent>,
     webhook_deliveries: HashMap<String, WebhookDelivery>,
+    /// Test fault injection: card record puts this predicate matches fail.
+    #[cfg(test)]
+    card_write_fault: Option<cards::CardWriteFault>,
 }
 
 /// Outcome of a first-write-wins keyed record put. The caller decides whether

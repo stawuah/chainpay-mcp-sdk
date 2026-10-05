@@ -2,7 +2,7 @@
 // Re-sending identical bytes can never create a second contribution: the
 // network treats it as the same transaction (same signature).
 import { Connection, PublicKey, Transaction, type TransactionInstruction } from "@solana/web3.js";
-import type { ChainPayWallet, SolanaChain } from "../wallet/connect";
+import type { ChainPayWallet } from "../wallet/connect";
 import { SUPPORT_RPC_URL, WALLET_CHAIN } from "./config";
 import { associatedTokenAddress, type SupportAccounts, type SupportAsset } from "./donation";
 
@@ -46,19 +46,18 @@ const FEE_BUFFER_LAMPORTS = 10_000n;
 export async function checkBalance(owner: PublicKey, asset: SupportAsset, amount: bigint, accounts: SupportAccounts) {
   const rpc = supportConnection();
   const lamports = BigInt(await rpc.getBalance(owner, "confirmed"));
-  const network = WALLET_CHAIN === "solana:mainnet" ? "mainnet" : "devnet";
-  const hint = `If your wallet is set to a different network, switch it to ${network} and try again.`;
+  const hint = "If your wallet is set to a different network, switch it to Devnet and try again.";
   if (asset === "SOL") {
-    if (lamports < amount + FEE_BUFFER_LAMPORTS) return `Not enough SOL in this wallet on ${network}. ${hint}`;
+    if (lamports < amount + FEE_BUFFER_LAMPORTS) return `Not enough Devnet SOL in this wallet. ${hint}`;
     return null;
   }
-  if (lamports < FEE_BUFFER_LAMPORTS) return `This wallet needs a little SOL on ${network} for the network fee.`;
+  if (lamports < FEE_BUFFER_LAMPORTS) return `This wallet needs a little Devnet SOL for the network fee.`;
   const ata = associatedTokenAddress(owner, accounts.usdcMint);
   try {
     const balance = await rpc.getTokenAccountBalance(ata, "confirmed");
-    if (BigInt(balance.value.amount) < amount) return `Not enough USDC in this wallet on ${network}. ${hint}`;
+    if (BigInt(balance.value.amount) < amount) return `Not enough Devnet USDC in this wallet. ${hint}`;
   } catch {
-    return `No USDC in this wallet on ${network}. ${hint}`;
+    return `No Devnet USDC in this wallet. ${hint}`;
   }
   return null;
 }
@@ -68,7 +67,7 @@ export async function signForSupport(wallet: ChainPayWallet, instructions: Trans
   const { blockhash, lastValidBlockHeight } = await rpc.getLatestBlockhash("confirmed");
   const transaction = new Transaction({ feePayer: new PublicKey(wallet.address), blockhash, lastValidBlockHeight });
   transaction.add(...instructions);
-  const signed = await wallet.signTransaction(transaction, { chain: WALLET_CHAIN as SolanaChain });
+  const signed = await wallet.signTransaction(transaction, { chain: WALLET_CHAIN });
   if (!signed.signature) throw new Error("The wallet didn't sign the transaction.");
   return {
     raw: signed.serialize(),

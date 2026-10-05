@@ -76,7 +76,7 @@ function SpendingPermissionAtPayment({ receipt }: { receipt: ReceiptView }) {
   const showTodayLine = !(display.source === "not-recorded" && check.status === "unknown");
   return (
     <section className="receipt-section receipt-policy" aria-labelledby={`receipt-policy-${receipt.address}`} data-policy-source={display.source}>
-      <h4 id={`receipt-policy-${receipt.address}`}>Spending permission at payment</h4>
+      <h4 id={`receipt-policy-${receipt.address}`}>{display.heading}</h4>
       {display.rows.length > 0 && (
         <ul className="receipt-policy-rows">
           {display.rows.map((row) => <li key={row}>{row}</li>)}
@@ -147,19 +147,20 @@ function policyTechnicalFields(receipt: ReceiptView) {
   const policy = receipt.policy;
   if (!policy || policy.source === "not-recorded") return null;
   const limits = policy.limits;
-  const laterCounted = policy.source === "relay-observed" && policy.includesLaterPayments;
+  const relay = policy.source === "relay-observed";
+  const laterCounted = relay && policy.includesLaterPayments;
   return (
     <>
       <Field label="Limits source" value={policy.source} />
-      <Field label="Per-payment limit at payment (base units)" value={limits.maxPerPayment} />
-      <Field label="Total limit at payment (base units)" value={limits.totalLimit} />
+      <Field label={relay ? "Per-payment limit when the relay read it (base units)" : "Per-payment limit at payment (base units)"} value={limits.maxPerPayment} />
+      <Field label={relay ? "Total limit when the relay read it (base units)" : "Total limit at payment (base units)"} value={limits.totalLimit} />
       <Field
         label={laterCounted ? "Spent when the relay read it (base units, includes later payments)" : "Spent after this payment (base units)"}
         value={limits.amountSpentAfter}
       />
       <Field label={laterCounted ? "Payment count when the relay read it" : "Payment count after this payment"} value={limits.paymentCountAfter} />
       <Field label="Payment-count cap" value={limits.maxPaymentCount === "0" ? "None" : limits.maxPaymentCount} />
-      <Field label="Expiry slot" value={limits.expiresAtSlot} />
+      <Field label={relay ? "Expiry slot when the relay read it" : "Expiry slot"} value={limits.expiresAtSlot} />
       <Field label="Cooldown slots" value={limits.cooldownSlots} />
       {policy.source === "relay-observed" && <Field label="Relay read at slot" value={policy.observedAtSlot} />}
     </>

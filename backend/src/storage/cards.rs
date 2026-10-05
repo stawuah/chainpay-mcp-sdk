@@ -134,6 +134,14 @@ impl StatusStore {
             }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
+                #[cfg(test)]
+                if state
+                    .card_write_fault
+                    .as_ref()
+                    .is_some_and(|fault| (fault.0)(kind, key, &record))
+                {
+                    return Err(StorageError::Remote("injected card write failure".into()));
+                }
                 let slot = (kind, key.to_owned());
                 let current = state.card_records.get(&slot).cloned();
                 let current_rev = current.as_ref().map(StoredCardRecord::rev);
@@ -334,6 +342,14 @@ impl StatusStore {
         }
     }
 
+    /// Test fault injection: card record puts matching `fault` fail until cleared.
+    #[cfg(test)]
+    pub(crate) async fn fail_card_writes(&self, fault: Option<CardWriteFault>) {
+        if let StorageBackend::Memory(state) = &self.backend {
+            state.write().await.card_write_fault = fault;
+        }
+    }
+
     /// Test and scanner support: every operation claim, as stored.
     #[cfg(test)]
     pub(crate) async fn all_operation_claims(&self) -> Vec<(String, Value, Value)> {
@@ -343,6 +359,20 @@ impl StatusStore {
             }
             _ => Vec::new(),
         }
+    }
+}
+
+/// Predicate over (kind, key, record) for injected card write failures.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct CardWriteFault(
+    pub std::sync::Arc<dyn Fn(CardKind, &str, &Value) -> bool + Send + Sync>,
+);
+
+#[cfg(test)]
+impl std::fmt::Debug for CardWriteFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CardWriteFault")
     }
 }
 

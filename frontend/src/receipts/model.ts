@@ -432,44 +432,83 @@ export function estimateSlotDate(
 
 export const POLICY_SOURCE_CAPTION: Record<PolicyAtPaymentView["source"], string> = {
   "on-chain": "Recorded on Solana at payment",
-  "relay-observed": "Seen by the ChainPay relay after payment, not stored on Solana",
-  "not-recorded": "Not recorded for this receipt. Showing today’s limits.",
+  "relay-observed": "Seen by the ChainPay relay after payment, not stored on Solana. The limits may have changed since the payment.",
+  "not-recorded": "Not recorded for this receipt. These are today’s limits, not the ones at payment.",
+};
+
+/** Section heading: only an on-chain snapshot is the permission "at payment". */
+export const POLICY_SOURCE_HEADING: Record<PolicyAtPaymentView["source"], string> = {
+  "on-chain": "Spending permission at payment",
+  "relay-observed": "Spending permission, read after payment",
+  "not-recorded": "Spending permission today",
 };
 
 export type PolicyAtPaymentDisplay = {
   source: PolicyAtPaymentView["source"];
+  heading: string;
   caption: string;
   /** Plain lines in token units. Empty for not-recorded. */
   rows: string[];
 };
 
+/**
+ * True only when the receipt's own on-chain snapshot shows the permission had
+ * not expired at the payment slot. The program accepts a payment only while
+ * `expires_at_slot > current_slot`, and the snapshot records both values.
+ */
+export function paidBeforeExpiryProven(receipt: ReceiptView): boolean {
+  const policy = receipt.policy;
+  if (!policy || policy.source !== "on-chain") return false;
+  const expires = policy.limits.expiresAtSlot;
+  if (!isUnsigned(expires) || !isUnsigned(receipt.executedAtSlot)) return false;
+  return BigInt(expires) > BigInt(receipt.executedAtSlot);
+}
+
 export function policyAtPayment(receipt: ReceiptView, nowMs = Date.now()): PolicyAtPaymentDisplay {
   const policy = receipt.policy ?? { source: "not-recorded" as const };
+  const base = { source: policy.source, heading: POLICY_SOURCE_HEADING[policy.source], caption: POLICY_SOURCE_CAPTION[policy.source] };
   if (policy.source === "not-recorded") {
-    return { source: policy.source, caption: POLICY_SOURCE_CAPTION[policy.source], rows: [] };
+    return { ...base, rows: [] };
   }
   const limits = policy.limits;
+  const expiry = estimateSlotDate(limits.expiresAtSlot, receipt.currentSlot, nowMs);
+  if (policy.source === "relay-observed") {
+    // A relay read is not the permission at payment: it may follow an edit or
+    // later payments. Show what was read, labeled as such, and claim nothing
+    // about the payment itself.
+    const rows = [`${tokenUnits(receipt, limits.maxPerPayment)} per payment, read after this payment`];
+    if (!policy.includesLaterPayments) {
+      rows.push(`${formatTokenUnits(limits.amountSpentAfter, receipt.amount.decimals, "")
+        .trim()} of ${tokenUnits(receipt, limits.totalLimit)} used after this payment`);
+      if (isUnsigned(limits.maxPaymentCount) && limits.maxPaymentCount !== "0") {
+        rows.push(`Payment ${limits.paymentCountAfter} of ${limits.maxPaymentCount}`);
+      }
+    }
+    rows.push(expiry ? `Expires ≈ ${expiry}, read after this payment` : `Expires at slot ${limits.expiresAtSlot}, read after this payment`);
+    return { ...base, rows };
+  }
   const rows = [
     `${tokenUnits(receipt, receipt.amount.baseUnits)} ≤ ${tokenUnits(receipt, limits.maxPerPayment)} per payment`,
+    `${formatTokenUnits(limits.amountSpentAfter, receipt.amount.decimals, "")
+      .trim()} of ${tokenUnits(receipt, limits.totalLimit)} used after this payment`,
   ];
-  // A relay read taken after a later payment counts that payment too. Leave
-  // the running totals out rather than show numbers this payment never had.
-  const laterPaymentsCounted = policy.source === "relay-observed" && policy.includesLaterPayments;
-  if (!laterPaymentsCounted) {
-    rows.push(`${formatTokenUnits(limits.amountSpentAfter, receipt.amount.decimals, "")
-      .trim()} of ${tokenUnits(receipt, limits.totalLimit)} used after this payment`);
-    if (isUnsigned(limits.maxPaymentCount) && limits.maxPaymentCount !== "0") {
-      rows.push(`Payment ${limits.paymentCountAfter} of ${limits.maxPaymentCount}`);
-    }
+  if (isUnsigned(limits.maxPaymentCount) && limits.maxPaymentCount !== "0") {
+    rows.push(`Payment ${limits.paymentCountAfter} of ${limits.maxPaymentCount}`);
   }
-  const expiry = estimateSlotDate(limits.expiresAtSlot, receipt.currentSlot, nowMs);
-  rows.push(expiry ? `Paid before expiry (≈ ${expiry})` : "Paid before expiry");
-  return { source: policy.source, caption: POLICY_SOURCE_CAPTION[policy.source], rows };
+  if (paidBeforeExpiryProven(receipt)) {
+    rows.push(expiry ? `Paid before expiry (≈ ${expiry})` : "Paid before expiry");
+  } else {
+    rows.push(expiry ? `Expires ≈ ${expiry}` : `Expires at slot ${limits.expiresAtSlot}`);
+  }
+  return { ...base, rows };
 }
 
 export function allowedStampDetail(policy: PolicyAtPaymentView | undefined): string {
   if (!policy || policy.source === "not-recorded") {
     return "The program accepted this payment under this spending permission. Its limits at payment were not recorded for this receipt.";
+  }
+  if (policy.source === "relay-observed") {
+    return "The program accepted this payment under this spending permission. Its limits at payment were not stored on Solana. The relay’s later read is shown below.";
   }
   return "The program accepted this payment under this spending permission. See Spending permission at payment for the limits it met.";
 }

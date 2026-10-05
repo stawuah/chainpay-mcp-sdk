@@ -912,18 +912,43 @@ pub fn parse_rfc3339_ms(value: &str) -> Option<u64> {
 
 /// Cron step per card: roll the period on PER once it ended, then close the
 /// period's statement; finish any interrupted close; push repayments that are
-/// waiting for the partner or for `record_repayment`.
-pub async fn tick(cards: &Arc<CardsConnector>, card: &StoredCardRecord) {
+/// waiting for the partner or for `record_repayment`. Returns how many steps
+/// failed (each is logged); every step is resumable, so the next pass
+/// retries it from what is stored.
+pub async fn tick(cards: &Arc<CardsConnector>, card: &StoredCardRecord) -> u32 {
     let card_id = card.record["cardId"]
         .as_str()
         .unwrap_or_default()
         .to_owned();
+    let mut errors = 0;
     if billing(card)["closing"].is_object() {
         let closing = billing(card)["closing"].clone();
-        let _ = finish_close(cards, &card_id, &closing).await;
+        if let Err(error) = finish_close(cards, &card_id, &closing).await {
+            super::card_log!(
+                "statement close for card {} not finished: {}",
+                log_id(&card_id),
+                error.code
+            );
+            errors += 1;
+        }
     }
-    let _ = period_end(cards, card).await;
-    let _ = advance_pending(cards, card).await;
+    if let Err(error) = period_end(cards, card).await {
+        super::card_log!(
+            "period end for card {} not finished: {}",
+            log_id(&card_id),
+            error.code
+        );
+        errors += 1;
+    }
+    if let Err(error) = advance_pending(cards, card).await {
+        super::card_log!(
+            "repayments for card {} not advanced: {}",
+            log_id(&card_id),
+            error.code
+        );
+        errors += 1;
+    }
+    errors
 }
 
 async fn period_end(
@@ -988,11 +1013,13 @@ async fn period_end(
                 },
             )
             .await?;
-            if let Ok(Some(fresh)) = cards.card(&card_id).await {
-                let _ = super::routes::checkpoint(cards, &fresh).await;
-                let _ = super::reconcile::snapshot(cards, &fresh).await;
-            }
-            Ok(())
+            // The roll and the close stand. The new period's public
+            // commitment and recovery snapshot are flagged for the reconcile
+            // repair phase if they cannot be taken now.
+            let checkpoint =
+                super::activation::checkpoint_or_flag(cards, &card_id, "period_end").await;
+            super::activation::snapshot_or_flag(cards, &card_id).await;
+            checkpoint.map(|_| ())
         }
         TxOutcome::ProgramError { code, .. } => {
             super::card_log!(
@@ -1312,10 +1339,21 @@ pub async fn close_now(
     .await?
     {
         Some(row) => {
-            if let Ok(Some(fresh)) = cards.card(card_id).await {
-                let _ = super::routes::checkpoint(cards, &fresh).await;
-            }
-            Ok(statement_view(cards, &row))
+            // The statement is closed whatever happens next; the response
+            // says whether its public checkpoint was scheduled, and a failure
+            // is left for the reconcile repair phase (never dropped).
+            let mut view = statement_view(cards, &row);
+            view["checkpoint"] = match super::activation::checkpoint_or_flag(
+                cards,
+                card_id,
+                "statement_close",
+            )
+            .await
+            {
+                Ok(commitment) => json!({"seq": commitment["seq"], "state": commitment["state"]}),
+                Err(error) => json!({"state": "due", "reason": error.code}),
+            };
+            Ok(view)
         }
         None => Err(CardsError::conflict(
             "nothing_to_close",
@@ -2119,12 +2157,17 @@ async fn discharge(
     if updated.is_some() {
         super::card_log!("statement {} discharged", log_id(&row.key));
         cards.metrics.count("statements_discharged");
-        if let Ok(Some(fresh)) = cards
-            .card(card.record["cardId"].as_str().unwrap_or(""))
-            .await
-        {
-            let _ = super::routes::checkpoint(cards, &fresh).await;
-            let _ = super::reconcile::snapshot(cards, &fresh).await;
+        // Discharged stands; the commitment and snapshot of the new state
+        // are flagged for the reconcile repair phase if they fail here.
+        let card_id = card.record["cardId"].as_str().unwrap_or("");
+        let checkpoint = super::activation::checkpoint_or_flag(cards, card_id, "discharge").await;
+        super::activation::snapshot_or_flag(cards, card_id).await;
+        if let Err(error) = checkpoint {
+            super::card_log!(
+                "checkpoint after discharge of {} is due: {}",
+                log_id(&row.key),
+                error.code
+            );
         }
     }
     Ok(updated)
@@ -2147,6 +2190,7 @@ async fn advance_pending(
             50,
         )
         .await?;
+    let mut failed: Option<CardsError> = None;
     for row in rows.iter().filter(|r| {
         r.record["type"] == "statement"
             && matches!(
@@ -2154,10 +2198,17 @@ async fn advance_pending(
                 Some("repayment_observed" | "partner_confirmed")
             )
     }) {
-        let _ = advance(cards, card, row).await;
+        if let Err(error) = advance(cards, card, row).await {
+            super::card_log!(
+                "statement {} not advanced: {}",
+                log_id(&row.key),
+                error.code
+            );
+            failed.get_or_insert(error);
+        }
     }
     super::private_repay::advance_open_attempts(cards, card, &rows).await;
-    Ok(())
+    failed.map_or(Ok(()), Err)
 }
 
 /// Write any posting a crash skipped: single-message captures are booked by

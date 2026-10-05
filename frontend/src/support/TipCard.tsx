@@ -1,8 +1,12 @@
-// Ruling P2–P7: one card, three steps + result. "Other" tips any verified token,
-// swapped to USDC by Jupiter inside the same transaction (swap.ts).
+// Ruling P2–P7: one card, three steps + result. This release is Devnet only:
+// Devnet SOL and Devnet USDC, no "Other" token and no Jupiter swap (SWAP_ENABLED
+// is false; the swap path below stays for a later, separately reviewed release).
 import { useEffect, useRef, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
-import { SOL_DECIMALS, SUPPORT_PROGRAM_ID, SWAP_ENABLED, USDC_DECIMALS, USDC_MINT, explorerTx } from "./config";
+import { SOL_DECIMALS, SWAP_ENABLED, USDC_DECIMALS, USDC_MINT, explorerTx } from "./config";
+
+// Devnet tokens have no value, so the card never shows a dollar figure for them.
+const TEST_TOKENS = true;
 import {
   NOTE_MAX,
   cleanNote,
@@ -10,12 +14,13 @@ import {
   decimalsFor,
   formatUnits,
   shortAddress,
-  supportAccounts,
   toBaseUnits,
+  type SupportAccounts,
   type SupportAsset,
 } from "./donation";
+import { clearPendingTip, loadPendingTip, recheckTip, savePendingTip, type PendingTip } from "./recovery";
 import { usdHint, useSolUsd } from "./price";
-import { checkBalance, friendlyError, sendSigned, signForSupport, type SendOutcome } from "./send";
+import { checkBalance, friendlyError, sendSigned, signForSupport, supportConnection, type SendOutcome } from "./send";
 import {
   BASE_FEE_LAMPORTS,
   SLIPPAGE_BPS,
@@ -35,10 +40,13 @@ import { resolveConnectedWalletIcon } from "../wallet/icons";
 
 type Mode = SupportAsset | "OTHER";
 const PRESETS: Record<SupportAsset, string[]> = { SOL: ["0.05", "0.1", "0.5"], USDC: ["5", "10", "25"] };
-type Step = "amount" | "wallet" | "review" | "done";
+type Step = "amount" | "wallet" | "review" | "status" | "done";
 type Pending = "" | "checking" | "quoting" | "signing" | "sending";
 
-const STEP_INDEX: Record<Step, number> = { amount: 0, wallet: 1, review: 2, done: 3 };
+const STEP_INDEX: Record<Step, number> = { amount: 0, wallet: 1, review: 2, status: 3, done: 3 };
+type Recheck = "" | "checking" | "unknown" | "failed" | "expired";
+// A saved tip that confirmed this long ago is history, not an uncertain send.
+const STALE_CONFIRMED_MS = 30 * 60_000;
 // A swap prepared longer ago than this is rebuilt before signing, and only signed
 // as-is if it's at least as good as what the card showed.
 const SWAP_FRESH_MS = 20_000;
@@ -76,9 +84,23 @@ function swapError(cause: unknown) {
   return /^Swap |^Jupiter |^Unexpected /.test(message) ? `${message} Nothing was sent.` : friendlyError(cause);
 }
 
-export function TipCard({ walletState, onSent }: { walletState: SupportWalletState; onSent: () => void }) {
+export type TipCardProps = {
+  walletState: SupportWalletState;
+  accounts: SupportAccounts;
+  /** Re-reads the chain right before signing. Returns why signing is blocked, or null. */
+  ensureReady: () => Promise<string | null>;
+  /** True once the public ledger lists this signature. */
+  indexed: (signature: string) => boolean;
+  onSent: () => void;
+  onRefreshLedger: () => void;
+};
+
+export function TipCard({ walletState, accounts, ensureReady, indexed, onSent, onRefreshLedger }: TipCardProps) {
   const { wallet } = walletState;
-  const [step, setStep] = useState<Step>("amount");
+  // A tip signed earlier (this tab or a previous one) whose outcome we never saw.
+  const [pendingTip, setPendingTip] = useState<PendingTip | null>(() => loadPendingTip());
+  const [recheck, setRecheck] = useState<Recheck>("");
+  const [step, setStep] = useState<Step>(() => (pendingTip ? "status" : "amount"));
   const [mode, setMode] = useState<Mode>("SOL");
   const [token, setToken] = useState<SwapToken | null>(null);
   const [amountText, setAmountText] = useState("0.1");
@@ -93,6 +115,7 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
   const headingRef = useRef<HTMLHeadingElement>(null);
   const amountRef = useRef<HTMLInputElement>(null);
 
+  // Only reachable when SWAP_ENABLED lists "OTHER" (never on Devnet).
   const swapping = mode === "OTHER";
   const symbol = swapping ? token?.symbol ?? "" : mode;
   const decimals = swapping ? token?.decimals ?? 0 : decimalsFor(mode);
@@ -105,10 +128,10 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
   const shownArrives = shownQuote ? `${formatUnits(BigInt(shownQuote.outAmount), USDC_DECIMALS)} USDC` : null;
   const minimum = shownQuote ? `${formatUnits(BigInt(shownQuote.otherAmountThreshold), USDC_DECIMALS)} USDC` : null;
   const feeLamports = swapping ? prepared?.feeLamports ?? null : BASE_FEE_LAMPORTS;
-  const feeUsd = feeLamports !== null ? usdHint("SOL", feeLamports, solUsd) : null;
+  const feeUsd = feeLamports !== null && !TEST_TOKENS ? usdHint("SOL", feeLamports, solUsd) : null;
   const hint = swapping
     ? quoteState === "loading" ? "Getting a price…" : quoteState === "none" ? "No swap route for this amount." : arrives ? `≈ ${arrives} arrives` : null
-    : usdHint(mode, units, solUsd);
+    : TEST_TOKENS ? "Devnet test tokens · no real value" : usdHint(mode, units, solUsd);
   const isCustom = swapping || !PRESETS[mode].includes(amountText);
   const busy = pending !== "";
 
@@ -133,13 +156,48 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
     setPrepared(null);
     if (step !== "review" || !swapping || !walletAddress || !quote) return;
     let alive = true;
-    buildSwapTip({ donor: new PublicKey(walletAddress), quote, note, hideAddress, accounts: supportAccounts(SUPPORT_PROGRAM_ID, USDC_MINT), existingAccounts })
+    buildSwapTip({ donor: new PublicKey(walletAddress), quote, note, hideAddress, accounts, existingAccounts })
       .then((built) => alive && setPrepared(built))
       .catch((cause) => alive && setError(swapError(cause)));
     return () => {
       alive = false;
     };
-  }, [step, swapping, walletAddress, quote, note, hideAddress]);
+  }, [step, swapping, walletAddress, quote, note, hideAddress, accounts]);
+
+  // Same-signature recovery: look up the saved signature, never ask for a new tip.
+  const checkPending = async (tip: PendingTip, fromLoad = false) => {
+    setRecheck("checking");
+    const result = await recheckTip(supportConnection(), tip);
+    if (result.status === "confirmed" && fromLoad && Date.now() - tip.savedAt > STALE_CONFIRMED_MS) {
+      // Landed long ago: nothing is uncertain any more, so don't hold the card on it.
+      clearPendingTip(tip.signature);
+      setPendingTip(null);
+      setRecheck("");
+      setStep("amount");
+    } else if (result.status === "confirmed") {
+      setRecheck("");
+      setOutcome({ status: "confirmed", signature: tip.signature });
+      setStep("done");
+      onSent();
+    } else if (result.status === "failed" || result.status === "expired") {
+      clearPendingTip(tip.signature);
+      setRecheck(result.status);
+    } else {
+      setRecheck("unknown");
+    }
+  };
+  useEffect(() => {
+    if (pendingTip && step === "status") void checkPending(pendingTip, true);
+    // Only on first load: later checks are the user's "Check again".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Once the ledger lists the tip, nothing is pending any more.
+  const doneSignature = step === "done" && outcome?.status === "confirmed" ? outcome.signature : null;
+  const onLedger = doneSignature ? indexed(doneSignature) : false;
+  useEffect(() => {
+    if (doneSignature && onLedger) clearPendingTip(doneSignature);
+  }, [doneSignature, onLedger]);
 
   const switchMode = (next: Mode) => {
     setMode(next);
@@ -172,9 +230,19 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
   const send = async () => {
     if (!wallet || !units) return;
     setError("");
-    const accounts = supportAccounts(SUPPORT_PROGRAM_ID, USDC_MINT);
+    if (pendingTip) {
+      // There's a tip we never got an answer for. Check that one; don't sign another.
+      setStep("status");
+      return;
+    }
     const owner = new PublicKey(wallet.address);
     try {
+      setPending("checking");
+      const blockedBy = await ensureReady();
+      if (blockedBy) {
+        setError(`${blockedBy} Nothing was sent.`);
+        return;
+      }
       let plan = prepared;
       if (swapping && token && plan && Date.now() - plan.preparedAt > SWAP_FRESH_MS) {
         setPending("quoting");
@@ -211,6 +279,10 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
           contributionInstructions({ donor: owner, asset: mode as SupportAsset, amount: units, note, hideAddress, accounts }),
         );
       }
+      // Saved before sending, so a lost answer is re-checked by this same signature.
+      const saved: PendingTip = { signature: signed.signature, lastValidBlockHeight: signed.lastValidBlockHeight, asset: swapping ? "USDC" : (mode as SupportAsset), amount: units.toString(), label: amountLabel, savedAt: Date.now() };
+      savePendingTip(saved);
+      setPendingTip(saved);
       setPending("sending");
       const result = await sendSigned(signed);
       setOutcome(result);
@@ -218,7 +290,12 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
         go("done");
         onSent();
       } else if (result.status === "failed") {
+        clearPendingTip(signed.signature);
+        setPendingTip(null);
         setError(result.message);
+      } else {
+        setRecheck("unknown");
+        go("status");
       }
     } catch (cause) {
       setError(swapError(cause));
@@ -228,6 +305,9 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
   };
 
   const reset = () => {
+    if (outcome) clearPendingTip(outcome.signature);
+    setPendingTip(null);
+    setRecheck("");
     setOutcome(null);
     setNote("");
     setNoteOpen(false);
@@ -244,8 +324,8 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
   const modes: Mode[] = SWAP_ENABLED ? ["SOL", "USDC", "OTHER"] : ["SOL", "USDC"];
 
   return (
-    <section className="tip-card" aria-label="Buy us a coffee">
-      {step !== "done" ? (
+    <section className="tip-card" aria-label="Send a Devnet test tip">
+      {step !== "done" && step !== "status" ? (
         <div className="tip-top">
           {step !== "amount" ? (
             <button type="button" className="tip-back" aria-label="Back" disabled={busy} onClick={() => go(step === "review" && wallet ? "amount" : step === "review" ? "wallet" : "amount")}>
@@ -304,7 +384,7 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
                   <div className="tip-presets" role="group" aria-label="Quick amounts">
                     {PRESETS[mode as SupportAsset].map((preset) => (
                       <button key={preset} type="button" aria-pressed={amountText === preset} onClick={() => setAmountText(preset)}>
-                        {mode === "USDC" ? `$${preset}` : `${preset} SOL`}
+                        {mode === "USDC" ? (TEST_TOKENS ? `${preset} USDC` : `$${preset}`) : `${preset} SOL`}
                       </button>
                     ))}
                     <button
@@ -386,27 +466,63 @@ export function TipCard({ walletState, onSent }: { walletState: SupportWalletSta
             {swapping ? <p className="tip-hint tip-center">Swapped to USDC by Jupiter in this same transaction ({SLIPPAGE_BPS / 100}% max slippage).</p> : null}
             <div aria-live="polite">
               {error ? <p className="tip-error" role="alert">{error}</p> : null}
-              {outcome?.status === "unknown" ? (
-                <p className="tip-error" role="alert">
-                  We couldn't confirm it yet. <a href={explorerTx(outcome.signature)} target="_blank" rel="noreferrer">Check the transaction</a> before trying again.
-                </p>
-              ) : null}
             </div>
-            <button type="button" className="tip-primary" disabled={busy || outcome?.status === "unknown" || (swapping && !prepared)} onClick={() => void send()}>
+            <button type="button" className="tip-primary" disabled={busy || pendingTip !== null || (swapping && !prepared)} onClick={() => void send()}>
               {busy ? <span className="tip-spinner" aria-hidden="true" /> : null}
               {sendLabel}
             </button>
           </>
         ) : null}
 
-        {step === "done" && outcome?.status === "confirmed" ? (
-          <div className="tip-done">
-            <img className="tip-done-art" src="/support/thanks-480.webp" srcSet="/support/thanks-480.webp 480w, /support/thanks-960.webp 960w" sizes="160px" width={160} height={160} alt="The ChainPay robot next to a coffee cup with a heart of steam" />
-            <h2 ref={headingRef} tabIndex={-1} className="tip-title">Thank you — you're on the ledger.</h2>
-            <p className="tip-review-amount tip-done-amount">{amountLabel}</p>
+        {step === "status" && pendingTip ? (
+          <div className="tip-status" data-testid="tip-status" data-state={recheck || "checking"}>
+            <h2 ref={headingRef} tabIndex={-1} className="tip-title">
+              {recheck === "failed" ? "That test tip didn't go through" : recheck === "expired" ? "That test tip never landed" : "Checking your test tip"}
+            </h2>
+            <p className="tip-review-amount tip-done-amount">{pendingTip.label}</p>
+            <p className="tip-usd">Devnet test tokens · no real value</p>
+            <div aria-live="polite">
+              {recheck === "failed" ? (
+                <p className="tip-sub">It failed on-chain. Nothing was taken except the network fee.</p>
+              ) : recheck === "expired" ? (
+                <p className="tip-sub">It expired before landing. Nothing was sent, so you can try again.</p>
+              ) : (
+                <p className="tip-sub" role="status">
+                  {recheck === "checking" || recheck === "" ? "Looking up the same transaction on Devnet…" : "Not confirmed yet. We're checking the transaction you already signed, so don't send another one. It can take a minute."}
+                </p>
+              )}
+            </div>
             <div className="tip-done-actions">
-              <a className="tip-secondary" href={explorerTx(outcome.signature)} target="_blank" rel="noreferrer">View on explorer ↗</a>
-              <button type="button" className="tip-primary" onClick={reset}>Send another</button>
+              <a className="tip-secondary" href={explorerTx(pendingTip.signature)} target="_blank" rel="noreferrer">View on Devnet explorer ↗</a>
+              {recheck === "failed" || recheck === "expired" ? (
+                <button type="button" className="tip-primary" onClick={reset}>Try again</button>
+              ) : (
+                <button type="button" className="tip-primary" disabled={recheck === "checking"} onClick={() => void checkPending(pendingTip)}>
+                  {recheck === "checking" ? <span className="tip-spinner" aria-hidden="true" /> : null}
+                  {recheck === "checking" ? "Checking…" : "Check again"}
+                </button>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {step === "done" && outcome?.status === "confirmed" ? (
+          <div className="tip-done" data-testid="tip-done" data-indexed={onLedger ? "yes" : "no"}>
+            <img className="tip-done-art" src="/support/thanks-480.webp" srcSet="/support/thanks-480.webp 480w, /support/thanks-960.webp 960w" sizes="160px" width={160} height={160} alt="The ChainPay robot next to a coffee cup with a heart of steam" />
+            <h2 ref={headingRef} tabIndex={-1} className="tip-title">{onLedger ? "Thanks. You're on the ledger." : "Thanks. It landed on Devnet."}</h2>
+            <p className="tip-review-amount tip-done-amount">{pendingTip?.signature === outcome.signature ? pendingTip.label : amountLabel}</p>
+            <p className="tip-usd">Devnet test tokens · no real value</p>
+            {onLedger ? null : (
+              <p className="tip-sub" role="status">Pending indexing. The public ledger catches up every few minutes. Your tip is already on-chain, so there's nothing more to send.</p>
+            )}
+            <p className="tip-hint tip-center">A support tip, not a ChainPay payment receipt.</p>
+            <div className="tip-done-actions">
+              <a className="tip-secondary" href={explorerTx(outcome.signature)} target="_blank" rel="noreferrer">View on Devnet explorer ↗</a>
+              {onLedger ? (
+                <button type="button" className="tip-primary" onClick={reset}>Send another</button>
+              ) : (
+                <button type="button" className="tip-primary" onClick={onRefreshLedger}>Refresh ledger</button>
+              )}
             </div>
           </div>
         ) : null}

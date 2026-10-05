@@ -45,6 +45,7 @@ fn config(mode: AttestationMode) -> CardsConfig {
     CardsConfig {
         issuer_writes: true,
         checkout_enabled: true,
+        new_activation_enabled: true,
         asa_verifier: crate::connectors::inbox::StandardWebhooks::new(&sim::asa_secret()).unwrap(),
         events_verifier: crate::connectors::inbox::StandardWebhooks::new(&sim::events_secret())
             .unwrap(),
@@ -159,6 +160,8 @@ impl Harness {
         let chain: Chain = Arc::default();
         let txs: Txs = Arc::default();
         let commitments: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        // Scheduled `write_commitment` actions land in the test RPC's accounts.
+        *per.base.lock().unwrap() = Some(chain.clone());
         let mut backend = BackendConfig::from_env().unwrap();
         backend.rpc.url = base_rpc(chain.clone(), commitments.clone(), txs.clone()).await;
         let mut state = BackendState::new(backend, store.clone()).unwrap();
@@ -2118,6 +2121,8 @@ fn the_connector_refuses_any_cluster_but_devnet() {
     assert!(CardsConnector::from_env_cluster_check("devnet").is_ok());
 }
 
+#[path = "tests_activation.rs"]
+mod activation_tests;
 #[path = "tests_private_repay.rs"]
 mod private_repay_tests;
 #[path = "tests_statements.rs"]

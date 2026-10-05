@@ -129,6 +129,11 @@ pub(super) async fn prepare(
     body: Bytes,
 ) -> Response {
     let cards = cards_or_404!(state);
+    // Selective gate: a new card is a newly initiated, risk-increasing
+    // operation. Checked before any RPC or issuer call.
+    if !cards.config.new_activation_enabled {
+        return cards::activation::gate_error().into_response();
+    }
     let caller = caller(&principal, connection.as_deref());
     let request = match parse_body(&body) {
         Ok(request) => request,
@@ -186,15 +191,21 @@ pub(super) async fn attestation(
     (StatusCode::OK, Json(json!(status))).into_response()
 }
 
-/// Public base-layer commitment for the card view (never private bytes).
+/// Public base-layer commitment for the card view (never private bytes),
+/// read back at finalized commitment and judged against the checkpoint
+/// ChainPay scheduled: its seq, policy version and period must match before
+/// the view says `confirmed`. `None` when nothing could be read, so the view
+/// falls back to the stored record.
 async fn commitment(
-    state: &BackendState,
+    cards: &CardsConnector,
     card: &crate::storage::StoredCardRecord,
 ) -> Option<Value> {
-    let address = card.record["commitmentPda"].as_str()?;
-    let account = state.rpc.account_info(address).await.ok()??;
-    let decoded = cards::program::decode_commitment(&account.data).ok()?;
-    (decoded.seq > 0).then(|| json!({"seq": decoded.seq.to_string(), "root": cards::program::hex(&decoded.root), "slot": decoded.written_slot.to_string()}))
+    match cards::activation::read_commitment(cards, card).await {
+        cards::activation::Readback::Account(actual) => {
+            Some(cards::activation::commitment_readback_view(card, &actual))
+        }
+        _ => None,
+    }
 }
 
 pub(super) async fn get_card(
@@ -209,7 +220,7 @@ pub(super) async fn get_card(
         Ok(card) => card,
         Err(error) => return error.into_response(),
     };
-    let commitment = commitment(&state, &card).await;
+    let commitment = commitment(&cards, &card).await;
     (
         StatusCode::OK,
         Json(routes::card_view(
@@ -422,7 +433,7 @@ pub(super) async fn disclosure_salt(
         Ok(card) => card,
         Err(error) => return error.into_response(),
     };
-    let on_chain = commitment(&state, &card)
+    let on_chain = commitment(&cards, &card)
         .await
         .and_then(|c| c["seq"].as_str().and_then(|s| s.parse().ok()));
     respond(

@@ -44,6 +44,20 @@ await page.getByText("Seen by the ChainPay relay after payment, not stored on So
 body = await page.locator("body").innerText();
 assert.equal(body.includes("used after this payment"), false);
 assert.match(body, /over today’s 3 USDC per-payment limit/);
+// A relay read is never the permission "at payment" and proves nothing about expiry.
+await page.getByRole("heading", { name: "Spending permission, read after payment" }).waitFor();
+assert.match(body, /5 USDC per payment, read after this payment/);
+assert.equal(/Paid before expiry|≤/.test(body), false);
+
+// A pasted full receipt link resolves locally; a malformed one explains itself.
+await page.goto(`${BASE_URL}/verify`);
+await page.getByLabel("Receipt address or link").fill("https://elsewhere.example/verify/not-a-receipt");
+await page.getByRole("button", { name: "Verify receipt" }).click();
+await page.getByText("The address in that link isn't a valid receipt address.").waitFor();
+assert.equal(new URL(page.url()).pathname, "/verify");
+await page.getByLabel("Receipt address or link").fill("https://elsewhere.example/verify/7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q");
+await page.getByRole("button", { name: "Verify receipt" }).click();
+await page.waitForURL("**/verify/7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q");
 
 // Audit link: details only after the signed request verifies against the receipt.
 const purchaseFixture = JSON.parse(await (await import("node:fs/promises")).readFile(new URL("./fixtures/receipt-purchase.json", import.meta.url), "utf8"));
@@ -68,5 +82,5 @@ for (const width of [390, 320]) {
 }
 
 assert.deepEqual(errors, []);
-console.log("PASS: public verify malformed, settled, not-found, limits at payment (on-chain, relay), audit link pass/fail; no inbox attribution or wallet chrome.");
+console.log("PASS: public verify malformed, settled, not-found, limits at payment (on-chain, relay read after payment), pasted receipt links, audit link pass/fail; no inbox attribution or wallet chrome.");
 await browser.close();

@@ -10,7 +10,7 @@ use super::program::{self, CardAccounts};
 use super::tee::{TeeRead, TxOutcome};
 use super::{
     CARD_LIST_REFERENCE, CONNECTOR, CardIssuerSecret, CardsConnector, card_key, cents, is_card_id,
-    log_id, merchant_by_acceptor, merchant_by_hash, now_ms, parse_cents, rfc3339, updated_now,
+    log_id, merchant_by_acceptor, now_ms, parse_cents, rfc3339, updated_now,
 };
 use crate::storage::{CardIndex, CardKind, CardPut, StorageError, StoredCardRecord};
 use axum::Json;
@@ -73,6 +73,9 @@ pub struct CardsError {
     pub evidence_state: &'static str,
     pub operation_id: Option<String>,
     pub detail: Option<String>,
+    /// Fresh card view attached to a partial failure, so the client shows
+    /// the state the issuer and chain actually reached.
+    pub card: Option<Value>,
 }
 
 impl CardsError {
@@ -91,6 +94,7 @@ impl CardsError {
             evidence_state,
             operation_id: None,
             detail: None,
+            card: None,
         }
     }
     pub fn bad(code: &'static str, message: impl Into<String>) -> Self {
@@ -116,6 +120,20 @@ impl CardsError {
     }
     pub fn unavailable(code: &'static str, message: impl Into<String>) -> Self {
         Self::new(StatusCode::SERVICE_UNAVAILABLE, code, message, true, "none")
+    }
+    /// A feature switched off on this deployment (not retryable).
+    pub fn disabled(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            code,
+            message,
+            false,
+            "none",
+        )
+    }
+    pub fn with_card(mut self, card: Value) -> Self {
+        self.card = Some(card);
+        self
     }
     pub fn internal() -> Self {
         Self::new(
@@ -168,6 +186,9 @@ impl IntoResponse for CardsError {
         }
         if let Some(detail) = &self.detail {
             body["detail"] = json!(detail);
+        }
+        if let Some(card) = self.card {
+            body["card"] = card;
         }
         (self.status, Json(body)).into_response()
     }
@@ -294,6 +315,17 @@ pub fn card_view(
     if let Some(version) = r["mirror"]["policyVersion"].as_u64() {
         mirror["policyVersionMirrored"] = json!(version);
     }
+    if let Some(all) = r["mirror"]["allMerchantsMirrored"].as_bool() {
+        // false: some allowlisted shops are not in the issuer's merchant lock
+        // (PER still enforces the full allowlist on every authorization).
+        mirror["allMerchantsMirrored"] = json!(all);
+    }
+    if r["mirror"]["rulesToRetire"]
+        .as_array()
+        .is_some_and(|rules| !rules.is_empty())
+    {
+        mirror["rulesRetirePending"] = json!(true);
+    }
     let mut view = json!({
         "cardId": r["cardId"],
         "label": cards.card_label(card),
@@ -307,8 +339,21 @@ pub fn card_view(
         "accounts": {"binding": r["bindingPda"], "policy": r["policyPda"], "period": r["periodPda"], "commitment": r["commitmentPda"], "escrow": r["escrowPda"]},
         "simulatedCredit": true,
     });
-    if let Some(commitment) = commitment {
+    // A live base-layer readback when the caller has one, else the stored
+    // record; `state: confirmed` only ever comes from a matching readback.
+    if let Some(commitment) = commitment.or_else(|| super::activation::commitment_record_view(r)) {
         view["commitment"] = commitment;
+    }
+    if r["activation"].is_object() {
+        let a = &r["activation"];
+        let mut activation =
+            json!({"state": a["state"], "policyVersion": a["policyVersion"], "steps": a["steps"]});
+        for field in ["startedAt", "updatedAt", "completedAt", "detail"] {
+            if !a[field].is_null() {
+                activation[field] = a[field].clone();
+            }
+        }
+        view["activation"] = activation;
     }
     if let Some(state) = r["recovery"]["state"].as_str() {
         let mut recovery = json!({"state": state});
@@ -405,6 +450,9 @@ pub async fn prepare(
     body: PrepareRequest,
     blockhash: [u8; 32],
 ) -> Result<Value, CardsError> {
+    if !cards.config.new_activation_enabled {
+        return Err(super::activation::gate_error());
+    }
     if !caller.is_owner_session() {
         return Err(CardsError::forbidden("Owner session required"));
     }
@@ -534,7 +582,7 @@ pub struct VersionedRequest {
     pub expected_policy_version: u32,
 }
 
-async fn read_policy(
+pub(super) async fn read_policy(
     cards: &CardsConnector,
     card: &StoredCardRecord,
 ) -> Result<program::CardPolicyAccount, CardsError> {
@@ -558,181 +606,68 @@ async fn read_policy(
     }
 }
 
-/// Mirror the hard limits to Lithic card controls (defence in depth) and
-/// return the acknowledgements. Never sends a zero spend limit.
-async fn mirror_limits(
+/// Read the card's period index from PER (the checkpoint's expected period).
+async fn read_period_index(
     cards: &CardsConnector,
-    issuer: &CardIssuerSecret,
-    policy: &program::CardPolicyAccount,
-    previous_rules: &[String],
-) -> Result<Value, String> {
-    let mut acks = Vec::new();
-    cards
-        .lithic
-        .set_spend_limit(&issuer.card_token, policy.max_purchase_cents)
-        .await
-        .map_err(|e| format!("spend limit: {e}"))?;
-    acks.push(json!({"control": "spend_limit", "duration": "TRANSACTION"}));
-    // New rules first; old ones are retired only after every replacement
-    // exists, so a failure never leaves an open card without controls.
-    let mut rules = Vec::new();
-    let merchants: Vec<Value> = policy
-        .merchant_id_hashes
-        .iter()
-        .filter_map(merchant_by_hash)
-        .map(|m| json!({"merchant_id": m.acceptor_id, "comment": m.reference}))
-        .collect();
-    let unmirrored = policy.merchant_id_hashes.len() - merchants.len();
-    if !merchants.is_empty() {
-        let token = cards
-            .lithic
-            .create_card_rule(
-                &issuer.card_token,
-                "chainpay merchant allowlist",
-                "MERCHANT_LOCK",
-                json!({"merchants": merchants}),
-            )
-            .await
-            .map_err(|e| format!("merchant lock: {e}"))?;
-        acks.push(json!({"control": "merchant_lock"}));
-        rules.push(token);
+    card: &StoredCardRecord,
+) -> Result<u32, CardsError> {
+    let (_, period) = card_pdas(card)?;
+    match cards.per.read(&period, Duration::from_secs(5)).await {
+        TeeRead::Visible { data, .. } => Ok(program::decode_period(&data)
+            .map_err(|_| CardsError::internal())?
+            .period_index),
+        TeeRead::NotVisible { .. } => Err(CardsError::conflict(
+            "policy_not_visible",
+            "The card's private state is not readable by ChainPay's authorizer",
+        )),
+        TeeRead::RpcError(_) => Err(CardsError::unavailable(
+            "per_unavailable",
+            "The private rollup is unreachable; retry",
+        )),
     }
-    if !policy.mccs.is_empty() {
-        let values: Vec<String> = policy.mccs.iter().map(|m| format!("{m:04}")).collect();
-        let token = cards
-            .lithic
-            .create_card_rule(
-                &issuer.card_token,
-                "chainpay mcc allowlist",
-                "CONDITIONAL_ACTION",
-                json!({"action": {"type": "DECLINE", "code": "UNAUTHORIZED_MERCHANT"}, "conditions": [{"attribute": "MCC", "operation": "IS_NOT_ONE_OF", "value": values}]}),
-            )
-            .await
-            .map_err(|e| format!("mcc rule: {e}"))?;
-        acks.push(json!({"control": "mcc_allowlist"}));
-        rules.push(token);
-    }
-    for rule in previous_rules.iter().filter(|r| !rules.contains(r)) {
-        let _ = cards
-            .lithic
-            .admin(
-                reqwest::Method::PATCH,
-                &format!("/v2/auth_rules/{rule}"),
-                Some(json!({"state": "INACTIVE"})),
-            )
-            .await;
-    }
-    // Control names only: list sizes are policy shape and stay out of Convex.
-    Ok(json!({"acks": acks, "rules": rules, "allMerchantsMirrored": unmirrored == 0}))
 }
 
-/// `POST /v1/cards/{cardId}/activate`: after the owner signed
-/// `init_permission` + `set_policy` on PER. Mirrors, then opens at the issuer
-/// only after every mirror call was acknowledged.
+/// `POST /v1/cards/{cardId}/activate`, see [`super::activation`].
 pub async fn activate(
     cards: &Arc<CardsConnector>,
     caller: &Caller,
     card_id: &str,
     body: VersionedRequest,
 ) -> Result<Value, CardsError> {
-    operation_id(&body.client_operation_id)?;
-    let card = owned_card(cards, caller, card_id).await?;
-    let policy = read_policy(cards, &card).await?;
-    if policy.authorizer != cards.authorizer() {
-        return Err(CardsError::conflict(
-            "authorizer_mismatch",
-            "The card's policy names a different authorizer",
-        ));
-    }
-    if policy.policy_version != body.expected_policy_version {
-        return Err(CardsError::conflict(
-            "policy_version",
-            "The card's policy version changed; review it again",
-        )
-        .with_detail(&policy.policy_version.to_string()));
-    }
-    let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
-    let previous: Vec<String> = card.record["mirror"]["rules"]
-        .as_array()
-        .map(|r| {
-            r.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mirrored = mirror_limits(cards, &issuer, &policy, &previous).await;
-    let at = rfc3339(now_ms());
-    let (mirror_state, rules, detail) = match &mirrored {
-        Ok(result) => ("acknowledged", result["rules"].clone(), result.clone()),
-        Err(reason) => ("failed", json!(previous), json!({"error": reason})),
-    };
-    let mut issuer_state = card.record["issuerState"]
-        .as_str()
-        .unwrap_or("PAUSED")
-        .to_owned();
-    if mirror_state == "acknowledged" && !policy.frozen && policy.recovery_state == 0 {
-        match cards.lithic.set_state(&issuer.card_token, "OPEN").await {
-            Ok(issued) => issuer_state = issued.state,
-            Err(_) => {
-                return Err(CardsError::unavailable(
-                    "issuer_unavailable",
-                    "Limits were mirrored but the issuer did not open the card; retry",
-                ));
-            }
-        }
-    }
-    let version = policy.policy_version;
-    let updated = cards
-        .update_card(card_id, |record| {
-            record["mirror"] = json!({"state": mirror_state, "ackAt": at, "policyVersion": version, "rules": rules, "detail": detail});
-            record["issuerState"] = json!(issuer_state);
-            record["activatedAt"] = json!(at);
-        })
-        .await?
-        .ok_or_else(CardsError::internal)?;
-    record_activity(
-        cards,
-        &card,
-        "policy_change",
-        json!({"policyVersion": version, "mirror": mirror_state}),
-    )
-    .await;
-    if let Err(reason) = mirrored {
-        // Never leave a card open on a stale issuer mirror.
-        if updated.record["issuerState"] == "OPEN"
-            && cards
-                .lithic
-                .set_state(&issuer.card_token, "PAUSED")
-                .await
-                .is_ok()
-        {
-            let _ = cards
-                .update_card(card_id, |record| record["issuerState"] = json!("PAUSED"))
-                .await;
-        }
-        return Err(CardsError::unavailable(
-            "mirror_failed",
-            "Issuer controls could not be mirrored; the card stays paused",
-        )
-        .with_detail(&reason));
-    }
-    let _ = checkpoint(cards, &updated).await;
-    let _ = super::reconcile::snapshot(cards, &updated).await;
-    Ok(card_view(
-        cards,
-        &updated,
-        None,
-        Some(&cards.attestation().await),
-    ))
+    super::activation::activate(cards, caller, card_id, body).await
 }
 
-/// Schedule a `CardCommitment` checkpoint. The master salt is stored only
-/// encrypted (contracts.md §1.6) so the owner can disclose single leaves.
+/// Stored checkpoint state for a PER submit outcome. `None`: refused as
+/// stale, so PER must be read to know whether it took this seq.
+pub fn checkpoint_outcome(outcome: &TxOutcome) -> Option<&'static str> {
+    match outcome {
+        TxOutcome::Confirmed { .. } => Some("scheduled"),
+        // May have landed: the repair phase reads PER before resubmitting.
+        TxOutcome::Unknown { .. } => Some("pending"),
+        TxOutcome::ProgramError { code, .. }
+            if program::error_name(*code) == Some("StaleCommitment") =>
+        {
+            None
+        }
+        _ => Some("failed"),
+    }
+}
+
+/// Schedule a `CardCommitment` checkpoint for the card's current private
+/// state and return the stored commitment record. The master salt is stored
+/// only encrypted (contracts.md §1.6) so the owner can disclose single leaves.
+///
+/// `scheduled` means PER accepted the checkpoint and scheduled the base-layer
+/// `write_commitment`; it is **not** a public commitment until
+/// [`super::activation::repair_commitment`] reads it back (`confirmed`). An
+/// unknown outcome is `pending` (PER may still have taken it), never `failed`.
+/// A storage failure is an error, never a silent success.
 pub async fn checkpoint(
     cards: &CardsConnector,
     card: &StoredCardRecord,
-) -> Result<u64, CardsError> {
+) -> Result<Value, CardsError> {
     let policy = read_policy(cards, card).await?;
+    let period_index = read_period_index(cards, card).await?;
     let owner: Address = card
         .index
         .owner
@@ -742,6 +677,8 @@ pub async fn checkpoint(
     let card_id = program::unhex::<32>(card.record["cardId"].as_str().unwrap_or(""))
         .ok_or_else(CardsError::internal)?;
     let accounts = CardAccounts::derive(&owner, &card_id);
+    // `commit_seq + 1`: the same seq again when an earlier attempt never
+    // reached PER, the next one when it did.
     let seq = policy.commit_seq + 1;
     let mut salt = [0u8; 32];
     getrandom::fill(&mut salt).expect("randomness");
@@ -778,6 +715,32 @@ pub async fn checkpoint(
             .map_err(|_| CardsError::internal())?;
         salt = program::unhex::<32>(&stored).ok_or_else(CardsError::internal)?;
     }
+    let previous = card.record["commitment"].clone();
+    let attempts = if previous["seq"].as_str() == Some(seq.to_string().as_str()) {
+        previous["attempts"].as_u64().unwrap_or(1) + 1
+    } else {
+        1
+    };
+    let mut commitment = json!({
+        "seq": seq.to_string(),
+        "state": "pending",
+        "policyVersion": policy.policy_version,
+        "periodIndex": period_index,
+        "requestedAt": rfc3339(now_ms()),
+        "attempts": attempts,
+    });
+    // The expectation is stored before the submit, so a crash in between
+    // leaves a record the reconcile repair phase re-drives.
+    cards
+        .update_card(&card_hex, |record| {
+            if record["commitment"]["state"] == "confirmed" {
+                record["commitmentConfirmed"] = record["commitment"].clone();
+            }
+            record["commitment"] = commitment.clone();
+            record["checkpointDue"] = Value::Null;
+        })
+        .await?
+        .ok_or_else(CardsError::internal)?;
     let outcome = cards
         .per
         .submit(
@@ -790,16 +753,33 @@ pub async fn checkpoint(
             Instant::now() + Duration::from_secs(8),
         )
         .await;
-    let state = match outcome {
-        TxOutcome::Confirmed { .. } => "scheduled",
-        _ => "failed",
+    let state = match checkpoint_outcome(&outcome) {
+        Some(state) => state,
+        // PER is already past this seq: it took this checkpoint (same sealed
+        // salt) or a concurrent one, or it did not.
+        None => match read_policy(cards, card).await {
+            Ok(p) if p.commit_seq >= seq => "scheduled",
+            Ok(_) => "failed",
+            Err(_) => "pending",
+        },
     };
-    let _ = cards
+    commitment["state"] = json!(state);
+    if state == "scheduled" {
+        commitment["scheduledAt"] = json!(rfc3339(now_ms()));
+    }
+    if let Some(signature) = outcome.signature() {
+        commitment["perTx"] = json!(signature);
+    }
+    cards
         .update_card(&card_hex, |record| {
-            record["commitment"] = json!({"seq": seq.to_string(), "state": state});
+            record["commitment"] = commitment.clone();
         })
-        .await;
-    Ok(seq)
+        .await?
+        .ok_or_else(CardsError::internal)?;
+    if state == "failed" {
+        super::card_log!("checkpoint refused for card {}", log_id(&card_hex));
+    }
+    Ok(commitment)
 }
 
 // ------------------------------------------------------------------- freeze
@@ -850,7 +830,7 @@ pub async fn freeze(
     let (policy, period) = card_pdas(&card)?;
     let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
     let at = rfc3339(now_ms());
-    let _ = cards
+    cards
         .update_card(card_id, |record| {
             record["freeze"] = json!({"onChain": true, "issuer": "pending_issuer_confirmation", "wantedIssuerState": "PAUSED", "opId": op_id, "at": at});
         })
@@ -877,7 +857,9 @@ pub async fn freeze(
         Ok(_) | Err(_) => "pending_issuer_confirmation",
     };
     let ack_at = rfc3339(now_ms());
-    let _ = cards
+    // The freeze itself already ran; a storage failure here is reported (the
+    // client retries the same operation, which re-drives both halves).
+    cards
         .update_card(card_id, |record| {
             record["freeze"]["onChainState"] = json!(on_chain);
             record["freeze"]["perTx"] = json!(per.signature());
@@ -888,7 +870,8 @@ pub async fn freeze(
                 record["issuerState"] = json!("PAUSED");
             }
         })
-        .await;
+        .await?
+        .ok_or_else(CardsError::internal)?;
     if issuer_state == "confirmed" {
         cards.metrics.count("freeze_acks");
     }
@@ -965,7 +948,7 @@ pub async fn unfreeze_mirror(
     ))
 }
 
-async fn record_activity(
+pub(super) async fn record_activity(
     cards: &CardsConnector,
     card: &StoredCardRecord,
     kind: &str,
@@ -976,7 +959,9 @@ async fn record_activity(
     let card_id = card.record["cardId"].as_str().unwrap_or_default();
     let key = format!("mirror:{}", program::hex(&id));
     let record = json!({"v": 1, "type": "mirror", "kind": kind, "cardId": card_id, "detail": detail, "at": rfc3339(now_ms())});
-    let _ = cards
+    // The activity row is the owner's history, not state: a failed write is
+    // logged and counted, and never fails the operation it describes.
+    if let Err(error) = cards
         .store
         .put_card_record(
             CardKind::CardEvents,
@@ -986,7 +971,14 @@ async fn record_activity(
             None,
             updated_now(),
         )
-        .await;
+        .await
+    {
+        super::card_log!(
+            "activity row not stored for card {}: {error}",
+            log_id(card_id)
+        );
+        cards.metrics.count("activity_writes_failed");
+    }
 }
 
 // ------------------------------------------------------------------- embed
@@ -1375,9 +1367,10 @@ pub async fn restore(
         .crypto
         .seal_json(CardKind::Cards.as_str(), &card_key(card_id), &summary);
     if body.recon_report_digest.as_deref() != Some(digest.as_str()) {
-        let _ = cards
+        cards
             .update_card(card_id, |record| record["recoveryReport"] = sealed.clone())
-            .await;
+            .await?
+            .ok_or_else(CardsError::internal)?;
         return Ok(
             json!({"state": "review_required", "reconReport": report, "reconReportDigest": digest}),
         );
@@ -1443,13 +1436,15 @@ pub async fn restore(
     let mut tx = program::unsigned_transaction(&owner_key, &[instruction], blockhash);
     program::sign_transaction(&mut tx, &[cards.per.signing_key()])
         .map_err(|_| CardsError::internal())?;
-    let _ = cards
+    // Recorded before the co-signed transaction is handed out.
+    cards
         .update_card(card_id, |record| {
             record["recovery"]["state"] = json!("restore_prepared");
             record["recovery"]["reconDigest"] = json!(digest);
             record["recoveryReport"] = sealed.clone();
         })
-        .await;
+        .await?
+        .ok_or_else(CardsError::internal)?;
     let policy_args = &args.policy;
     Ok(json!({
         "state": "ready_to_sign",
@@ -1548,6 +1543,40 @@ pub fn bearer_matches(header: Option<&str>, secret: Option<&str>) -> bool {
 #[cfg(test)]
 mod unit {
     use super::*;
+
+    #[test]
+    fn an_unknown_checkpoint_is_pending_never_failed() {
+        let sig = || Some("s".to_owned());
+        assert_eq!(
+            checkpoint_outcome(&TxOutcome::Confirmed {
+                signature: "s".into()
+            }),
+            Some("scheduled")
+        );
+        assert_eq!(
+            checkpoint_outcome(&TxOutcome::Unknown { signature: sig() }),
+            Some("pending")
+        );
+        assert_eq!(
+            checkpoint_outcome(&TxOutcome::Failed {
+                signature: sig(),
+                reason: "x".into()
+            }),
+            Some("failed")
+        );
+        let stale = 6000
+            + program::ERRORS
+                .iter()
+                .position(|e| *e == "StaleCommitment")
+                .unwrap() as u32;
+        assert_eq!(
+            checkpoint_outcome(&TxOutcome::ProgramError {
+                signature: "s".into(),
+                code: stale
+            }),
+            None
+        );
+    }
 
     #[test]
     fn bearer_checks_are_exact() {

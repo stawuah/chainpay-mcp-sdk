@@ -38,6 +38,8 @@ describe('support RPC relay: request checks', () => {
     expect(checkRelayRequest(call('getTokenAccountBalance', [ADDRESS]), config).ok).toBe(true);
     expect(checkRelayRequest(call('getLatestBlockhash', [{ commitment: 'confirmed' }]), config).ok).toBe(true);
     expect(checkRelayRequest(call('getBlockHeight'), config).ok).toBe(true);
+    expect(checkRelayRequest(call('getGenesisHash'), config).ok).toBe(true);
+    expect(checkRelayRequest(call('getGenesisHash', [{}]), config)).toMatchObject({ ok: false, status: 400 });
     expect(checkRelayRequest(call('getSignatureStatuses', [['5'.repeat(88)], { searchTransactionHistory: true }]), config).ok).toBe(true);
     for (const method of ['getProgramAccounts', 'requestAirdrop', 'getSignaturesForAddress', 'getTransaction', '__proto__']) {
       expect(checkRelayRequest(call(method), config)).toMatchObject({ ok: false, status: 403 });
@@ -93,6 +95,7 @@ describe('support RPC relay: route', () => {
   const upstream = vi.fn();
   beforeEach(() => {
     vi.stubEnv('SUPPORT_LIVE', 'true');
+    vi.stubEnv('SUPPORT_CLUSTER', 'devnet');
     vi.stubEnv('SUPPORT_RELAY_RPC_URL', 'https://relay-rpc.invalid/?key=relay');
     vi.stubEnv('SUPPORT_RPC_URL', 'https://tracker-rpc.invalid/?key=tracker');
     vi.stubEnv('SUPPORT_PROGRAM_ID', PROGRAM);
@@ -118,6 +121,17 @@ describe('support RPC relay: route', () => {
     expect((await post(t, call('getBlockHeight'))).status).toBe(200);
     expect(upstream.mock.calls[0][0]).toContain('key=relay');
     expect(upstream.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('stays off unless the server says Devnet (Devnet-only release)', async () => {
+    const t = convexTest(schema, modules);
+    for (const cluster of ['', 'mainnet', 'mainnet-beta', 'Devnet']) {
+      vi.stubEnv('SUPPORT_CLUSTER', cluster);
+      expect((await post(t, call('getBlockHeight'))).status).toBe(503);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+    vi.stubEnv('SUPPORT_CLUSTER', 'devnet');
+    expect((await post(t, call('getGenesisHash'))).status).toBe(200);
   });
 
   it('refuses an unrelated transaction before spending the key', async () => {

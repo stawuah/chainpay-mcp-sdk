@@ -1,6 +1,6 @@
 import { BrandLogo } from "../brand/Brand";
 import { useEffect, useState } from "react";
-import { loadOpsSnapshot, type OpsSnapshot } from "@chainpay/sdk";
+import { loadOpsSnapshot, type OpsReceiptRow, type OpsSnapshot } from "@chainpay/sdk";
 import { publicReceiptClient } from "../config/client";
 import { SpendMeter } from "../dashboard/charts/SpendMeter";
 import { LoadedReceiptCard } from "../receipts/InboxReceipt";
@@ -8,8 +8,13 @@ import { isPlausibleSolanaAddress } from "../receipts/model";
 import { useRoute } from "../routing/useRoute";
 import "./embed-overview.css";
 
-function OwnerEntry({ onSubmit }: { onSubmit: (owner: string) => void }) {
-  const [value, setValue] = useState("");
+/** Only settled payments count as receipts here. Prepared or submitted ones are not spending yet. */
+export function settledReceipts(receipts: readonly OpsReceiptRow[]): OpsReceiptRow[] {
+  return receipts.filter((receipt) => receipt.status === "confirmed");
+}
+
+function OwnerEntry({ onSubmit, initial = "" }: { onSubmit: (owner: string) => void; initial?: string }) {
+  const [value, setValue] = useState(initial);
   return (
     <form
       className="ops-embed-entry"
@@ -44,6 +49,7 @@ export function EmbedOverview({ owner }: { owner: string }) {
     | { kind: "ready"; snapshot: OpsSnapshot }
     | { kind: "error"; message: string }
   >(trimmed ? { kind: "loading" } : { kind: "idle" });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!trimmed || !plausible) {
@@ -69,9 +75,10 @@ export function EmbedOverview({ owner }: { owner: string }) {
     return () => {
       active = false;
     };
-  }, [trimmed, plausible]);
+  }, [trimmed, plausible, attempt]);
 
-  const latest = state.kind === "ready" ? state.snapshot.receipts[0] : undefined;
+  const settled = state.kind === "ready" ? settledReceipts(state.snapshot.receipts) : [];
+  const latest = settled[0];
 
   return (
     <main className="site-shell cp-app ops-embed">
@@ -95,7 +102,13 @@ export function EmbedOverview({ owner }: { owner: string }) {
           </>
         )}
         {state.kind === "loading" && <p className="t-body">Loading on-chain spend…</p>}
-        {state.kind === "error" && <p role="alert">{state.message}</p>}
+        {state.kind === "error" && (
+          <div className="ops-embed-error" data-testid="embed-error">
+            <p role="alert">Spending couldn't load. {state.message}</p>
+            <button type="button" className="button button-secondary" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+            <OwnerEntry key={trimmed} initial={trimmed} onSubmit={(next) => (next.trim() === trimmed ? setAttempt((n) => n + 1) : navigateToOwner(next))} />
+          </div>
+        )}
         {state.kind === "ready" && (
           <>
             {state.snapshot.totals.map((total) => (
@@ -125,9 +138,9 @@ export function EmbedOverview({ owner }: { owner: string }) {
                 <LoadedReceiptCard receiptPda={latest.address} shareMode="public" />
               </section>
             )}
-            {state.snapshot.receipts.length > 1 && (
+            {settled.length > 1 && (
               <ul className="ops-embed-receipts">
-                {state.snapshot.receipts.slice(1).map((receipt) => (
+                {settled.slice(1).map((receipt) => (
                   <li key={receipt.address}>
                     <a href={receipt.receiptUrl ?? `/verify/${encodeURIComponent(receipt.address)}`}>
                       {receipt.amount} {receipt.symbol}
