@@ -171,7 +171,8 @@ Possible connectors:
 
 - x402 for paid HTTP resources;
 - Stripe for invoices, merchant records, or fiat-side reconciliation;
-- PayPal for merchant payment metadata or settlement references;
+- PayPal: [proposal v2](proposals/paypal-v2.md), not implemented. Devnet tokens
+  go to a ChainPay treasury, then a separate PayPal sandbox payout pays the merchant;
 - Visa for enterprise payment network integrations;
 - OpenUSD for supported stablecoin routing if appropriate;
 - merchant APIs for invoices and receipts.
@@ -604,7 +605,8 @@ Suggested order:
 
 1. x402 connector for paid HTTP resources.
 2. Stripe connector for invoice and merchant reconciliation.
-3. PayPal connector for merchant-side payment references.
+3. PayPal connector: [proposal v2](proposals/paypal-v2.md) (treasury plus sandbox
+   payout), not implemented.
 4. OpenUSD or additional stablecoin support.
 5. Visa or enterprise connector exploration.
 6. Escrow payments.
