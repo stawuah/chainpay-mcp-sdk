@@ -1,5 +1,5 @@
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
-import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "./constants.js";
+import { MEMO_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "./constants.js";
 import type { Address, TokenProgram } from "./types.js";
 
 export const CROSSMINT_CONNECTOR = "crossmint-checkout/1.0" as const;
@@ -17,6 +17,17 @@ const MAX_ORDER_ID_CHARS = 128;
 const MAX_SERIALIZED_TRANSACTION_CHARS = 16 * 1024;
 const MAX_LINE_ITEM_LOCATORS = 32;
 const MAX_LOCATOR_CHARS = 256;
+const MAX_ITEM_NAME_CHARS = 200;
+const MAX_ITEM_DESCRIPTION_CHARS = 2_000;
+const MAX_ITEM_IMAGE_URL_CHARS = 1_024;
+/**
+ * Crossmint's Solana memo is `------BEGIN MEMO------<JWT>------END MEMO------`,
+ * about 300 bytes. The bound keeps the memo plus `execute_payment` well inside
+ * one legacy transaction.
+ */
+export const MAX_CROSSMINT_MEMO_BYTES = 512;
+const CROSSMINT_MEMO_PATTERN =
+  /^------BEGIN MEMO------([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)------END MEMO------$/;
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const SPL_TRANSFER_TAG = 3;
 const SPL_TRANSFER_CHECKED_TAG = 12;
@@ -60,6 +71,14 @@ export type CrossmintOrderSummary = {
   lineItems: CrossmintLineItem[];
   lineItemCount: number;
   serializedTransaction?: string;
+  /**
+   * `payment.preparation.transactionParameters.memo`, byte for byte (never
+   * trimmed). Crossmint pays every order into one shared treasury account, so
+   * this memo is the only thing that ties a payment to this order.
+   */
+  transactionMemo?: string;
+  /** `transactionParameters.amount`, base units, when Crossmint states it. */
+  transactionAmount?: string;
   payerAddress?: string;
   preparationChain?: string;
   quoteExpiresAt?: string;
@@ -73,6 +92,12 @@ export type CrossmintOrderSummary = {
  */
 export type CrossmintLineItem = {
   locator?: string;
+  /** `metadata.name`: what the owner is buying, in Crossmint's words. */
+  name?: string;
+  description?: string;
+  imageUrl?: string;
+  /** A metadata field Crossmint stated but ChainPay could not read within bounds. */
+  metadataUnreadable?: true;
   chain?: string;
   executionMode?: string;
   quantity?: number;
@@ -85,7 +110,11 @@ export type CrossmintLineItem = {
 
 /** The material terms of one item, bound into the reviewed approval. */
 export type CrossmintBoundItem = {
+  /** Crossmint's live order responses carry no locator; kept when one is returned. */
   locator: string | null;
+  name: string | null;
+  description: string | null;
+  imageUrl: string | null;
   chain: string | null;
   executionMode: string | null;
   quantity: number | null;
@@ -122,6 +151,14 @@ export type CrossmintPaymentTerms = {
   items: CrossmintBoundItem[];
   payerAddress?: string;
   crossmintSourceTokenAccount?: Address;
+  /**
+   * Crossmint's exact order memo. Checkout carries it as a second top-level
+   * SPL Memo instruction beside `execute_payment`, because the shared treasury
+   * destination cannot tell orders apart. Set only by
+   * `validateCrossmintCheckoutOrder`, after the memo is checked against the
+   * prepared transaction and the order id.
+   */
+  memo?: string;
 };
 
 export type CrossmintTransferTerms = {
@@ -131,6 +168,11 @@ export type CrossmintTransferTerms = {
   amount: string;
   decimals?: number;
   tokenProgram: TokenProgram;
+  /**
+   * Strict decoding only: the single SPL Memo instruction's text and the
+   * accounts it names. Every memo account must be a transaction signer.
+   */
+  memo?: { text: string; signers: Address[] };
 };
 
 export type CrossmintPaymentReferences = {
@@ -254,6 +296,18 @@ function agreed<T>(values: Array<T | undefined>): { value?: T; conflict?: true }
   return present.every((value) => value === present[0]) ? { value: present[0] } : { conflict: true };
 }
 
+const UNREADABLE = Symbol("unreadable");
+
+/**
+ * A string Crossmint may state. Absent stays absent; stated but not a bounded,
+ * non-empty string is reported as unreadable, so a field cannot silently vanish
+ * from what the owner reviews because it grew too long.
+ */
+function statedString(value: unknown, max: number): string | typeof UNREADABLE | undefined {
+  if (value === undefined || value === null) return undefined;
+  return optionalString(value, max) ?? UNREADABLE;
+}
+
 function lineItem(value: unknown): CrossmintLineItem | undefined {
   const record = optionalRecord(value);
   if (!record) return undefined;
@@ -273,8 +327,18 @@ function lineItem(value: unknown): CrossmintLineItem | undefined {
   const locator = lineItemLocator(record);
   const chain = optionalString(record.chain, 64);
   const executionMode = optionalString(record.executionMode, 32);
+  const metadata = optionalRecord(record.metadata);
+  const name = statedString(metadata?.name, MAX_ITEM_NAME_CHARS);
+  const description = statedString(metadata?.description, MAX_ITEM_DESCRIPTION_CHARS);
+  const imageUrl = statedString(metadata?.imageUrl, MAX_ITEM_IMAGE_URL_CHARS);
+  const metadataUnreadable = (record.metadata !== undefined && record.metadata !== null && !metadata)
+    || [name, description, imageUrl].some((field) => field === UNREADABLE);
   return {
     ...(locator ? { locator } : {}),
+    ...(typeof name === "string" ? { name } : {}),
+    ...(typeof description === "string" ? { description } : {}),
+    ...(typeof imageUrl === "string" ? { imageUrl } : {}),
+    ...(metadataUnreadable ? { metadataUnreadable: true as const } : {}),
     ...(chain ? { chain } : {}),
     ...(executionMode ? { executionMode } : {}),
     ...(quantity.value !== undefined ? { quantity: quantity.value } : {}),
@@ -298,6 +362,9 @@ function lineItems(value: unknown): { items: CrossmintLineItem[]; count: number 
 function boundItem(item: CrossmintLineItem): CrossmintBoundItem {
   return {
     locator: item.locator ?? null,
+    name: item.name ?? null,
+    description: item.description ?? null,
+    imageUrl: item.imageUrl ?? null,
     chain: item.chain ?? null,
     executionMode: item.executionMode ?? null,
     quantity: item.quantityConflict ? null : item.quantity ?? null,
@@ -307,16 +374,18 @@ function boundItem(item: CrossmintLineItem): CrossmintBoundItem {
 }
 
 /**
- * Checkout pays only for items whose delivery is fully stated: one readable
- * locator, one quantity and one Solana delivery wallet per line. Anything
- * absent or ambiguous stops before a payment is prepared.
+ * Checkout pays only for items whose delivery is fully stated: a readable item
+ * name, one quantity and one Solana delivery wallet per line. Crossmint's live
+ * order responses name the item only through `metadata`, not a collection or
+ * template locator, so the name is what the owner reviews. Anything absent or
+ * ambiguous stops before a payment is prepared.
  */
 function requireBindableItems(order: CrossmintOrderSummary): void {
   if (order.lineItemCount === 0 || order.lineItemCount > MAX_LINE_ITEM_LOCATORS || order.lineItems.length !== order.lineItemCount) {
     fail("terms_unavailable", "Crossmint order line items are missing or unreadable, so ChainPay cannot show what is being bought");
   }
   for (const item of order.lineItems) {
-    if (!item.locator) fail("terms_unavailable", "A Crossmint line item does not name the item being bought");
+    if (!item.name || item.metadataUnreadable) fail("terms_unavailable", "A Crossmint line item does not name the item being bought");
     if (item.chain !== undefined && item.chain !== "solana") fail("terms_unavailable", "A Crossmint line item delivers on a chain other than Solana");
     if (item.quantityConflict || item.quantity === undefined) {
       fail("terms_unavailable", "A Crossmint line item has a missing or ambiguous quantity");
@@ -354,6 +423,14 @@ export function parseCrossmintOrder(value: unknown): CrossmintOrderSummary {
   );
   const currency = optionalString(payment?.currency, 32);
   const payerAddress = optionalString(preparation?.payerAddress, 64);
+  const parameters = optionalRecord(preparation?.transactionParameters);
+  // Kept exactly as sent: the memo must match the prepared instruction byte for byte.
+  const transactionMemo = typeof parameters?.memo === "string"
+    && parameters.memo.length > 0
+    && new TextEncoder().encode(parameters.memo).length <= MAX_CROSSMINT_MEMO_BYTES
+    ? parameters.memo
+    : undefined;
+  const transactionAmount = typeof parameters?.amount === "string" && /^\d{1,20}$/.test(parameters.amount) ? parameters.amount : undefined;
   const total = quotedTotal(order);
   const items = lineItems(order.lineItems);
   return {
@@ -367,6 +444,8 @@ export function parseCrossmintOrder(value: unknown): CrossmintOrderSummary {
     ...(currency ? { currency } : {}),
     ...(total ? { quotedTotal: total } : {}),
     ...(serializedTransaction ? { serializedTransaction } : {}),
+    ...(transactionMemo ? { transactionMemo } : {}),
+    ...(transactionAmount ? { transactionAmount } : {}),
     ...(payerAddress ? { payerAddress } : {}),
     preparationChain: optionalString(preparation?.chain, 64),
     quoteExpiresAt: optionalString(optionalRecord(order.quote)?.expiresAt, 64),
@@ -493,12 +572,26 @@ export function decodeCrossmintTransferTerms(
   const message = transaction.message;
   const keyAt = accountKeyResolver(message);
   const transfers: CrossmintTransferTerms[] = [];
+  const memos: Array<{ text: string; signers: Address[] }> = [];
+  const signerCount = message.header.numRequiredSignatures;
   for (const compiled of normalizedInstructions(message)) {
     let programId: Address;
     try {
       programId = keyAt(compiled.programIdIndex).toBase58();
     } catch (error) {
       if (error instanceof CrossmintOrderError) throw error;
+      continue;
+    }
+    if (expected.strict && programId === MEMO_PROGRAM_ID) {
+      // The memo program checks that every account it names signed. Only a
+      // signer may appear here; anything else is not Crossmint's memo shape.
+      if (compiled.accountKeyIndexes.some((index) => index >= signerCount)) {
+        fail("terms_unavailable", "Crossmint memo names an account that is not a signer");
+      }
+      memos.push({
+        text: decodeMemoText(compiled.data),
+        signers: compiled.accountKeyIndexes.map((index) => canonicalAddress(keyAt(index), "Crossmint memo signer")),
+      });
       continue;
     }
     if (programId !== SPL_TOKEN_PROGRAM_ID && programId !== TOKEN_2022_PROGRAM_ID) {
@@ -567,7 +660,10 @@ export function decodeCrossmintTransferTerms(
       "Crossmint transaction contains more than one token transfer, so it has no single amount a mandate can authorize",
     );
   }
-  const terms = transfers[0];
+  if (memos.length > 1) {
+    fail("terms_unavailable", "Crossmint preparation carries more than one memo, so it has no single order reference");
+  }
+  const terms: CrossmintTransferTerms = memos.length === 1 ? { ...transfers[0], memo: memos[0] } : transfers[0];
   if (expected.mint && expected.mint !== terms.mint) {
     fail(
       "terms_mismatch",
@@ -581,6 +677,46 @@ export function decodeCrossmintTransferTerms(
     );
   }
   return terms;
+}
+
+function decodeMemoText(data: Uint8Array): string {
+  if (data.length === 0 || data.length > MAX_CROSSMINT_MEMO_BYTES) {
+    fail("terms_unavailable", "Crossmint memo is empty or too long");
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data);
+  } catch {
+    fail("terms_unavailable", "Crossmint memo is not valid UTF-8");
+  }
+}
+
+function base64UrlJson(segment: string): unknown {
+  try {
+    return JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Check Crossmint's order memo and return it unchanged.
+ *
+ * The memo is `------BEGIN MEMO------<JWT>------END MEMO------`. Its JWT payload
+ * names the order (`orderIdentifier`). ChainPay cannot check the JWT signature,
+ * which is Crossmint's own; it only checks that the memo belongs to this order,
+ * so a memo copied from a different order is refused.
+ */
+export function crossmintOrderMemo(memo: string, orderId: string): string {
+  if (new TextEncoder().encode(memo).length > MAX_CROSSMINT_MEMO_BYTES) {
+    fail("terms_unavailable", "Crossmint order memo is too long");
+  }
+  const match = CROSSMINT_MEMO_PATTERN.exec(memo);
+  if (!match) fail("terms_unavailable", "Crossmint order memo is not in the expected format");
+  const header = base64UrlJson(match[1]);
+  const payload = base64UrlJson(match[2]);
+  if (!isRecord(header) || !isRecord(payload)) fail("terms_unavailable", "Crossmint order memo is not a readable token");
+  if (payload.orderIdentifier !== orderId) fail("terms_mismatch", "Crossmint order memo names a different order");
+  return memo;
 }
 
 function quoteCheckFor(order: CrossmintOrderSummary, terms: CrossmintTransferTerms): CrossmintQuoteCheck {
@@ -605,9 +741,23 @@ export function validateCrossmintCheckoutOrder(
   requireBindableItems(order);
   const transfer = decodeCrossmintTransferTerms(order.serializedTransaction ?? "", { mint: expected.mint, tokenProgram: "spl-token", strict: true });
   if (transfer.source !== expected.source || transfer.decimals !== 6) fail("terms_mismatch", "Prepared transfer differs from the mandate source or USDC decimals");
+  if (order.transactionAmount !== undefined && order.transactionAmount !== transfer.amount) {
+    fail("terms_mismatch", "Crossmint's stated payment amount differs from its prepared transfer");
+  }
+  // Crossmint pays every order into one shared treasury account. Without the
+  // memo a payment cannot be matched to this order, so checkout requires it in
+  // both places Crossmint states it, identical, and naming this order.
+  if (!order.transactionMemo || !transfer.memo) {
+    fail("terms_unavailable", "Crossmint preparation carries no order memo, so a payment could not be matched to this order");
+  }
+  if (transfer.memo.text !== order.transactionMemo) fail("terms_mismatch", "Crossmint's prepared memo differs from its stated memo");
+  if (transfer.memo.signers.length > 1 || transfer.memo.signers.some((signer) => signer !== expected.owner)) {
+    fail("terms_mismatch", "Crossmint memo is signed by an account other than the payer");
+  }
+  const memo = crossmintOrderMemo(order.transactionMemo, order.orderId);
   const terms = crossmintPaymentTerms(order, { mint: expected.mint, tokenProgram: "spl-token" });
   if (terms.quoteCheck !== "match") fail("terms_mismatch", "Quote amount or currency does not match the prepared transfer");
-  return terms;
+  return { ...terms, memo };
 }
 
 /**

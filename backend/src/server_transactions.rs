@@ -1,5 +1,6 @@
 //! Complete supported instruction-set validation before any RPC submission.
 use super::*;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use solana_address::Address;
 use solana_message::compiled_instruction::CompiledInstruction;
 use std::str::FromStr;
@@ -59,6 +60,10 @@ const SET_COMPUTE_UNIT_LIMIT: u8 = 2;
 const SET_COMPUTE_UNIT_PRICE: u8 = 3;
 const SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT: u8 = 4;
 const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
+/// SPL Memo v2. It accepts a memo that names no signer accounts.
+const MEMO_PROGRAM: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+/// Crossmint's Solana memo is about 300 bytes; the SDK refuses anything longer than this.
+const MAX_CROSSMINT_MEMO_BYTES: usize = 512;
 
 /// The ChainPay instructions of a transaction, with compute-budget instructions
 /// removed.
@@ -579,6 +584,66 @@ pub(super) fn common(tx: &VersionedTransaction) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// The Crossmint order memo this payment must carry, when it pays a Crossmint
+/// order.
+///
+/// Crossmint pays every order into one shared treasury account and tells orders
+/// apart only by this memo, so a Crossmint payment without it could not be
+/// credited. The memo comes from the Crossmint terms, which the MCP server binds
+/// into the HMAC-authorized payload; `verify_crossmint_authorization` checks
+/// them before anything is reserved or broadcast, and recovery reuses the
+/// reserved terms. Any other payment carries no memo.
+pub(super) fn crossmint_memo(request: &PaymentSubmissionRequest) -> Result<Option<&str>, ApiError> {
+    let Some(crossmint) = &request.crossmint else {
+        return Ok(None);
+    };
+    let memo = crossmint
+        .terms
+        .get("memo")
+        .and_then(Value::as_str)
+        .filter(|memo| !memo.is_empty() && memo.len() <= MAX_CROSSMINT_MEMO_BYTES)
+        .ok_or_else(|| bad("Crossmint payments must carry the order memo Crossmint prepared"))?;
+    if crossmint_memo_order(memo).as_deref() != Some(crossmint.order_id.as_str()) {
+        return Err(bad("Crossmint memo does not name this order"));
+    }
+    Ok(Some(memo))
+}
+
+/// The order a Crossmint memo names: `------BEGIN MEMO------<JWT>------END MEMO------`
+/// whose JWT payload carries `orderIdentifier`. The JWT signature is Crossmint's
+/// and is not checked here; only which order the memo belongs to.
+fn crossmint_memo_order(memo: &str) -> Option<String> {
+    let jwt = memo
+        .strip_prefix("------BEGIN MEMO------")?
+        .strip_suffix("------END MEMO------")?;
+    let segments = jwt.split('.').collect::<Vec<_>>();
+    if segments.len() != 3
+        || segments.iter().any(|segment| {
+            segment.is_empty()
+                || !segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        })
+    {
+        return None;
+    }
+    let payload: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).ok()?).ok()?;
+    payload.get("orderIdentifier")?.as_str().map(str::to_owned)
+}
+
+/// How many payload instructions a payment transaction holds: one
+/// `execute_payment`, plus Crossmint's order memo when the authorized terms
+/// bind one.
+pub(super) fn payment_instruction_count(
+    request: &PaymentSubmissionRequest,
+) -> Result<usize, ApiError> {
+    Ok(if crossmint_memo(request)?.is_some() {
+        2
+    } else {
+        1
+    })
+}
+
 pub(super) fn payment(
     tx: &VersionedTransaction,
     request: &PaymentSubmissionRequest,
@@ -586,13 +651,41 @@ pub(super) fn payment(
 ) -> Result<(), ApiError> {
     common(tx)?;
     // The shipped payment builder emits exactly one execute_payment. No auxiliary
-    // transfer, approval, memo, or compute instruction is needed for this flow.
-    if payload_instructions(tx).len() != 1 || payload_account_keys(tx) != 11 {
-        return Err(bad(
-            "Payments require exactly one execute_payment instruction",
-        ));
+    // transfer, approval, or compute instruction is needed for this flow. The one
+    // exception is a Crossmint order: its exact memo follows execute_payment, as a
+    // separate top-level instruction that names no accounts.
+    let memo = crossmint_memo(request)?;
+    let (instructions, keys) = if memo.is_some() { (2, 12) } else { (1, 11) };
+    if payload_instructions(tx).len() != instructions || payload_account_keys(tx) != keys {
+        return Err(bad(if memo.is_some() {
+            "Crossmint payments require exactly execute_payment followed by the order memo"
+        } else {
+            "Payments require exactly one execute_payment instruction"
+        }));
     }
-    payment_at(tx, request, program, 0)
+    payment_at(tx, request, program, 0)?;
+    if let Some(memo) = memo {
+        crossmint_memo_at(tx, 1, memo)?;
+    }
+    Ok(())
+}
+
+/// The memo instruction must be the SPL Memo program, name no accounts (so it
+/// can neither require nor borrow another signer), and carry exactly the
+/// authorized memo bytes.
+fn crossmint_memo_at(
+    tx: &VersionedTransaction,
+    position: usize,
+    memo: &str,
+) -> Result<(), ApiError> {
+    let ix = payload_instructions(tx)[position];
+    if key(tx, ix.program_id_index)? != MEMO_PROGRAM
+        || !ix.accounts.is_empty()
+        || ix.data != memo.as_bytes()
+    {
+        return Err(bad("Crossmint memo differs from the authorized order memo"));
+    }
+    role(tx, ix.program_id_index, false, false)
 }
 
 fn payment_at(
@@ -1079,6 +1172,158 @@ pub(super) mod tests {
             "shape must reach the UPDATE_MANDATE arm"
         );
         assert!(owner(&tx, &wallet, DEFAULT_PROGRAM_ID).is_err());
+    }
+
+    /// The memo from a real Crossmint staging order (5 October 2026).
+    const STAGING_MEMO: &str = "------BEGIN MEMO------eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6ImY3YzY3NDM3LWQ4OWUtNDU5ZC1hYTI3LTc4NzYyMjdmOGVkOCIsIm9yZGVySWRlbnRpZmllciI6ImNmNWEwYWYwLWJlMTctNDM5My1hMDMzLTJmMjQ5NTUyMjdkMSIsImlhdCI6MTc5MTIwMzg4N30.5fSR_RK8Z9dTu1VxeN0tzUzSu-LguxPqcxx2kuR9AJQ------END MEMO------";
+    const STAGING_ORDER: &str = "cf5a0af0-be17-4393-a033-2f24955227d1";
+
+    /// Append a memo instruction (and the memo program key) to a payment message.
+    fn push_memo(message: &mut VersionedMessage, data: &[u8], accounts: Vec<u8>) {
+        let program = Address::from_str(MEMO_PROGRAM).unwrap();
+        macro_rules! push {
+            ($m:expr) => {{
+                $m.account_keys.push(program);
+                $m.header.num_readonly_unsigned_accounts += 1;
+                let index = ($m.account_keys.len() - 1) as u8;
+                $m.instructions.push(CompiledInstruction {
+                    program_id_index: index,
+                    accounts,
+                    data: data.to_vec(),
+                });
+            }};
+        }
+        match message {
+            VersionedMessage::Legacy(m) => push!(m),
+            VersionedMessage::V0(m) => push!(m),
+            VersionedMessage::V1(m) => push!(m),
+        }
+    }
+
+    fn resign(
+        tx: &mut VersionedTransaction,
+        request: &mut PaymentSubmissionRequest,
+        signer: &SigningKey,
+    ) {
+        tx.signatures = vec![signer.sign(&tx.message.serialize()).to_bytes().into()];
+        request.signed_transaction = BASE64.encode(wincode::serialize(&*tx).unwrap());
+    }
+
+    fn crossmint_terms(memo: &str) -> Option<CrossmintPaymentMetadata> {
+        Some(CrossmintPaymentMetadata {
+            order_id: STAGING_ORDER.into(),
+            order_url: None,
+            terms: json!({ "orderId": STAGING_ORDER, "memo": memo }),
+        })
+    }
+
+    /// A Crossmint payment as the SDK builds it: execute_payment, then the order memo.
+    fn crossmint_fixture(
+        version: u8,
+    ) -> (VersionedTransaction, PaymentSubmissionRequest, SigningKey) {
+        let (mut tx, mut request, signer) = fixture(version);
+        push_memo(&mut tx.message, STAGING_MEMO.as_bytes(), vec![]);
+        request.crossmint = crossmint_terms(STAGING_MEMO);
+        resign(&mut tx, &mut request, &signer);
+        (tx, request, signer)
+    }
+
+    #[test]
+    fn crossmint_payment_may_carry_exactly_its_authorized_memo() {
+        for version in 0..3 {
+            let (tx, request, signer) = crossmint_fixture(version);
+            validate_payment_request(&request, DEFAULT_PROGRAM_ID).unwrap();
+            // The managed path checks the same shape, unsigned and provider-signed.
+            let mut unsigned = tx.clone();
+            unsigned.signatures = vec![Default::default()];
+            let unsigned = BASE64.encode(wincode::serialize(&unsigned).unwrap());
+            validate_managed_payment_request(&unsigned, &request, DEFAULT_PROGRAM_ID).unwrap();
+            let mut signed = tx.clone();
+            signed.signatures = vec![signer.sign(&tx.message.serialize()).to_bytes().into()];
+            validate_provider_signed_transaction(
+                &unsigned,
+                &BASE64.encode(wincode::serialize(&signed).unwrap()),
+                &request,
+                DEFAULT_PROGRAM_ID,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn memo_is_refused_unless_authorized_crossmint_terms_bind_that_exact_memo() {
+        // A memo on an ordinary payment.
+        let (tx, mut request, _) = crossmint_fixture(0);
+        request.crossmint = None;
+        assert!(payment(&tx, &request, DEFAULT_PROGRAM_ID).is_err());
+        let mut unsigned = tx.clone();
+        unsigned.signatures = vec![Default::default()];
+        let unsigned = BASE64.encode(wincode::serialize(&unsigned).unwrap());
+        assert!(validate_managed_payment_request(&unsigned, &request, DEFAULT_PROGRAM_ID).is_err());
+        // Different memo text from the one the terms bind.
+        let (tx, mut request, _) = crossmint_fixture(0);
+        request.crossmint = crossmint_terms(&STAGING_MEMO.replace("5fSR", "5fSS"));
+        assert!(payment(&tx, &request, DEFAULT_PROGRAM_ID).is_err());
+        // Terms with no memo, or a memo naming another order.
+        let (tx, mut request, _) = crossmint_fixture(0);
+        request.crossmint.as_mut().unwrap().terms = json!({ "orderId": STAGING_ORDER });
+        assert!(payment(&tx, &request, DEFAULT_PROGRAM_ID).is_err());
+        let (tx, mut request, _) = crossmint_fixture(0);
+        request.crossmint.as_mut().unwrap().order_id = "another-order".into();
+        assert!(payment(&tx, &request, DEFAULT_PROGRAM_ID).is_err());
+        let (tx, mut request, _) = crossmint_fixture(0);
+        request.crossmint = crossmint_terms("------BEGIN MEMO------not-a-jwt------END MEMO------");
+        assert!(payment(&tx, &request, DEFAULT_PROGRAM_ID).is_err());
+        // A Crossmint payment whose transaction leaves the memo out.
+        let (tx, mut request, _) = fixture(0);
+        request.crossmint = crossmint_terms(STAGING_MEMO);
+        assert!(payment(&tx, &request, DEFAULT_PROGRAM_ID).is_err());
+    }
+
+    #[test]
+    fn crossmint_memo_shape_is_exact() {
+        // The memo names an account (the agent, a signer).
+        let (mut tx, mut request, signer) = fixture(0);
+        push_memo(&mut tx.message, STAGING_MEMO.as_bytes(), vec![0]);
+        request.crossmint = crossmint_terms(STAGING_MEMO);
+        resign(&mut tx, &mut request, &signer);
+        assert!(validate_payment_request(&request, DEFAULT_PROGRAM_ID).is_err());
+        // A second memo, or any third instruction.
+        let (mut tx, mut request, signer) = crossmint_fixture(0);
+        if let VersionedMessage::Legacy(m) = &mut tx.message {
+            m.instructions.push(m.instructions[1].clone());
+        }
+        resign(&mut tx, &mut request, &signer);
+        assert!(validate_payment_request(&request, DEFAULT_PROGRAM_ID).is_err());
+        // Memo before execute_payment.
+        let (mut tx, mut request, signer) = crossmint_fixture(0);
+        if let VersionedMessage::Legacy(m) = &mut tx.message {
+            m.instructions.swap(0, 1);
+        }
+        resign(&mut tx, &mut request, &signer);
+        assert!(validate_payment_request(&request, DEFAULT_PROGRAM_ID).is_err());
+        // Memo bytes that differ by one trailing byte.
+        let (mut tx, mut request, signer) = fixture(0);
+        push_memo(
+            &mut tx.message,
+            format!("{STAGING_MEMO} ").as_bytes(),
+            vec![],
+        );
+        request.crossmint = crossmint_terms(STAGING_MEMO);
+        resign(&mut tx, &mut request, &signer);
+        assert!(validate_payment_request(&request, DEFAULT_PROGRAM_ID).is_err());
+        // The memo program swapped for another program with the same data.
+        let (mut tx, mut request, signer) = crossmint_fixture(0);
+        if let VersionedMessage::Legacy(m) = &mut tx.message {
+            let last = m.account_keys.len() - 1;
+            m.account_keys[last] = Address::from_str(&bs58::encode([9; 32]).into_string()).unwrap();
+        }
+        resign(&mut tx, &mut request, &signer);
+        assert!(validate_payment_request(&request, DEFAULT_PROGRAM_ID).is_err());
+        // Ordinary payments keep the single-instruction rule.
+        let (_, request, _) = fixture(0);
+        validate_payment_request(&request, DEFAULT_PROGRAM_ID).unwrap();
+        assert_eq!(payment_instruction_count(&request).unwrap(), 1);
     }
 
     #[test]

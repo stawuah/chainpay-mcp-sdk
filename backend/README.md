@@ -210,6 +210,15 @@ binds the owner, mandate, agent, invoice, order and exact transfer terms before
 initial reservation. Existing immutable-operation recovery does not require
 minting a replacement authorization. See the MCP README for acceptance limits.
 
+A Crossmint payment transaction is exactly `execute_payment` followed by one
+SPL Memo instruction that names no accounts and carries the authorized terms'
+`memo` byte for byte. That memo must name the order (its JWT payload's
+`orderIdentifier`). Crossmint pays all orders into one shared treasury account
+and matches a payment to its order only by this memo, so a Crossmint payment
+without it is refused. A memo on any other payment, a different memo, or any
+other extra instruction is refused; all other payments keep the
+single-`execute_payment` rule.
+
 Before signing or broadcasting, the relay atomically binds an order ID within
 the authenticated owner's namespace to one payment idempotency key. This uses
 the durable `operation_claims` table, so concurrent requests and separate relay

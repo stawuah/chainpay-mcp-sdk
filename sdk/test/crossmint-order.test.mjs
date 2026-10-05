@@ -23,10 +23,13 @@ import {
 } from "../dist/crossmint-order.js";
 import {
   crossmintFieldsToPreparePaymentInput,
+  crossmintMemoInstruction,
   crossmintOrderToPreparePaymentInput,
+  crossmintPaymentTransaction,
   crossmintTermsToPrepareFields,
 } from "../dist/crossmint-adapt.js";
-import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "../dist/constants.js";
+import { MEMO_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "../dist/constants.js";
+import { readFileSync } from "node:fs";
 
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
 
@@ -87,6 +90,20 @@ function transferCheckedInstruction({
     amount,
     decimals,
   };
+}
+
+/** Crossmint's memo shape: a JWT whose payload names the order, between fixed markers. */
+function crossmintMemo(orderIdentifier, nonce = "nonce-1") {
+  const segment = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `------BEGIN MEMO------${segment({ alg: "HS256", typ: "JWT" })}.${segment({ nonce, orderIdentifier, iat: 1791203887 })}.c2lnbmF0dXJl------END MEMO------`;
+}
+
+function memoInstruction(memo, signers = []) {
+  return new TransactionInstruction({
+    programId: new PublicKey(MEMO_PROGRAM_ID),
+    keys: signers.map((signer) => ({ pubkey: new PublicKey(signer), isSigner: true, isWritable: false })),
+    data: Buffer.from(memo, "utf8"),
+  });
 }
 
 function crossmintOrder({
@@ -397,39 +414,44 @@ test("checkout rejects unsafe preparation while generic decoding remains descrip
   const owner = address();
   const mint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
   const transfer = transferCheckedInstruction({ mint, amount: "1234567" });
-  const raw = crossmintOrder({ serialized: serializedTransaction([transfer.instruction]), quoteAmount: "1.234567" });
+  const memo = crossmintMemo("order_test_1");
+  const raw = crossmintOrder({ serialized: serializedTransaction([transfer.instruction, memoInstruction(memo, [owner])]), quoteAmount: "1.234567" });
   raw.order.payment.preparation.payerAddress = owner;
   raw.order.payment.preparation.chain = "solana";
+  raw.order.payment.preparation.transactionParameters = { amount: "1234567", memo };
   raw.order.quote.status = "valid";
   raw.order.quote.expiresAt = "2030-01-01T00:00:00Z";
-  raw.order.lineItems = [{ chain: "solana", tokenLocator: "solana:token-address", quantity: 1, delivery: { status: "awaiting-payment", recipient: { locator: `solana:${owner}`, walletAddress: owner } } }];
+  raw.order.lineItems = [{ chain: "solana", metadata: { name: "Test item" }, quantity: 1, delivery: { status: "awaiting-payment", recipient: { locator: `solana:${owner}`, walletAddress: owner } } }];
   const order = parseCrossmintOrder(raw);
   const expected = { orderId: order.orderId, owner, source: transfer.source, mint, now: 1 };
   assert.equal(validateCrossmintCheckoutOrder(order, expected).amount, "1234567");
   for (const patch of [
     { preparationChain: "ethereum" }, { payerAddress: address() }, { orderId: "other" },
     { quoteStatus: "expired" }, { quoteExpiresAt: "not-a-date" }, { quoteExpiresAt: "1970-01-01T00:00:00Z" },
-    { paymentStatus: "completed" }, { currency: "eth" },
+    { paymentStatus: "completed" }, { currency: "eth" }, { transactionAmount: "1234568" },
     { quotedTotal: { amount: "1.234567", currency: "usd" } },
     { quotedTotal: { amount: "1.234568", currency: "usdc" } },
   ]) assert.throws(() => validateCrossmintCheckoutOrder({ ...order, ...patch }, expected), CrossmintOrderError);
   assert.throws(() => validateCrossmintCheckoutOrder(order, { ...expected, source: address() }), /source/);
   const extra = new TransactionInstruction({ programId: new PublicKey(SYSTEM_PROGRAM), keys: [], data: Buffer.from([1]) });
-  assert.throws(() => validateCrossmintCheckoutOrder({ ...order, serializedTransaction: serializedTransaction([extra, transfer.instruction]) }, expected), /cannot preserve/);
+  assert.throws(() => validateCrossmintCheckoutOrder({ ...order, serializedTransaction: serializedTransaction([extra, transfer.instruction, memoInstruction(memo, [owner])]) }, expected), /cannot preserve/);
 });
 
-function checkoutFixture() {
+function checkoutFixture({ memo = crossmintMemo("order_test_1"), paramsMemo = memo, memoSigners, instructions } = {}) {
   const owner = address();
   const mint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
   const transfer = transferCheckedInstruction({ mint, amount: "1234567" });
-  const raw = crossmintOrder({ serialized: serializedTransaction([transfer.instruction]), quoteAmount: "1.234567" });
+  const memoIx = memoInstruction(memo, memoSigners ?? [owner]);
+  const raw = crossmintOrder({ serialized: serializedTransaction(instructions ? instructions(transfer.instruction, memoIx, owner) : [transfer.instruction, memoIx]), quoteAmount: "1.234567" });
   raw.order.payment.preparation.payerAddress = owner;
   raw.order.payment.preparation.chain = "solana";
+  raw.order.payment.preparation.transactionParameters = { amount: "1234567", memo: paramsMemo };
   raw.order.quote.status = "valid";
   raw.order.quote.expiresAt = "2030-01-01T00:00:00Z";
   const delivery = address();
   raw.order.lineItems = [{
     chain: "solana", tokenLocator: "solana:token-address", quantity: 1, callData: { quantity: 1 },
+    metadata: { name: "Test item", description: "A test item", imageUrl: "https://example.com/item.png" },
     quote: { status: "valid", totalPrice: { amount: "1.234567", currency: "usdc" } },
     delivery: { status: "awaiting-payment", recipient: { locator: `solana:${delivery}`, walletAddress: delivery, email: "private@example.com" } },
   }];
@@ -440,7 +462,8 @@ test("checkout binds each item's delivery wallet, quantity and price, never the 
   const { raw, delivery, expected } = checkoutFixture();
   const terms = validateCrossmintCheckoutOrder(parseCrossmintOrder(raw), expected);
   assert.deepEqual(terms.items, [{
-    locator: "solana:token-address", chain: "solana", executionMode: null, quantity: 1, deliveryRecipient: delivery,
+    locator: "solana:token-address", name: "Test item", description: "A test item", imageUrl: "https://example.com/item.png",
+    chain: "solana", executionMode: null, quantity: 1, deliveryRecipient: delivery,
     totalPrice: { amount: "1.234567", currency: "usdc" },
   }]);
   assert(!JSON.stringify(terms).includes("private@example.com"));
@@ -456,7 +479,10 @@ test("checkout fails closed when delivery or quantity is missing or ambiguous", 
     (item) => { item.callData.quantity = 2; },
     (item) => { item.quantity = 1.5; },
     (item) => { item.quantity = "many"; },
-    (item) => { delete item.tokenLocator; },
+    (item) => { delete item.metadata.name; },
+    (item) => { delete item.metadata; },
+    (item) => { item.metadata.name = "x".repeat(201); },
+    (item) => { item.metadata.description = 7; },
     (item) => { item.chain = "base"; },
   ];
   for (const mutate of cases) {
@@ -482,4 +508,110 @@ test("a changed delivery wallet or quantity at the same price changes the bound 
   const more = structuredClone(base.raw);
   more.order.lineItems[0].quantity = 2; more.order.lineItems[0].callData.quantity = 2;
   assert.notDeepEqual(validateCrossmintCheckoutOrder(parseCrossmintOrder(more), base.expected).items, original);
+});
+
+// A real Crossmint staging order (5 October 2026, client secret removed). Its
+// preparation is [TransferChecked to Crossmint's shared treasury, Memo signed by
+// the payer], and its line items carry metadata but no collection locator.
+const STAGING_ORDER = JSON.parse(readFileSync(new URL("./fixtures/crossmint-staging-order-2026-10-05.json", import.meta.url), "utf8"));
+const STAGING_PAYER = "3dh3Bxu1hJzH3aHfwNAibRqTxyrPsUFyteiuGxycoohh";
+const STAGING_EXPECTED = {
+  orderId: "cf5a0af0-be17-4393-a033-2f24955227d1",
+  owner: STAGING_PAYER,
+  source: "7CCr5fU5zYNKDGQ5NtHywzmEmseZQQ36rFwHRmSmnC5f",
+  mint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  now: Date.parse("2026-10-05T12:40:00Z"),
+};
+function stagingOrder() {
+  const raw = structuredClone(STAGING_ORDER);
+  // The captured order reported insufficient funds; the shape is otherwise the payable one.
+  raw.order.payment.status = "awaiting-payment";
+  return raw;
+}
+
+test("the real Crossmint staging order parses and validates, memo and item name included", () => {
+  assert(!JSON.stringify(STAGING_ORDER).includes("clientSecret"));
+  const order = parseCrossmintOrder(stagingOrder());
+  assert.equal(order.transactionMemo, STAGING_ORDER.order.payment.preparation.transactionParameters.memo);
+  const terms = validateCrossmintCheckoutOrder(order, STAGING_EXPECTED);
+  assert.equal(terms.amount, "1206000");
+  assert.equal(terms.recipient, "8m5xPPa3gV4bHSRvCpsN7uaSruHN9YMfAaSaCohfCJuU");
+  assert.equal(terms.memo, STAGING_ORDER.order.payment.preparation.transactionParameters.memo);
+  assert.deepEqual(terms.items, [{
+    locator: null,
+    name: "ChainPay Spike Test",
+    description: "Staging-only test NFT for the ChainPay mandate payment compatibility spike. No value.",
+    imageUrl: "https://crossmint.myfilebase.com/ipfs/QmdRKAwm52YTXhDPuScBWoqpJSyxqhu5U63PbXcrr8PSod",
+    chain: "solana", executionMode: "exact-out", quantity: 1, deliveryRecipient: STAGING_PAYER,
+    totalPrice: { amount: "1.206", currency: "usdc" },
+  }]);
+  // As captured (insufficient funds) it is not payable.
+  assert.throws(() => validateCrossmintCheckoutOrder(parseCrossmintOrder(STAGING_ORDER), STAGING_EXPECTED), /not awaiting payment/);
+});
+
+test("the staging order's memo must be identical in the parameters and the transaction", () => {
+  const raw = stagingOrder();
+  raw.order.payment.preparation.transactionParameters.memo = crossmintMemo(STAGING_EXPECTED.orderId, "other-nonce");
+  assert.throws(() => validateCrossmintCheckoutOrder(parseCrossmintOrder(raw), STAGING_EXPECTED), /prepared memo differs/);
+  const missing = stagingOrder();
+  delete missing.order.payment.preparation.transactionParameters.memo;
+  assert.throws(() => validateCrossmintCheckoutOrder(parseCrossmintOrder(missing), STAGING_EXPECTED), /no order memo/);
+});
+
+test("memo checks: identical copies, this order, payer-only signer, exactly one memo", () => {
+  const ok = checkoutFixture();
+  assert.equal(validateCrossmintCheckoutOrder(parseCrossmintOrder(ok.raw), ok.expected).memo, crossmintMemo("order_test_1"));
+  const cases = [
+    [{ paramsMemo: crossmintMemo("order_test_1", "different") }, /prepared memo differs/],
+    [{ memo: crossmintMemo("another_order") }, /different order/],
+    [{ memo: "------BEGIN MEMO------not-a-jwt------END MEMO------" }, /expected format/],
+    [{ memo: `------BEGIN MEMO------e30.${Buffer.from("[1]").toString("base64url")}.x------END MEMO------` }, /readable token/],
+    [{ memoSigners: [address()] }, /other than the payer/],
+    [{ instructions: (transfer, memoIx, owner) => [transfer, memoInstruction(crossmintMemo("order_test_1"), [owner, address()])] }, /other than the payer/],
+    [{ instructions: (transfer) => [transfer] }, /no order memo/],
+    [{ instructions: (transfer, memoIx) => [transfer, memoIx, memoIx] }, /more than one memo/],
+    [{ instructions: (transfer, memoIx) => [transfer, memoIx, new TransactionInstruction({ programId: new PublicKey(SYSTEM_PROGRAM), keys: [], data: Buffer.from([1]) })] }, /cannot preserve/],
+  ];
+  for (const [options, pattern] of cases) {
+    const { raw, expected } = checkoutFixture(options);
+    assert.throws(() => validateCrossmintCheckoutOrder(parseCrossmintOrder(raw), expected), pattern);
+  }
+  // A memo account that is not a signer is not Crossmint's memo shape.
+  const unsigned = checkoutFixture({
+    instructions: (transfer, memoIx, owner) => [transfer, new TransactionInstruction({ programId: new PublicKey(MEMO_PROGRAM_ID), keys: [{ pubkey: new PublicKey(owner), isSigner: false, isWritable: false }], data: Buffer.from(crossmintMemo("order_test_1")) })],
+  });
+  assert.throws(() => validateCrossmintCheckoutOrder(parseCrossmintOrder(unsigned.raw), unsigned.expected), /not a signer/);
+  // A parameters memo that is too long is never read, so checkout has no memo.
+  const long = checkoutFixture({ paramsMemo: "m".repeat(513) });
+  assert.throws(() => validateCrossmintCheckoutOrder(parseCrossmintOrder(long.raw), long.expected), /no order memo/);
+});
+
+test("a changed memo or item name changes the bound terms", () => {
+  const base = checkoutFixture();
+  const original = validateCrossmintCheckoutOrder(parseCrossmintOrder(base.raw), base.expected);
+  const renamed = structuredClone(base.raw);
+  renamed.order.lineItems[0].metadata.name = "A different item";
+  assert.notDeepEqual(validateCrossmintCheckoutOrder(parseCrossmintOrder(renamed), base.expected).items, original.items);
+  const fresh = checkoutFixture({ memo: crossmintMemo("order_test_1", "nonce-2") });
+  assert.notEqual(validateCrossmintCheckoutOrder(parseCrossmintOrder(fresh.raw), fresh.expected).memo, original.memo);
+});
+
+test("a Crossmint payment transaction is exactly [execute_payment, unsigned memo with the bound bytes]", () => {
+  const memo = STAGING_ORDER.order.payment.preparation.transactionParameters.memo;
+  const agent = address();
+  const executePayment = { name: "execute_payment", programId: address(), keys: [{ address: agent, isSigner: true, isWritable: true }], data: new Uint8Array([86, 4, 7, 7]) };
+  const prepared = { instructions: [executePayment], requiredSigners: [agent], feePayer: agent };
+  const transaction = crossmintPaymentTransaction(prepared, { memo });
+  assert.deepEqual(transaction.instructions.map((ix) => ix.name), ["execute_payment", "crossmint_order_memo"]);
+  assert.equal(transaction.instructions[0], executePayment);
+  assert.equal(transaction.instructions[1].programId, MEMO_PROGRAM_ID);
+  assert.deepEqual(transaction.instructions[1].keys, []);
+  assert.equal(Buffer.from(transaction.instructions[1].data).toString("utf8"), memo);
+  assert.deepEqual(transaction.requiredSigners, [agent]);
+  assert.equal(transaction.feePayer, agent);
+  assert.equal(prepared.instructions.length, 1, "the prepared payment is not mutated");
+  assert.throws(() => crossmintPaymentTransaction(prepared, {}), /no checked order memo/);
+  assert.throws(() => crossmintPaymentTransaction(transaction, { memo }), /exactly one execute_payment/);
+  assert.throws(() => crossmintPaymentTransaction({ ...prepared, instructions: [{ ...executePayment, name: "other" }] }, { memo }), /exactly one execute_payment/);
+  assert.throws(() => crossmintMemoInstruction("m".repeat(513)), /too long/);
 });

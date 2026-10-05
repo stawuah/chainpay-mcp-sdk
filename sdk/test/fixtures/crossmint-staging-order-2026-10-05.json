@@ -1,0 +1,84 @@
+{
+  "order": {
+    "orderId": "cf5a0af0-be17-4393-a033-2f24955227d1",
+    "phase": "payment",
+    "locale": "en-US",
+    "lineItems": [
+      {
+        "chain": "solana",
+        "metadata": {
+          "name": "ChainPay Spike Test",
+          "description": "Staging-only test NFT for the ChainPay mandate payment compatibility spike. No value.",
+          "imageUrl": "https://crossmint.myfilebase.com/ipfs/QmdRKAwm52YTXhDPuScBWoqpJSyxqhu5U63PbXcrr8PSod"
+        },
+        "quote": {
+          "status": "valid",
+          "charges": {
+            "unit": {
+              "amount": "1.206",
+              "currency": "usdc"
+            }
+          },
+          "totalPrice": {
+            "amount": "1.206",
+            "currency": "usdc"
+          }
+        },
+        "delivery": {
+          "status": "awaiting-payment",
+          "recipient": {
+            "locator": "solana:3dh3Bxu1hJzH3aHfwNAibRqTxyrPsUFyteiuGxycoohh",
+            "walletAddress": "3dh3Bxu1hJzH3aHfwNAibRqTxyrPsUFyteiuGxycoohh"
+          }
+        },
+        "executionMode": "exact-out",
+        "callData": {
+          "quantity": 1
+        },
+        "quantity": 1
+      }
+    ],
+    "quote": {
+      "status": "valid",
+      "quotedAt": "2026-10-05T12:38:07.486Z",
+      "expiresAt": "2026-10-05T12:48:07.486Z",
+      "totalPrice": {
+        "amount": "1.206",
+        "currency": "usdc"
+      }
+    },
+    "payment": {
+      "status": "crypto-payer-insufficient-funds",
+      "method": "solana",
+      "currency": "usdc",
+      "preparation": {
+        "chain": "solana",
+        "payerAddress": "3dh3Bxu1hJzH3aHfwNAibRqTxyrPsUFyteiuGxycoohh",
+        "serializedTransaction": "NwbtPCP62oXk5fmSrgT62ChkeTwXUPW4nepuaejRMBAr55d2zV8HRytSMs76Z4JhajzZwSVJa9RPFFxMjdYyhpxrbK6nAZ7zG16ensRgt1acaKhUDnZFxiYS1mCZwfUHvhtRa7y4FkmJhhL79HBQa2AQgw4EiEgzDJs2sbZiDWMLhagjmhdaoMtB8PMXsEJ1ZeW8UdUhnSBWbawaqbgmGDcNDAjAcJhc64zbSkC2ZdGNfzDXpBn4QsE8koG2nTH2WZPWFmwoofkJYtMhRDmS7XEXnNYaWyLh7LRiwsuYZyGsQLHnWe6THpMcgCX7MAmY34GhUDMeULpJvr74JrGwiS67uGRiceh57Wzxq3U3H9RzDmK781gNaSgh5wHQe6gwPJHjKwrEiKou1bj5ENGuj1GDkphHHt7Tk39SXr7Sco1apDWFttTCksWxCd6rh7btEC6YmSjCGYXFgLQN3jrvUpyXxwZZ5Fcouoyv5vB92KJncpjLth8JwBwae1HPrN1Fsk1VRADomgSbGcAtbVFV3a9h7TNhReTBs83sTwks7KeaV42CJFJMsiR2ELBD6pnnmPi611Tygv2g3MLZE8Sd3dkP9TueHstSVgBAwQaKnpwqAJts3SVqpLpt7oorZNPAYhsYgF6VSGTJbrXkvuD9xmH3oWvnY95d23ixGQ8HcqB26Aawd8vw9FNpzfW8voQeoBQQsktmjtigtS3UVVBTJpJYiHq41YBbxZDco4siTXAr8oYvqJhHXRtRNTVJpJQ6sdoAgM9pkeWsazBpQxa1As3tPuMATXP3GFyMvmu2sDFAM1N3rhKSk",
+        "transactionParameters": {
+          "amount": "1206000",
+          "memo": "------BEGIN MEMO------eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6ImY3YzY3NDM3LWQ4OWUtNDU5ZC1hYTI3LTc4NzYyMjdmOGVkOCIsIm9yZGVySWRlbnRpZmllciI6ImNmNWEwYWYwLWJlMTctNDM5My1hMDMzLTJmMjQ5NTUyMjdkMSIsImlhdCI6MTc5MTIwMzg4N30.5fSR_RK8Z9dTu1VxeN0tzUzSu-LguxPqcxx2kuR9AJQ------END MEMO------"
+        }
+      },
+      "failureReason": {
+        "code": "insufficient-funds",
+        "message": "Insufficient funds in wallet '3dh…ohh'. Your current balance is 0.70990 USDC. You need at least 1.20600 USDC to proceed."
+      }
+    },
+    "legal": {
+      "shownBy": "crossmint",
+      "requirements": [
+        {
+          "display": "show-text",
+          "type": "crossmint-terms-of-service",
+          "url": "https://staging.crossmint.com/legal/crossmint-terms-of-service/FRGUSAALLALLALL"
+        },
+        {
+          "display": "show-text",
+          "type": "crossmint-privacy-policy",
+          "url": "https://staging.crossmint.com/legal/privacy-policy"
+        }
+      ]
+    }
+  }
+}
