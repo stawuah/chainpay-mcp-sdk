@@ -50,7 +50,7 @@ const SENSITIVE: Record<CardKind, string[]> = {
   card_recovery: ["snapshot", "masterSalt", "report"],
 };
 
-function isEnvelope(value: unknown): boolean {
+export function isEnvelope(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const e = value as Record<string, unknown>;
   const keys = Object.keys(e).sort();

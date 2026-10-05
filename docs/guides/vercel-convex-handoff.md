@@ -265,6 +265,10 @@ available, and transfer them privately. The exporter creates files with mode
    node scripts/migrate-storage.mjs compare .migration/source.ndjson .migration/roundtrip.ndjson
    ```
 
+   Owner webhook endpoints (migration 0013) are not migrated: their secrets are
+   sealed by the source relay's keys. Export refuses while any exist, so disable
+   them first and have owners re-register on the target.
+
    All 13 tables must match by count and canonical row hash. Import preserves
    existing IDs and is resumable with the identical snapshot while writes remain
    paused. It rejects malformed/oversized rows instead of truncating them.

@@ -6,10 +6,11 @@ import type { Doc } from "./_generated/dataModel";
 import { decimal, encode, fail, getRecord, json, jsonValue, numberToken, receiptKey, safeNumber, sorted, sqlTimestampMicros, string, writeRecord } from "./records";
 import type { RecordKind } from "./records";
 import { cardOperation, cardOperations, cardReadOperations } from "./cards";
+import { emitAfterWrite, webhookOperation, webhookOperations, webhookReadOperations } from "./webhooks";
 
-export const backendOperations = new Set(["pet.state","pet.visitors","pet.act","pet.memories","find_other_connector_job_for_owner","put_crossmint_proof","put_mandate_request","get_mandate_request","put_receipt_request","find_receipt_request","put_observed_policy","find_observed_policy","ping", "claim_operation", "operation_record", "operation_owner", "auth_rate", "put_auth", "get_auth", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "put_payment", "get_transaction", "find_transaction_by_idempotency", "put_transaction", "list_x402_for_owner", "find_x402_by_idempotency", "put_x402", "put_managed_signer_challenge", "get_managed_signer_challenge", "consume_managed_signer_challenge", "put_managed_signer", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "put_delivery_attestation", "find_delivery_attestation", ...cardOperations]);
+export const backendOperations = new Set(["pet.state","pet.visitors","pet.act","pet.memories","find_other_connector_job_for_owner","put_crossmint_proof","put_mandate_request","get_mandate_request","put_receipt_request","find_receipt_request","put_observed_policy","find_observed_policy","ping", "claim_operation", "operation_record", "operation_owner", "auth_rate", "put_auth", "get_auth", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "put_payment", "get_transaction", "find_transaction_by_idempotency", "put_transaction", "list_x402_for_owner", "find_x402_by_idempotency", "put_x402", "put_managed_signer_challenge", "get_managed_signer_challenge", "consume_managed_signer_challenge", "put_managed_signer", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "put_delivery_attestation", "find_delivery_attestation", ...cardOperations, ...webhookOperations]);
 export const mcpOperations = new Set(["ping", "mcp.register", "mcp.identify", "mcp.observe", "mcp.list", "mcp.revoke", "mcp.appendInboxMessage", "mcp.listInbox", "mcp.rateLimit"]);
-const readOperations = new Set(["get_mandate_request","find_receipt_request","find_observed_policy","find_other_connector_job_for_owner","ping", "operation_record", "operation_owner", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "get_transaction", "find_transaction_by_idempotency", "list_x402_for_owner", "find_x402_by_idempotency", "get_managed_signer_challenge", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "find_delivery_attestation", "mcp.identify", "mcp.list", "mcp.listInbox", ...cardReadOperations]);
+const readOperations = new Set(["get_mandate_request","find_receipt_request","find_observed_policy","find_other_connector_job_for_owner","ping", "operation_record", "operation_owner", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "get_transaction", "find_transaction_by_idempotency", "list_x402_for_owner", "find_x402_by_idempotency", "get_managed_signer_challenge", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "find_delivery_attestation", "mcp.identify", "mcp.list", "mcp.listInbox", ...cardReadOperations, ...webhookReadOperations]);
 export function isRead(operation: string, args: Record<string, any>): boolean { return readOperations.has(operation) || operation === "get_auth" && args.consume === false; }
 function publicConnection(r: Doc<"agent_connections">) { const { _id, _creationTime, tokenHash, revokedAt, source_json, ...record } = r; return record; }
 function publicInbox(r: Doc<"inbox_messages">) { const { _id, _creationTime, source_json, ...record } = r; return record; }
@@ -38,6 +39,7 @@ export const execute = internalMutation({
     if (op.startsWith("pet.")) return petOperation(ctx, op, a);
     if (op === "ping") return { version: 1 };
     if ((cardOperations as readonly string[]).includes(op)) return cardOperation(ctx, op, a);
+    if ((webhookOperations as readonly string[]).includes(op)) return webhookOperation(ctx, op, a);
     if (op === "claim_operation" || op === "operation_record" || op === "operation_owner") {
       const key = string(a.id); const old = await ctx.db.query("operation_claims").withIndex("by_key", q => q.eq("key", key)).unique();
       if (op === "operation_owner") return old?.owner ?? null;
@@ -109,7 +111,15 @@ export const execute = internalMutation({
       return null;
     }
     const puts: Record<string, [RecordKind, string]> = { put_payment: ["payments", "record_json"], put_transaction: ["transactions", "record_json"], put_x402: ["x402_payments", "record_json"], put_managed_signer_challenge: ["managed_signer_challenges", "challenge_json"], put_managed_signer: ["managed_signers", "signer_json"], put_delivery_attestation: ["delivery_attestations", "record_json"] };
-    if (puts[op]) { const [kind, field] = puts[op]; return writeRecord(ctx, kind, string(a[field])); }
+    if (puts[op]) {
+      const [kind, field] = puts[op]; const written = await writeRecord(ctx, kind, string(a[field]));
+      // Owner webhook outbox: same mutation, so the same transaction as the write.
+      if ((op === "put_payment" || op === "put_transaction") && a.events_json != null) {
+        const record = json(a[field]);
+        return emitAfterWrite(ctx, kind as "payments" | "transactions", string(op === "put_payment" ? record.payment_id : record.transaction_id), a.events_json);
+      }
+      return written;
+    }
     const gets: Record<string, [RecordKind, string]> = { get_payment: ["payments", "payment_id"], get_transaction: ["transactions", "transaction_id"], get_managed_signer_challenge: ["managed_signer_challenges", "challenge_id"] };
     if (gets[op]) { const [kind, field] = gets[op]; return (await getRecord(ctx, kind, string(a[field])))?.record_json ?? null; }
     const idempotency: Record<string, RecordKind> = { find_payment_by_idempotency: "payments", find_transaction_by_idempotency: "transactions", find_x402_by_idempotency: "x402_payments" };

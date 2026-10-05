@@ -1,0 +1,35 @@
+/* Settings → Webhooks. Compact developer section; reuses workspace tokens. */
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-note { margin: 4px 0 12px; font: 400 13px/18px Inter, sans-serif; color: var(--ws-ink-secondary); max-width: 68ch; }
+.dashboard-app.cp-app .cp-webhooks code { font: 400 12px/18px var(--ws-mono); }
+.dashboard-app.cp-app .cp-webhooks a { color: var(--ws-accent, #0052ff); }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-muted { font: 400 12px/18px Inter, sans-serif; color: var(--ws-ink-secondary); }
+.dashboard-app.cp-app .cp-webhooks [role="alert"] { font: 400 13px/18px Inter, sans-serif; color: #b42332; margin-top: 6px; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-secret { margin: 8px 0 16px; padding: 16px; border: 1px solid #c9d8ff; border-radius: 12px; background: #f4f7ff; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-secret strong { font: 500 14px/20px Inter, sans-serif; color: var(--ws-ink); }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-secret p { margin-top: 4px; font: 400 13px/18px Inter, sans-serif; color: var(--ws-ink-secondary); }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-secret-value { display: block; margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #fff; border: 1px solid var(--ws-border-soft); overflow-wrap: anywhere; user-select: all; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-form { display: grid; gap: 10px; margin: 8px 0 16px; padding: 16px; border: 1px solid var(--ws-border-soft); border-radius: 12px; background: #fafbfd; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-list { list-style: none; margin: 0; padding: 0; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-endpoint { padding: 14px 0; border-top: 1px solid var(--ws-border-soft); }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-endpoint:first-child { border-top: 0; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-endpoint[data-status="disabled"] .cp-webhooks-url { color: var(--ws-ink-secondary); }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-endpoint-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-endpoint-text { display: grid; gap: 2px; min-width: 0; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-endpoint-text strong { font: 500 14px/20px Inter, sans-serif; color: var(--ws-ink); }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-url { overflow-wrap: anywhere; color: var(--ws-ink); }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-deliveries { margin-top: 12px; padding: 4px 12px; border: 1px solid var(--ws-border-soft); border-radius: 10px; background: #fafbfd; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-deliveries > p { padding: 8px 0; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-deliveries ul { list-style: none; margin: 0; padding: 0; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-delivery { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--ws-border-soft); }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-delivery-body { min-width: 0; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-delivery:first-child { border-top: 0; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-delivery-main { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font: 400 13px/18px Inter, sans-serif; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-delivery-body > p { margin-top: 4px; overflow-wrap: anywhere; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-id { font: 400 12px/18px Inter, sans-serif; color: var(--ws-ink-secondary); overflow-wrap: anywhere; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-delivery > button { flex: none; }
+.dashboard-app.cp-app .cp-webhooks .cp-webhooks-cap { margin-top: 12px; }
+@media (max-width: 520px) {
+  .dashboard-app.cp-app .cp-webhooks .cp-webhooks-endpoint-head { flex-direction: column; }
+  .dashboard-app.cp-app .cp-webhooks .cp-webhooks-delivery { flex-direction: column; align-items: flex-start; }
+}

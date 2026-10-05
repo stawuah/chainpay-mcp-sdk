@@ -33,6 +33,8 @@ serde_json = "1"
 sha2 = "0.11"
 sqlx = { version = "0.8", default-features = false, features = ["json", "macros", "migrate", "postgres", "runtime-tokio-rustls"] }
 thiserror = "2"
+# Already in the tree through reqwest; named for `url::Host` in the SSRF guard.
+url = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 aes-gcm = "0.10"
@@ -44,4 +46,6 @@ anyhow = "1"
 dcap-qvl = { path = "vendor/dcap-qvl", default-features = false, features = ["std", "rustcrypto", "default-x509", "collateral"] }
 
 [dev-dependencies]
+# Already in the tree; an endless response body in the webhook transport test.
+futures-core = "0.3"
 solana-message = { version = "=4.6.0", features = ["wincode"] }

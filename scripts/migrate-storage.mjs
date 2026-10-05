@@ -113,6 +113,11 @@ async function exportPostgres(file) {
     // instants hash identically whatever the server's default zone is.
     await client.query("SET LOCAL TIME ZONE 'UTC'");
     const versions = await validateSchema(client);
+    // Owner webhook rows (0013) are not carried across: sealed endpoint
+    // secrets are tied to this relay's keys. Refuse rather than drop them.
+    if (versions.has(13) && (await client.query("SELECT EXISTS (SELECT 1 FROM webhook_subscriptions) AS present")).rows[0].present) {
+      throw new Error("Owner webhook endpoints exist: they are not migrated. Disable them and have owners re-register on the target before cutover");
+    }
     for (const [table, keys] of Object.entries(TABLES)) {
       if (FEATURE_MIGRATIONS[table] && !versions.has(FEATURE_MIGRATIONS[table])) continue;
       await client.query(`DECLARE migration_rows NO SCROLL CURSOR FOR SELECT row_to_json(t)::text AS row FROM "${table}" t ORDER BY ${keys.map(k => `"${k}"`).join(",")}`);

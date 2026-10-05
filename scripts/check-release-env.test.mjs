@@ -75,6 +75,16 @@ test("real Lithic production endpoints and keys are refused in every environment
   // Frontend and MCP builds get the same scan.
   assert.throws(() => checkReleaseEnvironment("frontend", {...env, VITE_LITHIC_URL: "https://api.lithic.com"}), /Lithic production API/);
 });
+test("owner webhooks need a sealing key, the dispatcher secret and the public origin", () => {
+  const hooks = {...env, OWNER_WEBHOOKS_ENABLED: "true", OWNER_WEBHOOKS_SECRET_KID: "w1", OWNER_WEBHOOKS_SECRET_KEY_w1: Buffer.alloc(32, 7).toString("base64"), CRON_SECRET: "c".repeat(16), CHAINPAY_APP_URL: "https://web.example.com"};
+  assert.equal(checkReleaseEnvironment("backend", hooks).service, "backend");
+  assert.equal(checkReleaseEnvironment("backend", {...env, OWNER_WEBHOOKS_ENABLED: "false"}).service, "backend");
+  assert.throws(() => checkReleaseEnvironment("backend", {...hooks, OWNER_WEBHOOKS_ENABLED: "yes"}), /true or false/);
+  for (const key of ["OWNER_WEBHOOKS_SECRET_KID", "OWNER_WEBHOOKS_SECRET_KEY_w1", "CRON_SECRET", "CHAINPAY_APP_URL"]) assert.throws(() => checkReleaseEnvironment("backend", {...hooks, [key]: ""}), undefined, key);
+  assert.throws(() => checkReleaseEnvironment("backend", {...hooks, OWNER_WEBHOOKS_SECRET_KEY_w1: "c2hvcnQ="}), /32 bytes/);
+  assert.throws(() => checkReleaseEnvironment("backend", {...hooks, CRON_SECRET: "short"}), /16/);
+  assert.throws(() => checkReleaseEnvironment("backend", {...hooks, CHAINPAY_APP_URL: "http://web.example.com"}), /HTTPS/);
+});
 
 const frontendBase = {...env, VITE_CHAINPAY_BACKEND_URL:"https://relay.example.com", VITE_CHAINPAY_RPC_URL:"https://relay.example.com/rpc", VITE_CHAINPAY_MCP_URL:"https://mcp.example.com/mcp", VITE_CHAINPAY_AGENT_URL:"https://mcp.example.com/agent/chat"};
 const supportLive = {...frontendBase, VITE_SUPPORT_LIVE:"true", VITE_SUPPORT_CLUSTER:"devnet", VITE_SUPPORT_PROGRAM_ID:"D1DvnVq37696mcFB5JeVWZy22wjxZ5xPJmZazbfPK7BH", VITE_SUPPORT_TRACKER_URL:"https://example-123.convex.site/support/v1", VITE_SUPPORT_RECIPIENT_A:"3yS1JFVT284y8z1LC9MRoWxZjzFrdoD5axKsZiyMsfC7", VITE_SUPPORT_RECIPIENT_B:"4iYFsZcZXQLTfykuzRwY19SxRja53Vm6jSf6CuTx6Kjt"};

@@ -113,6 +113,19 @@ export function checkReleaseEnvironment(service, env) {
         if (lithic.protocol !== "https:" || lithic.username || lithic.password || host !== LITHIC_SANDBOX_HOST) throw new Error(`LITHIC_API_URL must be https://${LITHIC_SANDBOX_HOST}`);
       }
     }
+    if (service === "backend" && env.OWNER_WEBHOOKS_ENABLED !== undefined) {
+      // Owner webhooks (docs/guides/owner-webhooks.md): sealed endpoint secrets, the dispatcher's
+      // bearer secret and the public origin used for receipt links. Mirrors OwnerWebhooks::from_vars.
+      if (!["true", "false"].includes(env.OWNER_WEBHOOKS_ENABLED)) throw new Error("OWNER_WEBHOOKS_ENABLED must be true or false");
+      if (env.OWNER_WEBHOOKS_ENABLED === "true") {
+        const kid = required("OWNER_WEBHOOKS_SECRET_KID");
+        let key; try { key = Buffer.from(required(`OWNER_WEBHOOKS_SECRET_KEY_${kid}`), "base64"); } catch { key = Buffer.alloc(0); }
+        if (key.length !== 32) throw new Error(`OWNER_WEBHOOKS_SECRET_KEY_${kid} must be 32 bytes of base64`);
+        if (required("CRON_SECRET").length < 16) throw new Error("CRON_SECRET must have at least 16 characters");
+        const app = origin("CHAINPAY_APP_URL");
+        if (app.pathname !== "/") throw new Error("CHAINPAY_APP_URL must be an origin");
+      }
+    }
     if (env.CHAINPAY_CROSSMINT_ENABLED === "true") {
       if (required("CHAINPAY_CROSSMINT_AUTH_SECRET").length < 32) throw new Error("Crossmint authorization secret must have at least 32 characters");
       required("CROSSMINT_API_KEY");

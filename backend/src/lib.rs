@@ -11,6 +11,7 @@ pub mod server;
 pub mod signer;
 pub mod status;
 pub mod storage;
+pub mod webhooks;
 
 pub use api::{PaymentRequest, PaymentResponse};
 pub use server::{BackendConfig, BackendState, build_router};

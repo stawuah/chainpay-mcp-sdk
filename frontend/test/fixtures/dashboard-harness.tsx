@@ -35,6 +35,8 @@ import blockedRequest from "./inbox-blocked.json";
 import { ownerReceiptRelay } from "../../src/receipts/owner";
 import purchase from "./receipt-purchase.json";
 import orders from "./mandate-request.json";
+import { setWebhooksSourceOverride } from "../../src/dashboard/webhooks/source";
+import { createFixtureWebhooksSource, type WebhooksFixture } from "./webhooks-fixture";
 
 const OWNER = "7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q";
 const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -352,6 +354,18 @@ if (FIXTURE_APPROVAL) {
   };
   const link = ownerReceiptRelay.linkMandateRequest;
   ownerReceiptRelay.linkMandateRequest = async (...args) => { approvalEvidence.links += 1; return link(...args); };
+}
+
+// `?webhooks=fixture|empty|off|fail` (with `signed-in=fixture`): Settings →
+// Webhooks from an in-memory stand-in for the relay routes. ILLUSTRATIVE
+// endpoints and deliveries; nothing is sent anywhere.
+{
+  const webhooks = QUERY.get("webhooks");
+  if (webhooks && ["fixture", "empty", "off", "fail"].includes(webhooks)) {
+    const evidence = { created: [] as string[] };
+    Object.assign(window, { webhookFixtureEvidence: evidence });
+    setWebhooksSourceOverride(createFixtureWebhooksSource(webhooks as WebhooksFixture, evidence));
+  }
 }
 
 const EMPTY = new URLSearchParams(location.search).has("empty");

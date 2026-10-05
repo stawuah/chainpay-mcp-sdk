@@ -78,6 +78,33 @@ private routes public. Server processes read their environment; copying the
   seq, policy version and period → policy version re-checked → issuer opened. A scheduled
   checkpoint is not a public commitment. The reconcile cron (`.github/workflows/cards-reconcile.yml`)
   re-drives the same persisted activation or checkpoint until the readback matches.
+- **Owner webhooks:** off unless `OWNER_WEBHOOKS_ENABLED=true`. See
+  [owner webhooks](#owner-webhooks).
+
+## Owner webhooks
+
+Relay (backend) settings. With `OWNER_WEBHOOKS_ENABLED` unset or `false`, every
+webhook route answers 404 and no event is written. With `true`, all of these are
+required and the relay refuses to start without them:
+
+| Variable | Value |
+| --- | --- |
+| `OWNER_WEBHOOKS_ENABLED` | `true` or `false`. |
+| `OWNER_WEBHOOKS_SECRET_KID` | Id of the key that seals new endpoint secrets (letters, digits, `_`, `-`; up to 32). |
+| `OWNER_WEBHOOKS_SECRET_KEY_<KID>` | 32 random bytes, base64 (`openssl rand -base64 32`). Keep old ids set after changing `OWNER_WEBHOOKS_SECRET_KID` so existing endpoints can still sign. Separate from the card record keys. |
+| `CRON_SECRET` | 16+ characters. Bearer token for `POST /internal/cron/webhooks/dispatch` (shared with the card reconcile route). |
+| `CHAINPAY_APP_URL` | Public web origin, e.g. `https://chainpay.example`. Events link to `<origin>/verify/<receipt>`. |
+
+Storage: run PostgreSQL migration `0013_owner_webhooks.sql` (applied on relay
+start), or deploy the Convex schema and functions **before** the relay, since
+`put_payment` gains an optional outbox argument.
+
+Scheduler: the `Owner webhooks dispatch` GitHub workflow calls the dispatch
+route every 5 minutes once the repository variable `OWNER_WEBHOOKS_DISPATCH_URL`
+(relay origin) and secret `OWNER_WEBHOOKS_CRON_SECRET` (the relay's
+`CRON_SECRET`) are set; `VERCEL_AUTOMATION_BYPASS_SECRET` only if the deployment
+is protected. Delivery cadence follows that schedule. See the
+[owner webhooks guide](../guides/owner-webhooks.md).
 
 The current deployment workflow is the [Vercel/Convex handoff](../guides/vercel-convex-handoff.md).
 [render.yaml](../../render.yaml) remains as a legacy rollback reference; the existing

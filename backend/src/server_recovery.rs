@@ -318,6 +318,7 @@ pub(super) async fn payment(
     let Some(signature) = record.signature.clone() else {
         return Ok(record);
     };
+    let mut confirmed_now = false;
     match state.rpc.signature_status(&signature).await {
         Ok(Some(status))
             if status.error.is_some()
@@ -332,6 +333,7 @@ pub(super) async fn payment(
         {
             match verify_finalized_receipt(state, &record).await {
                 Ok(()) => {
+                    confirmed_now = true;
                     record.status = PaymentStatus::Confirmed;
                     record.slot = status.slot;
                     record.error = None;
@@ -388,7 +390,18 @@ pub(super) async fn payment(
         (None, Some(crossmint)) => Some(ConnectorMetadata::Crossmint(crossmint)),
         (None, None) => None,
     };
-    persist_payment(state, &record, connector).await?;
+    // Owner webhook outbox: the receipt-ready event is written by the same
+    // storage call as the `confirmed` transition, and only after the finalized
+    // receipt matched. Receivers are never contacted here.
+    let mut events = Vec::new();
+    if let (true, Some(hooks)) = (confirmed_now, state.webhooks.as_deref()) {
+        if let Some(owner) = state.store.operation_owner(&record.payment_id).await? {
+            events.extend(
+                crate::webhooks::dispatch::payment_event(state, hooks, &owner, &record).await,
+            );
+        }
+    }
+    persist_payment_with_events(state, &record, connector, &events).await?;
     Ok(state
         .store
         .get_payment(&record.payment_id)
@@ -408,6 +421,8 @@ pub(super) async fn transaction(
     let Some(signature) = record.signature.clone() else {
         return Ok(record);
     };
+    let mut confirmed_now = false;
+    let mut bound: Option<(String, Value)> = None;
     match state.rpc.signature_status(&signature).await {
         Ok(Some(status))
             if status.error.is_some()
@@ -421,9 +436,10 @@ pub(super) async fn transaction(
                 && status.confirmation_status.as_deref() == Some("finalized") =>
         {
             let mut verified = true;
-            if let Some((_, intent, _)) =
+            if let Some((owner, intent, _)) =
                 state.store.operation_record(&record.transaction_id).await?
             {
+                bound = Some((owner, intent.clone()));
                 if let Some(receipts) = intent["receipts"].as_array() {
                     for receipt in receipts {
                         let receipt: PaymentRecord =
@@ -436,6 +452,7 @@ pub(super) async fn transaction(
                 }
             }
             if verified {
+                confirmed_now = true;
                 record.status = PaymentStatus::Confirmed;
                 record.slot = status.slot;
                 record.error = None;
@@ -457,7 +474,25 @@ pub(super) async fn transaction(
         }
     }
     record.updated_at_ms = now_ms();
-    state.store.put_transaction(record.clone()).await?;
+    let mut events = Vec::new();
+    if let (true, Some(hooks), Some((owner, intent))) =
+        (confirmed_now, state.webhooks.as_deref(), bound.as_ref())
+    {
+        let receipts = crate::webhooks::dispatch::intent_receipts(intent);
+        events = crate::webhooks::dispatch::batch_events(
+            state,
+            hooks,
+            owner,
+            &record.transaction_id,
+            &receipts,
+            record.updated_at_ms,
+        )
+        .await;
+    }
+    state
+        .store
+        .put_transaction_with_events(record.clone(), &events)
+        .await?;
     Ok(state
         .store
         .get_transaction(&record.transaction_id)
@@ -2422,5 +2457,177 @@ mod tests {
             .status,
             PaymentStatus::Failed
         );
+    }
+
+    /// Owner webhooks (R5): the receipt-ready event is stored by the same write
+    /// that confirms the payment, a dead receiver changes nothing about
+    /// settlement, and no retry adds a second event or a second payment.
+    #[tokio::test]
+    async fn receipt_ready_rides_the_confirmation_and_an_outage_never_touches_settlement() {
+        use crate::storage::{
+            WebhookDeliveryState, WebhookSubscription, WebhookSubscriptionStatus,
+        };
+        let (mut state, principal, request) = fixture();
+        // A receiver that is down: nothing listens on this port.
+        let dead = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let (hooks, transport) = crate::webhooks::test_support::webhooks(dead);
+        let secrets = hooks.initial_secrets(
+            "whk_settle",
+            &crate::webhooks::OwnerWebhooks::generate_secret(),
+            0,
+        );
+        state.webhooks = Some(Arc::new(hooks));
+        assert!(
+            state
+                .store
+                .create_webhook_subscription(
+                    WebhookSubscription {
+                        subscription_id: "whk_settle".into(),
+                        owner_wallet: principal.wallet.clone(),
+                        url: "https://hooks.example.com/chainpay".into(),
+                        description: None,
+                        status: WebhookSubscriptionStatus::Active,
+                        secrets,
+                        created_at_ms: 0,
+                        updated_at_ms: 0,
+                    },
+                    5,
+                )
+                .await
+                .unwrap()
+        );
+        let (won, record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
+            .await
+            .unwrap();
+        assert!(won);
+        let sends = Arc::new(AtomicUsize::new(0));
+        let receipt = receipt_data(&record);
+        let mandate = mandate_account_data(&record, false, false, u64::MAX);
+        let fixture_record = record.clone();
+        let signature = record.signature.clone().unwrap();
+        let sends_rpc = sends.clone();
+        let router = Router::new().fallback(move |Json(body): Json<Value>| {
+            let receipt = receipt.clone();
+            let mandate = mandate.clone();
+            let fixture_record = fixture_record.clone();
+            let signature = signature.clone();
+            let sends = sends_rpc.clone();
+            async move {
+                let result = match body["method"].as_str().unwrap() {
+                    "sendTransaction" => {
+                        sends.fetch_add(1, Ordering::SeqCst);
+                        json!(signature)
+                    }
+                    "getSignatureStatuses" if sends.load(Ordering::SeqCst) == 0 => json!({"value":[Value::Null]}),
+                    "getSignatureStatuses" => {
+                        json!({"value":[{"slot":3,"confirmationStatus":"finalized","err":Value::Null}]})
+                    }
+                    "getAccountInfo" => {
+                        let address = body["params"][0].as_str().unwrap();
+                        // The receipt exists only once the payment lands.
+                        if address != fixture_record.mandate && sends.load(Ordering::SeqCst) == 0 {
+                            json!({"value": Value::Null})
+                        } else {
+                            json!({"value": rpc_account_info(address, &fixture_record.mandate, &mandate, &receipt)})
+                        }
+                    }
+                    "getSlot" => json!(1),
+                    other => panic!("Unexpected RPC {other}"),
+                };
+                (StatusCode::OK, Json(json!({"jsonrpc":"2.0","id":1,"result":result})))
+            }
+        });
+        let task = attach_rpc(&mut state, router).await;
+        let started = std::time::Instant::now();
+        let Json(settled) = settle_payment(&state, request.clone(), record.clone())
+            .await
+            .unwrap();
+        assert_eq!(settled.status, PaymentStatus::Confirmed);
+        // Settlement never contacted the receiver.
+        assert!(transport.pinned.lock().unwrap().is_empty());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+
+        let receipt_address = settled.receipt_address.clone().unwrap();
+        let event_id = crate::webhooks::event_id("payment.receipt_ready", 1, &receipt_address);
+        let event = state
+            .store
+            .get_webhook_event(&event_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let body: Value = serde_json::from_str(&event.body).unwrap();
+        assert_eq!(body["data"]["operation_id"], settled.payment_id);
+        assert_eq!(body["data"]["amount"], settled.amount.unwrap().to_string());
+        assert_eq!(body["data"]["receipt_pda"], receipt_address);
+        assert_eq!(body["data"]["cluster"], "devnet");
+        // The fixture mint is not a token mint the relay can read: unknown, not guessed.
+        assert_eq!(body["data"]["decimals"], Value::Null);
+        assert_eq!(event.owner_wallet, principal.wallet);
+
+        // Status reads, retries and reconcile never add an event.
+        let again = payment(&state, settled.clone()).await.unwrap();
+        assert_eq!(again.status, PaymentStatus::Confirmed);
+        assert_eq!(
+            state
+                .store
+                .put_payment_with_events(settled.clone(), &[event.clone()])
+                .await
+                .unwrap(),
+            0
+        );
+        let hooks = state.webhooks.clone().unwrap();
+        let repaired = crate::webhooks::dispatch::reconcile(
+            &state,
+            &hooks,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(repaired.emitted, 0);
+        let rows = state
+            .store
+            .list_webhook_deliveries(&principal.wallet, "whk_settle", 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, WebhookDeliveryState::Pending);
+
+        // The receiver is down: a retry is scheduled, the payment is as it was.
+        let report =
+            crate::webhooks::dispatch::run(&state, hooks, std::time::Duration::from_secs(30)).await;
+        assert_eq!(
+            (report.claimed, report.retry_scheduled, report.delivered),
+            (1, 1, 0)
+        );
+        let rows = state
+            .store
+            .list_webhook_deliveries(&principal.wallet, "whk_settle", 10)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].state, WebhookDeliveryState::RetryScheduled);
+        let stored = state
+            .store
+            .get_payment(&settled.payment_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&stored).unwrap(),
+            serde_json::to_value(&settled).unwrap()
+        );
+        assert_eq!(
+            state
+                .store
+                .find_payment_by_idempotency(&settled.idempotency_key)
+                .await
+                .unwrap()
+                .unwrap()
+                .payment_id,
+            settled.payment_id
+        );
+        assert_eq!(sends.load(Ordering::SeqCst), 1, "one broadcast, ever");
+        task.abort();
     }
 }

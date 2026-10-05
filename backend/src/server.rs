@@ -12,6 +12,8 @@ mod receipt_routes;
 mod recovery;
 #[path = "server_transactions.rs"]
 mod transactions;
+#[path = "server_webhooks.rs"]
+mod webhook_routes;
 use transactions::owner as validate_owner_transaction;
 #[path = "server_auth.rs"]
 mod auth;
@@ -205,6 +207,8 @@ pub struct BackendState {
     pub signer_provider: Option<PrivySignerProvider>,
     /// Private agent card connector; `None` unless `CARDS_CONNECTOR_ENABLED=true`.
     pub cards: Option<std::sync::Arc<crate::connectors::card_issuer::CardsConnector>>,
+    /// Owner webhooks; `None` unless `OWNER_WEBHOOKS_ENABLED=true`.
+    pub webhooks: Option<std::sync::Arc<crate::webhooks::OwnerWebhooks>>,
 }
 
 #[derive(Debug, Error)]
@@ -217,6 +221,8 @@ pub enum BackendStateError {
     MissingManagedPaymentAuth,
     #[error("card connector configuration error: {0}")]
     Cards(String),
+    #[error("owner webhook configuration error: {0}")]
+    Webhooks(String),
 }
 
 impl BackendState {
@@ -229,12 +235,16 @@ impl BackendState {
         let cards =
             crate::connectors::card_issuer::CardsConnector::from_env(store.clone(), config.cluster)
                 .map_err(|error| BackendStateError::Cards(error.to_string()))?;
+        let webhooks = crate::webhooks::OwnerWebhooks::from_env()
+            .map_err(|error| BackendStateError::Webhooks(error.to_string()))?
+            .map(std::sync::Arc::new);
         Ok(Self {
             config,
             rpc,
             store,
             signer_provider,
             cards,
+            webhooks,
         })
     }
 }
@@ -425,6 +435,7 @@ fn build_router_with_pet(state: BackendState, pet_enabled: bool) -> Router {
         .route("/v1/transactions/{transaction_id}", get(get_transaction))
         .route("/rpc", post(proxy_rpc))
         .merge(card_routes::router())
+        .merge(webhook_routes::router())
         .with_state(state)
         .layer(Extension(pet_routes::PetEnabled(pet_enabled)))
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
@@ -550,6 +561,7 @@ async fn auth_middleware(
                 | "/v1/auth/session"
         )
         || card_routes::is_self_authenticated(path)
+        || webhook_routes::is_self_authenticated(path)
         || delivery_routes::is_public_delivery_path(request.method(), path)
         || pet_routes::is_public_pet_path(request.method(), path)
     {
@@ -1337,7 +1349,21 @@ async fn persist_payment(
     payment: &PaymentRecord,
     metadata: Option<ConnectorMetadata<'_>>,
 ) -> Result<(), ApiError> {
-    state.store.put_payment(payment.clone()).await?;
+    persist_payment_with_events(state, payment, metadata, &[]).await
+}
+
+/// `events` are owner webhook outbox rows written in the same storage
+/// transaction as the payment (only if it now reads `confirmed`).
+async fn persist_payment_with_events(
+    state: &BackendState,
+    payment: &PaymentRecord,
+    metadata: Option<ConnectorMetadata<'_>>,
+    events: &[crate::storage::WebhookEvent],
+) -> Result<(), ApiError> {
+    state
+        .store
+        .put_payment_with_events(payment.clone(), events)
+        .await?;
     let Some(metadata) = metadata else {
         return Ok(());
     };
