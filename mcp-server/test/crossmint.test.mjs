@@ -14,7 +14,8 @@ function fixture() {
   const data = Buffer.alloc(10); data[0] = 12; data.writeBigUInt64LE(1234567n, 1); data[9] = 6;
   const instruction = new TransactionInstruction({ programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), keys: [source, mint, recipient, owner].map((a, i) => ({ pubkey: new PublicKey(a), isSigner: i === 3, isWritable: i === 0 || i === 2 })), data });
   const transaction = new Transaction({ feePayer: new PublicKey(owner), recentBlockhash: PublicKey.default.toBase58() }).add(instruction);
-  const raw = { order: { orderId: "order_1", phase: "payment", quote: { status: "valid", expiresAt: "2030-01-01T00:00:00Z", totalPrice: { amount: "1.234567", currency: "usdc" } }, payment: { method: "solana", currency: "usdc", status: "awaiting-payment", preparation: { chain: "solana", payerAddress: owner, serializedTransaction: transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64") } } } };
+  const delivery = addr();
+  const raw = { order: { orderId: "order_1", phase: "payment", lineItems: [{ chain: "solana", tokenLocator: "solana:token-address", quantity: 1, delivery: { status: "awaiting-payment", recipient: { locator: `solana:${delivery}`, walletAddress: delivery } } }], quote: { status: "valid", expiresAt: "2030-01-01T00:00:00Z", totalPrice: { amount: "1.234567", currency: "usdc" } }, payment: { method: "solana", currency: "usdc", status: "awaiting-payment", preparation: { chain: "solana", payerAddress: owner, serializedTransaction: transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64") } } } };
   let preparations = 0;
   const context = { principal: { wallet: owner, scope: null }, backendUrl: "https://relay.invalid", backendAuthToken: "caller-token", client: {
     connection: { getGenesisHash: async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1", getLatestBlockhash: async () => ({ blockhash: PublicKey.default.toBase58(), lastValidBlockHeight: 1 }) },
@@ -104,5 +105,117 @@ test("reviewed execution forwards bound provider authorization and preserves unc
   const bound = JSON.parse(authorization.payload);
   assert.equal(bound.owner, f.context.principal.wallet); assert.equal(bound.mandate, f.args.mandate);
   assert.equal(bound.invoiceHash, args.invoiceHash); assert.equal(bound.terms.amount, submission.amount);
+  // The relay compares the whole bound terms object, so delivery terms are inside the MAC.
+  assert.equal(bound.terms.items[0].deliveryRecipient, f.raw.order.lineItems[0].delivery.recipient.walletAddress);
+  assert.equal(bound.terms.items[0].quantity, 1);
+  assert.deepEqual(bound.terms.items, submission.crossmint.terms.items);
   assert(!JSON.stringify(result).includes(authorization.mac));
+});
+
+async function reviewed(t) {
+  configure(t); const f = fixture();
+  globalThis.fetch = async () => Response.json(f.raw);
+  const prepared = await prepareCrossmintPayment(f.context, f.args);
+  return { f, args: { ...prepared.structuredContent.continuation.arguments, signedTransaction: "original-signed-bytes" }, prepared };
+}
+/** Route relay and provider calls; any POST to a payment route is a second purchase attempt. */
+function route(f, { connector = () => new Response(null, { status: 404 }), order = () => f.raw } = {}) {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url, method: init.method ?? "GET" });
+    if (url.endsWith("/connector")) return connector();
+    if (url.startsWith("https://staging.crossmint.com")) return Response.json(order());
+    if (/\/v1\/(managed-)?payments$/.test(url)) throw new Error("unexpected payment submission");
+    throw new Error(`unexpected ${url}`);
+  };
+  return calls;
+}
+const submissions = (calls) => calls.filter(c => /\/v1\/(managed-)?payments$/.test(c.url));
+
+test("the reviewed request shows who receives the item and how many", async t => {
+  const { prepared, f } = await reviewed(t);
+  const [item] = prepared.structuredContent.crossmint.items;
+  assert.equal(item.quantity, 1);
+  assert.equal(item.deliveryRecipient, f.raw.order.lineItems[0].delivery.recipient.walletAddress);
+});
+
+test("a changed delivery wallet or quantity at the same price requires a fresh owner review", async t => {
+  for (const change of [
+    (item) => { const moved = addr(); item.delivery.recipient = { locator: `solana:${moved}`, walletAddress: moved }; },
+    (item) => { item.quantity = 2; },
+    (item) => { item.tokenLocator = "solana:other-token"; },
+  ]) {
+    const { f, args } = await reviewed(t);
+    const changed = structuredClone(f.raw); change(changed.order.lineItems[0]);
+    const calls = route(f, { order: () => changed });
+    const result = await executeCrossmintPayment(f.context, args);
+    assert.equal(result.structuredContent.action, "crossmint_rejected_before_submission");
+    assert.equal(result.structuredContent.reviewRequired, true);
+    assert.match(result.structuredContent.message, /delivery wallet/);
+    assert.equal(submissions(calls).length, 0);
+  }
+});
+
+test("expired quote, payer mismatch and amount mismatch stop before any submission", async t => {
+  for (const change of [
+    (order) => { order.quote.expiresAt = "2000-01-01T00:00:00Z"; },
+    (order) => { order.quote.status = "expired"; },
+    (order) => { order.payment.preparation.payerAddress = addr(); },
+    (order) => { order.quote.totalPrice.amount = "1.234568"; },
+  ]) {
+    const { f, args } = await reviewed(t);
+    const changed = structuredClone(f.raw); change(changed.order);
+    const calls = route(f, { order: () => changed });
+    const result = await executeCrossmintPayment(f.context, args);
+    assert.equal(result.structuredContent.action, "crossmint_rejected_before_submission");
+    assert.equal(submissions(calls).length, 0);
+  }
+});
+
+test("replay and refresh resume the original operation, even after the quote expired", async t => {
+  const { f, args } = await reviewed(t);
+  const before = f.preparations();
+  const expired = structuredClone(f.raw); expired.order.quote.expiresAt = "2000-01-01T00:00:00Z"; expired.order.phase = "completed";
+  let id;
+  const calls = route(f, {
+    order: () => expired,
+    connector: () => Response.json({ connector: "crossmint", connector_reference: "order_1", idempotency_key: "key", payment: { payment_id: id, status: "submitted", mandate: f.args.mandate } }),
+  });
+  globalThis.fetch = ((inner) => async (url, init) => { id ??= url.match(/payment_[a-f0-9]{64}/)?.[0]; return inner(url, init); })(globalThis.fetch);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await executeCrossmintPayment(f.context, args);
+    assert.equal(result.structuredContent.payment_id, id);
+    assert.equal(result.structuredContent.action, "crossmint_payment_pending");
+  }
+  assert.equal(submissions(calls).length, 0);
+  assert.equal(f.preparations(), before, "no second payment is prepared");
+  assert(calls.every(c => !c.url.startsWith("https://staging.crossmint.com")), "a known operation is resumed before the provider is asked again");
+});
+
+test("an ambiguous original-operation check never turns into a replacement purchase", async t => {
+  const { f, args } = await reviewed(t);
+  const calls = route(f, { connector: () => new Response("upstream", { status: 502 }) });
+  await assert.rejects(executeCrossmintPayment(f.context, args), /do not submit a replacement/);
+  assert.equal(submissions(calls).length, 0);
+});
+
+test("status keeps payment, delivery and refund apart: completed order, failed delivery, refund", async t => {
+  configure(t); const f = fixture(); delete process.env.CHAINPAY_CROSSMINT_ENABLED;
+  const id = `payment_${"b".repeat(64)}`;
+  // The relay's sanitized observation of Crossmint's documented failed-delivery example.
+  const proof = { orderId: "order_1", orderPhase: "completed", paymentStatus: "completed", delivery: "failed", refunded: { amount: "1.234567", currency: "usdc" }, deliveries: [{ status: "failed", failureCode: "slippage-tolerance-exceeded" }], evidenceSource: "crossmint-staging-orders-api", reportedAtMs: 1_790_000_000_000 };
+  globalThis.fetch = async (url) => url.endsWith("/proof")
+    ? Response.json({ proof })
+    : Response.json({ connector: "crossmint", connector_reference: "order_1", idempotency_key: "key", payment: { payment_id: id, status: "confirmed", signature: "signature", receipt_address: "receipt", mandate: f.args.mandate } });
+  const result = await crossmintPaymentStatus(f.context, { paymentId: id });
+  const { crossmint } = result.structuredContent;
+  assert.equal(result.structuredContent.status, "confirmed");
+  assert.equal(crossmint.phase, "completed");
+  assert.equal(crossmint.paymentStatus, "completed");
+  assert.equal(crossmint.delivery, "failed");
+  assert.equal(crossmint.refunded, true);
+  assert.deepEqual(crossmint.refund, { amount: "1.234567", currency: "usdc" });
+  assert.equal(crossmint.deliveries[0].failureCode, "slippage-tolerance-exceeded");
+  assert.equal(result.structuredContent.providerDelivery, "failed");
+  assert.equal(f.preparations(), 0);
 });

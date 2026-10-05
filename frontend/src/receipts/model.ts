@@ -97,7 +97,7 @@ export type SellerStatementState =
   | { status: "unavailable"; reason: string }
   // Crossmint is the seller for a Crossmint order, so its order status takes the
   // seller slot. It is Crossmint's report, never ChainPay verification.
-  | { status: "crossmint"; phase: string; refunded: boolean; reportedAt?: string };
+  | { status: "crossmint"; phase: string; refunded: boolean; delivery?: "delivered" | "pending" | "failed" | "unknown"; reportedAt?: string };
 
 export type ReceiptValidationCode =
   | "wrong_owner"
@@ -205,7 +205,17 @@ function crossmintStamp(seller: Extract<SellerStatementState, { status: "crossmi
       tone: "unknown",
     };
   }
-  if (seller.phase === "completed") {
+  // Crossmint also marks an order completed when delivery failed, so a failed
+  // delivery is shown as such and "complete" needs a reported delivery.
+  if (seller.delivery === "failed") {
+    return {
+      key: "seller",
+      label: "Crossmint reports delivery failed",
+      detail: "Paid on Solana is unchanged. Crossmint says the item did not arrive and has not reported a refund.",
+      tone: "unknown",
+    };
+  }
+  if (seller.phase === "completed" && seller.delivery === "delivered") {
     return {
       key: "seller",
       label: "Crossmint reports order complete",
@@ -213,11 +223,13 @@ function crossmintStamp(seller: Extract<SellerStatementState, { status: "crossmi
       tone: "neutral",
     };
   }
-  if (seller.phase === "payment" || seller.phase === "delivery") {
+  if (seller.phase === "payment" || seller.phase === "delivery" || seller.phase === "completed") {
     return {
       key: "seller",
       label: "Waiting for Crossmint",
-      detail: "Payment is on Solana. Crossmint has not reported the order complete.",
+      detail: seller.phase === "completed"
+        ? "Payment is on Solana. Crossmint marked the order completed but has not reported the item delivered."
+        : "Payment is on Solana. Crossmint has not reported the order complete.",
       tone: "neutral",
     };
   }

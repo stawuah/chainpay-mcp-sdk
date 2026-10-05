@@ -226,7 +226,9 @@
       "orderId": "a1-crossmint-order-0040",
       "itemLabel": "Mad Lads #1230",
       "phase": "completed",
-      "reportedAt": "2026-10-02T14:02:00.000Z"
+      "reportedAt": "2026-10-02T14:02:00.000Z",
+      "delivery": "delivered",
+      "paymentStatus": "completed"
     },
     "outcome": {
       "kind": "payment_settled",
@@ -325,7 +327,65 @@
       "orderId": "a0-crossmint-order-0039",
       "itemLabel": "Mad Lads #1229",
       "phase": "completed",
-      "refunded": true
+      "refunded": true,
+      "delivery": "failed",
+      "paymentStatus": "completed",
+      "refund": {
+        "amount": "4.500001",
+        "currency": "usdc"
+      }
+    },
+    "outcome": {
+      "kind": "payment_settled",
+      "receiptAddress": "2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1"
+    }
+  },
+  {
+    "id": "cm-delivery-failed",
+    "createdAt": "2026-10-02T14:04:00.000Z",
+    "source": "message",
+    "title": "Mad Lads #1228",
+    "prompt": "Buy Mad Lads #1234 on Crossmint, up to 5 USDC",
+    "response": "I read the price from Crossmint's prepared payment and checked it against your spending permission.",
+    "stage": "receipt_ready",
+    "toolCalls": [
+      "prepare_payment"
+    ],
+    "attachments": [],
+    "approval": {
+      "kind": "payment",
+      "action": "agent_signature_required",
+      "payment": {
+        "amount": "4500001",
+        "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "recipient": "CrossmintRecipientAta1111111111111111111111"
+      }
+    },
+    "requirements": {
+      "status": "ready",
+      "missing": [],
+      "checks": [
+        {
+          "key": "limits",
+          "label": "Limits",
+          "status": "pass",
+          "detail": "Within this spending permission."
+        },
+        {
+          "key": "token",
+          "label": "Token",
+          "status": "pass",
+          "detail": "USDC allowed."
+        }
+      ]
+    },
+    "crossmint": {
+      "orderId": "a3-crossmint-order-0038",
+      "itemLabel": "Mad Lads #1228",
+      "phase": "completed",
+      "paymentStatus": "completed",
+      "delivery": "failed",
+      "refunded": false
     },
     "outcome": {
       "kind": "payment_settled",

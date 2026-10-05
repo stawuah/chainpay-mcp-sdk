@@ -52,11 +52,45 @@ export type CrossmintOrderSummary = {
   currency?: string;
   quotedTotal?: { amount: string; currency?: string };
   lineItemLocators: string[];
+  /**
+   * What each line item delivers and to whom. `lineItemCount` is the raw count
+   * Crossmint returned, so an item ChainPay could not read is never silently
+   * dropped from what the owner reviews.
+   */
+  lineItems: CrossmintLineItem[];
+  lineItemCount: number;
   serializedTransaction?: string;
   payerAddress?: string;
   preparationChain?: string;
   quoteExpiresAt?: string;
   quoteStatus?: string;
+};
+
+/**
+ * One Crossmint line item as ChainPay reads it. A field that is absent stays
+ * undefined; a field Crossmint states twice with different values is flagged
+ * as a conflict instead of picking one, so checkout can fail closed.
+ */
+export type CrossmintLineItem = {
+  locator?: string;
+  chain?: string;
+  executionMode?: string;
+  quantity?: number;
+  quantityConflict?: true;
+  /** Wallet that receives the purchased item: Crossmint's `delivery.recipient`. */
+  deliveryRecipient?: string;
+  deliveryRecipientConflict?: true;
+  totalPrice?: { amount: string; currency?: string };
+};
+
+/** The material terms of one item, bound into the reviewed approval. */
+export type CrossmintBoundItem = {
+  locator: string | null;
+  chain: string | null;
+  executionMode: string | null;
+  quantity: number | null;
+  deliveryRecipient: string | null;
+  totalPrice: { amount: string; currency: string | null } | null;
 };
 
 export type CrossmintQuoteCheck = "match" | "mismatch" | "unavailable";
@@ -80,6 +114,12 @@ export type CrossmintPaymentTerms = {
   quoteCheck: CrossmintQuoteCheck;
   quotedTotal?: { amount: string; currency?: string };
   lineItemLocators: string[];
+  /**
+   * Who receives what, and how many. The payer and the token-transfer recipient
+   * say nothing about where the purchased item goes, so a changed delivery
+   * wallet or quantity must change the reviewed fingerprint too.
+   */
+  items: CrossmintBoundItem[];
   payerAddress?: string;
   crossmintSourceTokenAccount?: Address;
 };
@@ -168,18 +208,123 @@ export function scaleDecimalString(value: string, decimals: number): bigint | un
   return BigInt(whole + padded);
 }
 
+function lineItemLocator(record: Record<string, unknown>): string | undefined {
+  return (
+    optionalString(record.tokenLocator, MAX_LOCATOR_CHARS) ??
+    optionalString(record.collectionLocator, MAX_LOCATOR_CHARS)
+  );
+}
+
 function lineItemLocators(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const locators: string[] = [];
   for (const item of value.slice(0, MAX_LINE_ITEM_LOCATORS)) {
     const record = optionalRecord(item);
     if (!record) continue;
-    const locator =
-      optionalString(record.tokenLocator, MAX_LOCATOR_CHARS) ??
-      optionalString(record.collectionLocator, MAX_LOCATOR_CHARS);
+    const locator = lineItemLocator(record);
     if (locator) locators.push(locator);
   }
   return locators;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  const parsed = typeof value === "string" && /^\d{1,9}$/.test(value.trim()) ? Number(value.trim()) : value;
+  return typeof parsed === "number" && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/** Normalize a delivery wallet. Only a Solana address counts; an email is not a wallet. */
+function solanaWallet(value: unknown): string | undefined {
+  const text = optionalString(value, MAX_LOCATOR_CHARS);
+  if (!text) return undefined;
+  const separator = text.indexOf(":");
+  const candidate = separator < 0 ? text : text.slice(0, separator) === "solana" ? text.slice(separator + 1) : undefined;
+  if (!candidate) return undefined;
+  try {
+    const key = new PublicKey(candidate);
+    return key.toBase58() === candidate && candidate !== PublicKey.default.toBase58() ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Every stated value must agree; disagreement is a conflict, never a choice. */
+function agreed<T>(values: Array<T | undefined>): { value?: T; conflict?: true } {
+  const present = values.filter((value): value is T => value !== undefined);
+  if (present.length === 0) return {};
+  return present.every((value) => value === present[0]) ? { value: present[0] } : { conflict: true };
+}
+
+function lineItem(value: unknown): CrossmintLineItem | undefined {
+  const record = optionalRecord(value);
+  if (!record) return undefined;
+  const callData = optionalRecord(record.callData);
+  const executionParams = optionalRecord(record.executionParams);
+  const recipient = optionalRecord(optionalRecord(record.delivery)?.recipient);
+  const rawQuantities = [record.quantity, callData?.quantity, executionParams?.quantity].filter((q) => q !== undefined && q !== null);
+  const quantities = rawQuantities.map(positiveInteger);
+  // A quantity Crossmint states but ChainPay cannot read is a conflict, not an absence.
+  const quantity = quantities.includes(undefined) ? { conflict: true as const } : agreed(quantities);
+  const rawRecipients = [recipient?.walletAddress, recipient?.locator].filter((r) => r !== undefined && r !== null);
+  const wallets = rawRecipients.map(solanaWallet);
+  const delivery = wallets.includes(undefined) ? { conflict: true as const } : agreed(wallets);
+  const price = optionalRecord(optionalRecord(record.quote)?.totalPrice);
+  const amount = optionalString(price?.amount, 64);
+  const currency = optionalString(price?.currency, 32);
+  const locator = lineItemLocator(record);
+  const chain = optionalString(record.chain, 64);
+  const executionMode = optionalString(record.executionMode, 32);
+  return {
+    ...(locator ? { locator } : {}),
+    ...(chain ? { chain } : {}),
+    ...(executionMode ? { executionMode } : {}),
+    ...(quantity.value !== undefined ? { quantity: quantity.value } : {}),
+    ...(quantity.conflict ? { quantityConflict: true as const } : {}),
+    ...(delivery.value !== undefined ? { deliveryRecipient: delivery.value } : {}),
+    ...(delivery.conflict ? { deliveryRecipientConflict: true as const } : {}),
+    ...(amount ? { totalPrice: { amount, ...(currency ? { currency } : {}) } } : {}),
+  };
+}
+
+function lineItems(value: unknown): { items: CrossmintLineItem[]; count: number } {
+  if (!Array.isArray(value)) return { items: [], count: 0 };
+  const items: CrossmintLineItem[] = [];
+  for (const raw of value.slice(0, MAX_LINE_ITEM_LOCATORS)) {
+    const item = lineItem(raw);
+    if (item) items.push(item);
+  }
+  return { items, count: value.length };
+}
+
+function boundItem(item: CrossmintLineItem): CrossmintBoundItem {
+  return {
+    locator: item.locator ?? null,
+    chain: item.chain ?? null,
+    executionMode: item.executionMode ?? null,
+    quantity: item.quantityConflict ? null : item.quantity ?? null,
+    deliveryRecipient: item.deliveryRecipientConflict ? null : item.deliveryRecipient ?? null,
+    totalPrice: item.totalPrice ? { amount: item.totalPrice.amount, currency: item.totalPrice.currency ?? null } : null,
+  };
+}
+
+/**
+ * Checkout pays only for items whose delivery is fully stated: one readable
+ * locator, one quantity and one Solana delivery wallet per line. Anything
+ * absent or ambiguous stops before a payment is prepared.
+ */
+function requireBindableItems(order: CrossmintOrderSummary): void {
+  if (order.lineItemCount === 0 || order.lineItemCount > MAX_LINE_ITEM_LOCATORS || order.lineItems.length !== order.lineItemCount) {
+    fail("terms_unavailable", "Crossmint order line items are missing or unreadable, so ChainPay cannot show what is being bought");
+  }
+  for (const item of order.lineItems) {
+    if (!item.locator) fail("terms_unavailable", "A Crossmint line item does not name the item being bought");
+    if (item.chain !== undefined && item.chain !== "solana") fail("terms_unavailable", "A Crossmint line item delivers on a chain other than Solana");
+    if (item.quantityConflict || item.quantity === undefined) {
+      fail("terms_unavailable", "A Crossmint line item has a missing or ambiguous quantity");
+    }
+    if (item.deliveryRecipientConflict || item.deliveryRecipient === undefined) {
+      fail("terms_unavailable", "A Crossmint line item has a missing or ambiguous delivery wallet");
+    }
+  }
 }
 
 function quotedTotal(order: Record<string, unknown>): { amount: string; currency?: string } | undefined {
@@ -210,10 +355,13 @@ export function parseCrossmintOrder(value: unknown): CrossmintOrderSummary {
   const currency = optionalString(payment?.currency, 32);
   const payerAddress = optionalString(preparation?.payerAddress, 64);
   const total = quotedTotal(order);
+  const items = lineItems(order.lineItems);
   return {
     orderId,
     phase,
     lineItemLocators: lineItemLocators(order.lineItems),
+    lineItems: items.items,
+    lineItemCount: items.count,
     ...(optionalString(payment?.status, 64) ? { paymentStatus: optionalString(payment?.status, 64)! } : {}),
     ...(optionalString(payment?.method, 64) ? { paymentMethod: optionalString(payment?.method, 64)! } : {}),
     ...(currency ? { currency } : {}),
@@ -454,6 +602,7 @@ export function validateCrossmintCheckoutOrder(
   const expires = Date.parse(order.quoteExpiresAt ?? "");
   if (order.quoteStatus !== "valid" || !Number.isFinite(expires) || expires <= (expected.now ?? Date.now())) fail("order_not_payable", "Crossmint quote is expired or unavailable");
   if (order.paymentStatus !== "awaiting-payment") fail("order_not_payable", "Crossmint order is not awaiting payment");
+  requireBindableItems(order);
   const transfer = decodeCrossmintTransferTerms(order.serializedTransaction ?? "", { mint: expected.mint, tokenProgram: "spl-token", strict: true });
   if (transfer.source !== expected.source || transfer.decimals !== 6) fail("terms_mismatch", "Prepared transfer differs from the mandate source or USDC decimals");
   const terms = crossmintPaymentTerms(order, { mint: expected.mint, tokenProgram: "spl-token" });
@@ -500,6 +649,7 @@ export function crossmintPaymentTerms(
     quoteCheck: quoteCheckFor(order, terms),
     ...(order.quotedTotal ? { quotedTotal: order.quotedTotal } : {}),
     lineItemLocators: order.lineItemLocators,
+    items: (order.lineItems ?? []).map(boundItem),
     ...(order.payerAddress ? { payerAddress: order.payerAddress } : {}),
     crossmintSourceTokenAccount: terms.source,
   };

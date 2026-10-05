@@ -99,7 +99,10 @@ export const execute = internalMutation({
       if (prior.connector !== "crossmint" || !["confirmed", "verified"].includes(prior.status) || old.updated > sorted(incoming.updated_at_ms)) return null;
       if (!["confirmed", "verified"].includes(incoming.status)) return fail("invalid_argument", "Invalid order evidence status");
       prior.proof = incoming.proof; prior.response_status = incoming.response_status; prior.error = incoming.error;
-      if (prior.status !== "verified") prior.status = incoming.status;
+      // Verification is monotonic against older-phase polls; a reported failed
+      // delivery or refund is a new fact and is the one thing that clears it.
+      const reverses = incoming.proof?.delivery === "failed" || (incoming.proof?.refunded !== null && typeof incoming.proof?.refunded === "object");
+      if (prior.status !== "verified" || reverses) prior.status = incoming.status;
       prior.updated_at_ms = incoming.updated_at_ms;
       const source = old.source_json ? json(old.source_json) : null; if (source) delete source.updated_at;
       await ctx.db.patch(old._id, { record_json: encode(prior), updated: sorted(prior.updated_at_ms), ...(source ? { source_json: encode(source) } : {}) });

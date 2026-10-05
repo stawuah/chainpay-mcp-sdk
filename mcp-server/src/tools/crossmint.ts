@@ -12,10 +12,32 @@ function backend(context: ChainPayMcpContext) {
   return { url: context.backendUrl.replace(/\/$/, ""), headers: { Authorization: `Bearer ${context.backendAuthToken}`, "Content-Type": "application/json" } };
 }
 export function crossmintTermsFingerprint(terms: CrossmintPaymentTerms): string {
-  return createHash("sha256").update(JSON.stringify([terms.orderId, terms.mint, terms.recipient, terms.amount, terms.decimals, terms.tokenProgram, terms.payerAddress, terms.crossmintSourceTokenAccount, terms.lineItemLocators])).digest("hex");
+  return createHash("sha256").update(JSON.stringify([terms.orderId, terms.mint, terms.recipient, terms.amount, terms.decimals, terms.tokenProgram, terms.payerAddress, terms.crossmintSourceTokenAccount, terms.lineItemLocators, terms.items ?? null])).digest("hex");
 }
+/** What the owner reviews: the price and also who receives which item, and how many. */
 function requestView(terms: CrossmintPaymentTerms) {
-  return { orderId: terms.orderId, quoteCheck: terms.quoteCheck, quotedAmount: terms.amount, phase: terms.phase };
+  return { orderId: terms.orderId, quoteCheck: terms.quoteCheck, quotedAmount: terms.amount, phase: terms.phase, items: (terms.items ?? []).map(item => ({ locator: item.locator, quantity: item.quantity, deliveryRecipient: item.deliveryRecipient })) };
+}
+const DELIVERY_STATES = new Set(["delivered", "pending", "failed", "unknown"]);
+type CrossmintObservation = { orderPhase?: string; evidenceSource?: string; reportedAtMs?: number; paymentStatus?: string; delivery?: string; refunded?: { amount?: string; currency?: string } | null; deliveries?: Array<{ status?: string; failureCode?: string }> };
+/**
+ * Crossmint's report, field by field. Payment, delivery and refund are read
+ * independently: a completed order whose delivery failed or was refunded is
+ * never collapsed into "complete".
+ */
+function providerView(orderId: string, observation: CrossmintObservation | undefined) {
+  const delivery = typeof observation?.delivery === "string" && DELIVERY_STATES.has(observation.delivery) ? observation.delivery : "unknown";
+  const refund = observation?.refunded && typeof observation.refunded.amount === "string" ? { amount: observation.refunded.amount, ...(typeof observation.refunded.currency === "string" ? { currency: observation.refunded.currency } : {}) } : undefined;
+  return {
+    orderId,
+    ...(observation?.orderPhase ? { phase: observation.orderPhase } : {}),
+    ...(typeof observation?.paymentStatus === "string" ? { paymentStatus: observation.paymentStatus } : {}),
+    delivery,
+    refunded: Boolean(refund),
+    ...(refund ? { refund } : {}),
+    ...(Array.isArray(observation?.deliveries) ? { deliveries: observation!.deliveries!.map(line => ({ status: typeof line?.status === "string" ? line.status : "unknown", ...(typeof line?.failureCode === "string" ? { failureCode: line.failureCode } : {}) })) } : {}),
+    ...(Number.isSafeInteger(observation?.reportedAtMs) ? { reportedAt: new Date(observation!.reportedAtMs!).toISOString() } : {}),
+  };
 }
 async function preparedOrder(context: ChainPayMcpContext, args: Record<string, unknown>, mayPatch: boolean) {
   requireCrossmintEnabled(); backend(context);
@@ -48,6 +70,11 @@ export async function prepareCrossmintPayment(context: ChainPayMcpContext, args:
   return toolResult({ action: "crossmint_agent_signature_required", payment, crossmint: requestView(terms), receiptAddress: prepared.receiptAddress, preflight: prepared.preflight, requirements: requirementsFromPreflight(prepared.preflight), transaction: serializeTransaction(prepared.transaction), unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction), continuation, message: "Review this Devnet order and sign the ChainPay transaction. No payment has been submitted." });
 }
 
+/** The re-fetched order no longer matches what the owner reviewed. */
+class ReviewRequired extends Error {
+  constructor() { super("Crossmint order changed (price, item, quantity or delivery wallet) or was not reviewed. Prepare and review it again; nothing was submitted."); }
+}
+
 export async function executeCrossmintPayment(context: ChainPayMcpContext, args: Record<string, unknown>) {
   if (typeof args.paymentId === "string" && /^payment_/.test(args.paymentId)) return crossmintPaymentStatus(context, args);
   // Check the deterministic original operation before current quote/preflight:
@@ -65,12 +92,12 @@ export async function executeCrossmintPayment(context: ChainPayMcpContext, args:
   try {
     checked = await preparedOrder(context, args, false);
     if (args.invoiceHash !== checked.fields.invoiceHash) throw new Error("Invoice reference is missing or differs from the Crossmint order");
-    if (args.expectedTerms !== checked.fingerprint) throw new Error("Crossmint order changed or was not reviewed. Prepare and review it again; nothing was submitted.");
+    if (args.expectedTerms !== checked.fingerprint) throw new ReviewRequired();
     if (!checked.prepared.preflight.valid) return toolResult({ action: "rejected_by_preflight", preflight: checked.prepared.preflight }, true);
     if (args.signingMode !== "human" && args.signingMode !== "delegated") throw new Error("Choose human or delegated signing explicitly");
     if (args.signingMode === "human" && typeof args.signedTransaction !== "string") throw new Error("Human execution requires the original approved signed transaction");
     if (args.signingMode === "delegated" && args.signedTransaction !== undefined) throw new Error("Delegated execution does not accept signed transactions");
-  } catch (error) { return toolResult({ action: "crossmint_rejected_before_submission", message: error instanceof Error ? error.message : "Crossmint preparation failed" }, true); }
+  } catch (error) { return toolResult({ action: "crossmint_rejected_before_submission", ...(error instanceof ReviewRequired ? { reviewRequired: true } : {}), message: error instanceof Error ? error.message : "Crossmint preparation failed" }, true); }
   const { terms, fields, prepared, agent } = checked;
   const relay = backend(context);
   await context.assertActive?.();
@@ -103,7 +130,7 @@ export async function crossmintPaymentStatus(context: ChainPayMcpContext, args: 
   if (typeof id !== "string" || !/^payment_[a-f0-9]{64}$/.test(id)) throw new Error("A valid existing paymentId is required");
   const response = await fetch(`${relay.url}/v1/payments/${id}/connector`, { headers: relay.headers, redirect: "error", signal: AbortSignal.timeout(20_000) });
   if (!response.ok) throw new Error(`Original Crossmint operation unavailable (${response.status}); retain the original approval`);
-  const saved = await response.json() as { connector: string; connector_reference: string; payment: Record<string, unknown>; idempotency_key: string; proof?: { orderPhase?: string; evidenceSource?: string; reportedAtMs?: number } };
+  const saved = await response.json() as { connector: string; connector_reference: string; payment: Record<string, unknown>; idempotency_key: string; proof?: CrossmintObservation };
   if (saved.connector !== "crossmint" || saved.payment.payment_id !== id) throw new Error("This operation is not the requested Crossmint payment");
   let observation = saved.proof?.evidenceSource === "crossmint-staging-orders-api" ? saved.proof : undefined; let providerError: string | undefined;
   if (saved.payment.status === "confirmed") {
@@ -114,5 +141,6 @@ export async function crossmintPaymentStatus(context: ChainPayMcpContext, args: 
       observation = (await readback.json() as { proof?: typeof observation }).proof;
     } catch { providerError = "Payment is confirmed; Crossmint order status could not be refreshed. Retry status, not payment."; }
   }
-  return toolResult({ ...saved.payment, action: saved.payment.status === "confirmed" ? "crossmint_settled" : "crossmint_payment_pending", receiptAddress: saved.payment.receipt_address, crossmint: { orderId: saved.connector_reference, phase: observation?.orderPhase, ...(Number.isSafeInteger(observation?.reportedAtMs) ? { reportedAt: new Date(observation!.reportedAtMs!).toISOString() } : {}) }, providerStatus: observation?.orderPhase ?? "unknown", ...(providerError ? { message: providerError } : {}), continuation: { tool: "get_crossmint_payment", arguments: { paymentId: id } } }, saved.payment.status === "failed");
+  const crossmint = providerView(saved.connector_reference, observation);
+  return toolResult({ ...saved.payment, action: saved.payment.status === "confirmed" ? "crossmint_settled" : "crossmint_payment_pending", receiptAddress: saved.payment.receipt_address, crossmint, providerStatus: observation?.orderPhase ?? "unknown", providerDelivery: crossmint.delivery, ...(providerError ? { message: providerError } : {}), continuation: { tool: "get_crossmint_payment", arguments: { paymentId: id } } }, saved.payment.status === "failed");
 }

@@ -212,6 +212,10 @@ describe("combined release storage", () => {
     expect(stored.status).toBe("verified"); expect(stored.proof.phase).toBe("completed"); expect(stored.transaction_signature).toBe("original");
     await call(t, "put_x402", { record_json: JSON.stringify({ ...record, updated_at_ms: 400 }) });
     expect(JSON.parse(await call(t, "find_x402_by_idempotency", { key: "owner:c" })).proof.phase).toBe("completed");
+     // A later refund or failed delivery is a new fact, so it clears verification.
+    await call(t, "put_crossmint_proof", { record_json: JSON.stringify({ ...record, status: "confirmed", updated_at_ms: 500, proof: { orderPhase: "completed", delivery: "failed", refunded: { amount: "5", currency: "usdc" }, fulfilled: false }, response_status: 200, error: null }) });
+    const refunded = JSON.parse(await call(t, "find_x402_by_idempotency", { key: "owner:c" }));
+    expect(refunded.status).toBe("confirmed"); expect(refunded.proof.refunded.amount).toBe("5"); expect(refunded.transaction_signature).toBe("original");
   });
 });
 

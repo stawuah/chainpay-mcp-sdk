@@ -184,6 +184,7 @@ export type AgentInboxStage = "received" | "understood" | "mandate_prepared" | "
  * A request that pays a Crossmint checkout order. Everything here is Crossmint's
  * own statement about the order; whether money moved comes only from the receipt.
  */
+export type CrossmintDelivery = "delivered" | "pending" | "failed" | "unknown";
 export type CrossmintRequest = {
   orderId: string;
   itemLabel?: string;
@@ -192,7 +193,13 @@ export type CrossmintRequest = {
   quoteCheck?: "match" | "mismatch" | "unavailable";
   /** Crossmint order phase: quote, payment, delivery or completed. */
   phase?: string;
+  /** Crossmint's payment status, separate from the phase. */
+  paymentStatus?: string;
+  /** Whether the item reached the reviewed wallet. `completed` phase alone is not delivery. */
+  delivery?: CrossmintDelivery;
   refunded?: boolean;
+  /** The refund Crossmint reports, exactly as stated. */
+  refund?: { amount: string; currency?: string };
   reportedAt?: string;
   /** Why ChainPay refused to pay this order before anything was submitted. */
   blockedReason?: "closed" | "already_paid";
