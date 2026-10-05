@@ -184,6 +184,11 @@ export interface CardsSource {
    * (same Axum operation ids, finished steps skipped) instead of making a new one.
    */
   createCard(input: CreateCardInput, progress: CreateProgress, attemptId: string): Promise<string>;
+  /**
+   * Re-drive a card's persisted activation (same policy version): copy limits, read the
+   * public proof back from Solana, open the card. Answers the state Axum actually reached.
+   */
+  finishActivation(card: CardView, operationId: string): Promise<CardView>;
   /** `operationId` is reused when the owner retries the same freeze. */
   freeze(cardId: string, reason: string, operationId: string): Promise<FreezeResult>;
   unfreeze(card: CardView, policyVersion: number, operationId: string): Promise<CardView>;

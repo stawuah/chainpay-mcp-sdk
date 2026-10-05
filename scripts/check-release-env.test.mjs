@@ -44,6 +44,8 @@ test("the public Devnet MVP (Vercel production) allows cards only on Devnet + th
   assert.equal(checkReleaseEnvironment("backend", productionBackend).environment, "production");
   assert.equal(checkReleaseEnvironment("backend", {...productionBackend, CARDS_CONNECTOR_ENABLED: "false"}).environment, "production");
   assert.throws(() => checkReleaseEnvironment("backend", {...productionBackend, CARDS_CONNECTOR_ENABLED: "yes"}), /true or false/);
+  assert.equal(checkReleaseEnvironment("backend", {...productionBackend, CARDS_NEW_ACTIVATION_ENABLED: "false"}).environment, "production");
+  assert.throws(() => checkReleaseEnvironment("backend", {...productionBackend, CARDS_NEW_ACTIVATION_ENABLED: "off"}), /CARDS_NEW_ACTIVATION_ENABLED must be true or false/);
   assert.throws(() => checkReleaseEnvironment("backend", {...productionCards, CHAINPAY_CLUSTER: "mainnet-beta"}), /Devnet only/);
   // The sandbox host and the sandbox key must be explicit in production.
   assert.throws(() => checkReleaseEnvironment("backend", {...productionCards, LITHIC_API_URL: ""}), /LITHIC_API_URL is required/);

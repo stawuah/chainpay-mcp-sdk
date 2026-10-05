@@ -377,7 +377,7 @@ if (SIGNED_IN && !FIXTURE_APPROVAL) {
   void ensureSessionReady();
 }
 
-// Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1][&attest=verified|challenge_bound|mismatch|failed][&repay=unknown][&restore=tampered][&reads=unreadable]`.
+// Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1][&attest=verified|challenge_bound|mismatch|failed][&repay=unknown][&restore=tampered][&reads=unreadable][&activation=proof_pending|opening|limits_failed]`.
 // ILLUSTRATIVE fixtures through the same CardsSource interface the live SDK
 // client implements. Nothing signs or reaches a network.
 const CARD_QUERY = new URLSearchParams(location.search);
@@ -387,6 +387,7 @@ const fixtureCards = createFixtureCardsSource({
   empty: CARD_QUERY.get("cards") === "empty" || (EMPTY && SIGNED_IN),
   unlocked: CARD_QUERY.get("cards") !== "locked",
   statement: (CARD_QUERY.get("statement") as never) ?? undefined,
+  activation: (CARD_QUERY.get("activation") as never) ?? undefined,
   freezeAck: CARD_QUERY.has("ack"),
   attestation: (CARD_QUERY.get("attest") as never) ?? undefined,
   repay: (CARD_QUERY.get("repay") as never) ?? undefined,

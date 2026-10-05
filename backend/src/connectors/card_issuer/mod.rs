@@ -25,6 +25,7 @@ pub(crate) fn captured_logs() -> &'static std::sync::Mutex<Vec<String>> {
     LOGS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
+pub mod activation;
 pub mod asa;
 pub mod capacity;
 pub mod checkout;
@@ -92,6 +93,11 @@ fn invalid(message: impl Into<String>) -> CardsConfigError {
 pub struct CardsConfig {
     pub issuer_writes: bool,
     pub checkout_enabled: bool,
+    /// `CARDS_NEW_ACTIVATION_ENABLED` (default on): the selective gate for
+    /// newly initiated, risk-increasing card operations (prepare a new card,
+    /// activate a card). Off, it refuses only those; reads, issuer events,
+    /// reconciliation, freeze/pause, statements and recovery keep working.
+    pub new_activation_enabled: bool,
     pub asa_verifier: StandardWebhooks,
     pub events_verifier: StandardWebhooks,
     pub attestation_mode: AttestationMode,
@@ -113,6 +119,7 @@ impl std::fmt::Debug for CardsConfig {
         f.debug_struct("CardsConfig")
             .field("issuer_writes", &self.issuer_writes)
             .field("checkout_enabled", &self.checkout_enabled)
+            .field("new_activation_enabled", &self.new_activation_enabled)
             .field("asa_secret", &self.asa_verifier.is_configured())
             .field("events_secret", &self.events_verifier.is_configured())
             .field("attestation_mode", &self.attestation_mode)
@@ -211,6 +218,21 @@ fn attestation_mode(value: Option<&str>) -> Result<AttestationMode, CardsConfigE
     }
 }
 
+/// `CARDS_NEW_ACTIVATION_ENABLED`: on unless set to exactly `false`, so
+/// existing deployments keep today's behaviour. Any other value than unset,
+/// `true` or `false` fails closed (new activations off) and says so in the
+/// log, instead of refusing to boot the relay.
+pub fn new_activation_enabled(value: Option<&str>) -> bool {
+    match value {
+        None | Some("true") => true,
+        Some("false") => false,
+        Some(_) => {
+            card_log!("CARDS_NEW_ACTIVATION_ENABLED is not true or false; new activations are off");
+            false
+        }
+    }
+}
+
 fn flag(name: &str) -> bool {
     env(name).as_deref() == Some("true")
 }
@@ -253,6 +275,9 @@ impl CardsConnector {
         let config = CardsConfig {
             issuer_writes,
             checkout_enabled: flag("CARDS_CHECKOUT_ENABLED"),
+            new_activation_enabled: new_activation_enabled(
+                env("CARDS_NEW_ACTIVATION_ENABLED").as_deref(),
+            ),
             asa_verifier: verifier("LITHIC_ASA_SECRET")?,
             events_verifier: verifier("LITHIC_EVENTS_SECRET")?,
             attestation_mode,

@@ -189,7 +189,7 @@ test("collection states: unknown is never zero", () => {
 });
 
 test("cards summary counts lifecycle states and carries no amounts", () => {
-  const card = (over) => ({ cardId: "c", label: "x", lastFour: "4242", issuerState: "OPEN", mirror: { state: "acknowledged" }, freeze: { onChain: false, issuer: "confirmed" }, billing: { label: "b", carriedCreditCents: "999999" }, ...over });
+  const card = (over) => ({ cardId: "c", label: "x", lastFour: "4242", issuerState: "OPEN", mirror: { state: "acknowledged" }, commitment: { seq: "1", state: "confirmed" }, freeze: { onChain: false, issuer: "confirmed" }, billing: { label: "b", carriedCreditCents: "999999" }, ...over });
   const summary = summarizeCards([card({}), card({ freeze: { onChain: true, issuer: "confirmed" } }), card({})]);
   assert.equal(summary.total, 3);
   assert.deepEqual(summary.lifecycle.map((row) => [row.key, row.count]), [["active", 2], ["frozen", 1]]);

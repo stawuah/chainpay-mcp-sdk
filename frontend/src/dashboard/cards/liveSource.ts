@@ -48,6 +48,7 @@ import { payStatementPrivately, preparePrivateRepayment, submitPrivateRepayment,
 import { chainpayClient } from "../../config/client";
 import { submitSignedTransaction } from "../../owner/runtime";
 import { checkTeeAttestation } from "./teeAttestation";
+import { cardStatus } from "./lifecycle";
 import { statementAmountDue } from "./statementMath";
 import { assertCardSetupTransaction, assertCoSignedRestore, reviewedRestore, type ReviewedRestore } from "./signingGuards";
 import { clearRepaymentAttempt, lookupRepayment, recordRepaymentAttempt } from "./repaymentAttempts";
@@ -68,6 +69,19 @@ import {
   type RepaymentLookup,
   RECOVERY_NUMBER_KEYS,
 } from "./source";
+
+
+/** Activation re-drive while the owner waits: about a minute, then the reconcile cron finishes it. */
+const ACTIVATION_POLL_TRIES = 12;
+const ACTIVATION_POLL_MS = 5_000;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function activationProgress(view: CardView): string {
+  const status = cardStatus(view);
+  if (status.key === "proof_pending") return "Limits copied. Waiting for the public proof on Solana before the card opens.";
+  if (status.key === "opening") return status.detail ?? "Public proof is on Solana. Opening the card.";
+  return status.detail ?? "Turning the card on.";
+}
 
 export { assertCoSignedRestore, assertRestoreMatchesReport, assertCardSetupTransaction } from "./signingGuards";
 
@@ -339,13 +353,27 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       progress("rules", "done");
 
       progress("activate", "active");
-      await guard(() => api.activateCard(prepared.cardId, 1, `card-activate-${attemptId}`));
-      progress("activate", "done");
+      // Axum answers with the activation it actually reached. "Returned" is not "done":
+      // the card is on only when the card network shows it open, the limits are copied
+      // and the public proof read back from Solana (cardStatus "active").
+      const operationId = `card-activate-${attemptId}`;
+      let view = await guard(() => api.activateCard(prepared.cardId, 1, operationId));
+      for (let tries = 0; cardStatus(view).key !== "active" && tries < ACTIVATION_POLL_TRIES; tries += 1) {
+        progress("activate", "active", activationProgress(view));
+        await sleep(ACTIVATION_POLL_MS);
+        // Same operation: Axum resumes it (reads the proof back, then opens the card).
+        // An older relay without `activation` in its answer is only read, never re-driven.
+        view = view.activation ? await guard(() => api.activateCard(prepared.cardId, 1, operationId)) : await guard(() => api.getCard(prepared.cardId));
+      }
       attempts.delete(attemptId);
+      if (cardStatus(view).key === "active") progress("activate", "done");
+      else progress("activate", "active", `${activationProgress(view)} ChainPay keeps going without you; the card page shows each step.`);
       return prepared.cardId;
     },
 
     freeze: (cardId, reason, operationId) => guard(() => api.freezeCard(cardId, reason, operationId)),
+    // Resumes the card's persisted activation for its policy version (Axum never starts a second one).
+    finishActivation: (card, operationId) => guard(() => api.activateCard(card.cardId, card.activation?.policyVersion ?? card.mirror.policyVersionMirrored ?? 1, operationId)),
     cardNumberSession: (cardId) => guard(() => api.createEmbedSession(cardId)),
 
     async unfreeze(card, policyVersion, operationId) {
