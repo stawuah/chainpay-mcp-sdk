@@ -8,6 +8,11 @@
 //!    `pending` decisions from PER + issuer truth, and re-drive issuer
 //!    freezes still waiting for acknowledgement.
 //!
+//! 3. commitment repair: re-drive the card's persisted activation, or its
+//!    latest checkpoint, until the base-layer `CardCommitment` reads back
+//!    with the expected seq, policy version and period. Always the same
+//!    persisted operation; never a new one to get past an uncertain step.
+//!
 //! `ambiguous` is never released on a timer: only evidence moves it.
 
 use super::program::{self, reservation_state};
@@ -30,6 +35,8 @@ pub struct ReconcileReport {
     pub ambiguous_resolved: u32,
     pub unpaired_flagged: u32,
     pub freezes_confirmed: u32,
+    pub commitments_confirmed: u32,
+    pub activations_completed: u32,
     pub errors: u32,
 }
 
@@ -522,7 +529,7 @@ async fn reconcile_card(
         };
         if state.as_deref() == Some(wanted.as_str()) {
             let at = rfc3339(now_ms());
-            let _ = cards
+            let stored = cards
                 .update_card(&card_id, |record| {
                     record["issuerState"] = json!(wanted);
                     record["freeze"]["issuer"] = json!("confirmed");
@@ -530,8 +537,13 @@ async fn reconcile_card(
                     record["freeze"]["ackSource"] = json!("reconcile");
                 })
                 .await;
-            report.freezes_confirmed += 1;
-            cards.metrics.count("freeze_acks");
+            if matches!(stored, Ok(Some(_))) {
+                report.freezes_confirmed += 1;
+                cards.metrics.count("freeze_acks");
+            } else {
+                // The issuer confirmed; the record did not. Next pass re-reads.
+                report.errors += 1;
+            }
         }
     }
     if lost.is_none() {
@@ -546,8 +558,9 @@ async fn reconcile_card(
             .filter(|c| !super::recovery::in_recovery(c))
         {
             super::statements::backfill_postings(cards, &fresh).await;
-            super::statements::tick(cards, &fresh).await;
+            report.errors += super::statements::tick(cards, &fresh).await;
         }
+        repair_commitment_phase(cards, &card_id, report).await;
     }
     // Rent back to the prefund for final holds and dead intents the event
     // path did not close (never on a lost card: PER state is not trusted).
@@ -561,6 +574,80 @@ async fn reconcile_card(
                 record["reconciledThroughSecs"] = json!(through)
             })
             .await;
+    }
+}
+
+/// Phase 3: finish what activation, period end, statement close and
+/// discharge left for later. Never on a card in recovery.
+async fn repair_commitment_phase(
+    cards: &Arc<CardsConnector>,
+    card_id: &str,
+    report: &mut ReconcileReport,
+) {
+    let Some(card) = cards
+        .card(card_id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|c| !super::recovery::in_recovery(c))
+    else {
+        return;
+    };
+    let confirmed_before = card.record["commitment"]["state"] == "confirmed";
+    if super::activation::in_progress(&card) {
+        match super::activation::drive(cards, card_id, super::activation::Trigger::Reconcile).await
+        {
+            Ok(after) => {
+                if after.record["activation"]["state"] == super::activation::state::ACTIVE {
+                    report.activations_completed += 1;
+                }
+                if !confirmed_before && after.record["commitment"]["state"] == "confirmed" {
+                    report.commitments_confirmed += 1;
+                }
+            }
+            Err(error) => {
+                super::card_log!(
+                    "activation for card {} not advanced: {}",
+                    log_id(card_id),
+                    error.code
+                );
+                report.errors += 1;
+            }
+        }
+    } else if !card.record["checkpointDue"].is_null()
+        || (card.record["commitment"].is_object() && !confirmed_before)
+    {
+        match super::activation::repair_commitment(cards, card_id).await {
+            Ok(commitment) => {
+                if commitment["state"] == "confirmed" {
+                    report.commitments_confirmed += 1;
+                }
+            }
+            Err(error) => {
+                super::card_log!(
+                    "commitment for card {} not repaired: {}",
+                    log_id(card_id),
+                    error.code
+                );
+                report.errors += 1;
+            }
+        }
+    }
+    let Some(card) = cards.card(card_id).await.ok().flatten() else {
+        return;
+    };
+    if !card.record["snapshotDue"].is_null() {
+        if snapshot(cards, &card).await.is_err() {
+            report.errors += 1;
+        }
+    }
+    if let Err(error) = super::activation::retry_rule_retirement(cards, &card).await {
+        super::card_log!(
+            "rule retirement for card {} not stored: {}",
+            log_id(card_id),
+            error.code
+        );
+        report.errors += 1;
     }
 }
 
@@ -679,11 +766,16 @@ pub async fn snapshot(cards: &CardsConnector, card: &StoredCardRecord) -> Result
     }
     let secs = now_ms() / 1000;
     let seq = policy.ledger_seq;
-    let _ = cards
+    match cards
         .update_card(&card_id, |record| {
             record["lastSnapshotSecs"] = json!(secs);
             record["lastSnapshotSeq"] = json!(seq);
+            record["snapshotDue"] = Value::Null;
         })
-        .await;
-    Ok(seq)
+        .await
+    {
+        Ok(Some(_)) => Ok(seq),
+        // The snapshot row is stored; only the card's bookkeeping is not.
+        _ => Err("storage".into()),
+    }
 }

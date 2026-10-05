@@ -116,6 +116,49 @@ test("lifecycle states are distinct words, and an exception is never shown as ap
   assert.equal(m.cardStatus({ ...card, freeze: { onChain: true, issuer: "confirmed" }, recovery: { state: "recovery_frozen" } }).label, "Needs restore");
 });
 
+test("a card is Active only when the card network, the copied limits and the public proof all agree (audit R2)", () => {
+  const proven = { seq: "5", state: "confirmed", policyVersion: 2 };
+  const base = { ...card, mirror: { state: "acknowledged", policyVersionMirrored: 2 }, commitment: proven };
+  assert.equal(m.cardStatus(base).key, "active");
+  assert.equal(m.cardStatus({ ...base, activation: { state: "active", policyVersion: 2 } }).key, "active");
+  // A scheduled checkpoint (or the bare seq an older relay sent) is not a public proof.
+  assert.equal(m.cardStatus({ ...base, commitment: { seq: "5", state: "pending", checkpoint: "scheduled" } }).key, "proof_pending");
+  assert.equal(m.cardStatus({ ...base, commitment: { seq: "5", root: "", slot: "1" } }).key, "proof_pending");
+  assert.equal(m.cardStatus({ ...base, commitment: undefined }).key, "proof_pending");
+  // Issuer open but the activation is still waiting on the proof: not Active.
+  assert.equal(m.cardStatus({ ...base, activation: { state: "pending_commitment", policyVersion: 2 }, commitment: { seq: "6", state: "pending" } }).key, "proof_pending");
+  // Proof confirmed, issuer still paused.
+  const opening = m.cardStatus({ ...base, issuerState: "PAUSED", activation: { state: "issuer_pending", policyVersion: 2 } });
+  assert.equal(opening.key, "opening");
+  assert.match(opening.detail, /Waiting for the card network/);
+  assert.match(m.cardStatus({ ...base, issuerState: "PAUSED", activation: { state: "issuer_pending", policyVersion: 2, detail: "new_activation_disabled" } }).detail, /switched off/);
+  // A refused mirror: never "paused" unless the card network says so.
+  const failedOpen = m.cardStatus({ ...base, mirror: { state: "failed" }, activation: { state: "mirror_failed", policyVersion: 2, steps: { issuer: "OPEN" } } });
+  assert.equal(failedOpen.key, "limits_failed");
+  assert.match(failedOpen.detail, /still shows this card open/);
+  const failedUnknown = m.cardStatus({ ...base, issuerState: "PAUSED", mirror: { state: "failed" }, activation: { state: "mirror_failed", policyVersion: 2, steps: { issuer: "unknown" } } });
+  assert.match(failedUnknown.detail, /couldn't read the card's state/);
+  assert.equal(m.cardStatus({ ...base, activation: { state: "superseded", policyVersion: 1 } }).key, "needs_activation");
+  // The step lines say what each part reached.
+  const lines = m.activationLines({ ...base, issuerState: "PAUSED", commitment: { seq: "5", state: "pending" }, activation: { state: "pending_commitment", policyVersion: 2, steps: { issuer: "pending" } } });
+  assert.deepEqual(lines.map((l) => [l.key, l.state]), [["limits", "done"], ["proof", "pending"], ["issuer", "pending"]]);
+  assert.match(lines[2].text, /paused until the steps above are done/);
+  const unknown = m.activationLines({ ...base, issuerState: "PAUSED", mirror: { state: "failed" }, activation: { state: "mirror_failed", policyVersion: 2, steps: { issuer: "unknown" } } });
+  assert.deepEqual(unknown.map((l) => l.state), ["failed", "done", "unknown"]);
+  // A proof of the previous limits is not a proof of the ones being turned on.
+  const older = { ...base, commitment: { ...proven, policyVersion: 1 }, activation: { state: "pending_commitment", policyVersion: 2 } };
+  assert.equal(m.cardStatus(older).key, "proof_pending");
+  assert.match(m.activationLines(older)[1].text, /previous limits/);
+  // Simulated credit stays labelled on the fixture cards.
+  assert.ok(m.SIMULATED_CREDIT_LABEL.length > 0);
+});
+
+test("only a confirmed public commitment becomes card evidence", () => {
+  const row = { rowId: "r1", cardId: card.cardId, at: "x", kind: "capture", lifecycle: "captured", amountCents: "1800", merchant };
+  assert.equal(m.activityEvidence({ ...card, commitment: { seq: "5", state: "pending", root: "ab", slot: "1" } }, row).commitment, undefined);
+  assert.deepEqual(m.activityEvidence({ ...card, commitment: { seq: "5", state: "confirmed", root: "ab", slot: "1" } }, row).commitment, { seq: "5", root: "ab", slot: "1" });
+});
+
 test("restore refuses values the owner wasn't shown", () => {
   const report = { digest: "ab".repeat(32), detectedAt: "", reason: "", snapshotLedgerSeq: "1", issuerEventsReplayed: 0, numbers: [
     { key: "budget", label: "Budget", cents: "200000" }, { key: "captured", label: "Charged", cents: "12000" }, { key: "reserved", label: "Held", cents: "0" },

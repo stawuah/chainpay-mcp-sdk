@@ -1,14 +1,15 @@
 name: Cards reconcile
-# Drives the card connector's reconcile job (contracts.md §3.4) where the
-# connector actually runs. Vercel crons fire only on Production deployments,
-# and the connector is refused in Production, so a Vercel cron never reached
-# it (and a */5 schedule fails a Hobby-plan deploy). This calls the same
-# route on the Preview relay instead.
+# Drives the card connector's reconcile job (contracts.md §3.4) on the relay
+# where cards are switched on. Since 2026-10-04 that is the production relay
+# (the public Devnet MVP; the release check allows cards there only with
+# Solana Devnet and the Lithic sandbox). A Vercel cron is not used: a */10
+# schedule fails a Hobby-plan deploy. The job also finishes card activations
+# and public commitments that were still waiting on the base layer.
 #
 # Off until configured. Needs, in the repository settings:
-#   variable CARDS_RECONCILE_URL   the Preview relay origin, e.g. https://relay-preview.example
-#   secret   CARDS_CRON_SECRET     the relay's CRON_SECRET (16+ characters)
-#   secret   VERCEL_AUTOMATION_BYPASS_SECRET  only if the Preview deployment is protected
+#   variable CARDS_RECONCILE_URL   the relay origin running the card connector, e.g. https://chainpay-relay.vercel.app
+#   secret   CARDS_CRON_SECRET     that relay's CRON_SECRET (16+ characters)
+#   secret   VERCEL_AUTOMATION_BYPASS_SECRET  only if that deployment is protected
 on:
   schedule:
     - cron: "*/10 * * * *"

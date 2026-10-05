@@ -96,7 +96,13 @@ struct State {
     cards: HashMap<Address, Card>,
     signatures: HashMap<String, TxOutcome>,
     log: Vec<String>,
+    /// `write_commitment` actions a checkpoint scheduled, not yet on base:
+    /// (commitment PDA, account bytes).
+    scheduled: Vec<(String, Vec<u8>)>,
 }
+
+/// Base-layer accounts the test RPC serves: address -> (owner, data).
+pub type BaseAccounts = std::sync::Arc<Mutex<HashMap<String, (String, Vec<u8>)>>>;
 
 #[derive(Debug, Default, Clone)]
 pub struct Knobs {
@@ -109,12 +115,17 @@ pub struct Knobs {
     pub outage: bool,
     /// The card's private state is gone: reads return null, writes fail.
     pub lost: bool,
+    /// Scheduled `write_commitment` actions wait (base layer is slow or the
+    /// action was dropped) until [`FakePer::release_commitments`].
+    pub hold_commitments: bool,
 }
 
 pub struct FakePer {
     key: SigningKey,
     state: Mutex<State>,
     pub knobs: Mutex<Knobs>,
+    /// Where scheduled base-layer commitment writes land (the test RPC).
+    pub base: Mutex<Option<BaseAccounts>>,
 }
 
 impl std::fmt::Debug for FakePer {
@@ -172,6 +183,36 @@ impl FakePer {
             key: SigningKey::from_bytes(&[42; 32]),
             state: Mutex::new(State::default()),
             knobs: Mutex::new(Knobs::default()),
+            base: Mutex::new(None),
+        }
+    }
+
+    /// Land every held `write_commitment` action on the base layer.
+    pub fn release_commitments(&self) {
+        let scheduled = std::mem::take(&mut self.state.lock().unwrap().scheduled);
+        self.land(scheduled);
+    }
+
+    /// Drop every held `write_commitment` action (the action never ran).
+    pub fn drop_commitments(&self) {
+        self.state.lock().unwrap().scheduled.clear();
+    }
+
+    fn land(&self, writes: Vec<(String, Vec<u8>)>) {
+        let Some(base) = self.base.lock().unwrap().clone() else {
+            return;
+        };
+        let mut accounts = base.lock().unwrap();
+        for (address, data) in writes {
+            // `write_commitment` requires a higher seq than the account holds.
+            let current = accounts
+                .get(&address)
+                .and_then(|(_, d)| program::decode_commitment(d).ok())
+                .map_or(0, |c| c.seq);
+            let next = program::decode_commitment(&data).map_or(0, |c| c.seq);
+            if next > current {
+                accounts.insert(address, (program::CARD_POLICY_PROGRAM_ID.into(), data));
+            }
         }
     }
 
@@ -263,8 +304,15 @@ impl FakePer {
                 },
             };
             state.signatures.insert(signature.clone(), outcome.clone());
-            outcome
+            let writes = if knobs.hold_commitments {
+                Vec::new()
+            } else {
+                std::mem::take(&mut state.scheduled)
+            };
+            (outcome, writes)
         };
+        let (result, writes) = result;
+        self.land(writes);
         let remaining = deadline.saturating_duration_since(Instant::now());
         if knobs.confirm_delay > remaining {
             tokio::time::sleep(remaining).await;
@@ -362,7 +410,10 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
     // `restore` is co-signed: [owner, authorizer, policy, period].
     let policy_pda = ix.accounts[if name == "restore" { 2 } else { 1 }].pubkey;
     let signer = ix.accounts[0].pubkey;
-    let card = state.cards.get_mut(&policy_pda).ok_or(6039u32)?;
+    let State {
+        cards, scheduled, ..
+    } = state;
+    let card = cards.get_mut(&policy_pda).ok_or(6039u32)?;
     let is_authorizer = signer == *authorizer && card.policy.authorizer == *authorizer;
     let available = card
         .policy
@@ -813,7 +864,26 @@ fn apply(state: &mut State, authorizer: &Address, name: &str, ix: &Instruction) 
             Ok(())
         }
         "checkpoint" => {
-            card.policy.commit_seq = u64_at(args, 32);
+            if !is_authorizer {
+                return err(6000);
+            }
+            let seq = u64_at(args, 32);
+            if seq != card.policy.commit_seq + 1 {
+                return err(stale_commitment());
+            }
+            card.policy.commit_seq = seq;
+            // Schedules the base-layer `write_commitment` action.
+            let binding = ix.accounts[3].pubkey;
+            let commitment = ix.accounts[4].pubkey;
+            let root: [u8; 32] = Sha256::digest(&args[..32]).into();
+            let data = encode_commitment(
+                &binding,
+                seq,
+                &root,
+                card.policy.version,
+                card.period.index.max(1),
+            );
+            scheduled.push((commitment.to_string(), data));
             Ok(())
         }
         "close_checkout_intent" => {
@@ -881,6 +951,32 @@ pub fn encode_policy(p: &FakePolicy) -> Vec<u8> {
     }
     d.push(p.repayments.len() as u8);
     d.extend_from_slice(&[0; 32 * 16 + 1 + 2]);
+    d
+}
+
+fn stale_commitment() -> u32 {
+    6000 + program::ERRORS
+        .iter()
+        .position(|e| *e == "StaleCommitment")
+        .expect("error name") as u32
+}
+
+/// Base-layer `CardCommitment` as `write_commitment` leaves it.
+pub fn encode_commitment(
+    binding: &Address,
+    seq: u64,
+    root: &[u8; 32],
+    policy_version: u32,
+    period_index: u32,
+) -> Vec<u8> {
+    let mut d = account_disc("CardCommitment").to_vec();
+    d.extend_from_slice(binding.as_ref());
+    d.extend_from_slice(&seq.to_le_bytes());
+    d.extend_from_slice(root);
+    d.extend_from_slice(&policy_version.to_le_bytes());
+    d.extend_from_slice(&period_index.to_le_bytes());
+    d.extend_from_slice(&7u64.to_le_bytes());
+    d.push(255);
     d
 }
 

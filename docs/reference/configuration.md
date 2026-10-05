@@ -60,6 +60,24 @@ private routes public. Server processes read their environment; copying the
   `CHAINPAY_X402_ALLOW_HTTP=true` allows loopback HTTP for development only.
 - **Seller statements:** public identity mappings in [trusted sellers](../guides/trusted-sellers.md).
   Statement signing stays on the merchant host.
+- **Agent cards (Devnet + Lithic sandbox):** `CARDS_CONNECTOR_ENABLED=true` mounts the card
+  routes; `scripts/check-release-env.mjs` lists the secrets it then requires.
+  `CARDS_ISSUER_WRITES_ENABLED` and `CARDS_CHECKOUT_ENABLED` are off unless `true`.
+  `CARDS_ISSUER_WRITES_ENABLED=false` blocks **every** issuer write, including the
+  pause a freeze needs, so it is not a safe way to stop new cards.
+- **`CARDS_NEW_ACTIVATION_ENABLED`** (default on): the selective gate for new card risk.
+  Set it to exactly `false` to refuse `POST /v1/cards/prepare` and `POST /v1/cards/{id}/activate`
+  (`503 new_activation_disabled`, not retryable). Card reads, issuer webhooks and ASA decisions,
+  the reconcile cron, freeze (issuer pause), unfreeze of an already activated card, statements,
+  repayments and recovery keep working. While it is off, reconcile still finishes the public
+  commitment of an activation accepted earlier but never opens a card that was not already open.
+  Unset or `true` keeps today's behaviour. Any other value turns new activations off and is
+  logged; the release check refuses it.
+- **Card activation order:** limits mirrored at the issuer while the card is paused → checkpoint
+  scheduled on PER → `CardCommitment` read back from the base layer (finalized) with the expected
+  seq, policy version and period → policy version re-checked → issuer opened. A scheduled
+  checkpoint is not a public commitment. The reconcile cron (`.github/workflows/cards-reconcile.yml`)
+  re-drives the same persisted activation or checkpoint until the readback matches.
 
 The current deployment workflow is the [Vercel/Convex handoff](../guides/vercel-convex-handoff.md).
 [render.yaml](../../render.yaml) remains as a legacy rollback reference; the existing

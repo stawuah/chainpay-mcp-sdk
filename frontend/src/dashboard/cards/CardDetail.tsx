@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Tab, TabList } from "@astryxdesign/core/TabList";
-import { ArrowLeft, CircleCheck, Clock3, Snowflake, TriangleAlert } from "lucide-react";
-import { availableCents, type CardActivityRow, type CardView } from "@chainpay/sdk";
+import { ArrowLeft, CircleCheck, CircleHelp, CircleX, Clock3, Snowflake, TriangleAlert } from "lucide-react";
+import { availableCents, CardsApiError, type CardActivityRow, type CardView } from "@chainpay/sdk";
 import { CARD_SECTIONS, type CardSection } from "../../routing/paths";
 import { PageHeader } from "../PageHeader";
-import { cardStatus, ISSUER_FREEZE_COPY } from "./lifecycle";
+import { activationLines, cardStatus, ISSUER_FREEZE_COPY } from "./lifecycle";
 import { newOperationId, type CardPrivateRead, type CardStatements } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { UnlockStrip } from "./Unlock";
@@ -23,6 +23,10 @@ const SECTION_LABELS: Record<CardSection, string> = { activity: "Activity", stat
 const FREEZE_POLL_MS = 3_000;
 const FREEZE_POLL_LIMIT = 40;
 
+
+/** Card states where turning it on stopped partway: show each step as it is, with a way to resume. */
+const PARTIAL_STATUS = new Set(["proof_pending", "opening", "limits_failed", "needs_activation", "setting_up"]);
+
 export type CardDetailProps = CardsShared & {
   cardId: string;
   section: CardSection;
@@ -38,12 +42,13 @@ export function CardDetail(props: CardDetailProps) {
   const [readError, setReadError] = useState("");
   const [activity, setActivity] = useState<CardActivityRow[] | null>(null);
   const [statements, setStatements] = useState<CardStatements | null>(null);
-  const [busy, setBusy] = useState<"" | "freeze" | "unfreeze">("");
+  const [busy, setBusy] = useState<"" | "freeze" | "unfreeze" | "activate">("");
   const [actionError, setActionError] = useState("");
   const [polling, setPolling] = useState(false);
   // Reused while the owner retries the same freeze/unfreeze; cleared once it succeeds.
   const freezeOp = useRef<string | null>(null);
   const unfreezeOp = useRef<string | null>(null);
+  const activateOp = useRef<string | null>(null);
 
   // Every response is dropped unless it still belongs to the card on screen.
   const currentCard = useRef(cardId);
@@ -159,6 +164,25 @@ export function CardDetail(props: CardDetailProps) {
     }
   }
 
+  // Resume the persisted activation; show whatever state Axum actually reached, success or not.
+  async function finishActivation() {
+    if (!card) return;
+    setBusy("activate");
+    setActionError("");
+    try {
+      activateOp.current ??= newOperationId("activate");
+      const next = await source.finishActivation(card, activateOp.current);
+      if (currentCard.current !== card.cardId) return;
+      setCard(next);
+      if (cardStatus(next).key === "active") activateOp.current = null;
+    } catch (error) {
+      if (error instanceof CardsApiError && error.card && currentCard.current === card.cardId) setCard(error.card);
+      setActionError(errorText(error));
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (loadError && !card) {
     return (
       <>
@@ -210,8 +234,25 @@ export function CardDetail(props: CardDetailProps) {
                   </li>
                 </ul>
               )}
+              {!card.freeze.onChain && PARTIAL_STATUS.has(status.key) && (
+                <>
+                  {status.detail && <p className="cp-activation-detail">{status.detail}</p>}
+                  <ul className="cp-freeze-lines cp-activation-lines" data-testid="activation-lines" aria-label="Turning the card on">
+                    {activationLines(card).map((line) => (
+                      <li key={line.key} data-step={line.key} data-state={line.state}>
+                        {line.state === "done" ? <CircleCheck size={16} aria-hidden="true" /> : line.state === "failed" ? <CircleX size={16} aria-hidden="true" /> : line.state === "unknown" ? <CircleHelp size={16} aria-hidden="true" /> : <Clock3 size={16} aria-hidden="true" />}
+                        {line.text}
+                        <span className="cp-visually-hidden"> ({line.state})</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
             <div className="cp-card-hero-actions">
+              {!card.freeze.onChain && PARTIAL_STATUS.has(status.key) && card.activation?.detail !== "new_activation_disabled" && (
+                <Button type="button" variant="primary" label={busy === "activate" ? "Checking…" : status.key === "limits_failed" || status.key === "needs_activation" ? "Turn on again" : "Check again"} isDisabled={Boolean(busy)} onClick={() => void finishActivation()} />
+              )}
               {card.freeze.onChain ? (
                 <>
                   <Button type="button" variant="secondary" label={busy === "unfreeze" ? "Waiting for wallet…" : "Unfreeze"} isDisabled={Boolean(busy) || Boolean(unfreezeBlocked)} onClick={() => void unfreeze()} />

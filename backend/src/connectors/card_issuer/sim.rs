@@ -65,6 +65,12 @@ pub struct SimState {
     pub rules: Vec<Value>,
     pub asa_url: Option<String>,
     pub asa_results: HashMap<String, String>,
+    /// Failure knobs: rule creation, `PATCH state=PAUSED`, card reads and
+    /// rule retirement answer 500 while set.
+    pub fail_rules: bool,
+    pub fail_pause: bool,
+    pub fail_get: bool,
+    pub fail_retire: bool,
     counter: u64,
 }
 
@@ -118,10 +124,7 @@ impl LithicSim {
                 "/v2/auth_rules/{token}/promote",
                 post(|| async { Json(json!({})) }),
             )
-            .route(
-                "/v2/auth_rules/{token}",
-                patch(|| async { Json(json!({})) }),
-            )
+            .route("/v2/auth_rules/{token}", patch(patch_rule))
             .route("/v1/transactions", get(list_transactions))
             .route("/v1/transactions/{token}", get(get_transaction))
             .route("/v1/simulate/authorize", post(simulate_authorize))
@@ -245,6 +248,9 @@ async fn create_card(State(state): Shared, Json(body): Json<Value>) -> Json<Valu
 
 async fn get_card(State(state): Shared, Path(token): Path<String>) -> Response {
     let s = state.lock().unwrap();
+    if s.fail_get {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))).into_response();
+    }
     match s.cards.get(&token) {
         Some(card) => Json(json!({"token": token, "last_four": &card.pan[12..], "state": card.state, "pan": card.pan, "cvv": "123", "spend_limit": card.spend_limit})).into_response(),
         None => (StatusCode::NOT_FOUND, Json(json!({}))).into_response(),
@@ -258,6 +264,9 @@ async fn patch_card(
 ) -> Response {
     log(&state, "PATCH", &format!("/v1/cards/{token}"), body.clone());
     let mut s = state.lock().unwrap();
+    if s.fail_pause && body["state"] == "PAUSED" {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))).into_response();
+    }
     let Some(card) = s.cards.get_mut(&token) else {
         return (StatusCode::NOT_FOUND, Json(json!({}))).into_response();
     };
@@ -270,12 +279,27 @@ async fn patch_card(
     Json(json!({"token": token, "last_four": &card.pan[12..], "state": card.state, "spend_limit": card.spend_limit})).into_response()
 }
 
-async fn create_rule(State(state): Shared, Json(body): Json<Value>) -> Json<Value> {
+async fn create_rule(State(state): Shared, Json(body): Json<Value>) -> Response {
     log(&state, "POST", "/v2/auth_rules", body.clone());
     let mut s = state.lock().unwrap();
+    if s.fail_rules {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))).into_response();
+    }
     s.counter += 1;
     s.rules.push(body);
-    Json(json!({"token": uuid(s.counter, 2), "current_version": null}))
+    Json(json!({"token": uuid(s.counter, 2), "current_version": null})).into_response()
+}
+
+async fn patch_rule(
+    State(state): Shared,
+    Path(token): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    log(&state, "PATCH", &format!("/v2/auth_rules/{token}"), body);
+    if state.lock().unwrap().fail_retire {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))).into_response();
+    }
+    Json(json!({})).into_response()
 }
 
 async fn list_transactions(
