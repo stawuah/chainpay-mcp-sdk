@@ -1060,6 +1060,47 @@ async fn concurrent_cold_start_attestation_checks_run_once() {
     assert_eq!(h.cards.attestation_checks() - before, 5);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checkout_steps_land_attestation_before_the_authorization() {
+    // Cold instance: no attestation yet. Issuing the intent and redeeming it
+    // run the check off the ASA's deadline, so the purchase that follows is
+    // approved instead of declining while a check is still in flight.
+    let h = Harness::with(AttestationMode::Enforce, true).await;
+    *h.cards.attestation_next.lock().unwrap() = Some(AttestationStatus {
+        hardware: "verified",
+        measurements: "match",
+        mode: "enforce",
+        checked_at_ms: now_ms(),
+        observed: None,
+        detail: None,
+        tcb_status: Some("UpToDate".into()),
+    });
+    assert!(
+        !h.cards
+            .attestation()
+            .await
+            .permits_approval(AttestationMode::Enforce, now_ms())
+    );
+    let before = h.cards.attestation_checks();
+    let (status, cap) = h.intent_unredeemed("demo-approved", "100").await;
+    assert_eq!(status, 200, "{cap}");
+    assert!(
+        h.cards.attestation_checks() > before,
+        "intent issue warmed attestation"
+    );
+    let (status, run) = h
+        .call(
+            "POST",
+            "/v1/cards/checkout/redeem",
+            Some(RUNNER),
+            Some(json!({"capability": cap["capability"]})),
+        )
+        .await;
+    assert_eq!(status, 200, "{run}");
+    let token = run["lithicToken"].as_str().unwrap().to_owned();
+    assert_eq!(h.sim.state.lock().unwrap().asa_results[&token], "APPROVED");
+}
+
 async fn futures_join_all<T: Send + 'static>(handles: Vec<tokio::task::JoinHandle<T>>) -> Vec<T> {
     let mut out = Vec::with_capacity(handles.len());
     for handle in handles {

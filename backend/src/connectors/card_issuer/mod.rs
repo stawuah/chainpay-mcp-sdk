@@ -144,6 +144,10 @@ pub struct CardsConnector {
     attestation_checks: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
     pub(crate) attestation_panics: std::sync::atomic::AtomicBool,
+    /// What the next (simulated) attestation check reports, so a test can
+    /// model a cold instance whose check succeeds.
+    #[cfg(test)]
+    pub(crate) attestation_next: std::sync::Mutex<Option<AttestationStatus>>,
     card_cache: RwLock<HashMap<String, (StoredCardRecord, Instant)>>,
     http: reqwest::Client,
 }
@@ -338,6 +342,8 @@ impl CardsConnector {
             attestation_checks: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             attestation_panics: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            attestation_next: std::sync::Mutex::new(None),
             card_cache: RwLock::new(HashMap::new()),
             http: reqwest::Client::new(),
         }
@@ -388,6 +394,28 @@ impl CardsConnector {
             };
             tokio::join!(this.per.prime(), attest);
         });
+    }
+
+    /// Called on the checkout steps that come 1–3 s before an authorization
+    /// (intent issue, capability redeem), and awaited, not spawned: serverless
+    /// instances may freeze background tasks once the response is sent. On a
+    /// cold instance this lands the attestation check and primes the rollup
+    /// path here, where there is no network deadline, so the ASA that follows
+    /// finds a fresh check instead of declining while one is still in flight
+    /// (seen live: a cold first purchase declined at 1140 ms, warm ones
+    /// approved in 711–982 ms). Bounded by `budget`; never fails the caller.
+    pub async fn warm_for_authorization(self: &Arc<Self>, budget: std::time::Duration) {
+        let attest = async {
+            let current = self.attestation().await;
+            let fresh = now_ms().saturating_sub(current.checked_at_ms) <= 10 * 60 * 1000;
+            if !(fresh && current.permits_approval(self.config.attestation_mode, now_ms())) {
+                self.refresh_attestation().await;
+            }
+        };
+        let _ = tokio::time::timeout(budget, async {
+            tokio::join!(self.per.prime(), attest);
+        })
+        .await;
     }
 
     /// Run (or join) the attestation check. Concurrent callers share one
@@ -457,7 +485,17 @@ impl CardsConnector {
             .await
         } else {
             #[cfg(test)]
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                let next = self
+                    .attestation_next
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                if let Some(status) = next {
+                    return status;
+                }
+            }
             self.attestation.read().await.clone()
         };
         if status.measurements == "mismatch" || status.hardware == "failed" {

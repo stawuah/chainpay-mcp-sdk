@@ -116,6 +116,11 @@ pub(super) async fn redeem(
         }
         .into_response();
     }
+    // The runner's charge triggers the authorization (in the sandbox, from
+    // inside this very request), so land the attestation check and rollup
+    // session first, off the ASA's deadline. Only an authenticated runner
+    // gets here.
+    cards.warm_for_authorization(WARM_BUDGET).await;
     respond(match parse_body(&body) {
         Ok(request) => checkout::redeem(&cards, request).await,
         Err(error) => Err(error),
@@ -492,11 +497,19 @@ pub(super) async fn checkout_intent(
         Ok(card) => card,
         Err(error) => return error.into_response(),
     };
-    respond(match parse_body(&body) {
+    let result = match parse_body(&body) {
         Ok(request) => checkout::issue(&cards, &caller, &card, request).await,
         Err(error) => Err(error),
-    })
+    };
+    if result.is_ok() {
+        cards.warm_for_authorization(WARM_BUDGET).await;
+    }
+    respond(result)
 }
+
+/// How long a checkout step may wait for a cold instance's attestation check
+/// and rollup session. Off the ASA path, so it can exceed the ASA budget.
+const WARM_BUDGET: std::time::Duration = std::time::Duration::from_millis(4000);
 
 pub(super) async fn restore(
     State(state): State<BackendState>,
