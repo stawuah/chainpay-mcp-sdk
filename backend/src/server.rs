@@ -2344,7 +2344,6 @@ async fn submit_transaction(
         "signed_transaction",
     )?;
     if card_routes::is_card_setup(&transaction) {
-        transactions::common(&transaction)?;
         card_routes::validate_card_setup(&state, &principal.wallet, &transaction).await?;
     } else {
         validate_owner_transaction(&transaction, &principal.wallet, &state.config.program_id)?;

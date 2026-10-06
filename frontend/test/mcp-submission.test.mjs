@@ -9,7 +9,7 @@ import * as sdk from "@chainpayhq/sdk";
 // wallet login and service responses are fixtures; no transaction is signed.
 const bundle = await build({
   stdin: {
-    contents: `export { callMcpTool } from "./src/owner/runtime";
+    contents: `export { callMcpTool, paymentLabel } from "./src/owner/runtime";
       export { configureSession, setSessionWallet, ensureSessionReady } from "./src/session";
       export { listStoredOperations, reconcileSettlement, PendingSettlementError } from "./src/settlement";`,
     // fileURLToPath, not .pathname: a space in the checkout path stays
@@ -141,4 +141,17 @@ test("a matching confirmed response still returns its signature and receipt", as
   assert.equal(result.structuredContent.status, "confirmed");
   assert.equal(result.structuredContent.receiptAddress, "fixture-receipt");
   assert.equal(f.listStoredOperations()[0].wire, undefined);
+});
+
+test("a payment's update names its exact amount and recipient", async t => {
+  const recipient = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
+  const usdc = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const f = await fixture(t, () => Response.json({ jsonrpc: "2.0", id: 1, error: { code: -32603, message: "Fixture RPC read failed" } }));
+  assert.equal(f.paymentLabel({ amount: "5000000", mint: usdc, recipient }), "Payment of 5 USDC to 9xQe…VFin");
+  assert.equal(f.paymentLabel({ amount: "4500001", mint: usdc, recipient }), "Payment of 4.500001 USDC to 9xQe…VFin");
+  // Unknown decimals keep exact base units; a missing field is left out, never guessed.
+  assert.equal(f.paymentLabel({ amount: "18446744073709551615", mint: "Unknown1111111111111111111111111111111111", recipient }), "Payment of 18446744073709551615 base units to 9xQe…VFin");
+  assert.equal(f.paymentLabel({}), "Payment");
+  await assert.rejects(f.callMcpTool("execute_payment", { ...args, amount: "5000000", mint: usdc, recipient }));
+  assert.equal(f.listStoredOperations()[0].label, "Payment of 5 USDC to 9xQe…VFin");
 });

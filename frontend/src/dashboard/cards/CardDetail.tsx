@@ -5,7 +5,7 @@ import { ArrowLeft, CircleCheck, CircleHelp, CircleX, Clock3, Snowflake, Triangl
 import { availableCents, CardsApiError, type CardActivityRow, type CardView } from "@chainpayhq/sdk";
 import { CARD_SECTIONS, type CardSection } from "../../routing/paths";
 import { PageHeader } from "../PageHeader";
-import { activationLines, cardStatus, ISSUER_FREEZE_COPY } from "./lifecycle";
+import { activationLines, cardStatus, isUnfinishedSetup, ISSUER_FREEZE_COPY } from "./lifecycle";
 import { newOperationId, type CardPrivateRead, type CardStatements } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { UnlockStrip } from "./Unlock";
@@ -18,6 +18,8 @@ import { CardPrivacyCheck } from "./CardPrivacyCheck";
 import { RecoveryBanner } from "./CardRecovery";
 import { CardNumberReveal } from "./CardNumberReveal";
 import { CardAgentConnect } from "./CardAgentConnect";
+import { CardFinishSetup } from "./CardFinishSetup";
+import { CardCreate } from "./CardCreate";
 
 const SECTION_LABELS: Record<CardSection, string> = { activity: "Activity", statement: "Statement", sharing: "Sharing", privacy: "Privacy check" };
 const FREEZE_POLL_MS = 3_000;
@@ -49,6 +51,8 @@ export function CardDetail(props: CardDetailProps) {
   const freezeOp = useRef<string | null>(null);
   const unfreezeOp = useRef<string | null>(null);
   const activateOp = useRef<string | null>(null);
+  // Set while the owner re-enters limits that weren't saved before setup stopped (the attempt to continue).
+  const [limitsFor, setLimitsFor] = useState<string | null>(null);
 
   // Every response is dropped unless it still belongs to the card on screen.
   const currentCard = useRef(cardId);
@@ -85,6 +89,7 @@ export function CardDetail(props: CardDetailProps) {
     setLoadError("");
     setActionError("");
     setPolling(false);
+    setLimitsFor(null);
     void reload();
     void reloadActivity();
     void reloadStatements();
@@ -177,7 +182,8 @@ export function CardDetail(props: CardDetailProps) {
       if (cardStatus(next).key === "active") activateOp.current = null;
     } catch (error) {
       if (error instanceof CardsApiError && error.card && currentCard.current === card.cardId) setCard(error.card);
-      setActionError(errorText(error));
+      // Axum's words name program instructions; the owner gets the step instead.
+      setActionError(error instanceof CardsApiError && error.code === "policy_not_visible" ? "Your limits aren't saved yet, so the card can't be turned on. Use Finish setup." : errorText(error));
     } finally {
       setBusy("");
     }
@@ -193,7 +199,26 @@ export function CardDetail(props: CardDetailProps) {
   }
   if (!card) return <p className="owner-muted" aria-busy="true">Loading card…</p>;
 
+  if (limitsFor) {
+    return (
+      <CardCreate
+        source={source}
+        unlocked={unlocked}
+        onUnlocked={onUnlocked}
+        onNavigate={onNavigate}
+        notice={notice}
+        resume={{
+          card,
+          attemptId: limitsFor,
+          onCancel: () => setLimitsFor(null),
+          onFinished: () => { setLimitsFor(null); void reload(); },
+        }}
+      />
+    );
+  }
+
   const status = cardStatus(card);
+  const unfinished = isUnfinishedSetup(card);
   const recovery = source.recovery(card);
   const policy = read?.policy.state === "visible" ? read.policy.account : null;
   const period = read?.period.state === "visible" ? read.period.account : null;
@@ -234,7 +259,17 @@ export function CardDetail(props: CardDetailProps) {
                   </li>
                 </ul>
               )}
-              {!card.freeze.onChain && PARTIAL_STATUS.has(status.key) && (
+              {unfinished && (
+                <CardFinishSetup
+                  source={source}
+                  card={card}
+                  unlocked={unlocked}
+                  onUnlocked={onUnlocked}
+                  onLimitsNeeded={setLimitsFor}
+                  onFinished={() => void reload()}
+                />
+              )}
+              {!unfinished && !card.freeze.onChain && PARTIAL_STATUS.has(status.key) && (
                 <>
                   {status.detail && <p className="cp-activation-detail">{status.detail}</p>}
                   <ul className="cp-freeze-lines cp-activation-lines" data-testid="activation-lines" aria-label="Turning the card on">
@@ -250,7 +285,7 @@ export function CardDetail(props: CardDetailProps) {
               )}
             </div>
             <div className="cp-card-hero-actions">
-              {!card.freeze.onChain && PARTIAL_STATUS.has(status.key) && card.activation?.detail !== "new_activation_disabled" && (
+              {!unfinished && !card.freeze.onChain && PARTIAL_STATUS.has(status.key) && card.activation?.detail !== "new_activation_disabled" && (
                 <Button type="button" variant="primary" label={busy === "activate" ? "Checking…" : status.key === "limits_failed" || status.key === "needs_activation" ? "Turn on again" : "Check again"} isDisabled={Boolean(busy)} onClick={() => void finishActivation()} />
               )}
               {card.freeze.onChain ? (

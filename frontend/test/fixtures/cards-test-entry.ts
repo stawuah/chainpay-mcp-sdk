@@ -6,7 +6,7 @@ export { AgentCard } from "../../src/dashboard/cards/AgentCard";
 export { CardNumberReveal, safeEmbedUrl } from "../../src/dashboard/cards/CardNumberReveal";
 export { CardVerifyPage, setCardCommitmentReader, CARD_VERIFY_COPY, disclosureFragmentFromInput } from "../../src/verify/CardVerifyPage";
 export { createFixtureCardsSource, FIXTURE_CARD_IDS } from "../../src/dashboard/cards/fixtureSource";
-export { activityPills, activationLines, cardStatus, rowNeedsReview, LIFECYCLE_PILLS } from "../../src/dashboard/cards/lifecycle";
+export { activityPills, activationLines, cardStatus, rowNeedsReview, LIFECYCLE_PILLS, isUnfinishedSetup, finishSetupCopy } from "../../src/dashboard/cards/lifecycle";
 export { activityEvidence } from "../../src/dashboard/cards/evidence";
 export { dollarsToCents, centsToDollarInput } from "../../src/dashboard/cards/amounts";
 export { statementLineTotals, SIMULATED_CREDIT_LABEL, CardStatement } from "../../src/dashboard/cards/CardStatement";
@@ -16,7 +16,7 @@ export { assertRestoreMatchesReport, assertCoSignedRestore, assertCardSetupTrans
 export { PrivateRepayOptIn } from "../../src/dashboard/cards/PrivateRepayOptIn";
 export { normalizeApproverAttestation, approverAttestationCopy, approverAttestationPassed, BROWSER_CHECK_NOTE } from "../../src/dashboard/cards/CardPrivacyCheck";
 export { CardList, CARDS_OFF_COPY } from "../../src/dashboard/cards/CardList";
-export { CardsNotEnabledError } from "../../src/dashboard/cards/source";
+export { CardsNotEnabledError, LimitsNeededError } from "../../src/dashboard/cards/source";
 export { PRIVACY_COPY, PRIVACY_SHORT } from "../../src/dashboard/cards/privacyCopy";
 export { lookupRepayment, recordRepaymentAttempt, readRepaymentAttempts } from "../../src/dashboard/cards/repaymentAttempts";
 export { CardNumberReveal as CardNumberRevealComponent } from "../../src/dashboard/cards/CardNumberReveal";

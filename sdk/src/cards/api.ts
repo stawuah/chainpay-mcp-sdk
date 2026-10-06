@@ -384,6 +384,15 @@ export class CardsApiClient {
     return this.request("POST", "/v1/cards/prepare", { clientOperationId: assertClientOperationId(input.clientOperationId), label: input.label.trim() });
   }
 
+  /**
+   * The unsigned base-layer setup transactions of one of the owner's own cards,
+   * the same ones `prepareCard` returned. Lets a setup that stopped partway be
+   * finished without the first attempt's `clientOperationId`. Creates nothing.
+   */
+  async cardSetup(cardId: string): Promise<PreparedCard> {
+    return this.request("GET", `/v1/cards/${assertCardId(cardId)}/setup`);
+  }
+
   async activateCard(cardId: string, expectedPolicyVersion: number, clientOperationId: string): Promise<CardView> {
     if (!Number.isInteger(expectedPolicyVersion) || expectedPolicyVersion < 1) throw new Error("expectedPolicyVersion must be a positive integer");
     return this.request("POST", `/v1/cards/${assertCardId(cardId)}/activate`, { clientOperationId: assertClientOperationId(clientOperationId), expectedPolicyVersion });

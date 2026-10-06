@@ -89,6 +89,22 @@ export type CreateStepId = "prepare" | "base" | "session" | "rules" | "activate"
 export type CreateStepState = "waiting" | "active" | "done" | "failed";
 export type CreateProgress = (step: CreateStepId, state: CreateStepState, detail?: string) => void;
 
+/**
+ * Where a card's setup stopped, for a card that was never turned on.
+ * `baseLeft`: Solana setup approvals still needed (0-3). `rulesSaved`: the limits
+ * are in the private rollup; null when the private session isn't open, so it
+ * can't be read yet.
+ */
+export type SetupProgress = { baseLeft: number; rulesSaved: boolean | null };
+
+/** Finishing setup reached the limits step without limits to save: the owner sets them again. */
+export class LimitsNeededError extends Error {
+  constructor() {
+    super("Your limits weren't saved before setup stopped. Set them again to finish.");
+    this.name = "LimitsNeededError";
+  }
+}
+
 export type ReadResult = {
   label: string;
   /** What the RPC literally answered, e.g. `value: null`. */
@@ -184,6 +200,15 @@ export interface CardsSource {
    * (same Axum operation ids, finished steps skipped) instead of making a new one.
    */
   createCard(input: CreateCardInput, progress: CreateProgress, attemptId: string): Promise<string>;
+  /** Where an unfinished card's setup stopped. Reads only; nothing is signed. */
+  setupProgress(card: CardView): Promise<SetupProgress>;
+  /**
+   * Resume an unfinished card's setup from the first step that isn't done:
+   * Solana setup, private session, limits, then turning it on. `input` is only
+   * used when the limits aren't saved yet; without it this throws
+   * LimitsNeededError at that step, after the earlier ones are done.
+   */
+  finishSetup(card: CardView, input: CreateCardInput | null, progress: CreateProgress, attemptId: string): Promise<string>;
   /**
    * Re-drive a card's persisted activation (same policy version): copy limits, read the
    * public proof back from Solana, open the card. Answers the state Axum actually reached.

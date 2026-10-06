@@ -19,7 +19,7 @@ import {
   type RestoreArgs,
   type StatementView,
 } from "@chainpayhq/sdk";
-import { CARD_AGENT_TOOLS, type CardPrivateRead, type CardRecoveryView, type CardsSource, type CreateCardInput, type PrivacyCheckResult, type ReaderMember, type RecoveryReport, type RepaymentLookup } from "./source";
+import { CARD_AGENT_TOOLS, LimitsNeededError, type CardPrivateRead, type CardRecoveryView, type CardsSource, type CreateCardInput, type PrivacyCheckResult, type ReaderMember, type RecoveryReport, type RepaymentLookup } from "./source";
 import { assertCoSignedRestore, reviewedRestore } from "./signingGuards";
 
 /*
@@ -52,6 +52,11 @@ export type CardsFixtureOptions = {
   restore?: "tampered";
   /** `unreadable`: private reads fail with an RPC error. */
   reads?: "unreadable";
+  /**
+   * Adds a fourth card whose setup stopped before it was turned on: `base` one Solana
+   * approval short, `limits` before the limits were saved, `saved` after they were.
+   */
+  setup?: "base" | "limits" | "saved";
 };
 
 const FIXTURE_PROVENANCE = MAGICBLOCK_DEVNET_TEE_MEASUREMENTS.provenance;
@@ -75,6 +80,7 @@ export const FIXTURE_CARD_IDS = {
   data: "a1".repeat(32),
   research: "b2".repeat(32),
   travel: "c3".repeat(32),
+  setup: "d4".repeat(32),
 } as const;
 
 type FixtureCard = { view: CardView; policy: CardPolicy; period: CardPeriod; binding: string };
@@ -129,7 +135,27 @@ function dataActivation(state: CardsFixtureOptions["activation"]): Pick<CardView
   }
 }
 
+/** A card ChainPay issued whose setup stopped before activation: paused, nothing copied, no activation. */
+function setupCard(saved: boolean): FixtureCard {
+  const binding = key(14);
+  return {
+    binding,
+    view: {
+      cardId: FIXTURE_CARD_IDS.setup, label: "Crossmint", lastFour: "7256", issuerState: "PAUSED",
+      mirror: { state: "pending" }, freeze: { onChain: false, issuer: "confirmed" }, recovery: { state: "normal" },
+    },
+    policy: saved
+      ? policyFor(binding, { policyVersion: 1, budgetCents: 20_000n, maxPurchaseCents: 2_500n, statementOutstandingCents: 0n, exceptionsOpen: 0, members: [{ pubkey: FIXTURE_OWNER, flags: 15 }, { pubkey: AUTHORIZER, flags: 6 }] })
+      : policyFor(binding, { policyVersion: 0, budgetCents: 0n, maxPurchaseCents: 0n, merchantIdHashes: [], mccs: [], statementOutstandingCents: 0n, exceptionsOpen: 0, members: [] }),
+    period: periodFor({ capturedCents: 0n, reservedCents: 0n, refundedCents: 0n, purchasesCount: 0, exceptionCents: 0n }),
+  };
+}
+
 function buildCards(options: CardsFixtureOptions): FixtureCard[] {
+  return options.setup ? [...baseCards(options), setupCard(options.setup === "saved")] : baseCards(options);
+}
+
+function baseCards(options: CardsFixtureOptions): FixtureCard[] {
   const data = key(11), research = key(12), travel = key(13);
   return [
     {
@@ -179,6 +205,7 @@ const shop = { displayName: "ChainPay demo shop", mcc: "5734" };
 const data = (n: number) => `act-${String(n).padStart(3, "0")}`;
 
 function activityFor(cardId: string): CardActivityRow[] {
+  if (cardId === FIXTURE_CARD_IDS.setup) return [];
   if (cardId !== FIXTURE_CARD_IDS.data) {
     return [
       { rowId: data(90), cardId, at: "2026-10-03T18:02:00Z", kind: "freeze" },
@@ -275,6 +302,9 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
   const cards = options.empty ? [] : buildCards(options);
   let unlocked = Boolean(options.unlocked);
   const delay = options.delayMs ?? 450;
+  // The stopped card's setup, as far as it got.
+  let setupBaseLeft = options.setup === "base" ? 1 : 0;
+  let setupLimitsSaved = options.setup === "saved";
   const statements = new Map(cards.map((card) => [card.view.cardId, statementFor(card.view.cardId, options.statement ?? "closed")]));
   const activity = new Map(cards.map((card) => [card.view.cardId, activityFor(card.view.cardId)]));
   const openStatements = new Map(cards.map((card) => [card.view.cardId, openStatementFor(card.view.cardId)]));
@@ -336,6 +366,7 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
       const found = find(card.cardId);
       if (options.reads === "unreadable") { await wait(delay / 3); throw new Error("The private rollup didn't answer. Nothing was changed."); }
       if (!unlocked) return { policy: { state: "not_visible", slot: null }, period: { state: "not_visible", slot: null } };
+      if (card.cardId === FIXTURE_CARD_IDS.setup && !setupLimitsSaved) return { policy: { state: "not_visible", slot: 412_883_200n }, period: { state: "not_visible", slot: 412_883_200n } };
       return {
         policy: { state: "visible", slot: 412_883_200n, account: cardPolicyView(found.policy) },
         period: { state: "visible", slot: 412_883_200n, account: found.period },
@@ -355,6 +386,42 @@ export function createFixtureCardsSource(options: CardsFixtureOptions = {}): Car
       }
       unlocked = true;
       return FIXTURE_CARD_IDS.data;
+    },
+    async setupProgress(card) {
+      find(card.cardId);
+      await wait(delay / 3);
+      return { baseLeft: setupBaseLeft, rulesSaved: setupBaseLeft > 0 ? false : unlocked ? setupLimitsSaved : null };
+    },
+    async finishSetup(card, input, progress) {
+      const found = find(card.cardId);
+      progress("base", "active");
+      for (; setupBaseLeft > 0; setupBaseLeft -= 1) {
+        progress("base", "active", `Approval ${4 - setupBaseLeft} of 3`);
+        await wait(delay);
+      }
+      progress("base", "done");
+      progress("session", "active");
+      if (!unlocked) { await wait(delay); unlocked = true; }
+      progress("session", "done");
+      progress("rules", "active");
+      if (!setupLimitsSaved) {
+        if (!input) throw new LimitsNeededError();
+        await wait(delay);
+        found.policy = { ...found.policy, policyVersion: 1, budgetCents: BigInt(input.budgetCents), maxPurchaseCents: BigInt(input.maxPurchaseCents), maxPurchasesPerPeriod: input.maxPurchasesPerPeriod, mccs: input.mccs, recurringAllowed: input.recurringAllowed, feeBps: input.feeBps, members: [{ pubkey: FIXTURE_OWNER, flags: 15 }, { pubkey: AUTHORIZER, flags: 6 }] };
+        setupLimitsSaved = true;
+      }
+      progress("rules", "done");
+      progress("activate", "active");
+      await wait(delay);
+      const on = dataActivation(undefined);
+      found.view = {
+        ...found.view, ...on,
+        mirror: { ...on.mirror, policyVersionMirrored: 1 },
+        commitment: on.commitment && { ...on.commitment, seq: "1", policyVersion: 1, periodIndex: 0 },
+        activation: { state: "active", policyVersion: 1, steps: ACTIVE_STEPS, completedAt: new Date().toISOString() },
+      };
+      progress("activate", "done");
+      return card.cardId;
     },
     async cardNumberSession(cardId) {
       find(cardId);

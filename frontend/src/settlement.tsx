@@ -2,12 +2,55 @@ import type { Transaction } from "@solana/web3.js";
 import { useEffect, useState } from "react";
 import { authorizedFetch, ensureSessionReady, RequestNotSentError, sessionBinding, sessionWalletAddress, type WalletBinding } from "./session";
 
-export type Operation = WalletBinding & { id: string; key: string; kind: "payments" | "transactions"; backend: string; status: string; signature?: string; wire?: string; result?: Settlement };
+/**
+ * `label`: what the owner approved, in their words ("Payment of 5 USDC to 9xQe…3Fp1"). Older rows have none.
+ * `seenAt`: a confirmed update the owner has had on screen. It leaves "Payment & approval updates"
+ * but stays in the stored history, which recent activity and payment de-duplication read.
+ */
+export type Operation = WalletBinding & { id: string; key: string; kind: "payments" | "transactions"; backend: string; status: string; signature?: string; wire?: string; result?: Settlement; label?: string; seenAt?: number };
 export type Settlement = { status?: string; signature?: string; payment_id?: string; transaction_id?: string; receipt_address?: string; amount?: string | null; error?: string };
 const storageKey = "chainpay.pending-operations.v1";
 export const settlementPendingEvent = "chainpay:settlement-pending";
 export const settlementTerminalEvent = "chainpay:settlement-terminal";
 const terminal = (status: string) => ["confirmed", "failed"].includes(status);
+/** How long a confirmed update stays on screen, while the page is visible, before it clears itself. */
+export const CONFIRMED_SEEN_MS = 6_000;
+
+/*
+ * Words for an operation the caller didn't label, from the idempotency key
+ * every submission already carries. Covers rows stored before labels existed.
+ */
+const KEY_LABELS: [RegExp, (match: RegExpMatchArray) => string][] = [
+  [/^card-base:[0-9a-f]{64}:(\d):/, (m) => `Card setup: approval ${Number(m[1]) + 1} of 3`],
+  [/^card-repay-permission:/, () => "Permission to pay a card statement"],
+  [/^agent-mandate:/, () => "Spending permission for your agent"],
+  [/^agent-ata:/, () => "Token account for your agent"],
+  [/^revoke-all:/, () => "Revoking every spending permission"],
+  [/^pause-mandate:/, () => "Pausing a spending permission"],
+  [/^revoke-mandate:/, () => "Revoking a spending permission"],
+  [/^update-mandate:/, () => "Changing a spending permission"],
+  [/^delegate-repair:/, () => "Restoring a spending permission's allowance"],
+  [/^batch:/, () => "Batch payment"],
+  [/^mandate:/, () => "New spending permission"],
+  [/^config:/, () => "ChainPay program setup"],
+  [/^register-asset:/, () => "Adding a token ChainPay accepts"],
+  [/^(enable|disable)-asset:/, (m) => `${m[1] === "enable" ? "Turning on" : "Turning off"} a token`],
+];
+
+/** What an update is about, for its row in "Payment & approval updates". */
+export function describeOperation(operation: Pick<Operation, "kind" | "key" | "label">): string {
+  if (operation.label?.trim()) return operation.label.trim();
+  if (operation.kind === "payments") return "Payment";
+  for (const [pattern, words] of KEY_LABELS) {
+    const match = operation.key?.match(pattern);
+    if (match) return words(match);
+  }
+  return "Wallet approval";
+}
+
+function statusWords(status: string): string {
+  return status === "confirmed" ? "Confirmed" : status === "failed" ? "Could not complete" : status === "unknown" ? "Outcome unknown — check status" : "Waiting for confirmation";
+}
 export function listStoredOperations(): Operation[] {
   return read();
 }
@@ -38,7 +81,7 @@ export function publishSettlement(operation: Operation, result?: Settlement): Op
   if (terminal(next.status)) window.dispatchEvent(new CustomEvent(settlementTerminalEvent, { detail: next }));
   return next;
 }
-export async function beginSettlement(backend: string, kind: Operation["kind"], key: string, wire?: string): Promise<Operation> {
+export async function beginSettlement(backend: string, kind: Operation["kind"], key: string, wire?: string, label?: string): Promise<Operation> {
   await ensureSessionReady();
   const binding = sessionBinding();
   if (read().filter((row) => !terminal(row.status)).length >= 100) throw new RequestNotSentError("Resolve pending operations before submitting more requests");
@@ -46,7 +89,7 @@ export async function beginSettlement(backend: string, kind: Operation["kind"], 
   const current = sessionBinding();
   if (current.wallet !== binding.wallet || current.generation !== binding.generation) throw new RequestNotSentError("Wallet changed while reserving the request; nothing was sent");
   const id = `${kind === "payments" ? "payment" : "transaction"}_${Array.from(hash, (b) => b.toString(16).padStart(2, "0")).join("")}`;
-  return publishSettlement({ id, key, kind, ...binding, backend: backend.replace(/\/$/, ""), status: "submitted", wire });
+  return publishSettlement({ id, key, kind, ...binding, backend: backend.replace(/\/$/, ""), status: "submitted", wire, ...(label ? { label } : {}) });
 }
 function checkOwner(operation: Operation) {
   if (operation.wallet !== sessionWalletAddress()) throw new Error("Connect the original owner wallet to check this operation");
@@ -106,6 +149,13 @@ export async function retrySameApproval(operation: Operation) {
   if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Recovery unavailable; keep the original approval");
   return publishSettlement(operation, await response.json() as Settlement);
 }
+/** Hide confirmed updates the owner has seen. Only confirmed rows; the history itself is kept. */
+export function markSettlementsSeen(ids: string[], at = Date.now()) {
+  const rows = read();
+  if (!rows.some((row) => ids.includes(row.id) && row.status === "confirmed" && !row.seenAt)) return;
+  localStorage.setItem(storageKey, JSON.stringify(rows.map((row) => ids.includes(row.id) && row.status === "confirmed" && !row.seenAt ? { ...row, seenAt: at } : row)));
+  window.dispatchEvent(new Event(storageKey));
+}
 export function dismissSettlement(id: string) {
   localStorage.setItem(storageKey, JSON.stringify(read().filter((row) => row.id !== id || !terminal(row.status))));
   window.dispatchEvent(new Event(storageKey));
@@ -137,15 +187,30 @@ export function useSettlementFormStatus<S extends string>(
     return () => { window.removeEventListener(settlementPendingEvent, pending); window.removeEventListener(settlementTerminalEvent, settled); };
   }, [wallet, setStatus, operationKeyRef]);
 }
-export function PendingSettlements({ wallet }: { wallet: string }) {
+export function PendingSettlements({ wallet, confirmedSeenMs = CONFIRMED_SEEN_MS }: { wallet: string; confirmedSeenMs?: number }) {
   const [rows, setRows] = useState(() => read());
   const [message, setMessage] = useState("");
   const [checking, setChecking] = useState(false);
+  const [visible, setVisible] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
   useEffect(() => { const refresh = () => setRows(read()); window.addEventListener(storageKey, refresh); return () => window.removeEventListener(storageKey, refresh); }, []);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const update = () => setVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
   const run = (action: () => Promise<unknown>) => { setChecking(true); void action().then(() => setMessage("Settlement status updated.")).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error))).finally(() => setChecking(false)); };
-  const operations = rows.filter((row) => row.wallet === wallet);
+  const operations = rows.filter((row) => row.wallet === wallet && !(row.status === "confirmed" && row.seenAt));
+  // A confirmed update clears itself once the owner has had it on screen for a moment.
+  // Waiting, unknown and failed updates stay until the owner acts on them.
+  const confirmedIds = operations.filter((row) => row.status === "confirmed").map((row) => row.id).join(",");
+  useEffect(() => {
+    if (!confirmedIds || !visible) return;
+    const timer = setTimeout(() => markSettlementsSeen(confirmedIds.split(",")), confirmedSeenMs);
+    return () => clearTimeout(timer);
+  }, [confirmedIds, visible, confirmedSeenMs]);
   if (!operations.length) return null;
-  return <section className="dashboard-card owner-settlements" aria-live="polite"><h2>Payment & approval updates</h2><p className="owner-muted">Recovery keeps your original approval and never requests a new wallet signature.</p>{operations.map((operation) => <div className="owner-settlement-row" key={operation.id}><strong>{operation.status === "confirmed" ? "Confirmed" : operation.status === "failed" ? "Could not complete" : operation.status === "unknown" ? "Outcome unknown — check status" : "Waiting for confirmation"}</strong>{operation.result?.error && <p role="alert">{operation.result.error}</p>}<div className="owner-inline-actions">{terminal(operation.status) ? <button onClick={() => dismissSettlement(operation.id)}>Dismiss</button> : <><button disabled={checking} onClick={() => run(() => reconcileSettlement(operation))}>Check status</button>{operation.wire && <button disabled={checking} onClick={() => run(() => retrySameApproval(operation))}>Retry same signed approval</button>}<button disabled={checking} onClick={() => run(() => cancelUnstarted(operation))}>Cancel only if unstarted</button></>}</div><details className="owner-disclosure"><summary>Technical details</summary><p>Operation ID</p><code>{operation.id}</code>{operation.signature && <><p>Transaction signature</p><code>{operation.signature}</code></>}</details></div>)}{message && <p role="status">{message}</p>}</section>;
+  return <section className="dashboard-card owner-settlements" aria-live="polite"><h2>Payment & approval updates</h2><p className="owner-muted">Recovery keeps your original approval and never requests a new wallet signature.</p>{operations.map((operation) => <div className="owner-settlement-row" key={operation.id} data-status={operation.status}><div className="owner-settlement-head"><strong>{statusWords(operation.status)}</strong><span>{describeOperation(operation)}</span></div>{operation.result?.error && <p role="alert">{operation.result.error}</p>}<div className="owner-inline-actions">{terminal(operation.status) ? <button onClick={() => dismissSettlement(operation.id)}>Dismiss</button> : <><button disabled={checking} onClick={() => run(() => reconcileSettlement(operation))}>Check status</button>{operation.wire && <button disabled={checking} onClick={() => run(() => retrySameApproval(operation))}>Retry same signed approval</button>}<button disabled={checking} onClick={() => run(() => cancelUnstarted(operation))}>Cancel only if unstarted</button></>}</div><details className="owner-disclosure"><summary>Technical details</summary><p>Operation ID</p><code>{operation.id}</code>{operation.signature && <><p>Transaction signature</p><code>{operation.signature}</code></>}</details></div>)}{message && <p role="status">{message}</p>}</section>;
 }
 export function rejectBeforeSubmission(operation: Operation, reason?: string) { publishSettlement(operation, { status: "failed", error: reason ? `Request rejected before submission: ${reason}` : "Request rejected before submission" }); }
 export class PendingSettlementError extends Error {}

@@ -515,6 +515,10 @@ test("card API client: merchant registry, statement close, restore and reconcile
   assert.deepEqual(shop, { merchantRef: "demo-approved", displayName: "Data API credits", merchantIdHash: "c6".repeat(32), mcc: 5734 });
   await client.closeStatement(cardId, "op-close-1234");
   assert.deepEqual(seen[1], { url: `https://axum.test/v1/cards/${cardId}/statements/close`, method: "POST", body: { clientOperationId: "op-close-1234" } });
+  await client.cardSetup(cardId);
+  assert.deepEqual(seen.at(-1), { url: `https://axum.test/v1/cards/${cardId}/setup`, method: "GET", body: undefined }, "setup is a read of the owner's own card");
+  seen.pop();
+  await assert.rejects(client.cardSetup("not-a-card"), /64 lowercase hex/);
   const review = await client.prepareRestore(cardId, { clientOperationId: "op-restore-1" });
   assert.equal(review.state, "review_required");
   assert.deepEqual(seen[2].body, { clientOperationId: "op-restore-1" }, "no digest sent when asking for the report");

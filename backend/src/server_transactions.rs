@@ -86,7 +86,19 @@ pub(super) fn payload_instructions(tx: &VersionedTransaction) -> Vec<&CompiledIn
 }
 
 fn is_compute_budget(tx: &VersionedTransaction, program_id_index: u8) -> bool {
-    matches!(key(tx, program_id_index), Ok(program) if program == COMPUTE_BUDGET_PROGRAM)
+    tx.message
+        .static_account_keys()
+        .get(program_id_index as usize)
+        .is_some_and(is_compute_budget_program)
+}
+
+/// Whether `address` is the compute-budget program.
+///
+/// Card setup compares decoded instructions rather than positions, so it sets
+/// compute-budget instructions aside with this. Only call it after `common`
+/// has bounded them: that is what makes setting them aside safe.
+pub(super) fn is_compute_budget_program(address: &Address) -> bool {
+    address.to_string() == COMPUTE_BUDGET_PROGRAM
 }
 
 /// How many static account keys belong to the ChainPay instructions.
@@ -101,7 +113,7 @@ fn payload_account_keys(tx: &VersionedTransaction) -> usize {
     tx.message
         .static_account_keys()
         .iter()
-        .filter(|address| address.to_string() != COMPUTE_BUDGET_PROGRAM)
+        .filter(|address| !is_compute_budget_program(address))
         .count()
 }
 

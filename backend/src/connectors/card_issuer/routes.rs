@@ -573,6 +573,40 @@ pub async fn prepare(
     Ok(prepared(cards, &owner, &card_id, &card_ref_hash, blockhash))
 }
 
+/// `GET /v1/cards/{cardId}/setup`: the unsigned base-layer setup transactions
+/// for one of the caller's own cards, the same ones `prepare` returned for it.
+///
+/// A card whose setup stopped partway (a refused or abandoned wallet approval,
+/// a closed tab) can then be finished from any browser, without the
+/// `clientOperationId` of the first attempt. Nothing is created or changed:
+/// the card, its issuer reference and every account are re-derived from the
+/// stored row, and the relay still accepts only these transactions for it.
+pub async fn setup(
+    cards: &Arc<CardsConnector>,
+    caller: &Caller,
+    card_id: &str,
+    blockhash: [u8; 32],
+) -> Result<Value, CardsError> {
+    if !cards.config.new_activation_enabled {
+        return Err(super::activation::gate_error());
+    }
+    let card = owned_card(cards, caller, card_id).await?;
+    let owner: Address = caller
+        .wallet
+        .parse()
+        .map_err(|_| CardsError::forbidden("Owner wallet is not a Solana address"))?;
+    let id = program::unhex::<32>(card_id).ok_or_else(CardsError::internal)?;
+    let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
+    let salt = program::unhex::<32>(&issuer.ref_salt).ok_or_else(CardsError::internal)?;
+    Ok(prepared(
+        cards,
+        &owner,
+        &id,
+        &program::issuer_card_ref_hash(&issuer.card_token, &salt),
+        blockhash,
+    ))
+}
+
 // ----------------------------------------------------------------- activate
 
 #[derive(Debug, Deserialize)]

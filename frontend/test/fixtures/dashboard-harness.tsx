@@ -391,7 +391,8 @@ if (SIGNED_IN && !FIXTURE_APPROVAL) {
   void ensureSessionReady();
 }
 
-// Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1][&attest=verified|challenge_bound|mismatch|failed][&repay=unknown][&restore=tampered][&reads=unreadable][&activation=proof_pending|opening|limits_failed]`.
+// Cards: `?tab=cards[&cards=empty|locked][&card=data|research|travel][&section=…][&new=1][&statement=<state>][&ack=1][&attest=verified|challenge_bound|mismatch|failed][&repay=unknown][&restore=tampered][&reads=unreadable][&activation=proof_pending|opening|limits_failed][&setup=base|limits|saved]`.
+// `setup` adds a fourth card ("Crossmint", `card=setup`) whose setup stopped before it was turned on.
 // ILLUSTRATIVE fixtures through the same CardsSource interface the live SDK
 // client implements. Nothing signs or reaches a network.
 const CARD_QUERY = new URLSearchParams(location.search);
@@ -407,6 +408,7 @@ const fixtureCards = createFixtureCardsSource({
   repay: (CARD_QUERY.get("repay") as never) ?? undefined,
   restore: (CARD_QUERY.get("restore") as never) ?? undefined,
   reads: (CARD_QUERY.get("reads") as never) ?? undefined,
+  setup: (CARD_QUERY.get("setup") as never) ?? undefined,
 });
 // `?clear=1` keeps only cards that need nothing from the owner, so a checked Overview
 // can be clear; `?cards=fail` fails the card list alone (Overview must not call that clear).
