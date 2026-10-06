@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../src");
 const blocked = [
-  "@chainpay/sdk",
+  "@chainpayhq/sdk",
   "@solana/web3.js",
   "./wallet.ts",
   "wallet/connect",
@@ -71,7 +71,7 @@ test("landing module graph does not import wallet, SDK client, or owner runtime"
   // Guard the guard: if resolution silently failed we would be asserting over a
   // single file and calling the graph clean.
   assert.ok(visited.size >= 2, `expected to walk the landing graph, visited ${visited.size} file(s)`);
-  assert.equal(specifiers.some((value) => value.includes("@chainpay/sdk")), false);
+  assert.equal(specifiers.some((value) => value.includes("@chainpayhq/sdk")), false);
   assert.equal(specifiers.some((value) => value.includes("@solana")), false);
   assert.equal(specifiers.some((value) => value.includes("config/client")), false);
   assert.equal(specifiers.some((value) => value.includes("wallet/connect")), false);
@@ -84,7 +84,7 @@ test("landing module graph does not import wallet, SDK client, or owner runtime"
 test("AppShell does not statically import wallet connect or SDK client", async () => {
   const source = await readFile(resolve(root, "AppShell.tsx"), "utf8");
   const specifiers = importsIn(source);
-  assert.equal(specifiers.includes("@chainpay/sdk"), false);
+  assert.equal(specifiers.includes("@chainpayhq/sdk"), false);
   assert.equal(specifiers.some((value) => value.includes("config/client")), false);
   assert.equal(specifiers.some((value) => value.includes("wallet/connect")), false);
   assert.match(source, /lazy\(\(\) => import\("\.\/wallet\/WalletController"\)\)/);
@@ -102,8 +102,8 @@ test("shared token UI does not import the dashboard owner layer", async () => {
   assert.deepEqual(ownerModules, [], "app-shared token UI must not pull in the dashboard owner chunk");
   // The SDK proper sits in the dashboard chunk too. The asset table is the one
   // SDK module app-shared may reach, and vite.config.ts places it there.
-  const sdkImports = specifiers.filter((value) => value.includes("@chainpay/sdk"));
-  assert.deepEqual([...new Set(sdkImports)], ["@chainpay/sdk/known-assets"]);
+  const sdkImports = specifiers.filter((value) => value.includes("@chainpayhq/sdk"));
+  assert.deepEqual([...new Set(sdkImports)], ["@chainpayhq/sdk/known-assets"]);
   const vite = await readFile(resolve(root, "../vite.config.ts"), "utf8");
   assert.match(vite, /\/sdk\/dist\/known-assets/);
 });

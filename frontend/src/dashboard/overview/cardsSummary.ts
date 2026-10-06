@@ -1,4 +1,4 @@
-import type { CardView } from "@chainpay/sdk";
+import type { CardView } from "@chainpayhq/sdk";
 import { cardStatus, stateAppearance } from "../cards/lifecycle";
 import type { StatusIcon, StatusTone } from "../../ui/workspace/Status";
 

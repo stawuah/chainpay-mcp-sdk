@@ -2,7 +2,7 @@
 import "../../src/polyfills";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Mandate } from "@chainpay/sdk";
+import type { Mandate } from "@chainpayhq/sdk";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";

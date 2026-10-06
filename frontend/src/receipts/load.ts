@@ -8,7 +8,7 @@ import {
   type ReceiptPolicy,
   type ReceiptValidationCode,
   type TokenAmountDisplay,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { PROGRAM_ID, publicReceiptClient } from "../config/client";
 import { DEVNET_PYUSD_TOKEN_2022_MINT, DEVNET_USDC_MINT } from "../config/public";
 import {

@@ -7,7 +7,7 @@ import {
   type OpsReceiptPurpose,
   type OpsSnapshot,
   type PaymentLookupCard,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { receiptUrlForAddress } from "../outcome.js";
 
 type RecordLike = Record<string, unknown>;

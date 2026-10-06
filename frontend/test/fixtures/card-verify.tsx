@@ -2,7 +2,7 @@
 // verification, commitment read stubbed in memory. `?state=verified|tampered|superseded|invalid|empty|rpc_error|no_commitment`.
 import "../../src/polyfills";
 import { createRoot } from "react-dom/client";
-import { encodeDisclosureFragment } from "@chainpay/sdk";
+import { encodeDisclosureFragment } from "@chainpayhq/sdk";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";

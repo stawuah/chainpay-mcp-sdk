@@ -1,5 +1,5 @@
-import type { PreparedTransaction } from "@chainpay/sdk";
-import { toWeb3Transaction } from "@chainpay/sdk";
+import type { PreparedTransaction } from "@chainpayhq/sdk";
+import { toWeb3Transaction } from "@chainpayhq/sdk";
 
 export const DEFAULT_TX_SIZE_LIMIT = 1_100;
 

@@ -3,7 +3,7 @@ import {
   SPL_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   deriveX402PaymentReferences,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { createMerchantApp } from "./app.js";
 import { loadCardShopSettings } from "./card-shops.js";
 import { loadMerchantConfig, loadSellerPublishConfig, sanitizedResourceLabel } from "./config.js";

@@ -15,7 +15,7 @@ import {
   publicKey,
   type PaymentReceipt,
   type X402PaymentReferences,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import type { MerchantConfig } from "./config.js";
 
 const require = createRequire(import.meta.url);
@@ -428,7 +428,7 @@ function loadedAddressLists(meta: Record<string, unknown>): { writable: string[]
   return { writable: writable as string[], readonly: readonly as string[] };
 }
 
-// TODO(PR-09 SDK): import a shared verifyExecutePaymentSettlement helper from @chainpay/sdk when exported.
+// TODO(PR-09 SDK): import a shared verifyExecutePaymentSettlement helper from @chainpayhq/sdk when exported.
 export async function validateSettlementTransaction(
   wireResult: unknown,
   proof: CustomReceiptProof,

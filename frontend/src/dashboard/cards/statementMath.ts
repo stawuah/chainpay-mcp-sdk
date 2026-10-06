@@ -1,4 +1,4 @@
-import type { StatementView } from "@chainpay/sdk";
+import type { StatementView } from "@chainpayhq/sdk";
 
 /** Exactly what a repayment must carry: the statement's amount due (after carried credit), never negative. */
 export function statementAmountDue(statement: StatementView): bigint {

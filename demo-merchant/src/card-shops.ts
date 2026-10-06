@@ -6,7 +6,7 @@ import {
   merchantIdHash,
   redactCardData,
   type CardSandboxMerchant,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 
 /*
  * Workstream D fixture shops (contracts.md §3.4, §6). Two sandbox shops an

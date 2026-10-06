@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Download } from "lucide-react";
-import type { Mandate, PaymentReceipt } from "@chainpay/sdk";
+import type { Mandate, PaymentReceipt } from "@chainpayhq/sdk";
 import { chainpayClient } from "../config/client";
 import { buildPath } from "../routing/paths";
 import { receiptViewFromSettledPayment } from "../receipts/load";

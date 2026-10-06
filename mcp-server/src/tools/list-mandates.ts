@@ -1,6 +1,6 @@
 import { PublicKey } from "@solana/web3.js";
-import type { Address, Mandate, TokenProgram } from "@chainpay/sdk";
-import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@chainpay/sdk";
+import type { Address, Mandate, TokenProgram } from "@chainpayhq/sdk";
+import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@chainpayhq/sdk";
 import { mandateInScope } from "../authorization.js";
 import type { ChainPayMcpContext } from "./context.js";
 import { solanaAddress, tokenProgram, toolResult, unsignedInteger } from "./common.js";

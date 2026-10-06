@@ -5,7 +5,7 @@ import {
   bytesToHex,
   type PaymentReceipt,
   type PreparedPayment,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import {
   materializeUnsignedTransaction,
@@ -30,7 +30,7 @@ import {
 import {
   detectedChallengeToPrepareFields,
   standardV2RecipientTokenAccount,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { requirementsFromPreflight } from "./check_payment_requirements.js";
 
 const MAX_RESOURCE_BODY_BYTES = 1_048_576;

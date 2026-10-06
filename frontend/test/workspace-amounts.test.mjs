@@ -16,7 +16,7 @@ async function loadModule(entryPoint) {
   const outfile = join(frontendRoot, `test/.tmp-${entryPoint.replace(/\//g, "-")}.mjs`);
   await esbuild.build({ absWorkingDir: frontendRoot, entryPoints: [entryPoint], bundle: true, format: "esm", platform: "node", outfile, logLevel: "error",
     // The SDK is consumed as the real package (only its plain-word tables are used here).
-    external: ["@chainpay/sdk", "@solana/web3.js"] });
+    external: ["@chainpayhq/sdk", "@solana/web3.js"] });
   const module = await import(`${pathToFileURL(outfile).href}?t=${Date.now()}`);
   await unlink(outfile).catch(() => {});
   return module;

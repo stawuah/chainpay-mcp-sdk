@@ -1,5 +1,5 @@
-import type { CardActivityRow, CardView, IssuerFreezeState } from "@chainpay/sdk";
-import { DECLINE_COPY } from "@chainpay/sdk";
+import type { CardActivityRow, CardView, IssuerFreezeState } from "@chainpayhq/sdk";
+import { DECLINE_COPY } from "@chainpayhq/sdk";
 import type { StatusIcon, StatusProps, StatusTone } from "../../ui/workspace/Status";
 
 /*

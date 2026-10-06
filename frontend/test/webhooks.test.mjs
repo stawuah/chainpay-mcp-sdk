@@ -36,7 +36,7 @@ await esbuild.build({
   entryPoints: ["test/fixtures/webhooks-test-entry.ts"],
   bundle: true, format: "esm", platform: "browser", jsx: "automatic", outfile,
   loader: { ".css": "empty", ".png": "empty", ".svg": "empty", ".webp": "empty" },
-  external: ["react", "react-dom", "react/jsx-runtime", "react-dom/client", "@chainpay/sdk", "@solana/web3.js", "buffer", "@phala/dcap-qvl"],
+  external: ["react", "react-dom", "react/jsx-runtime", "react-dom/client", "@chainpayhq/sdk", "@solana/web3.js", "buffer", "@phala/dcap-qvl"],
   define: { "import.meta.env": "{}" },
   logLevel: "error",
 });

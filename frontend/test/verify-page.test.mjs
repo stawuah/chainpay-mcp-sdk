@@ -157,7 +157,7 @@ async function renderVerify(receiptPda, url) {
     jsx: "automatic",
     outfile,
     loader: { ".css": "empty" },
-    external: ["react", "react-dom", "react/jsx-runtime", "@chainpay/sdk"],
+    external: ["react", "react-dom", "react/jsx-runtime", "@chainpayhq/sdk"],
     plugins: [stubReceiptLoadPlugin()],
   });
   const dom = installDom(url);

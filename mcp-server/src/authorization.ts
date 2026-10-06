@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import type { Mandate } from "@chainpay/sdk";
+import type { Mandate } from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./tools/context.js";
 import type { McpConnectionRegistry } from "./connections.js";
 

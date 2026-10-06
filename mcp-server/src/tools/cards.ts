@@ -17,7 +17,7 @@ import {
   redactCardData,
   type CardActivityRow,
   type StatementView,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 
 /*

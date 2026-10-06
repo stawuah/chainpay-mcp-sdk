@@ -2,7 +2,7 @@ import { useState } from "react";
 import { SectionHeader } from "../../ui/workspace/SectionHeader";
 import { Button } from "@astryxdesign/core/Button";
 import { CircleCheck, CircleHelp, CircleX, Cpu, Eye, EyeOff, Globe } from "lucide-react";
-import type { CardAttestationView, CardView } from "@chainpay/sdk";
+import type { CardAttestationView, CardView } from "@chainpayhq/sdk";
 import type { CardsSource, PrivacyCheckResult, ReadResult } from "./source";
 import { errorText } from "./shared";
 import { UnlockStrip } from "./Unlock";

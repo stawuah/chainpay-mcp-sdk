@@ -4,7 +4,7 @@ import {
   privateRepaymentDisclosure,
   type PrivateRepaymentAttempt,
   type PrivateRepaymentResult,
-} from "@chainpay/sdk/cards/private-repayment";
+} from "@chainpayhq/sdk/cards/private-repayment";
 import "./private-repay.css";
 
 /*

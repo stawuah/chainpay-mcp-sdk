@@ -4,7 +4,7 @@ import {
   type Address,
   type ChainPayClient,
   type PreparedTransaction,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { formatToolPresentation } from "./presentation.js";
 
 export function requiredString(value: unknown, name: string): string {

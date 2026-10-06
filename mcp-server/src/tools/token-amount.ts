@@ -1,4 +1,4 @@
-import { assetLabel, type Address, type ChainPayClient } from "@chainpay/sdk";
+import { assetLabel, type Address, type ChainPayClient } from "@chainpayhq/sdk";
 
 export function tokenLabel(mint: Address): string {
   return assetLabel(mint);

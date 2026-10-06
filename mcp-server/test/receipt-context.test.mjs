@@ -8,7 +8,7 @@ import {
   DuplicateInvoiceError,
   canonicalPaymentRequest,
   decodePaymentReceipt,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { TOOL_DEFINITIONS, callTool } from "../dist/index.js";
 import { executePayment } from "../dist/tools/execute_payment.js";
 

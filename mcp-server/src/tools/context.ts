@@ -1,4 +1,4 @@
-import type { ChainPayClient } from "@chainpay/sdk";
+import type { ChainPayClient } from "@chainpayhq/sdk";
 
 export type ChainPayMcpContext = {
   client: ChainPayClient;

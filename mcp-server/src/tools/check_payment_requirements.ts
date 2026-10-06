@@ -1,4 +1,4 @@
-import { bytesToHex, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, verifyPaymentRequest, type PaymentPreflight, type PolicyCheck, type SignedPaymentRequest } from "@chainpay/sdk";
+import { bytesToHex, SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, verifyPaymentRequest, type PaymentPreflight, type PolicyCheck, type SignedPaymentRequest } from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import { tokenProgram, toolResult } from "./common.js";
 import { parsePaymentInput, requireObject } from "./payment-input.js";

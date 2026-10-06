@@ -6,7 +6,7 @@ import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { ShieldCheck, UserPlus } from "lucide-react";
-import type { CardView } from "@chainpay/sdk";
+import type { CardView } from "@chainpayhq/sdk";
 import type { CardPrivateRead, CardsSource } from "./source";
 import { errorText } from "./shared";
 import { UnlockStrip } from "./Unlock";

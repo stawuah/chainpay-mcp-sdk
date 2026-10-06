@@ -1,7 +1,7 @@
 import {
   verifyDeliveryAttestation,
   type TrustedSellerMapping,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { BACKEND_URL, PROGRAM_ID } from "../config/client";
 import { sellerStateFromHttp, type SellerStatementState } from "./model";
 

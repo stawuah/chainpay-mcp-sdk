@@ -4,7 +4,7 @@ import {
   relayObservedPolicy,
   type PaymentReceipt,
   type ReceiptCsvRow,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { publicReceiptUrl } from "./model";
 
 function localDate(now: Date): string {

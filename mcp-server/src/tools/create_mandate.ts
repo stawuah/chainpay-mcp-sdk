@@ -1,4 +1,4 @@
-import type { CreateMandateInput } from "@chainpay/sdk";
+import type { CreateMandateInput } from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import {
   requiredString,

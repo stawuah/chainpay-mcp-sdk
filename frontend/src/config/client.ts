@@ -1,4 +1,4 @@
-import { ChainPayClient } from "@chainpay/sdk";
+import { ChainPayClient } from "@chainpayhq/sdk";
 import { configureSession } from "../session";
 import { AGENT_URL, BACKEND_URL, MCP_URL, PROGRAM_ID, RPC_URL } from "./public";
 

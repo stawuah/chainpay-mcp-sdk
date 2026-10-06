@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import express from "express";
-import { CARD_SANDBOX_MERCHANTS } from "@chainpay/sdk";
+import { CARD_SANDBOX_MERCHANTS } from "@chainpayhq/sdk";
 import { CARD_SHOPS, loadCardShopSettings, mountCardShops } from "../dist/card-shops.js";
 
 const SECRET = "runner-secret-0123456789abcdef0123456789abcdef";

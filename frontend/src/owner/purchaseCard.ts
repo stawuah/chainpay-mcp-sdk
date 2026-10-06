@@ -1,4 +1,4 @@
-import type { Mandate } from "@chainpay/sdk";
+import type { Mandate } from "@chainpayhq/sdk";
 import type { AgentCheck, AgentInboxItem, AgentInboxStage, StablecoinOption } from "./runtime";
 import { isInboxItemArchived } from "./inboxArchive";
 import { formatTokenAmount } from "./amounts";

@@ -1,4 +1,4 @@
-import { bytesToHex, verifyPaymentRequest as verifySignedPaymentRequest, type SignedPaymentRequest } from "@chainpay/sdk";
+import { bytesToHex, verifyPaymentRequest as verifySignedPaymentRequest, type SignedPaymentRequest } from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import { toolResult } from "./common.js";
 import { requireObject } from "./payment-input.js";

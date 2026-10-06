@@ -1,6 +1,6 @@
 import { submitSettlement } from "./settlement-submit.js";
 import type { ChainPayMcpContext } from "./context.js";
-import { bytesToHex, verifyPaymentRequest, type SignedPaymentRequest } from "@chainpay/sdk";
+import { bytesToHex, verifyPaymentRequest, type SignedPaymentRequest } from "@chainpayhq/sdk";
 import { materializeUnsignedTransaction, serializeTransaction, toolResult } from "./common.js";
 import { parsePaymentInput, requireObject } from "./payment-input.js";
 import { requirementsFromPreflight } from "./check_payment_requirements.js";

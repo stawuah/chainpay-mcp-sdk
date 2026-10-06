@@ -9,8 +9,8 @@ import type {
   StatementState,
   StatementView,
   TeeRead,
-} from "@chainpay/sdk";
-import type { PrivateRepaymentAttempt, PrivateRepaymentResult } from "@chainpay/sdk/cards/private-repayment";
+} from "@chainpayhq/sdk";
+import type { PrivateRepaymentAttempt, PrivateRepaymentResult } from "@chainpayhq/sdk/cards/private-repayment";
 
 /*
  * Everything the Cards area needs, behind one interface. The live source wraps

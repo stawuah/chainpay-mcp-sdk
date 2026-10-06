@@ -1,4 +1,4 @@
-import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@chainpay/sdk";
+import { SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import { toolResult } from "./common.js";
 

@@ -3,7 +3,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
-import { COMMITMENT_FIELD_LABELS, encodeDisclosureFragment, type CardView } from "@chainpay/sdk";
+import { COMMITMENT_FIELD_LABELS, encodeDisclosureFragment, type CardView } from "@chainpayhq/sdk";
 import type { CardsSource } from "./source";
 import { errorText } from "./shared";
 

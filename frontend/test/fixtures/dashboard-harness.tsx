@@ -26,7 +26,7 @@ import { CardsNotEnabledError, setCardsSourceOverride } from "../../src/dashboar
 import { createFixtureCardsSource, FIXTURE_CARD_IDS } from "../../src/dashboard/cards/fixtureSource";
 import { cardStatus } from "../../src/dashboard/cards/lifecycle";
 import { CARD_ATTENTION_KEYS } from "../../src/dashboard/overview/cardsSummary";
-import type { Mandate, PaymentReceipt } from "@chainpay/sdk";
+import type { Mandate, PaymentReceipt } from "@chainpayhq/sdk";
 import { Router } from "../../src/routing/Router";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
 import crossmintInbox from "./inbox-crossmint.json";

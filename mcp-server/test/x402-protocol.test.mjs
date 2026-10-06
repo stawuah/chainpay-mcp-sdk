@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
 import { Keypair, SystemProgram } from "@solana/web3.js";
-import { SPL_TOKEN_PROGRAM_ID as SDK_SPL_TOKEN, standardV2RecipientTokenAccount } from "@chainpay/sdk";
+import { SPL_TOKEN_PROGRAM_ID as SDK_SPL_TOKEN, standardV2RecipientTokenAccount } from "@chainpayhq/sdk";
 import {
   CUSTOM_PROTOCOL,
   CUSTOM_X402_VERSION,

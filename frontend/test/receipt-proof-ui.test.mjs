@@ -35,7 +35,7 @@ async function loadBundle(entry, name, { platform = "node", plugins = [] } = {})
     jsx: "automatic",
     outfile,
     loader: { ".css": "empty" },
-    external: ["@chainpay/sdk", "react", "react-dom", "react/jsx-runtime"],
+    external: ["@chainpayhq/sdk", "react", "react-dom", "react/jsx-runtime"],
     plugins,
   });
   try {

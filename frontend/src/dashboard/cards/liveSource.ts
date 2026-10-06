@@ -40,11 +40,11 @@ import {
   type PreparedCard,
   type TeeRead,
   type TeeSession,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { authorizedFetch } from "../../session";
 import { BACKEND_URL, CARD_PARTNER_TOKEN_ACCOUNT, CARD_POLICY_PROGRAM_ID, DEVNET_SEND_RPC_URL, DEVNET_USDC_MINT, MCP_URL } from "../../config/public";
 import { registerMcpConnection } from "../../owner/runtime";
-import { payStatementPrivately, preparePrivateRepayment, submitPrivateRepayment, waitForPrivateRepayment, type ChainPayRoutesOptions } from "@chainpay/sdk/cards/private-repayment";
+import { payStatementPrivately, preparePrivateRepayment, submitPrivateRepayment, waitForPrivateRepayment, type ChainPayRoutesOptions } from "@chainpayhq/sdk/cards/private-repayment";
 import { chainpayClient } from "../../config/client";
 import { submitSignedTransaction } from "../../owner/runtime";
 import { checkTeeAttestation } from "./teeAttestation";

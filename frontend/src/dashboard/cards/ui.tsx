@@ -1,7 +1,7 @@
 import {
   AlarmClock, CircleCheck, Info, CircleDot, CircleHelp, CircleX, Clock3, Contrast, Dot, Flag, Hourglass, Lock, RotateCcw, Snowflake, TriangleAlert, Undo2,
 } from "lucide-react";
-import { formatUsdCents } from "@chainpay/sdk";
+import { formatUsdCents } from "@chainpayhq/sdk";
 import { Status } from "../../ui/workspace/Status";
 import { pillStatusProps, type PillIcon, type StatePill } from "./lifecycle";
 

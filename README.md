@@ -68,7 +68,7 @@ is still waiting.
 | I want to… | Start here |
 | --- | --- |
 | Connect an AI agent | [MCP connection guide](docs/guides/connect-an-agent.md) — discover tools, authenticate, and inspect a mandate |
-| Integrate a TypeScript app | [SDK guide](docs/guides/use-the-sdk.md) — build locally and read protocol state |
+| Integrate a TypeScript app | [SDK guide](docs/guides/use-the-sdk.md) — install `@chainpayhq/sdk` and read protocol state |
 | Accept payment for a resource | [Merchant guide](docs/guides/merchant-integration.md) — verify payment before serving it |
 | Run or contribute to the project | [Local development](docs/getting-started/local-development.md) · [Contributing](CONTRIBUTING.md) |
 | Have a coding agent work on the repo | [AGENTS.md](AGENTS.md) — architecture, setup, checks, and boundaries |

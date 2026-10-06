@@ -1,4 +1,4 @@
-import type { PreparePaymentInput } from "@chainpay/sdk";
+import type { PreparePaymentInput } from "@chainpayhq/sdk";
 import {
   hex32,
   requiredString,

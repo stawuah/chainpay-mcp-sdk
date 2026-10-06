@@ -46,7 +46,7 @@ export default function WalletController({ children }: { children: ReactNode }) 
   const loadWalletState = useCallback(async (owner: string, preferredMandateAddress?: string) => {
     const loadGeneration = ++walletLoadGeneration.current;
     const [{ deriveMandateAddress }, { chainpayClient }, runtime] = await Promise.all([
-      import("@chainpay/sdk"),
+      import("@chainpayhq/sdk"),
       import("../config/client"),
       import("../owner/runtime"),
     ]);

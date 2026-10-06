@@ -8,7 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../src");
 const landingPath = resolve(root, "landing/LandingPage.tsx");
 
 const blocked = [
-  "@chainpay/sdk",
+  "@chainpayhq/sdk",
   "config/client",
   "wallet/connect",
   "wallet/WalletController",

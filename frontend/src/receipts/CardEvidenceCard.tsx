@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { Lock, Printer, Share2 } from "lucide-react";
 import { BrandLogo } from "../brand/Brand";
-import { DECLINE_COPY, formatUsdCents, mccLabel, type CardEvidence } from "@chainpay/sdk";
+import { DECLINE_COPY, formatUsdCents, mccLabel, type CardEvidence } from "@chainpayhq/sdk";
 import { LIFECYCLE_PILLS, STATEMENT_STATE_LABEL } from "../dashboard/cards/lifecycle";
 import { Pill } from "../dashboard/cards/ui";
 import { printReceipt } from "./print";

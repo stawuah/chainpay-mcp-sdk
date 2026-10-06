@@ -9,7 +9,7 @@ import {
   type CardCommitment,
   type DisclosureBundle,
   type DisclosureCheck,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { BrandLogo } from "../brand/Brand";
 import { CARD_POLICY_PROGRAM_ID } from "../config/public";
 import "../receipts/receipt-card.css";
