@@ -38,26 +38,34 @@ const BANNED = [
 
 test("summaries, reasons and soon notes stay inside what ships", () => {
   for (const item of data.USE_CASES) {
-    const lines = [item.title, item.summary, ...item.steps, ...item.why, item.soonNote?.title, item.soonNote?.body].filter(Boolean);
+    const lines = [item.title, item.summary, ...item.steps, ...item.why, item.soonNote?.title, item.soonNote?.body, item.liveNote?.title, item.liveNote?.body].filter(Boolean);
     for (const line of lines) {
       for (const phrase of BANNED) assert.doesNotMatch(line, phrase, `${item.slug}: "${line}"`);
     }
   }
 });
 
-test("the agent card entry is honest about privacy, testing and its own limits", () => {
+// Live on Devnet since 2026-10-06 (docs/project/release-manifest.md, Cards gates).
+// It must still say sandbox test card, Devnet and simulated credit everywhere a reader lands.
+test("the agent card entry is live but honest about sandbox, simulated credit and privacy", () => {
   const card = data.findUseCase("private-agent-card");
   assert.ok(card, "private-agent-card entry missing");
-  assert.equal(card.status, "soon");
+  assert.equal(card.status, "live");
   assert.match(card.summary, /virtual card/i);
-  assert.match(card.summary, /testing/i);
-  assert.match(card.summary, /sandbox/i);
+  assert.match(card.summary, /sandbox test card/i);
+  assert.match(card.summary, /Devnet/);
+  assert.match(card.summary, /simulated credit/i);
+  assert.match(card.summary, /no real card money/i);
   assert.match(card.why.join(" "), /public chain/i);
   assert.match(card.why.join(" "), /issuer/i, "say who else can see card limits");
-  assert.ok(card.soonNote, "card needs its own soon note");
-  // Card limits are set on the card; a spending permission is a different thing.
-  assert.doesNotMatch(card.soonNote.body, /limits (your agent|it) will use/i);
-  assert.match(card.soonNote.body, /spending permission/i);
+  assert.deepEqual(card.example.find(([label]) => label === "Real money"), ["Real money", "None · sandbox and Devnet only"]);
+  assert.match(card.example.map(([, value]) => value).join(" "), /simulated credit/i);
+  assert.equal(card.cta.href, "/app/cards");
+  assert.equal(card.soonNote, undefined, "a live card has no soon note");
+  assert.ok(card.liveNote, "card needs its own live note with the sandbox caveat");
+  assert.match(card.liveNote.body, /sandbox test card/i);
+  assert.match(card.liveNote.body, /simulated/i);
+  assert.match(card.liveNote.body, /Devnet USDC/);
 });
 
 test("the landing teaser and the use-case page read the same entry", async () => {
@@ -67,12 +75,13 @@ test("the landing teaser and the use-case page read the same entry", async () =>
   assert.ok(slug, "teaser must look its entry up with findUseCase");
   const item = data.findUseCase(slug);
   assert.ok(item, `teaser slug ${slug} is not a use case, so the landing card would silently vanish`);
-  for (const field of ["{item.title}", "{item.summary}", "STATUS_LABEL[item.status]", "/use-cases/${item.slug}", "imageFor(item"]) {
+  for (const field of ["{item.title}", "{item.summary}", "STATUS_LABEL[item.status]", "/use-cases/${item.slug}", "imageFor(item", "item.cta.href"]) {
     assert.ok(teaser.includes(field), `teaser must render ${field} from the entry`);
   }
   assert.ok(!teaser.includes(item.summary), "teaser must not hardcode the summary");
   assert.match(detail, /findUseCase\(/);
-  for (const field of ["{item.title}", "{item.summary}", "item.soonNote"]) {
+  assert.doesNotMatch(teaser, /Coming next|will work/, "the cards band is live, not a teaser");
+  for (const field of ["{item.title}", "{item.summary}", "item.soonNote", "item.liveNote"]) {
     assert.ok(detail.includes(field), `detail page must render ${field} from the entry`);
   }
 });
@@ -99,13 +108,17 @@ test("card copy says card records are not payment receipts", () => {
   assert.match(card.why.join(" "), /not a Solana payment receipt/);
 });
 
+// Tested on Devnet with Crossmint staging on 2026-10-06, but the flags are off: it stays "soon".
 test("agent shopping stays Coming soon with a CTA that can't start an order", () => {
   const shopping = data.findUseCase("agent-shopping");
   assert.equal(shopping.status, "soon");
   assert.ok(shopping.soonNote, "agent shopping needs its own soon note");
-  assert.match(shopping.soonNote.body, /Crossmint/);
+  assert.match(shopping.soonNote.title, /Coming soon/);
+  assert.match(shopping.soonNote.body, /Crossmint staging/);
+  assert.match(shopping.soonNote.body, /Devnet/);
   assert.match(shopping.soonNote.body, /no order can start/i);
-  assert.deepEqual(shopping.example.find(([label]) => label === "Status"), ["Status", "Coming soon"]);
+  assert.doesNotMatch(shopping.soonNote.body, /delivered|arrived/i, "delivery was never proven");
+  assert.deepEqual(shopping.example.find(([label]) => label === "Status"), ["Status", "Tested on Devnet · switching on after one more check"]);
   assert.notEqual(shopping.cta.href, "/app");
   assert.match(shopping.cta.label, /spending limit/i);
 });

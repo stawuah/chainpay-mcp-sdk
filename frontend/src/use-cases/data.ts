@@ -18,6 +18,8 @@ export type UseCase = {
   featured?: boolean;
   /** CTA band copy for a "soon" case that is not built yet. Defaults to the built-and-switched-off wording. */
   soonNote?: { title: string; body: string };
+  /** CTA band copy for a "live" case that needs its own Devnet caveat. Defaults to the test-tokens wording. */
+  liveNote?: { title: string; body: string };
 };
 
 export const AUDIENCES: readonly { id: Audience; label: string }[] = [
@@ -37,6 +39,7 @@ const DASHBOARD = { label: "Open dashboard", href: "/app" };
 // written out because this file stays import-free.
 export const RECEIPT = { label: "See a receipt", href: "/verify/7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q" };
 const SPENDING_PERMISSION = { label: "Set a spending limit", href: "/app/mandates" };
+const CARDS = { label: "Open your cards", href: "/app/cards" };
 const MCP_DOCS = { label: "Read the MCP docs", href: "https://chainpay-mcp.vercel.app/docs" };
 const SELLER_GUIDE = {
   label: "Read the seller guide",
@@ -248,9 +251,9 @@ export const USE_CASES: readonly UseCase[] = [
   {
     slug: "private-agent-card",
     audience: "business",
-    status: "soon",
+    status: "live",
     title: "Give your agent a card",
-    summary: "A virtual card for your agent. You set the limits, it buys inside them. In testing with a sandbox card issuer.",
+    summary: "A virtual card for your agent. You set the limits, it buys inside them. Sandbox test card on Devnet, simulated credit, no real card money.",
     steps: [
       "Set a monthly budget and a per-purchase cap.",
       "Pick the shops it can buy from.",
@@ -261,11 +264,18 @@ export const USE_CASES: readonly UseCase[] = [
       "Freeze it in one tap.",
       "Every purchase leaves a card record, not a Solana payment receipt.",
     ],
-    example: [["Bought", "Data API credits"], ["Paid", "$20"], ["Cap per purchase", "$30"]],
-    cta: DASHBOARD,
-    soonNote: {
-      title: "Coming soon. In testing now.",
-      body: "Cards get their own limits. For API payments today, give your agent a spending permission.",
+    example: [
+      ["Card", "Sandbox test card"],
+      ["Bought", "Data API credits"],
+      ["Paid", "$20"],
+      ["Cap per purchase", "$30"],
+      ["Paid back", "Devnet USDC · simulated credit"],
+      ["Real money", "None · sandbox and Devnet only"],
+    ],
+    cta: CARDS,
+    liveNote: {
+      title: "Try it on Devnet.",
+      body: "The card is a sandbox test card and the credit is simulated. You pay the statement back in Devnet USDC, so no real card money moves.",
     },
     imageAlt: "A white payment card with the ChainPay logo, half hidden behind frosted blue glass with a small lock, the ChainPay robot peeking over the top.",
   },
@@ -365,11 +375,11 @@ export const USE_CASES: readonly UseCase[] = [
       "Order and payment live in one place.",
       "Off by default until it's ready.",
     ],
-    example: [["Checkout partner", "Crossmint"], ["Status", "Coming soon"]],
+    example: [["Checkout partner", "Crossmint"], ["Status", "Tested on Devnet · switching on after one more check"]],
     cta: SPENDING_PERMISSION,
     soonNote: {
-      title: "Coming soon. Switched off for now.",
-      body: "Checkout stays off until Crossmint signs off, so no order can start yet. Meanwhile, set up the spending limit your agent would shop with.",
+      title: "Coming soon. Tested on Devnet.",
+      body: "A spending limit paid a Crossmint staging order on Devnet, and Crossmint marked it paid. Checkout stays off until one more test run, so no order can start yet. Meanwhile, set up the spending limit your agent would shop with.",
     },
     imageAlt: "A shopping bag with the ChainPay logo, the robot behind it.",
   },

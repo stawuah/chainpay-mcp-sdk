@@ -1,7 +1,7 @@
 import { STATUS_LABEL, findUseCase, imageFor, type UseCase } from "../use-cases/data";
 
 // "What will your agent pay for?" Four use cases between the story and the
-// "Coming next" teaser. Static: no reveal, no carousel. Titles come from the
+// agent cards band. Static: no reveal, no carousel. Titles come from the
 // use-case data so the landing and /use-cases never disagree.
 // Ruling: _bmad-output/design-council/landing-brand-ruling-2026-10-04.md (B1 to B4, B11).
 const SLUGS = ["pay-per-api-call", "one-tap-stop", "receipts-for-accounting", "paypal-invoices"] as const;

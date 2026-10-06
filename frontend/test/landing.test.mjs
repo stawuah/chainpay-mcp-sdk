@@ -95,6 +95,8 @@ test("illustrative receipt uses the approved example and never claims payment", 
 test("x402 and managed signing status stay honest", async () => {
   const text = await source();
   assert.match(text, /unsupported-sponsor/);
+  assert.match(text, /Proven on Devnet with a demo seller: 402, payment inside the spending limit, receipt check, 200/);
+  assert.match(text, /A replay doesn't pay twice/);
   assert.match(text, /receipt-proof|receipt PDA/);
   assert.match(text, /Not live facilitator acceptance/);
   assert.match(text, /Managed signing/);

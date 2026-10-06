@@ -1,7 +1,9 @@
 # ChainPay implementation status
 
-Updated: 2026-10-05, against upstream master `c936067`. The tables after
-"Current state" are the 2026-09-16 record; rows that changed since are marked.
+Updated: 2026-10-06, against upstream master `ddcd7c2`. "Live on Devnet,
+2026-10-06" is the newest record. "Current state at master `c936067`" is the
+2026-10-05 record, kept as it was except for the PR status column. The tables
+after it are the 2026-09-16 record; rows that changed since are marked.
 
 This file separates implementation/regression evidence from real Devnet
 settlement acceptance. Tests and local HTTP fixtures do not count as settlement.
@@ -9,6 +11,54 @@ PR01 enables RPC preflight after full wire validation. Axum then waits for
 finality and verifies the receipt before reporting success. Local tests cover
 wallet sessions, scope enforcement and official legacy/v0/v1 decoding; they
 do not establish live settlement or a database restart acceptance.
+
+## Live on Devnet, 2026-10-06
+
+### Merged since the 2026-10-05 record
+
+`gh pr list -R stawuah/chainpay-mcp-sdk --state all`, read 2026-10-06:
+
+| PR | What | Merged (UTC) | Merge commit |
+| --- | --- | --- | --- |
+| [#52](https://github.com/stawuah/chainpay-mcp-sdk/pull/52) | Card activation is "on" only after the public commitment | 2026-10-05 06:52 | `2c09de1` |
+| [#53](https://github.com/stawuah/chainpay-mcp-sdk/pull/53) | Receipts a stranger can open, honest captions | 2026-10-05 06:58 | `371b9c4` |
+| [#54](https://github.com/stawuah/chainpay-mcp-sdk/pull/54) | PayPal v2 proposal and site copy (nothing built) | 2026-10-05 06:59 | `b03e63c` |
+| [#55](https://github.com/stawuah/chainpay-mcp-sdk/pull/55) | Crossmint binds the delivery recipient; refunds never read as delivered | 2026-10-05 07:03 | `2853ff0` |
+| [#56](https://github.com/stawuah/chainpay-mcp-sdk/pull/56) | Support tips: Devnet only, fail closed | 2026-10-05 07:00 | `f182dfa` |
+| [#57](https://github.com/stawuah/chainpay-mcp-sdk/pull/57) | Owner webhooks, off unless `OWNER_WEBHOOKS_ENABLED=true` | 2026-10-05 09:55 | `6c0fb88` |
+| [#58](https://github.com/stawuah/chainpay-mcp-sdk/pull/58) | This status page and the release manifest | 2026-10-05 09:56 | `186bb54` |
+| [#59](https://github.com/stawuah/chainpay-mcp-sdk/pull/59) | Crossmint order memo carried in the mandate payment | 2026-10-05 15:21 | `a9a023a` |
+| [#60](https://github.com/stawuah/chainpay-mcp-sdk/pull/60) | `@chainpayhq/sdk` 0.1.0 npm release prep | 2026-10-06 00:55 | `dffa44a` |
+| [#61](https://github.com/stawuah/chainpay-mcp-sdk/pull/61) | Crossmint fixes from the live run, incl. the relay's `crypto-tx-id` notice | 2026-10-06 14:41 | `ecfc2d0` |
+| [#62](https://github.com/stawuah/chainpay-mcp-sdk/pull/62) | Card setup works in Phantom; stopped setups can finish | 2026-10-06 14:54 | `ddcd7c2` |
+
+Still open: [#63](https://github.com/stawuah/chainpay-mcp-sdk/pull/63) (card
+repayment against the deployed 282-byte ChainPay receipt; SDK accepts
+MagicBlock's new deposit shape) and
+[#64](https://github.com/stawuah/chainpay-mcp-sdk/pull/64) (x402 job labels,
+demo merchant `payTo`, hostable demo merchant, webhook redeliver cleanup).
+
+### What was proven, and where
+
+All runs used Devnet test tokens, the Lithic **sandbox** and Crossmint
+**staging**, against **preview** deploys of the relay and MCP with preview
+Convex `acrobatic-mole-703`. Production env was not changed by any run, so
+"proven on Devnet" below does not mean switched on in production. Full
+evidence: the [release manifest's 2026-10-06 record](release-manifest.md#devnet-live-runs-2026-10-06).
+
+| Capability | Live-proven on Devnet | Evidence | Still needed before production says "on" |
+| --- | --- | --- | --- |
+| Agent cards: activation, approve, decline, freeze | **Yes**, 2026-10-06, preview relay at `dffa44a` | Commitment [`DAHX…SZXX`](https://explorer.solana.com/address/DAHXQq6MA5MNz2KWRSEEfdoAh1RNFMuJwURwaLt2SZXX?cluster=devnet) read back (seq 1) before Lithic showed OPEN. $20 approved (Lithic auth `e73796bf…`), $40 refused by the private rules and declined at the network (`d5f273de…`), freeze read back PAUSED. TEE attestation `enforce`, DCAP verified | Relay `CARDS_CHECKOUT_ENABLED` + `CARDS_CHECKOUT_RUNNER_SECRET` (production declines every purchase with `intent_missing` without them); repo var `CARDS_RECONCILE_URL` + secret `CARDS_CRON_SECRET` |
+| Agent cards: `CARDS_NEW_ACTIVATION_ENABLED=false` | **Yes**, 2026-10-06, preview | prepare and activate → 503 `new_activation_disabled`; reads, freeze, repayment, reconcile → 200 | — |
+| Card statement repayment, transparent | **Yes**, 2026-10-06 | `repay_statement` [`2xjwgS6X…`](https://explorer.solana.com/tx/2xjwgS6XAS59255knTXpDzHSovdc5gVGnpnW2fK9nmGVodrvke5rLm2FGqnQvcS72MmA2s8z44Ub7tpbQCFLvQs3?cluster=devnet) → ChainPay receipt [`5gFw…7pP7`](https://explorer.solana.com/address/5gFweJeBTjuR3kkqWSegXWSPEWiHkTJp3diKF9Za7pP7?cluster=devnet), statement discharged on PER. Needed the `card_policy` upgrade (Devnet slot 508123988, built from #63) | Merge #63, so master matches the upgraded program |
+| Card statement repayment, private (MagicBlock) | **Yes**, 2026-10-06 | Deposit [`3YyV8ndz…`](https://explorer.solana.com/tx/3YyV8ndzAigTFDs1pvHQ6sqG1CrQBs7QDxZDdvc7CrZ6ttBTu3dXGDbZhxuhKTTTkta17NsiWc5z1jPiuVgNuwWG?cluster=devnet), settlement [`3L7HAjDm…`](https://explorer.solana.com/tx/3L7HAjDmGNjtZWN5KNCGgzQKi9theqqEn9VekPtsEtq6jqFHKQctqqBideAgk8zpMLUwWKT13XgkKApUVDDvhrgz?cluster=devnet), labeled `payerVerified: false` / "Simulated credit", discharged | Merge #63 (SDK accepts deposit tag 24) |
+| Standard x402 v2 (receipt-merchant path) | **Yes**, 2026-10-06, preview relay + MCP at `dffa44a` | 402 → payment [`2nGaP5WS…`](https://explorer.solana.com/tx/2nGaP5WSqtgkVutuoJXiNXkR9wPvDFARt24LrtNoWdhVJ8peDFtB3QooRtqi574Mk7cfZehRtmqZrMkhZfdXLRDQ?cluster=devnet) → receipt [`Fqn1…ZtZV`](https://explorer.solana.com/address/Fqn1y5q7dGvtFM49xGpZXFfsmdtRpm9ENPDtZHBnZtZV?cluster=devnet) → 200. Replays: `duplicate_invoice` or the same receipt, no second payment | MCP `CHAINPAY_X402_ALLOWED_ORIGINS` / `_RECEIPT_MERCHANTS` in production; #64 for job labels |
+| Owner webhooks | **Yes on preview**, 2026-10-06 | Signed `payment.receipt_ready` `evt_0425bf41…`, 5 deliveries all verified; 500 / 429 / timeout retried with the same event ID; concurrent dispatchers did not double-deliver | Relay `OWNER_WEBHOOKS_*`, `CRON_SECRET`, `CHAINPAY_APP_URL`; repo var + secret for the scheduled dispatch, then one green scheduled run |
+| Crossmint checkout | **Paid and credited on staging, with a caveat**, 2026-10-06 | Order `5a5fe611…` paid by [`AsCF3JLh…`](https://explorer.solana.com/tx/AsCF3JLhHxtuYNiu82KqJW8epaKWiF7sWmYujLfsMgbsqyxkiutGmr6Ag7YmsSxoeZHEFymko6fJ4T1MvMpWaEx?cluster=devnet) (0.1203 Devnet USDC). Crossmint marked it paid only after a manual `crypto-tx-id` call. Delivery never finished | One Devnet re-run on a preview built after #61 (relay sends `crypto-tx-id` itself); then the three flags. The use case stays Coming soon |
+| Managed (Privy) signing | Not run | — | One approved delegated Devnet payment |
+| PayPal invoices, support tips | Not run (not built / not deployed) | — | Out of scope for this round |
+
+Bugs these runs found are fixed in #61 and #62 (merged) and #63 and #64 (open).
 
 ## Current state at master `c936067` (2026-10-05)
 
@@ -37,20 +87,20 @@ Read-only checks used on 2026-10-05:
 | Capability | In master | Deployed | Live-proven | Pending |
 | --- | --- | --- | --- | --- |
 | Spending permissions: create, update, pause, revoke, on-chain limits | Yes | Program on Devnet since 2026-08-15; web and relay from run 37219312021 | Historical Devnet settlements [USDC](https://explorer.solana.com/tx/6vvJgRXdneFkrqxgvedbkCCGqw4SUqTLvYcEgHsKnbzfZX28uWmQrt3U6ToJGmByf7AxK224Uxz8jSczAVi8x7D?cluster=devnet) and [PYUSD](https://explorer.solana.com/tx/3yRhnwna13r5SDUsBf2LJdgqGRro7XAGZtaPHbAARfMLbCmQyFS8BWXdyK6qdtpZ48mpc2srvt2UU7LZ63vBLc7?cluster=devnet), both from before this release. Not yet proven on `c936067` | — |
-| Payment receipt PDA and public `/verify` card | Yes | Web from run 37219312021 | Receipt account [`7R1i…sh2q`](https://explorer.solana.com/address/7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q?cluster=devnet) exists (282 bytes, 0.010000 USDC). The public site's card for it has not been recorded | [#53](https://github.com/stawuah/chainpay-mcp-sdk/pull/53): landing opens that receipt; honest captions |
+| Payment receipt PDA and public `/verify` card | Yes | Web from run 37219312021 | Receipt account [`7R1i…sh2q`](https://explorer.solana.com/address/7R1i9ccD7tZoXozceTMeTueWSfSs9F1jANQcCHcEsh2q?cluster=devnet) exists (282 bytes, 0.010000 USDC). The public site's card for it has not been recorded | [#53](https://github.com/stawuah/chainpay-mcp-sdk/pull/53) (merged 2026-10-05): landing opens that receipt; honest captions |
 | Policy snapshot stored at payment (371-byte receipt) | Yes: program change [#23](https://github.com/stawuah/chainpay-mcp-sdk/pull/23) (`c9f9663`), readers in SDK and web | **No.** The Devnet program predates the change and no 371-byte receipt exists | Not yet proven | Program upgrade (Kwasi). Caption honesty in #53 |
 | Relay-observed limits (read after payment) | Yes | Relay from run 37219312021 | Not yet proven | #53 relabels it "read after payment" |
-| MCP server, 33 tools | Yes | `tools/list` returns 33 | Discovery only. No tool-driven payment recorded on this release | [#55](https://github.com/stawuah/chainpay-mcp-sdk/pull/55) changes Crossmint tool output, not the count |
+| MCP server, 33 tools | Yes | `tools/list` returns 33 | Discovery only. No tool-driven payment recorded on this release | [#55](https://github.com/stawuah/chainpay-mcp-sdk/pull/55) (merged 2026-10-05) changes Crossmint tool output, not the count |
 | Custom x402: 402 → mandate payment → receipt → 200 | Yes | Relay and MCP from run 37219312021 | Not yet proven. Use the [x402 acceptance checklist](../guides/acceptance-x402-mcp.md) | — |
 | Standard x402 v2 | Quoted; settles only for `CHAINPAY_X402_RECEIPT_MERCHANTS` | Unverified (env) | Not yet proven | — |
 | Delegated (Privy) signing | Yes | `healthz` reports `privy` | Not yet proven | — |
 | Vercel + Convex storage | Yes | Convex `notable-bee-447` functions and services from run 37219312021 | Not yet proven: no payment record read back on this release | — |
 | Seller statements, purchase orders, permission requests | Yes, off-chain | Web and relay from run 37219312021 | Not yet proven (fixtures and harness only) | — |
-| Agent Cards (Lithic sandbox, `card_policy`) | Yes | `card_policy` [`H3ae…B93n`](https://explorer.solana.com/address/H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n?cluster=devnet) is executable on Devnet. The production relay's `POST /v1/cards/lithic/asa` answers `invalid_signature`, so the connector is mounted. Other card flags unverified | Not yet proven. On master, activation can report success before the public commitment exists | [#52](https://github.com/stawuah/chainpay-mcp-sdk/pull/52): activation is "on" only after the commitment reads back; adds `CARDS_NEW_ACTIVATION_ENABLED` |
-| Crossmint checkout | Yes, behind `CHAINPAY_CROSSMINT_ENABLED` / `VITE_CHAINPAY_CROSSMINT` | Unverified (env). The use case says Coming soon | Not yet proven. Crossmint has not accepted a mandate-paid order | [#55](https://github.com/stawuah/chainpay-mcp-sdk/pull/55): bind the delivery recipient; a refund or failed delivery never reads as delivered |
-| Support tips (splitter) | UI, program source and indexer | **No.** The splitter program ID in source has no account on Devnet. `/support` shows Opening soon | Not yet proven | [#56](https://github.com/stawuah/chainpay-mcp-sdk/pull/56): Devnet test tokens only, fails closed (stacked on #53) |
-| Owner webhooks and email | **No.** The read-only Settings → Notifications tab was removed in `3c3569a` | — | — | [#57](https://github.com/stawuah/chainpay-mcp-sdk/pull/57): signed `payment.receipt_ready`, off unless `OWNER_WEBHOOKS_ENABLED=true` (stacked on #55). Email is not planned |
-| PayPal invoices | Use-case page only (Coming soon). No PayPal code | — | — | [#54](https://github.com/stawuah/chainpay-mcp-sdk/pull/54): proposal v2 and site copy, still not implemented |
+| Agent Cards (Lithic sandbox, `card_policy`) | Yes | `card_policy` [`H3ae…B93n`](https://explorer.solana.com/address/H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n?cluster=devnet) is executable on Devnet. The production relay's `POST /v1/cards/lithic/asa` answers `invalid_signature`, so the connector is mounted. Other card flags unverified | Not yet proven. On master, activation can report success before the public commitment exists | [#52](https://github.com/stawuah/chainpay-mcp-sdk/pull/52) (merged 2026-10-05): activation is "on" only after the commitment reads back; adds `CARDS_NEW_ACTIVATION_ENABLED` |
+| Crossmint checkout | Yes, behind `CHAINPAY_CROSSMINT_ENABLED` / `VITE_CHAINPAY_CROSSMINT` | Unverified (env). The use case says Coming soon | Not yet proven. Crossmint has not accepted a mandate-paid order | [#55](https://github.com/stawuah/chainpay-mcp-sdk/pull/55) (merged 2026-10-05): bind the delivery recipient; a refund or failed delivery never reads as delivered |
+| Support tips (splitter) | UI, program source and indexer | **No.** The splitter program ID in source has no account on Devnet. `/support` shows Opening soon | Not yet proven | [#56](https://github.com/stawuah/chainpay-mcp-sdk/pull/56) (merged 2026-10-05): Devnet test tokens only, fails closed (stacked on #53) |
+| Owner webhooks and email | **No.** The read-only Settings → Notifications tab was removed in `3c3569a` | — | — | [#57](https://github.com/stawuah/chainpay-mcp-sdk/pull/57) (merged 2026-10-05): signed `payment.receipt_ready`, off unless `OWNER_WEBHOOKS_ENABLED=true` (stacked on #55). Email is not planned |
+| PayPal invoices | Use-case page only (Coming soon). No PayPal code | — | — | [#54](https://github.com/stawuah/chainpay-mcp-sdk/pull/54) (merged 2026-10-05): proposal v2 and site copy, still not implemented |
 | Shared pet room | Yes, behind `CHAINPAY_SHARED_PET` / `VITE_CHAINPAY_SHARED_PET` | Off: `/pet` shows the missing-page screen | Not applicable (no payment) | — |
 
 ### Policy snapshots: old and new receipts
@@ -136,5 +186,6 @@ On 2026-09-15, the hosted landing showed an earlier interface. Production
 now runs on Vercel with Convex `notable-bee-447` (origins in
 [`scripts/production-release.json`](../../scripts/production-release.json)). Deploys go
 through the `Deploy to Vercel` workflow. The deployed revision and the evidence
-for each capability are in [Current state](#current-state-at-master-c936067-2026-10-05)
+for each capability are in [Live on Devnet, 2026-10-06](#live-on-devnet-2026-10-06),
+[Current state](#current-state-at-master-c936067-2026-10-05)
 above and, per release, in the [release manifest](release-manifest.md).

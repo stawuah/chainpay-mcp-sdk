@@ -152,7 +152,7 @@ export function LandingPage({ wallet, connecting, onConnect, onOpenDashboard }: 
             </article>
             <article>
               <h3 data-pet-perch className="t-title">Standard x402 v2</h3>
-              <p className="t-body-sm">Recognized and returned as unsupported-sponsor before wallet, signing, or settlement. Not live facilitator acceptance.</p>
+              <p className="t-body-sm">Proven on Devnet with a demo seller: 402, payment inside the spending limit, receipt check, 200. A replay doesn't pay twice. Works only for sellers that accept a ChainPay receipt as proof; other v2 challenges still come back as unsupported-sponsor. Not live facilitator acceptance.</p>
             </article>
             <article>
               <h3 data-pet-perch className="t-title">Managed signing</h3>
