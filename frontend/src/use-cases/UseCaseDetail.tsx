@@ -72,8 +72,8 @@ export default function UseCaseDetail({ slug }: { slug: string }) {
       <section className="page-width uc-section">
         <div className="uc-cta">
           <div>
-            <h2 className="t-lg">{item.status === "soon" ? item.soonNote?.title ?? "Not switched on yet." : "Try it on devnet."}</h2>
-            <p>{item.status === "soon" ? item.soonNote?.body ?? "It's built and waiting. Meanwhile, set up the limits it will use." : "Test tokens, real rules. Connecting a wallet doesn't let anything spend."}</p>
+            <h2 className="t-lg">{item.status === "soon" ? item.soonNote?.title ?? "Not switched on yet." : item.liveNote?.title ?? "Try it on devnet."}</h2>
+            <p>{item.status === "soon" ? item.soonNote?.body ?? "It's built and waiting. Meanwhile, set up the limits it will use." : item.liveNote?.body ?? "Test tokens, real rules. Connecting a wallet doesn't let anything spend."}</p>
           </div>
           {external
             ? <Button variant="secondary" size="lg" label={item.cta.label} isDisabled={false} href={item.cta.href} target="_blank" rel="noreferrer" />

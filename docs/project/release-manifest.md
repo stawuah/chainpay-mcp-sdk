@@ -115,6 +115,12 @@ Prepared by: <name> · Reviewed by: <name>
 These come from the 2026-10-05 audit remediation plan. Check a box only when
 the evidence column of the manifest links the proof.
 
+Boxes ticked on 2026-10-06 point at [Devnet live runs, 2026-10-06](#devnet-live-runs-2026-10-06).
+Those runs used **preview** deploys and preview Convex, not a production
+release, so a ticked box here proves the code path on Devnet. It does not mean
+the feature is switched on in production. Where one gate held two checks and
+only one was proven, it is split in two so the unproven half stays unticked.
+
 ### Receipt render (audit fixes A1–A3, A5, A6, A8, A10; [#53](https://github.com/stawuah/chainpay-mcp-sdk/pull/53))
 
 - [ ] Without a wallet, the public site opens `/verify/<demo receipt>` from the landing **See a receipt** and shows the receipt card. Exact amount and token match the chain.
@@ -139,17 +145,18 @@ first. Delegated Privy signing needs its own proof.
 
 ### Custom x402 ([x402 acceptance checklist](../guides/acceptance-x402-mcp.md))
 
-- [ ] 402 challenge → mandate payment → finalized receipt proof → HTTP 200 resource.
-- [ ] A replay of the same request does not pay twice. An unavailable merchant after settlement keeps the original receipt and does not pay again.
-- [ ] Standard v2-shaped challenges settle only for origins in `CHAINPAY_X402_RECEIPT_MERCHANTS`. Generic facilitator or sponsor compatibility is not claimed.
+- [x] 402 challenge → mandate payment → finalized receipt proof → HTTP 200 resource. [2026-10-06](#devnet-live-runs-2026-10-06): the run used a standard v2 challenge on the receipt-merchant path.
+- [x] A replay of the same request does not pay twice. [2026-10-06](#devnet-live-runs-2026-10-06)
+- [ ] An unavailable merchant after settlement keeps the original receipt and does not pay again. Not run.
+- [ ] Standard v2-shaped challenges settle only for origins in `CHAINPAY_X402_RECEIPT_MERCHANTS`. Generic facilitator or sponsor compatibility is not claimed. Partial: with `settleIfReceiptMerchant: false` the same origin came back `x402_unsupported_sponsor`; an origin outside the list was not tried.
 
 ### Cards ([#52](https://github.com/stawuah/chainpay-mcp-sdk/pull/52))
 
-- [ ] Activation reports "on" only when the issuer shows the card open, the limits are mirrored, and the public `CardCommitment` reads back for that policy version.
-- [ ] Partial states (proof pending, limits not copied, issuer pending) show what actually happened. "Paused" appears only when the issuer reads back paused.
-- [ ] Period end, close and discharge keep their checkpoint state, and reconcile repairs it. Cite the scheduled reconcile run that reached this deployment.
-- [ ] With `CARDS_NEW_ACTIVATION_ENABLED=false`, direct API calls to prepare and activate are refused. Reads, pause, statements and repayment still work.
-- [ ] Transparent repayment produces a ChainPay receipt. Private repayment keeps its authorizer-attested label. Simulated credit is labeled simulated.
+- [x] Activation reports "on" only when the issuer shows the card open, the limits are mirrored, and the public `CardCommitment` reads back for that policy version. [2026-10-06](#devnet-live-runs-2026-10-06)
+- [ ] Partial states (proof pending, limits not copied, issuer pending) show what actually happened. "Paused" appears only when the issuer reads back paused. Partial: freeze showed `pending_issuer_confirmation` and turned Paused only after Lithic read back PAUSED; proof-pending and limits-not-copied were not seen live.
+- [ ] Period end, close and discharge keep their checkpoint state, and reconcile repairs it. Cite the scheduled reconcile run that reached this deployment. Partial: close checkpoints confirmed and all three statements discharged after a manual reconcile call; the scheduled `Cards reconcile` workflow is skipped (no `CARDS_RECONCILE_URL` / `CARDS_CRON_SECRET`).
+- [x] With `CARDS_NEW_ACTIVATION_ENABLED=false`, direct API calls to prepare and activate are refused. Reads, pause, statements and repayment still work. [2026-10-06](#devnet-live-runs-2026-10-06)
+- [x] Transparent repayment produces a ChainPay receipt. Private repayment keeps its authorizer-attested label. Simulated credit is labeled simulated. [2026-10-06](#devnet-live-runs-2026-10-06) (after the `card_policy` upgrade; SDK side in open #63)
 
 ### Support rehearsal ([#56](https://github.com/stawuah/chainpay-mcp-sdk/pull/56), `programs/support-splitter/DEPLOY.md`)
 
@@ -165,19 +172,22 @@ Devnet test tokens only. No mainnet deploy, no authority removal, no swaps.
 ### Crossmint ([#55](https://github.com/stawuah/chainpay-mcp-sdk/pull/55))
 
 - [ ] Staging project, Orders API permissions and the server-only auth secret are confirmed by name only.
-- [ ] One operator-created staging order is quoted. The sanitized order shows chain, mint, payment recipient, delivery recipient, payer, exact amount and expiry.
-- [ ] Crossmint credits that order when it is paid by the mandate-controlled transfer. No plain-transfer fallback, no agent-funded wallet.
+- [x] One operator-created staging order is quoted. The sanitized order shows chain, mint, payment recipient, delivery recipient, payer, exact amount and expiry. [2026-10-06](#devnet-live-runs-2026-10-06)
+- [x] Crossmint credits that order when it is paid by the mandate-controlled transfer. No plain-transfer fallback, no agent-funded wallet. [2026-10-06](#devnet-live-runs-2026-10-06). **Caveat:** the order stayed `awaiting-payment` for ~5 minutes and was credited 13 s after a manual `POST /orders/{id}/payment {"type":"crypto-tx-id"}`. #61 makes the relay send that call itself; a re-run on a preview built after #61 has not happened yet.
 - [ ] The finalized ChainPay receipt matches Crossmint's payment state. Delivery state is tracked separately. A refund or failed delivery stays visible.
 - [ ] Refresh, quote expiry, payer mismatch, amount mismatch, replay and ambiguous responses resume the original operation. None buys again.
 - [ ] Only after all of the above: `CHAINPAY_CROSSMINT_ENABLED` and `VITE_CHAINPAY_CROSSMINT` are on for this environment, and the Coming soon copy is updated.
 
 ### Owner webhooks ([#57](https://github.com/stawuah/chainpay-mcp-sdk/pull/57))
 
-- [ ] One deployed Devnet `payment.receipt_ready` event reaches a controlled HTTPS endpoint and verifies with the documented signature check.
-- [ ] Endpoint answers 2xx, 500, 429, and a timeout after storing the event. Retries reuse the event ID. A dedupe-by-ID receiver processes it once.
-- [ ] A dispatcher crash or restart loses no event. Concurrent dispatchers never deliver the same row twice.
-- [ ] An invalid signature or stale timestamp is rejected. Another owner's endpoints are not reachable. Unsafe destinations are blocked.
-- [ ] A receiver outage does not delay settlement or create a new payment.
+- [x] One deployed Devnet `payment.receipt_ready` event reaches a controlled HTTPS endpoint and verifies with the documented signature check. [2026-10-06](#devnet-live-runs-2026-10-06) (preview relay)
+- [x] Endpoint answers 2xx, 500, 429, and a timeout after storing the event. Retries reuse the event ID. [2026-10-06](#devnet-live-runs-2026-10-06)
+- [ ] A dedupe-by-ID receiver processes it once. Not run: the test receiver logged every attempt (all with the same `webhook-id`) and did no dedupe.
+- [ ] A dispatcher crash or restart loses no event. Not run.
+- [x] Concurrent dispatchers never deliver the same row twice. [2026-10-06](#devnet-live-runs-2026-10-06): two concurrent dispatch calls, one claimed 0 and the other 1.
+- [x] An invalid signature is rejected. Another owner's endpoints are not reachable. Unsafe destinations are blocked. [2026-10-06](#devnet-live-runs-2026-10-06)
+- [ ] A stale timestamp is rejected. Not run (a receiver-side check).
+- [x] A receiver outage does not delay settlement or create a new payment. [2026-10-06](#devnet-live-runs-2026-10-06)
 - [ ] Cite the scheduled dispatch run that reached this deployment.
 
 ## Baseline: master `c936067` (partial, 2026-10-05)
@@ -193,3 +203,85 @@ deploy-account details and every evidence gate are still open.
 - Public origins: as in [`scripts/production-release.json`](../../scripts/production-release.json).
 - Flags: unread. Two values were observed from outside: the cards connector answers on the relay, and `/pet` is off.
 - Evidence gates: none passed on this release yet.
+
+## Devnet live runs, 2026-10-06
+
+Not a production release. Every run used Devnet, preview deploys of the relay
+and MCP built from upstream master `dffa44a` (#60), preview Convex
+`acrobatic-mole-703`, the Lithic **sandbox** and Crossmint **staging**.
+Production env was not changed. Raw run logs stay with the operator; the IDs
+below are enough to check each step on-chain or with the provider.
+
+### Agent cards (Lithic sandbox, MagicBlock Devnet TEE)
+
+- Preview relay `https://chainpay-relay-cards-e2e.vercel.app` with deploy-time `CARDS_CHECKOUT_ENABLED=true`.
+  Gate-off check on `https://chainpay-relay-i1nq9kih7-chainpay.vercel.app` (`CARDS_NEW_ACTIVATION_ENABLED=false`).
+- Card program `H3aetJdQXG8EeJSCHZrpQa8iKHBw8e1p9fSPjTUsB93n`. ChainPay program `3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4` (282-byte receipts).
+- TEE attestation (`/v1/cards/tee/attestation`, production and preview): `mode: enforce`, Intel DCAP chain verified (TCB UpToDate), measurements match.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Base setup (owner-signed) | init_card, delegate_card, escrow top-up | [`4jF26WMh…`](https://explorer.solana.com/tx/4jF26WMh6Stwf6cqyb7bPcEZ7QawtMMPaZ1QVXi1ZcnfBdfAtfErsXPzpSySgWdfsitxtDQBnWeTTUCHmtY8Yxpx?cluster=devnet), [`3eGhJfDm…`](https://explorer.solana.com/tx/3eGhJfDmqwkDaVW2D2zKeYWKb8DwTQFF6aCSx1ncynFh6HsK2b5e5ktJdwYm6XHbs48sPi4CfsjyK8tytVHiv6TJ?cluster=devnet), [`61363kGJ…`](https://explorer.solana.com/tx/61363kGJN8QWwAnyshcqqEESLfFR921hJH2UtFvBRQpnesPvq9uisKiB3G2iRdbgFYKLxjxSPC8cgmxe1wiznY9h?cluster=devnet) |
+| Activation | `activation.state: active` at 13:14:33Z. `commitment.confirmedAt` 13:14:31Z comes before issuer OPEN | `CardCommitment` [`DAHX…SZXX`](https://explorer.solana.com/address/DAHXQq6MA5MNz2KWRSEEfdoAh1RNFMuJwURwaLt2SZXX?cluster=devnet) read at finalized: seq 1, policyVersion 1, slot 508104508 |
+| $20 purchase | **Approved** | Lithic AUTHORIZATION `e73796bf-a7bd-4404-87f9-1d212f347f2d` |
+| $40 purchase | Agent path refused (409, PER `BudgetExceeded`), no issuer call. At the network with no intent: **declined** | Lithic AUTHORIZATION `d5f273de-c248-4911-80dc-b4f017d21490` (UNAUTHORIZED_MERCHANT) |
+| Freeze | `pending_issuer_confirmation` → `confirmed` only after Lithic read PAUSED. A redeem opened just before was declined `CARD_PAUSED` | Lithic txn `6c4c63b0-8fb6-480e-bf6e-74c641078c38` |
+| Privacy | Policy visible to the owner, `not_visible` to a fresh stranger key | — |
+| New activation off | prepare / activate → 503 `new_activation_disabled`; list, card, statements, freeze, repayment, reconcile → 200 | gate-off preview above |
+| Transparent repayment (statement C, $1.00) | `repay_statement` → ChainPay `execute_payment`, receipt verified at finalized, discharged on PER at 14:39:53Z | tx [`2xjwgS6X…`](https://explorer.solana.com/tx/2xjwgS6XAS59255knTXpDzHSovdc5gVGnpnW2fK9nmGVodrvke5rLm2FGqnQvcS72MmA2s8z44Ub7tpbQCFLvQs3?cluster=devnet), receipt [`5gFw…7pP7`](https://explorer.solana.com/address/5gFweJeBTjuR3kkqWSegXWSPEWiHkTJp3diKF9Za7pP7?cluster=devnet) (282 bytes). Statement A's earlier receipt [`4Tq3…AKTT`](https://explorer.solana.com/address/4Tq3gpiYjcPuSWfXJjXcv72s8gAmWyqJB7a53TL4AKTT?cluster=devnet) discharged on the first reconcile |
+| Private repayment (statement B, $0.40) | MagicBlock deposit + settlement, verified `magicblock_queue_settlement`, `payerVerified: false`, "Simulated credit", discharged at 14:35:23Z | deposit [`3YyV8ndz…`](https://explorer.solana.com/tx/3YyV8ndzAigTFDs1pvHQ6sqG1CrQBs7QDxZDdvc7CrZ6ttBTu3dXGDbZhxuhKTTTkta17NsiWc5z1jPiuVgNuwWG?cluster=devnet), settlement [`3L7HAjDm…`](https://explorer.solana.com/tx/3L7HAjDmGNjtZWN5KNCGgzQKi9theqqEn9VekPtsEtq6jqFHKQctqqBideAgk8zpMLUwWKT13XgkKApUVDDvhrgz?cluster=devnet) |
+| Outstanding balance | 542¢ at start → **0¢** at the end | PER `statementOutstandingCents`, read as the owner |
+
+Repayment needed the `card_policy` upgrade deployed at Devnet slot 508123988
+(282-byte receipt decode and rent) and the SDK change for MagicBlock deposit
+tag 24, both from open #63. Open items: one later $1.00 purchase was declined
+`SUSPECTED_FRAUD` after the ~2 s ASA deadline although PER authorized it, and
+its activity row reads "reversal" (display only). Production still declines
+every card purchase until `CARDS_CHECKOUT_ENABLED` and
+`CARDS_CHECKOUT_RUNNER_SECRET` are set.
+
+### Standard x402 v2 (receipt-merchant path)
+
+- Preview relay `https://chainpay-relay-eoddc6irq-chainpay.vercel.app`, preview MCP `https://chainpay-3zj4mcb8c-chainpay.vercel.app` with `CHAINPAY_X402_ALLOWED_ORIGINS` = `CHAINPAY_X402_RECEIPT_MERCHANTS` = `https://chainpay-demo-merchant.vercel.app`.
+- Demo merchant `https://chainpay-demo-merchant.vercel.app/data`, `CHAINPAY_X402_CHALLENGE_SHAPE=v2`, price 0.1 Devnet USDC (`100000`, 6 decimals).
+
+| Step | Result | Evidence |
+| --- | --- | --- |
+| `GET /data` | 402, `x402Version: 2` | — |
+| `execute_x402_payment` (human signing) | classified standard v2, preflight valid, agent signs, relay `submitted` | payment `payment_ab9107d4…` |
+| Settlement | finalized, slot 508110881 | tx [`2nGaP5WS…`](https://explorer.solana.com/tx/2nGaP5WSqtgkVutuoJXiNXkR9wPvDFARt24LrtNoWdhVJ8peDFtB3QooRtqi574Mk7cfZehRtmqZrMkhZfdXLRDQ?cluster=devnet) |
+| Resume by paymentId | `x402_verified`, merchant answered **200** with the receipt proof | receipt [`Fqn1…ZtZV`](https://explorer.solana.com/address/Fqn1y5q7dGvtFM49xGpZXFfsmdtRpm9ENPDtZHBnZtZV?cluster=devnet) |
+| Replays (same signed tx, fresh request, resume, direct merchant call) | `duplicate_invoice` or the same receipt and 200; `get_mandate` paymentCount 1; balances unchanged | exactly 0.1 Devnet USDC moved, once |
+
+Open in #64: the owner's x402 job list labels this paid job `unknown` /
+`x402_unsupported_sponsor`, and the demo merchant can default `payTo` to the agent.
+
+### Owner webhooks
+
+Preview relay as above, with deploy-time `OWNER_WEBHOOKS_ENABLED=true`. Dispatch
+called the way `owner-webhooks-dispatch.yml` does (bearer `CRON_SECRET`; 401 without it).
+
+| Check | Result |
+| --- | --- |
+| Event | `payment.receipt_ready` `evt_0425bf41af2fd7e9dbc9390db52a38ad` for the x402 receipt above, written at confirmation (13:40:09Z) while the receiver answered 500 |
+| Retries | 500 → retry 60 s → 200 delivered; manual redeliver → 429 → retry; 15 s hang → timeout → retry 300 s → 200 delivered. 5 attempts, same `webhook-id`, identical body bytes |
+| Signature | All 5 verified (Standard Webhooks HMAC-SHA256); wrong key and tampered body rejected |
+| Concurrency | Two dispatchers at once: one claimed 0, the other 1 |
+| Isolation | Another owner: 404 on deliveries and redeliver, empty list; agent token: 403; `http://`, loopback, link-local, private and credentialed URLs refused 400 |
+
+Not run: a scheduled GitHub dispatch run (no repo var/secret yet), a dispatcher crash mid-run, a stale-timestamp receiver.
+
+### Crossmint (staging)
+
+| Field | Value |
+| --- | --- |
+| Order | `5a5fe611-e678-4312-8ac1-25e219292127`, quoted 0.1203 USDC (`120300`), expiry 13:16:23Z, payer and recipient = owner |
+| Prepare | `prepare_crossmint_payment`: quote match, 19 preflight checks pass |
+| Payment | mandate CPI transfer + Crossmint memo, finalized: [`AsCF3JLh…`](https://explorer.solana.com/tx/AsCF3JLhHxtuYNiu82KqJW8epaKWiF7sWmYujLfsMgbsqyxkiutGmr6Ag7YmsSxoeZHEFymko6fJ4T1MvMpWaEx?cluster=devnet), receipt [`3eU8…9FZw`](https://explorer.solana.com/address/3eU8zvhpEaTYm3sChj7yJuyeSCTyJoUVwVuypEYy9FZw?cluster=devnet). Owner USDC −0.120300 exactly |
+| Credited | `payment.status: completed`, `received.txId` = that signature, **only after** a manual `crypto-tx-id` call (13:11:23Z) |
+| Replay / expiry | Re-running, resuming and re-preparing (before and after quote expiry) returned the original operation or refused; no second payment |
+| Delivery | `in-progress` for 18 minutes, nothing arrived. Paid, not delivered |
+
+The flags stay off. Next: one Devnet re-run on a preview built after #61, which
+sends the `crypto-tx-id` call from the relay, before
+`CHAINPAY_CROSSMINT_ENABLED` / `VITE_CHAINPAY_CROSSMINT` go on.
