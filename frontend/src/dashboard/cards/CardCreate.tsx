@@ -15,6 +15,7 @@ import {
   type CardDraftIntake,
 } from "@chainpayhq/sdk";
 import { PageHeader } from "../PageHeader";
+import type { CardView } from "@chainpayhq/sdk";
 import type { CardShop, CreateCardInput, CreateStepId, CreateStepState } from "./source";
 import { errorText, type CardsShared } from "./shared";
 import { centsToDollarInput, dollarsToCents } from "./amounts";
@@ -90,17 +91,23 @@ function validate(form: Form, step: number, shops: CardShop[] | null): { input?:
   }
 }
 
-export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShared) {
-  const [form, setForm] = useState<Form>(EMPTY_FORM);
+/**
+ * Finishing a card whose limits weren't saved before setup stopped: the same
+ * form and review, for the existing card, continuing `attemptId`.
+ */
+export type CardCreateResume = { card: CardView; attemptId: string; onCancel: () => void; onFinished: () => void };
+
+export function CardCreate({ source, onUnlocked, onNavigate, notice, resume }: CardsShared & { resume?: CardCreateResume }) {
+  const [form, setForm] = useState<Form>(() => (resume ? { ...EMPTY_FORM, label: resume.card.label } : EMPTY_FORM));
   const [step, setStep] = useState(0);
   const [error, setError] = useState("");
-  const [intake, setIntake] = useState<Intake>(() => (typeof window !== "undefined" && window.location.hash.includes("draft=") ? { kind: "checking" } : { kind: "none" }));
+  const [intake, setIntake] = useState<Intake>(() => (!resume && typeof window !== "undefined" && window.location.hash.includes("draft=") ? { kind: "checking" } : { kind: "none" }));
   const [progress, setProgress] = useState<Partial<Record<CreateStepId, { state: CreateStepState; detail?: string }>>>({});
   const [running, setRunning] = useState(false);
   const [failed, setFailed] = useState("");
   const heading = useRef<HTMLHeadingElement>(null);
   // Stable across "Try again" so a retry resumes the same card instead of creating another.
-  const attemptId = useRef(globalThis.crypto.randomUUID());
+  const attemptId = useRef(resume?.attemptId ?? globalThis.crypto.randomUUID());
   // Shops come from ChainPay's registry (live) so the hashes the owner signs match what checkout opens.
   const [shops, setShops] = useState<CardShop[] | null>(null);
   const [shopsError, setShopsError] = useState("");
@@ -156,13 +163,20 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
     setFailed("");
     setProgress({});
     try {
-      const cardId = await source.createCard(result.input, (id, state, detail) => setProgress((current) => ({ ...current, [id]: { state, detail } })), attemptId.current);
+      const report = (id: CreateStepId, state: CreateStepState, detail?: string) => setProgress((current) => ({ ...current, [id]: { state, detail } }));
+      if (resume) {
+        await source.finishSetup(resume.card, result.input, report, attemptId.current);
+        onUnlocked();
+        resume.onFinished();
+        return;
+      }
+      const cardId = await source.createCard(result.input, report, attemptId.current);
       onUnlocked();
       if (window.location.hash) history.replaceState(history.state, "", window.location.pathname);
       onNavigate({ cardId });
     } catch (cause) {
       setProgress((current) => {
-        const active = CREATE_STEPS.find((item) => current[item.id]?.state === "active");
+        const active = steps.find((item) => current[item.id]?.state === "active");
         return active ? { ...current, [active.id]: { state: "failed" } } : current;
       });
       setFailed(errorText(cause));
@@ -171,6 +185,7 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
     }
   }
 
+  const steps = resume ? CREATE_STEPS.filter((item) => item.id !== "prepare") : CREATE_STEPS;
   const review = step === 2 ? validate(form, 2, shops) : null;
   const summary = review?.input ? policyReviewSummary(BigInt(review.input.budgetCents), BigInt(review.input.maxPurchaseCents), review.input.feeBps) : null;
   const intakeResult = intake.kind === "result" ? intake.result : null;
@@ -178,8 +193,12 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
   return (
     <>
       <PageHeader
-        copy={{ kicker: "AGENT CARDS", title: "New card", subtitle: "Set the limits. Your agent only ever sees what it may buy." }}
-        action={<Button type="button" variant="secondary" label="Back to cards" icon={<ArrowLeft size={16} />} onClick={() => onNavigate({})} />}
+        copy={resume
+          ? { kicker: "AGENT CARDS", title: "Finish setup", subtitle: `Set the limits for “${resume.card.label}” again. They weren't saved before setup stopped.` }
+          : { kicker: "AGENT CARDS", title: "New card", subtitle: "Set the limits. Your agent only ever sees what it may buy." }}
+        action={resume
+          ? <Button type="button" variant="secondary" label="Back to card" icon={<ArrowLeft size={16} />} isDisabled={running} onClick={resume.onCancel} />
+          : <Button type="button" variant="secondary" label="Back to cards" icon={<ArrowLeft size={16} />} onClick={() => onNavigate({})} />}
       />
       {notice}
       <section className="owner-permission-wizard cp-card-create">
@@ -218,7 +237,7 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
                 </div>
                 {step === 0 ? (
                   <div className="cp-form-grid">
-                    <div className="field-wide"><TextInput label="Card name" value={form.label} onChange={(value) => update("label", value)} placeholder="Data API credits" description="Up to 40 characters. It's how the card shows in your dashboard." /></div>
+                    {!resume && <div className="field-wide"><TextInput label="Card name" value={form.label} onChange={(value) => update("label", value)} placeholder="Data API credits" description="Up to 40 characters. It's how the card shows in your dashboard." /></div>}
                     <TextInput label="Budget per period (USD)" value={form.budget} onChange={(value) => update("budget", value)} placeholder="500" description="The most it can spend each period." />
                     <TextInput label="Max per purchase (USD)" value={form.maxPurchase} onChange={(value) => update("maxPurchase", value)} placeholder="30" description="The most it can spend at once." />
                     <Selector className="cp-create-select" label="Period" value={form.periodDays} onChange={(value) => update("periodDays", value)} options={withValue(PERIOD_OPTIONS, form.periodDays, (days) => `Every ${days} day${days === "1" ? "" : "s"}`)} />
@@ -286,7 +305,7 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
                 )}
                 {(running || failed || Object.keys(progress).length > 0) && (
                   <ol className="cp-create-steps" aria-label="What happens when you approve" data-testid="create-steps">
-                    {CREATE_STEPS.map((item) => {
+                    {steps.map((item) => {
                       const entry = progress[item.id];
                       const state = entry?.state ?? "waiting";
                       return (
@@ -301,7 +320,9 @@ export function CardCreate({ source, onUnlocked, onNavigate, notice }: CardsShar
                 )}
                 {failed && <div className="builder-error" role="alert"><b>Stopped at this step</b><span>{failed}</span></div>}
                 {!running && !failed && Object.keys(progress).length === 0 && (
-                  <p className="owner-muted cp-approve-note">Approving takes 4 wallet approvals and 1 message, one per step below. Each one says what it does.</p>
+                  <p className="owner-muted cp-approve-note">{resume
+                    ? "Approving takes 1 wallet approval. It saves these limits privately, then ChainPay turns the card on."
+                    : "Approving takes 4 wallet approvals and 1 message, one per step below. Each one says what it does."}</p>
                 )}
                 <div className="owner-form-actions">
                   <Button type="button" variant="secondary" label="Back" icon={<ArrowLeft size={16} />} isDisabled={running} onClick={() => setStep(1)} />

@@ -178,6 +178,34 @@ export function cardStatus(card: CardView): CardStatusPill {
   return { key: "setting_up", label: "Setting up", tone: "neutral", icon: "clock" };
 }
 
+/**
+ * A card whose setup stopped before it was ever turned on: ChainPay has the card,
+ * but no activation has started (Axum only starts one once the limits are readable).
+ * The owner finishes it with "Finish setup" rather than waiting on "Check again".
+ */
+export function isUnfinishedSetup(card: CardView): boolean {
+  return !card.freeze.onChain && !card.activation && cardStatus(card).key === "setting_up";
+}
+
+/** What finishing setup still needs from the owner, in plain words. */
+export function finishSetupCopy(progress: { baseLeft: number; rulesSaved: boolean | null }, unlocked: boolean): { headline: string; cost: string } {
+  const headline = progress.baseLeft > 0
+    ? "Setup stopped before the card was created on Solana."
+    : progress.rulesSaved === true
+      ? "Your limits are saved. Setup stopped before the card was turned on."
+      : "Setup stopped before your limits were saved.";
+  const messages = unlocked ? 0 : 1;
+  const approvals = progress.baseLeft + (progress.rulesSaved === true ? 0 : 1);
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  const parts = [messages && plural(messages, "message"), approvals && plural(approvals, "approval")].filter(Boolean);
+  const cost = !parts.length
+    ? "Nothing to sign. ChainPay turns the card on."
+    : progress.rulesSaved === null && progress.baseLeft === 0
+      ? `${parts.join(", ")}. If your limits turn out to be saved already, the approval is skipped.`
+      : `${parts.join(", ")}.`;
+  return { headline, cost };
+}
+
 /*
  * One appearance per state, shared by the Cards area and Overview's Cards
  * summary, on the workspace Status contract (DESIGN.md 2026-10-04): positive

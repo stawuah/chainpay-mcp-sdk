@@ -78,3 +78,33 @@ test("terminal history is bounded and pending entries cannot be dismissed",async
   f.dismissSettlement(op.id);
   const rows=JSON.parse([...f.entries.values()][0]);assert.equal(rows.filter(r=>r.status==="confirmed").length,30);assert.ok(rows.some(r=>r.id===op.id));
 });
+
+test("each update says what it is about, from its label or its key",async t=>{
+  const f=await fixture(t);
+  const labeled=await f.beginSettlement("https://fixture.example","transactions","card-base:"+"d4".repeat(32)+":1:hash",undefined,"Setting up “Crossmint”: approval 2 of 3");
+  assert.equal(JSON.parse([...f.entries.values()][0]).find(r=>r.id===labeled.id).label,"Setting up “Crossmint”: approval 2 of 3");
+  assert.equal(f.describeOperation(labeled),"Setting up “Crossmint”: approval 2 of 3");
+  // Rows stored before labels existed still read as something.
+  assert.equal(f.describeOperation({kind:"transactions",key:"card-base:"+"d4".repeat(32)+":2:hash"}),"Card setup: approval 3 of 3");
+  assert.equal(f.describeOperation({kind:"transactions",key:"pause-mandate:Mdt:hash"}),"Pausing a spending permission");
+  assert.equal(f.describeOperation({kind:"transactions",key:"agent-mandate:Mdt:hash"}),"Spending permission for your agent");
+  assert.equal(f.describeOperation({kind:"payments",key:"mandate:"+"ab".repeat(32)}),"Payment");
+  assert.equal(f.describeOperation({kind:"transactions",key:"something-new:1"}),"Wallet approval");
+});
+
+test("a seen confirmed update leaves the panel but stays in history; pending and failed ones stay",async t=>{
+  const f=await fixture(t);
+  const confirmed=await f.beginSettlement("https://fixture.example","payments","seen-confirmed");
+  const failed=await f.beginSettlement("https://fixture.example","payments","seen-failed");
+  const pending=await f.beginSettlement("https://fixture.example","payments","seen-pending");
+  f.publishSettlement(confirmed,{status:"confirmed",signature:"sig"});
+  f.publishSettlement(failed,{status:"failed",error:"refused"});
+  f.markSettlementsSeen([confirmed.id,failed.id,pending.id],1234);
+  const rows=f.listStoredOperations();
+  assert.equal(rows.find(r=>r.id===confirmed.id).seenAt,1234);
+  assert.equal(rows.find(r=>r.id===confirmed.id).signature,"sig","history keeps the confirmed payment");
+  assert.equal(rows.find(r=>r.id===failed.id).seenAt,undefined,"a failure stays until the owner dismisses it");
+  assert.equal(rows.find(r=>r.id===pending.id).seenAt,undefined);
+  // A late status read can't bring a seen confirmation back.
+  assert.equal(f.publishSettlement(confirmed,{status:"submitted"}).seenAt,1234);
+});

@@ -941,6 +941,8 @@ body:has(.dashboard-app) .cp-record-panel :is(.mono,.t-num,.mandate-detail-value
 .owner-settlement-row { border-top: 1px solid var(--line); padding: 18px 0; display: grid; gap: 12px; }
 .owner-settlement-row .owner-page-actions { justify-content: flex-start; margin-bottom: 0; }
 .owner-settlement-row code { overflow-wrap: anywhere; }
+.owner-settlement-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.owner-settlement-head span { color: var(--muted); overflow-wrap: anywhere; }
 .dashboard-app.cp-app [hidden] { display: none !important; }
 @media (max-width: 1200px) {
   .dashboard-app.cp-app .dashboard-page { padding: 30px 28px; }

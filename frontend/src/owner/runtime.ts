@@ -8,6 +8,7 @@ import { chainpayClient } from "../config/client";
 import { tokenProgramAccountType } from "./tokenAccounts";
 import { settlementKey } from "./settlementKey";
 import { assetOrder, knownAsset } from "../config/knownAssets";
+import { formatTokenUnits } from "../receipts/model";
 
 import type { PermissionRequestRecord } from "../requests/permissionRequest";
 
@@ -446,9 +447,19 @@ function unresolvedPayment(operation: Operation, reason: string, first?: Settlem
   throw new PendingSettlementError(error);
 }
 
+/** "Payment of 5 USDC to 9xQe…3Fp1" from the payment's own arguments; exact units, never rounded. */
+export function paymentLabel(args: Record<string, unknown>): string {
+  const amount = typeof args.amount === "string" || typeof args.amount === "number" || typeof args.amount === "bigint" ? String(args.amount) : "";
+  const recipient = typeof args.recipient === "string" ? args.recipient : "";
+  const asset = typeof args.mint === "string" ? knownAsset(args.mint) : undefined;
+  // Only USDC's decimals are certain here; any other token keeps its exact base units.
+  const value = /^\d+$/.test(amount) ? formatTokenUnits(amount, asset?.label === "USDC" ? 6 : null, asset?.label ?? "tokens") : "";
+  return ["Payment", value && `of ${value}`, recipient && `to ${shortAddress(recipient)}`].filter(Boolean).join(" ");
+}
+
 export async function callMcpTool(name: string, args: Record<string, unknown>) {
   if (!["execute_payment", "execute_crossmint_payment"].includes(name) || (!args.signedTransaction && args.signingMode !== "delegated")) return mcpRequest<McpToolResponse>("tools/call", { name, arguments: args });
-  const operation = await beginSettlement(BACKEND_URL, "payments", settlementKey(String(args.mandate), String(args.invoiceHash)), typeof args.signedTransaction === "string" ? args.signedTransaction : undefined);
+  const operation = await beginSettlement(BACKEND_URL, "payments", settlementKey(String(args.mandate), String(args.invoiceHash)), typeof args.signedTransaction === "string" ? args.signedTransaction : undefined, paymentLabel(args));
   let result: McpToolResponse;
   try { result = await mcpRequest<McpToolResponse>("tools/call", { name, arguments: args }, operation); }
   catch (error) {
@@ -785,9 +796,10 @@ export function preparedTransactionFromAgentApproval(approval: AgentApproval): P
   };
 }
 
-export async function submitSignedTransaction(idempotencyKey: string, signedTransaction: Uint8Array, options: { dismissOnConfirm?: boolean } = {}) {
+/** `label` names the approval in "Payment & approval updates"; without one, the key's prefix does. */
+export async function submitSignedTransaction(idempotencyKey: string, signedTransaction: Uint8Array, options: { dismissOnConfirm?: boolean; label?: string } = {}) {
   if (!BACKEND_URL) throw new Error("VITE_CHAINPAY_BACKEND_URL is not configured.");
-  const operation = await beginSettlement(BACKEND_URL, "transactions", idempotencyKey, Buffer.from(signedTransaction).toString("base64"));
+  const operation = await beginSettlement(BACKEND_URL, "transactions", idempotencyKey, Buffer.from(signedTransaction).toString("base64"), options.label);
   let response: Response;
   try {
     response = await authorizedFetch(`${BACKEND_URL.replace(/\/$/, "")}/v1/transactions/submit`, {

@@ -1379,12 +1379,12 @@ pub fn decline_reason_for(code: u32) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Re-sort a legacy message's unsigned keys the way web3.js does
     /// (stringwise within each header group) and remap the instructions.
-    fn resort_like_web3(message: &Message) -> Message {
+    pub(crate) fn resort_like_web3(message: &Message) -> Message {
         let mut m = message.clone();
         let signed = m.header.num_required_signatures as usize;
         let ro_unsigned = m.header.num_readonly_unsigned_accounts as usize;

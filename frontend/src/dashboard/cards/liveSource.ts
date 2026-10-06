@@ -61,6 +61,8 @@ import {
   type CardRecoveryView,
   type CardsSource,
   type CreateCardInput,
+  type CreateProgress,
+  LimitsNeededError,
   type PrivacyCheckResult,
   type ReaderMember,
   type ReadResult,
@@ -138,7 +140,7 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
   });
   let session: TeeSession | null = null;
   /** Resumable create attempts: same Axum operation ids and skipped finished steps on "Try again". */
-  const attempts = new Map<string, { prepared?: PreparedCard; baseDone: number; rulesDone: boolean; activated?: string }>();
+  const attempts = new Map<string, { prepared?: PreparedCard; baseDone: number; rulesDone: boolean }>();
 
   const accounts = (cardId: string) => deriveCardAccounts(deps.wallet, cardIdFromHex(cardId), programId);
   const cardRef = (cardId: string) => ({ owner: deps.wallet, cardId: cardIdFromHex(cardId) });
@@ -216,15 +218,96 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
   }
 
   /** 0 init_card: binding exists · 1 delegate_card: policy owned by the delegation program · 2 escrow top-up: escrow funded. */
-  async function baseStepDone(index: number, prepared: PreparedCard): Promise<boolean> {
+  async function baseStepDone(index: number, a: { binding: string; policy: string; escrow: string }): Promise<boolean> {
     try {
       const connection = chainpayClient.connection;
-      if (index === 0) return (await connection.getAccountInfo(new PublicKey(prepared.accounts.binding), "confirmed")) !== null;
-      if (index === 1) return (await connection.getAccountInfo(new PublicKey(prepared.accounts.policy), "confirmed"))?.owner.toBase58() === DELEGATION_PROGRAM_ID;
-      return ((await connection.getAccountInfo(new PublicKey(prepared.accounts.escrow), "confirmed"))?.lamports ?? 0) > 0;
+      if (index === 0) return (await connection.getAccountInfo(new PublicKey(a.binding), "confirmed")) !== null;
+      if (index === 1) return (await connection.getAccountInfo(new PublicKey(a.policy), "confirmed"))?.owner.toBase58() === DELEGATION_PROGRAM_ID;
+      return ((await connection.getAccountInfo(new PublicKey(a.escrow), "confirmed"))?.lamports ?? 0) > 0;
     } catch {
       return false;
     }
+  }
+
+  type Attempt = { prepared?: PreparedCard; baseDone: number; rulesDone: boolean };
+
+  /** The three Solana setup approvals, skipping any whose effect is already on Solana. */
+  async function signBaseSteps(prepared: PreparedCard, cardName: string, attempt: Attempt, progress: CreateProgress) {
+    if (!deps.signTransaction) throw new Error("This wallet can't sign transactions.");
+    const encodedTxs = [prepared.initTx, prepared.delegateTx, prepared.escrowTopUpTx];
+    for (let index = attempt.baseDone; index < encodedTxs.length; index += 1) {
+      progress("base", "active", `Approval ${index + 1} of 3`);
+      // Resume after a reload or an outcome we never heard back: skip a step whose effect is
+      // already on Solana instead of asking the wallet to sign it again.
+      if (await baseStepDone(index, prepared.accounts)) { attempt.baseDone = index + 1; continue; }
+      const transaction = Transaction.from(Uint8Array.from(atob(encodedTxs[index]), (char) => char.charCodeAt(0)));
+      // Decoded against the exact setup instruction for THIS card; anything else is refused.
+      assertCardSetupTransaction(transaction, index, { owner: deps.wallet, prepared, programId });
+      // Server-built, owner-only transactions: refresh the blockhash right before
+      // signing so a slow wallet prompt can't push it past its lifetime.
+      if (transaction.signatures.every((entry) => entry.publicKey.toBase58() === deps.wallet && !entry.signature)) {
+        transaction.recentBlockhash = (await chainpayClient.connection.getLatestBlockhash("confirmed")).blockhash;
+      }
+      const signed = await deps.signTransaction(transaction);
+      // One operation per signed transaction: a step the relay refused before sending can be
+      // signed again with a fresh blockhash instead of hitting the refused operation forever.
+      await submitSignedTransaction(`card-base:${prepared.cardId}:${index}:${signed.recentBlockhash}`, signed.serialize(), { dismissOnConfirm: true, label: `Setting up “${cardName}”: approval ${index + 1} of 3` });
+      attempt.baseDone = index + 1;
+    }
+  }
+
+  /** The limits are in the private rollup once `set_policy` has run (its first run makes the version 1). */
+  async function limitsSaved(cardId: string): Promise<boolean> {
+    const read = await readCardPolicy(await ensureSession(), accounts(cardId).policy, programId);
+    if (read.state === "rpc_error") throw new Error("The private rollup didn't answer, so ChainPay can't tell whether your limits are saved. Nothing was changed. Try again in a moment.");
+    return read.state === "visible" && read.account.policyVersion >= 1;
+  }
+
+  /** init_permission + set_policy in one approval, sent to the private rollup. */
+  async function saveRules(prepared: PreparedCard, input: CreateCardInput) {
+    const registry = await listMerchants();
+    const merchantIdHashes = input.merchants.map((ref) => {
+      const shop = registry.find((m) => m.merchantRef === ref);
+      if (!shop) throw new Error(`"${ref}" isn't a shop ChainPay can check out at, so nothing was signed.`);
+      return hexBytes(shop.merchantIdHash);
+    });
+    const policy: PolicyArgs = {
+      budgetCents: BigInt(input.budgetCents),
+      maxPurchaseCents: BigInt(input.maxPurchaseCents),
+      maxPurchasesPerPeriod: input.maxPurchasesPerPeriod,
+      periodSeconds: input.periodDays * 86_400,
+      currency: "USD",
+      merchantIdHashes,
+      mccs: input.mccs,
+      expiresAt: input.expiresAt ? BigInt(Math.floor(Date.parse(input.expiresAt) / 1000)) : 0n,
+      recurringAllowed: input.recurringAllowed,
+      feeBps: input.feeBps,
+      authorizer: prepared.authorizer,
+    };
+    const ref = cardRef(prepared.cardId);
+    await sendTee("Save rules privately", [
+      buildInitPermissionInstruction({ ...ref, authorizer: prepared.authorizer }, programId),
+      buildSetPolicyInstruction({ ...ref, policy }, programId),
+    ]);
+  }
+
+  /**
+   * Axum answers with the activation it actually reached. "Returned" is not "done":
+   * the card is on only when the card network shows it open, the limits are copied
+   * and the public proof read back from Solana (cardStatus "active").
+   */
+  async function turnOn(cardId: string, operationId: string, progress: CreateProgress) {
+    progress("activate", "active");
+    let view = await guard(() => api.activateCard(cardId, 1, operationId));
+    for (let tries = 0; cardStatus(view).key !== "active" && tries < ACTIVATION_POLL_TRIES; tries += 1) {
+      progress("activate", "active", activationProgress(view));
+      await sleep(ACTIVATION_POLL_MS);
+      // Same operation: Axum resumes it (reads the proof back, then opens the card).
+      // An older relay without `activation` in its answer is only read, never re-driven.
+      view = view.activation ? await guard(() => api.activateCard(cardId, 1, operationId)) : await guard(() => api.getCard(cardId));
+    }
+    if (cardStatus(view).key === "active") progress("activate", "done");
+    else progress("activate", "active", `${activationProgress(view)} ChainPay keeps going without you; the card page shows each step.`);
   }
 
   async function readCommitment(cardId: string) {
@@ -293,35 +376,14 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       // Same clientOperationId on every retry: Axum returns the same card instead of issuing a second one.
       const prepared = attempt.prepared ?? await guard(() => api.prepareCard({ label: input.label, clientOperationId: `card-prepare-${attemptId}` }));
       attempt.prepared = prepared;
+      // Fail on an unknown shop before any approval, not after three.
       const registry = await listMerchants();
-      const merchantIdHashes = input.merchants.map((ref) => {
-        const shop = registry.find((m) => m.merchantRef === ref);
-        if (!shop) throw new Error(`"${ref}" isn't a shop ChainPay can check out at, so nothing was signed.`);
-        return hexBytes(shop.merchantIdHash);
-      });
+      const unknown = input.merchants.find((ref) => !registry.some((m) => m.merchantRef === ref));
+      if (unknown) throw new Error(`"${unknown}" isn't a shop ChainPay can check out at, so nothing was signed.`);
       progress("prepare", "done");
 
       progress("base", "active");
-      const encodedTxs = [prepared.initTx, prepared.delegateTx, prepared.escrowTopUpTx];
-      for (let index = attempt.baseDone; index < encodedTxs.length; index += 1) {
-        progress("base", "active", `Approval ${index + 1} of 3`);
-        // Resume after a reload or an outcome we never heard back: skip a step whose effect is
-        // already on Solana instead of asking the wallet to sign it again.
-        if (await baseStepDone(index, prepared)) { attempt.baseDone = index + 1; continue; }
-        const transaction = Transaction.from(Uint8Array.from(atob(encodedTxs[index]), (char) => char.charCodeAt(0)));
-        // Decoded against the exact setup instruction for THIS card; anything else is refused.
-        assertCardSetupTransaction(transaction, index, { owner: deps.wallet, prepared, programId });
-        // Server-built, owner-only transactions: refresh the blockhash right before
-        // signing so a slow wallet prompt can't push it past its lifetime.
-        if (transaction.signatures.every((entry) => entry.publicKey.toBase58() === deps.wallet && !entry.signature)) {
-          transaction.recentBlockhash = (await chainpayClient.connection.getLatestBlockhash("confirmed")).blockhash;
-        }
-        const signed = await deps.signTransaction(transaction);
-        // One operation per signed transaction: a step the relay refused before sending can be
-        // signed again with a fresh blockhash instead of hitting the refused operation forever.
-        await submitSignedTransaction(`card-base:${prepared.cardId}:${index}:${signed.recentBlockhash}`, signed.serialize(), { dismissOnConfirm: true });
-        attempt.baseDone = index + 1;
-      }
+      await signBaseSteps(prepared, input.label, attempt, progress);
       progress("base", "done");
 
       progress("session", "active");
@@ -330,45 +392,51 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
 
       progress("rules", "active");
       if (!attempt.rulesDone) {
-        const policy: PolicyArgs = {
-          budgetCents: BigInt(input.budgetCents),
-          maxPurchaseCents: BigInt(input.maxPurchaseCents),
-          maxPurchasesPerPeriod: input.maxPurchasesPerPeriod,
-          periodSeconds: input.periodDays * 86_400,
-          currency: "USD",
-          merchantIdHashes,
-          mccs: input.mccs,
-          expiresAt: input.expiresAt ? BigInt(Math.floor(Date.parse(input.expiresAt) / 1000)) : 0n,
-          recurringAllowed: input.recurringAllowed,
-          feeBps: input.feeBps,
-          authorizer: prepared.authorizer,
-        };
-        const ref = cardRef(prepared.cardId);
-        await sendTee("Save rules privately", [
-          buildInitPermissionInstruction({ ...ref, authorizer: prepared.authorizer }, programId),
-          buildSetPolicyInstruction({ ...ref, policy }, programId),
-        ]);
+        await saveRules(prepared, input);
         attempt.rulesDone = true;
       }
       progress("rules", "done");
 
-      progress("activate", "active");
-      // Axum answers with the activation it actually reached. "Returned" is not "done":
-      // the card is on only when the card network shows it open, the limits are copied
-      // and the public proof read back from Solana (cardStatus "active").
-      const operationId = `card-activate-${attemptId}`;
-      let view = await guard(() => api.activateCard(prepared.cardId, 1, operationId));
-      for (let tries = 0; cardStatus(view).key !== "active" && tries < ACTIVATION_POLL_TRIES; tries += 1) {
-        progress("activate", "active", activationProgress(view));
-        await sleep(ACTIVATION_POLL_MS);
-        // Same operation: Axum resumes it (reads the proof back, then opens the card).
-        // An older relay without `activation` in its answer is only read, never re-driven.
-        view = view.activation ? await guard(() => api.activateCard(prepared.cardId, 1, operationId)) : await guard(() => api.getCard(prepared.cardId));
-      }
+      await turnOn(prepared.cardId, `card-activate-${attemptId}`, progress);
       attempts.delete(attemptId);
-      if (cardStatus(view).key === "active") progress("activate", "done");
-      else progress("activate", "active", `${activationProgress(view)} ChainPay keeps going without you; the card page shows each step.`);
       return prepared.cardId;
+    },
+
+    async setupProgress(card) {
+      const a = accounts(card.cardId);
+      let baseLeft = 0;
+      for (let index = 0; index < 3; index += 1) if (!(await baseStepDone(index, a))) baseLeft += 1;
+      // Limits can't be saved before the card's accounts exist, and can't be read without the private session.
+      return { baseLeft, rulesSaved: baseLeft > 0 ? false : session ? await limitsSaved(card.cardId) : null };
+    },
+
+    async finishSetup(card, input, progress, attemptId) {
+      if (!deps.signTransaction) throw new Error("This wallet can't sign transactions.");
+      const attempt = attempts.get(attemptId) ?? { baseDone: 0, rulesDone: false };
+      attempts.set(attemptId, attempt);
+      progress("base", "active");
+      // The same unsigned setup transactions prepare returned, re-derived by Axum for this card.
+      const prepared = attempt.prepared ?? await guard(() => api.cardSetup(card.cardId));
+      if (prepared.cardId !== card.cardId) throw new Error("ChainPay sent setup for a different card, so nothing was signed.");
+      attempt.prepared = prepared;
+      await signBaseSteps(prepared, card.label, attempt, progress);
+      progress("base", "done");
+
+      progress("session", "active");
+      await ensureSession();
+      progress("session", "done");
+
+      progress("rules", "active");
+      if (!attempt.rulesDone && !(await limitsSaved(card.cardId))) {
+        if (!input) throw new LimitsNeededError();
+        await saveRules(prepared, input);
+      }
+      attempt.rulesDone = true;
+      progress("rules", "done");
+
+      await turnOn(card.cardId, `card-activate-${attemptId}`, progress);
+      attempts.delete(attemptId);
+      return card.cardId;
     },
 
     freeze: (cardId, reason, operationId) => guard(() => api.freezeCard(cardId, reason, operationId)),
@@ -421,7 +489,7 @@ export function createLiveCardsSource(getDeps: () => LiveCardsDeps): CardsSource
       }, deps.wallet);
       const latest = await chainpayClient.connection.getLatestBlockhash("confirmed");
       const signed = await deps.signTransaction(toWeb3Transaction(prepared.transaction, latest.blockhash));
-      await submitSignedTransaction(`card-repay-permission:${statement.statementId}:${signed.recentBlockhash}`, signed.serialize(), { dismissOnConfirm: true });
+      await submitSignedTransaction(`card-repay-permission:${statement.statementId}:${signed.recentBlockhash}`, signed.serialize(), { dismissOnConfirm: true, label: `Permission to pay the “${card.label}” statement` });
       return prepared.mandateAddress;
     },
 

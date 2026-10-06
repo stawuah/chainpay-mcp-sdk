@@ -996,3 +996,132 @@ test("X12: card dashboard code is lazy, so /verify doesn't download it", async (
   const config = await readFile(join(frontendRoot, "vite.config.ts"), "utf8");
   assert.match(config, /\/src\/dashboard\/cards\/.*return "cards"/);
 });
+
+// ------------------------------------------------ finishing a stopped setup (Lane B2)
+
+const input = (host, label) => {
+  const tag = [...host.querySelectorAll("label")].find((l) => l.textContent.trim().startsWith(label));
+  return tag && (host.querySelector(`#${CSS.escape(tag.htmlFor)}`) ?? tag.querySelector("input"));
+};
+async function typeInto(field, value) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set.call(field, value);
+    field.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+}
+const detailProps = (source, cardId, unlocked = false) => ({ source, unlocked, onUnlocked() {}, onNavigate() {}, cardId, section: "activity", wallet: "owner", mandates: [] });
+
+test("a card whose setup stopped is told apart from one being turned on", async () => {
+  const source = m.createFixtureCardsSource({ delayMs: 0, setup: "limits" });
+  const cards = await source.listCards();
+  const stopped = cards.find((c) => c.cardId === m.FIXTURE_CARD_IDS.setup);
+  assert.equal(m.cardStatus(stopped).key, "setting_up");
+  assert.equal(m.isUnfinishedSetup(stopped), true);
+  for (const other of cards.filter((c) => c !== stopped)) assert.equal(m.isUnfinishedSetup(other), false, other.label);
+  // Turning on started (an activation exists) is "Check again", not "Finish setup".
+  for (const activation of ["proof_pending", "opening", "limits_failed"]) {
+    const partial = (await m.createFixtureCardsSource({ delayMs: 0, activation }).listCards())[0];
+    assert.equal(m.isUnfinishedSetup(partial), false, activation);
+  }
+  // A frozen card is never offered setup.
+  assert.equal(m.isUnfinishedSetup({ ...stopped, freeze: { onChain: true, issuer: "confirmed" } }), false);
+});
+
+test("finish setup copy says where setup stopped and what it takes, in plain words", () => {
+  const cases = [
+    [{ baseLeft: 0, rulesSaved: null }, false, "Setup stopped before your limits were saved.", "1 message, 1 approval. If your limits turn out to be saved already, the approval is skipped."],
+    [{ baseLeft: 0, rulesSaved: false }, true, "Setup stopped before your limits were saved.", "1 approval."],
+    [{ baseLeft: 0, rulesSaved: false }, false, "Setup stopped before your limits were saved.", "1 message, 1 approval."],
+    [{ baseLeft: 2, rulesSaved: false }, false, "Setup stopped before the card was created on Solana.", "1 message, 3 approvals."],
+    [{ baseLeft: 0, rulesSaved: true }, false, "Your limits are saved. Setup stopped before the card was turned on.", "1 message."],
+    [{ baseLeft: 0, rulesSaved: true }, true, "Your limits are saved. Setup stopped before the card was turned on.", "Nothing to sign. ChainPay turns the card on."],
+  ];
+  for (const [progress, unlocked, headline, cost] of cases) {
+    const copy = m.finishSetupCopy(progress, unlocked);
+    assert.equal(copy.headline, headline);
+    assert.equal(copy.cost, cost);
+    assert.doesNotMatch(`${copy.headline} ${copy.cost}`, /init_permission|set_policy|instruction|PDA|\bPER\b/);
+  }
+});
+
+test("Finish setup resumes a card whose limits weren't saved: one message, then the limits, then it's on", async () => {
+  globalThis.CSS ??= { supports: () => false, escape: (value) => String(value) };
+  const source = m.createFixtureCardsSource({ delayMs: 0, setup: "limits" });
+  const finishes = [];
+  const finish = source.finishSetup.bind(source);
+  source.finishSetup = (card, limits, progress, attemptId) => { finishes.push({ limits, attemptId }); return finish(card, limits, progress, attemptId); };
+  const { host, unmount } = await render(createElement(m.CardDetail, detailProps(source, m.FIXTURE_CARD_IDS.setup)));
+  await settle(40);
+  const panel = host.querySelector('[data-testid="finish-setup"]');
+  assert.ok(panel, "the stopped card offers Finish setup");
+  assert.match(panel.textContent, /Setup stopped before your limits were saved\./);
+  assert.match(host.querySelector('[data-testid="finish-cost"]').textContent, /^1 message, 1 approval\./);
+  assert.equal(button(host, "Check again"), undefined, "polling isn't offered for a setup that stopped");
+  assert.equal(host.querySelector('[data-testid="activation-lines"]'), null);
+  assert.doesNotMatch(host.textContent, /init_permission|set_policy/);
+  const steps = [...host.querySelectorAll('[data-testid="finish-steps"] li')].map((li) => [li.dataset.step, li.dataset.state]);
+  assert.deepEqual(steps, [["base", "done"], ["session", "waiting"], ["rules", "waiting"], ["activate", "waiting"]], "the list starts where setup stopped");
+
+  await click(button(host, "Finish setup"));
+  await settle(40);
+  assert.equal(finishes.length, 1);
+  assert.equal(finishes[0].limits, null, "the first pass has no limits to save");
+  // Limits are needed: the same form, for this card, continuing the same attempt.
+  assert.match(host.textContent, /Set the limits for “Crossmint” again/);
+  assert.equal(input(host, "Card name"), undefined, "the card already has its name");
+  await typeInto(input(host, "Budget per period"), "200");
+  await typeInto(input(host, "Max per purchase"), "25");
+  await click(button(host, "Pick shops"));
+  await settle(20);
+  await click(host.querySelector('.cp-shop-pick input[type="checkbox"]'));
+  await click(button(host, "Review"));
+  assert.equal(host.querySelector(".builder-error")?.textContent, undefined, "the limits are valid");
+  assert.match(host.querySelector('[data-row="allowance"]').textContent, /\$200\.00/);
+  assert.match(host.textContent, /Approving takes 1 wallet approval\./);
+  await click(button(host, "Approve in wallet"));
+  await settle(60);
+  assert.equal(finishes.length, 2);
+  assert.equal(finishes[1].attemptId, finishes[0].attemptId, "the limits continue the same attempt");
+  assert.equal(finishes[1].limits.budgetCents, "20000");
+  // Back on the card, which is on now.
+  assert.equal(host.querySelector('[data-testid="finish-setup"]'), null);
+  assert.equal(m.cardStatus(await source.getCard(m.FIXTURE_CARD_IDS.setup)).key, "active");
+  assert.match(host.querySelector(".cp-card-hero").dataset.status, /active/);
+  await unmount();
+});
+
+test("Finish setup with the limits already saved signs nothing new and turns the card on", async () => {
+  const source = m.createFixtureCardsSource({ delayMs: 0, setup: "saved", unlocked: true });
+  const { host, unmount } = await render(createElement(m.CardDetail, detailProps(source, m.FIXTURE_CARD_IDS.setup, true)));
+  await settle(40);
+  assert.match(host.querySelector('[data-testid="finish-setup"]').textContent, /Your limits are saved\. Setup stopped before the card was turned on\./);
+  assert.equal(host.querySelector('[data-testid="finish-cost"]').textContent, "Nothing to sign. ChainPay turns the card on.");
+  await click(button(host, "Finish setup"));
+  await settle(60);
+  assert.equal(host.querySelector('[data-testid="finish-setup"]'), null);
+  assert.equal(host.querySelector(".cp-card-hero").dataset.status, "active");
+  await unmount();
+});
+
+test("Finish setup starts with the Solana approvals still missing, and a failure keeps the step and offers Try again", async () => {
+  const source = m.createFixtureCardsSource({ delayMs: 0, setup: "base" });
+  const finish = source.finishSetup.bind(source);
+  let fail = true;
+  source.finishSetup = async (card, limits, progress, attemptId) => {
+    if (fail) { progress("base", "active", "Approval 3 of 3"); throw new Error("You declined in your wallet. Nothing was changed."); }
+    return finish(card, limits, progress, attemptId);
+  };
+  const { host, unmount } = await render(createElement(m.CardDetail, detailProps(source, m.FIXTURE_CARD_IDS.setup)));
+  await settle(40);
+  assert.match(host.querySelector('[data-testid="finish-setup"]').textContent, /Setup stopped before the card was created on Solana\./);
+  assert.match(host.querySelector('[data-testid="finish-cost"]').textContent, /^1 message, 2 approvals\./);
+  await click(button(host, "Finish setup"));
+  await settle(20);
+  assert.equal(host.querySelector('[data-step="base"]').dataset.state, "failed");
+  assert.match(host.querySelector('[data-testid="finish-setup"] [role="alert"]').textContent, /declined in your wallet/);
+  fail = false;
+  await click(button(host, "Try again"));
+  await settle(40);
+  assert.match(host.textContent, /Set the limits for “Crossmint” again/, "then on to the limits");
+  await unmount();
+});

@@ -139,27 +139,53 @@ pub(super) async fn prepare(
         Ok(request) => request,
         Err(error) => return error.into_response(),
     };
-    let blockhash = match state.rpc.latest_blockhash().await {
-        Ok(latest) => match bs58::decode(&latest.blockhash)
+    let blockhash = match latest_blockhash(&state).await {
+        Ok(hash) => hash,
+        Err(response) => return response,
+    };
+    respond(routes::prepare(&cards, &caller, request, blockhash).await)
+}
+
+/// A fresh base-layer blockhash for the unsigned setup transactions.
+async fn latest_blockhash(state: &BackendState) -> Result<[u8; 32], Response> {
+    match state.rpc.latest_blockhash().await {
+        Ok(latest) => bs58::decode(&latest.blockhash)
             .into_vec()
             .ok()
             .and_then(|v| <[u8; 32]>::try_from(v).ok())
-        {
-            Some(hash) => hash,
-            None => {
-                return CardsError::unavailable(
+            .ok_or_else(|| {
+                CardsError::unavailable(
                     "rpc_unavailable",
                     "Solana RPC returned an invalid blockhash",
                 )
-                .into_response();
-            }
-        },
-        Err(_) => {
-            return CardsError::unavailable("rpc_unavailable", "Solana RPC is unavailable; retry")
-                .into_response();
-        }
+                .into_response()
+            }),
+        Err(_) => Err(CardsError::unavailable(
+            "rpc_unavailable",
+            "Solana RPC is unavailable; retry",
+        )
+        .into_response()),
+    }
+}
+
+/// The unsigned setup transactions of one of the caller's own cards, so an
+/// owner can finish a setup that stopped partway (see [`routes::setup`]).
+pub(super) async fn setup(
+    State(state): State<BackendState>,
+    Extension(principal): Extension<Principal>,
+    connection: Option<Extension<ConnectionHash>>,
+    Path(card_id): Path<String>,
+) -> Response {
+    let cards = cards_or_404!(state);
+    if !cards.config.new_activation_enabled {
+        return cards::activation::gate_error().into_response();
+    }
+    let caller = caller(&principal, connection.as_deref());
+    let blockhash = match latest_blockhash(&state).await {
+        Ok(hash) => hash,
+        Err(response) => return response,
     };
-    respond(routes::prepare(&cards, &caller, request, blockhash).await)
+    respond(routes::setup(&cards, &caller, &card_id, blockhash).await)
 }
 
 pub(super) async fn list(
@@ -532,12 +558,18 @@ pub(super) fn is_card_setup(tx: &VersionedTransaction) -> bool {
 /// Accept only the exact transactions `/v1/cards/prepare` produced for one of
 /// the caller's own cards (`init_card`, `delegate_card`, escrow top-up),
 /// re-derived from the registry, with the caller as fee payer. Any other
-/// instruction, account or amount is refused. The blockhash may be fresh.
+/// instruction, account or amount is refused. The blockhash may be fresh, and
+/// the owner's wallet may add its own bounded priority fee (see
+/// [`matches_prepared_setup`]).
 pub(super) async fn validate_card_setup(
     state: &BackendState,
     wallet: &str,
     tx: &VersionedTransaction,
 ) -> Result<(), ApiError> {
+    // Structure, signer and compute-budget bounds first, exactly as for every
+    // other owner transaction: a malformed, duplicated or fee-draining
+    // compute-budget instruction is refused here with its own reason.
+    transactions::common(tx)?;
     let refuse = || {
         ApiError::BadRequest(
             "Relay accepts only the card setup transactions prepared for your own card".into(),
@@ -550,12 +582,6 @@ pub(super) async fn validate_card_setup(
             "Owner must sign and pay transaction fees".into(),
         ));
     }
-    let blockhash = tx.message.recent_blockhash().to_bytes();
-    // Compare meaning, not bytes: the browser's web3.js re-sorts account keys
-    // when it refreshes the blockhash (seen live: a second card's init_card
-    // was refused because its PDAs sorted differently).
-    let submitted = cards::program::decode_message(&tx.message).ok_or_else(refuse)?;
-    let signers = tx.message.header().num_required_signatures;
     let rows = cards
         .store
         .list_card_records_for_owner(
@@ -595,16 +621,53 @@ pub(super) async fn validate_card_setup(
                 cards::program::ESCROW_TOP_UP_LAMPORTS,
             )],
         ];
-        for instructions in expected {
-            let candidate = cards::program::unsigned_transaction(&owner, &instructions, blockhash);
-            if candidate.message.header().num_required_signatures == signers
-                && cards::program::decode_message(&candidate.message).as_ref() == Some(&submitted)
-            {
-                return Ok(());
-            }
+        if matches_prepared_setup(tx, &owner, &expected) {
+            return Ok(());
         }
     }
     Err(refuse())
+}
+
+/// A setup message's meaning with the wallet's compute-budget instructions set
+/// aside: fee payer, then each remaining instruction's program, metas and data.
+fn setup_meaning(
+    message: &solana_message::VersionedMessage,
+) -> Option<(
+    solana_address::Address,
+    Vec<cards::program::DecodedInstruction>,
+)> {
+    let (payer, mut instructions) = cards::program::decode_message(message)?;
+    instructions.retain(|(program, _, _)| !transactions::is_compute_budget_program(program));
+    Some((payer, instructions))
+}
+
+/// Whether `tx` means exactly one of `candidates`, as the owner's wallet may
+/// have re-shaped it before signing.
+///
+/// Compare meaning, not bytes: the browser's web3.js re-sorts account keys
+/// when it refreshes the blockhash (seen live: a second card's init_card was
+/// refused because its PDAs sorted differently). And wallets such as Phantom
+/// add their own SetComputeUnitLimit / SetComputeUnitPrice before signing
+/// (seen live: every card setup from Phantom was refused). Those are set aside
+/// here the same way the owner-action path sets them aside, and only after
+/// `transactions::common` has refused any that carry accounts, repeat, or
+/// would charge more than the relay's priority-fee cap. Every other
+/// instruction, account, signer and amount still has to match.
+pub(super) fn matches_prepared_setup(
+    tx: &VersionedTransaction,
+    owner: &solana_address::Address,
+    candidates: &[Vec<solana_message::Instruction>],
+) -> bool {
+    let Some(submitted) = setup_meaning(&tx.message) else {
+        return false;
+    };
+    let signers = tx.message.header().num_required_signatures;
+    let blockhash = tx.message.recent_blockhash().to_bytes();
+    candidates.iter().any(|instructions| {
+        let candidate = cards::program::unsigned_transaction(owner, instructions, blockhash);
+        candidate.message.header().num_required_signatures == signers
+            && setup_meaning(&candidate.message).as_ref() == Some(&submitted)
+    })
 }
 
 pub(super) fn router() -> Router<BackendState> {
@@ -622,6 +685,7 @@ pub(super) fn router() -> Router<BackendState> {
         .route("/v1/cards/prepare", post(prepare))
         .route("/v1/cards", get(list))
         .route("/v1/cards/{card_id}", get(get_card))
+        .route("/v1/cards/{card_id}/setup", get(setup))
         .route("/v1/cards/{card_id}/activate", post(activate))
         .route("/v1/cards/{card_id}/freeze", post(freeze))
         .route("/v1/cards/{card_id}/unfreeze-mirror", post(unfreeze_mirror))
@@ -655,4 +719,175 @@ pub(super) fn router() -> Router<BackendState> {
         )
         .route("/v1/cards/{card_id}/disclosure-salt", get(disclosure_salt))
         .route("/internal/ops/cards/metrics", get(ops_metrics))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cards::program::{
+        self, ISSUER_LITHIC_SANDBOX, PREFUND_LAMPORTS, init_card, set_compute_unit_limit,
+        tests::resort_like_web3, unsigned_transaction,
+    };
+    use ed25519_dalek::{Signer, SigningKey};
+    use solana_message::{Instruction, Message, VersionedMessage};
+
+    const COMPUTE_BUDGET: &str = "ComputeBudget111111111111111111111111111111";
+
+    fn owner_key() -> SigningKey {
+        SigningKey::from_bytes(&[21; 32])
+    }
+
+    fn owner() -> solana_address::Address {
+        solana_address::Address::from(owner_key().verifying_key().to_bytes())
+    }
+
+    fn prepared_init() -> Vec<Instruction> {
+        vec![init_card(
+            &owner(),
+            &[4; 32],
+            ISSUER_LITHIC_SANDBOX,
+            &[3; 32],
+            PREFUND_LAMPORTS,
+        )]
+    }
+
+    fn compute_price(micro_lamports: u64) -> Instruction {
+        let mut data = vec![3u8];
+        data.extend_from_slice(&micro_lamports.to_le_bytes());
+        Instruction {
+            program_id: program::addr(COMPUTE_BUDGET),
+            accounts: vec![],
+            data,
+        }
+    }
+
+    /// What Phantom hands back: its own compute limit and price in front of the
+    /// prepared instruction, keys re-sorted the way web3.js recompiles them,
+    /// and the owner's signature.
+    fn wallet_signed(instructions: &[Instruction]) -> VersionedTransaction {
+        let tx = unsigned_transaction(&owner(), instructions, [9; 32]);
+        let VersionedMessage::Legacy(legacy) = &tx.message else {
+            unreachable!()
+        };
+        sign(VersionedMessage::Legacy(resort_like_web3(legacy)))
+    }
+
+    fn sign(message: VersionedMessage) -> VersionedTransaction {
+        VersionedTransaction {
+            signatures: vec![owner_key().sign(&message.serialize()).to_bytes().into()],
+            message,
+        }
+    }
+
+    /// The relay's full check for card setup, minus the registry lookup.
+    fn accepted(tx: &VersionedTransaction) -> bool {
+        transactions::common(tx).is_ok() && matches_prepared_setup(tx, &owner(), &[prepared_init()])
+    }
+
+    fn with_budget(budget: Vec<Instruction>) -> VersionedTransaction {
+        wallet_signed(&[budget, prepared_init()].concat())
+    }
+
+    #[test]
+    fn the_prepared_setup_transaction_is_accepted() {
+        assert!(accepted(&wallet_signed(&prepared_init())));
+    }
+
+    #[test]
+    fn a_phantom_priority_fee_is_accepted() {
+        // Phantom's usual shape: a limit near the simulated use and a modest price.
+        let tx = with_budget(vec![set_compute_unit_limit(83_000), compute_price(150_000)]);
+        assert_eq!(tx.message.instructions().len(), 3);
+        assert!(accepted(&tx));
+        // A price alone (runtime default limit) is also fine.
+        assert!(accepted(&with_budget(vec![compute_price(1_000)])));
+    }
+
+    #[test]
+    fn a_compute_budget_instruction_with_accounts_is_refused() {
+        let mut limit = set_compute_unit_limit(200_000);
+        limit
+            .accounts
+            .push(solana_message::AccountMeta::new(owner(), true));
+        assert!(!accepted(&with_budget(vec![limit])));
+    }
+
+    #[test]
+    fn a_repeated_compute_budget_instruction_is_refused() {
+        assert!(!accepted(&with_budget(vec![
+            set_compute_unit_limit(200_000),
+            set_compute_unit_limit(300_000),
+        ])));
+        assert!(!accepted(&with_budget(vec![
+            compute_price(1_000),
+            compute_price(2_000),
+        ])));
+    }
+
+    #[test]
+    fn an_over_cap_limit_or_fee_is_refused() {
+        assert!(!accepted(&with_budget(vec![set_compute_unit_limit(
+            1_400_001
+        )])));
+        // 1.4M units at 50 lamports each is 0.07 SOL, over the 0.01 SOL cap.
+        assert!(!accepted(&with_budget(vec![
+            set_compute_unit_limit(1_400_000),
+            compute_price(50_000_000),
+        ])));
+        // The same rate is fine when the wallet asks for few units: the cap is
+        // on what the owner pays, not on the rate.
+        assert!(accepted(&with_budget(vec![
+            set_compute_unit_limit(100_000),
+            compute_price(50_000_000),
+        ])));
+    }
+
+    #[test]
+    fn an_unrelated_extra_instruction_is_still_refused() {
+        let memo = Instruction {
+            program_id: program::addr("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
+            accounts: vec![],
+            data: b"hi".to_vec(),
+        };
+        assert!(!accepted(&with_budget(vec![
+            set_compute_unit_limit(83_000),
+            memo
+        ])));
+        // A system transfer out of the owner's wallet beside the setup.
+        let transfer = Instruction {
+            program_id: program::addr("11111111111111111111111111111111"),
+            accounts: vec![
+                solana_message::AccountMeta::new(owner(), true),
+                solana_message::AccountMeta::new(solana_address::Address::from([8; 32]), false),
+            ],
+            data: [2u32.to_le_bytes().as_slice(), &1_000u64.to_le_bytes()].concat(),
+        };
+        assert!(!accepted(&wallet_signed(
+            &[prepared_init(), vec![transfer]].concat()
+        )));
+    }
+
+    #[test]
+    fn only_compute_budget_instructions_never_match_a_setup() {
+        let message = Message::new_with_blockhash(
+            &[set_compute_unit_limit(83_000)],
+            Some(&owner()),
+            &solana_message::Hash::new_from_array([9; 32]),
+        );
+        let tx = sign(VersionedMessage::Legacy(message));
+        assert!(!matches_prepared_setup(&tx, &owner(), &[prepared_init()]));
+    }
+
+    #[test]
+    fn a_different_amount_is_still_refused() {
+        let more = vec![init_card(
+            &owner(),
+            &[4; 32],
+            ISSUER_LITHIC_SANDBOX,
+            &[3; 32],
+            PREFUND_LAMPORTS + 1,
+        )];
+        let tx = wallet_signed(&[vec![set_compute_unit_limit(83_000)], more].concat());
+        assert!(!accepted(&tx));
+    }
 }

@@ -114,6 +114,12 @@
 .cp-activation-lines li[data-state="pending"] { color: var(--ws-warning, #854d0e); }
 .cp-activation-lines li[data-state="failed"], .cp-activation-lines li[data-state="unknown"] { color: var(--ws-critical, #b91c1c); }
 .cp-activation-detail { margin: 0; font-size: 13px; color: var(--body); max-width: 52ch; }
+/* A card whose setup stopped before it was turned on: where it stopped, and one way to finish. */
+.cp-finish-setup { display: grid; gap: 12px; width: 100%; max-width: 560px; }
+.cp-finish-setup .cp-activation-detail b { display: block; margin-bottom: 2px; font-weight: 600; color: var(--ink); font-size: 14px; }
+.cp-finish-steps { margin: 0; }
+.cp-finish-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.cp-finish-actions small { font-size: 13px; }
 .cp-card-tabs { margin-top: 4px; }
 .cp-card-section { display: grid; gap: 16px; min-width: 0; }
 
