@@ -3,7 +3,7 @@ import {
   parseSignedMandateRequest,
   verifyMandateRequest,
   type SignedMandateRequest,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import type { OrderLinkState, ReceiptView } from "./model";
 
 /** Keeps a hostile audit link from making the page decode megabytes. */

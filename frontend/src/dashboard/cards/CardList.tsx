@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { CreditCard, Plus } from "lucide-react";
-import { availableCents, type CardView } from "@chainpay/sdk";
+import { availableCents, type CardView } from "@chainpayhq/sdk";
 import { PageHeader } from "../PageHeader";
 import { SectionHeader } from "../../ui/workspace/SectionHeader";
 import { CollectionState } from "../../ui/workspace/CollectionState";

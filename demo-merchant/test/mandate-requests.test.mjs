@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { Keypair } from "@solana/web3.js";
-import { decodeMandateRequestLink, verifyMandateRequest } from "@chainpay/sdk";
+import { decodeMandateRequestLink, verifyMandateRequest } from "@chainpayhq/sdk";
 import { createMerchantApp } from "../dist/app.js";
 import { loadMandateRequestSettings } from "../dist/mandate-requests.js";
 import { makeCustomSettlement } from "./settlement-fixture.mjs";

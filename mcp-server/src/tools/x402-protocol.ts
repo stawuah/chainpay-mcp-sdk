@@ -1,5 +1,5 @@
 /**
- * Re-exports x402 challenge parsers from @chainpay/sdk.
+ * Re-exports x402 challenge parsers from @chainpayhq/sdk.
  * MCP and demo-merchant import from here for backward compatibility.
  */
 
@@ -22,7 +22,7 @@ export {
   customReceiptProofDocument,
   unsupportedSponsorResult,
   parseMppWwwAuthenticate,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 
 export type {
   X402ProtocolCode,
@@ -31,4 +31,4 @@ export type {
   DetectedChallenge,
   UnsupportedSponsorResult,
   MppUnsupportedResult,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";

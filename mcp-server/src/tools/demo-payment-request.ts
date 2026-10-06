@@ -4,7 +4,7 @@ import {
   canonicalPaymentRequest,
   paymentRequestTokenProgramAddress,
   type PaymentRequestPayload,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import { requiredString, solanaAddress, tokenProgram, toolResult, unsignedInteger } from "./common.js";
 

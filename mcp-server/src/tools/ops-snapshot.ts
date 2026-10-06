@@ -1,4 +1,4 @@
-import { loadOpsSnapshot, receiptListFromSnapshot, type Mandate } from "@chainpay/sdk";
+import { loadOpsSnapshot, receiptListFromSnapshot, type Mandate } from "@chainpayhq/sdk";
 import { mandateInScope } from "../authorization.js";
 import type { ChainPayMcpContext } from "./context.js";
 import { solanaAddress, toolResult, unsignedInteger } from "./common.js";

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import * as sdk from "@chainpay/sdk";
+import * as sdk from "@chainpayhq/sdk";
 
 // Bundle the real runtime, session and durable settlement store together. Only
 // wallet login and service responses are fixtures; no transaction is signed.
@@ -21,9 +21,9 @@ const bundle = await build({
   packages: "external", define: { "import.meta.env": "{}" },
 });
 const require = createRequire(import.meta.url);
-// The SDK index re-exports every subpath (e.g. @chainpay/sdk/known-assets),
+// The SDK index re-exports every subpath (e.g. @chainpayhq/sdk/known-assets),
 // so one loaded copy serves them all.
-const loadDependency = name => name === "@chainpay/sdk" || name.startsWith("@chainpay/sdk/") ? sdk : require(name);
+const loadDependency = name => name === "@chainpayhq/sdk" || name.startsWith("@chainpayhq/sdk/") ? sdk : require(name);
 const args = {
   mandate: "fixture-mandate", invoiceHash: "ab".repeat(32),
   signingMode: "human", signedTransaction: "fixture-approved-bytes",

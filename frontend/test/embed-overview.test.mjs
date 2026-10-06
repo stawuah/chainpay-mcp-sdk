@@ -24,7 +24,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const { createRoot } = await import("react-dom/client");
 
 const STUBS = {
-  "@chainpay/sdk": "export const loadOpsSnapshot = (...args) => globalThis.__loadOpsSnapshot(...args);",
+  "@chainpayhq/sdk": "export const loadOpsSnapshot = (...args) => globalThis.__loadOpsSnapshot(...args);",
   "../config/client": "export const publicReceiptClient = {};",
   "../receipts/InboxReceipt": "import { createElement } from 'react'; export const LoadedReceiptCard = ({ receiptPda }) => createElement('div', { 'data-receipt': receiptPda }, 'receipt ' + receiptPda);",
   "../routing/useRoute": "export const useRoute = () => ({ navigate: (route) => globalThis.__navigated.push(route) });",
@@ -41,7 +41,7 @@ await esbuild.build({
   plugins: [{
     name: "embed-stubs",
     setup(build) {
-      build.onResolve({ filter: /^(@chainpay\/sdk|\.\.\/config\/client|\.\.\/receipts\/InboxReceipt|\.\.\/routing\/useRoute)$/ }, (args) => ({ path: args.path, namespace: "embed-stub" }));
+      build.onResolve({ filter: /^(@chainpayhq\/sdk|\.\.\/config\/client|\.\.\/receipts\/InboxReceipt|\.\.\/routing\/useRoute)$/ }, (args) => ({ path: args.path, namespace: "embed-stub" }));
       build.onLoad({ filter: /.*/, namespace: "embed-stub" }, (args) => ({ contents: STUBS[args.path], loader: "js", resolveDir: frontendRoot }));
     },
   }],

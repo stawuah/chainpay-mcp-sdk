@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
-import type { CardView } from "@chainpay/sdk";
+import type { CardView } from "@chainpayhq/sdk";
 import type { CardsSource } from "./source";
 import { errorText } from "./shared";
 

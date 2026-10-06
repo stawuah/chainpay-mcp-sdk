@@ -17,8 +17,9 @@ npm ci --include=dev --ignore-scripts
 npm --prefix mcp-server run build
 ```
 
-Both packages are private workspace packages. Use the built entry point; there
-is no published `npx @chainpay/mcp-server` quickstart.
+The SDK is published as `@chainpayhq/sdk`. The MCP server remains a private
+workspace package; use its built entry point. There is no published
+`npx @chainpay/mcp-server` quickstart.
 
 Send one read-only request:
 

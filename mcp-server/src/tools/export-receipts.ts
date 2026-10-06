@@ -6,7 +6,7 @@ import {
   type PaymentReceipt,
   type ReceiptCsvRow,
   type ReceiptPolicySource,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { mandateInScope } from "../authorization.js";
 import type { ChainPayMcpContext } from "./context.js";
 import { solanaAddress, toolResult, unsignedInteger } from "./common.js";

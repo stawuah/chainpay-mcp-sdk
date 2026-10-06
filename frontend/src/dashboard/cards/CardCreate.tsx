@@ -13,7 +13,7 @@ import {
   policyReviewSummary,
   verifyCardDraftFragment,
   type CardDraftIntake,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { PageHeader } from "../PageHeader";
 import type { CardShop, CreateCardInput, CreateStepId, CreateStepState } from "./source";
 import { errorText, type CardsShared } from "./shared";

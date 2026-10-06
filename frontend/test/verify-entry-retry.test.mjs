@@ -47,7 +47,7 @@ async function bundle(entry, name, plugins = [stubLoaderPlugin()]) {
     jsx: "automatic",
     outfile,
     loader: { ".css": "empty" },
-    external: ["react", "react-dom", "react/jsx-runtime", "@chainpay/sdk"],
+    external: ["react", "react-dom", "react/jsx-runtime", "@chainpayhq/sdk"],
     define: { "import.meta.env": "{}" },
     plugins,
     logLevel: "error",
@@ -258,7 +258,7 @@ test("receipt card: a retry for receipt A that answers after moving to B is igno
 
 function stubLoadDepsPlugin() {
   const stubs = {
-    "@chainpay/sdk": "export const bytesToHex = () => ''; export const formatExactTokenAmount = () => ({}); export const receiptPolicy = () => ({ source: 'not-recorded' });",
+    "@chainpayhq/sdk": "export const bytesToHex = () => ''; export const formatExactTokenAmount = () => ({}); export const receiptPolicy = () => ({ source: 'not-recorded' });",
     "../config/client": "export const PROGRAM_ID = 'Program1111'; export const publicReceiptClient = { readPublicReceipt: (pda) => globalThis.__readPublicReceipt(pda), getCurrentSlot: async () => 1n };",
     "../config/public": "export const DEVNET_PYUSD_TOKEN_2022_MINT = 'p'; export const DEVNET_USDC_MINT = 'u';",
     "./seller": "export const loadSellerStatement = async () => ({ status: 'absent' });",
@@ -266,7 +266,7 @@ function stubLoadDepsPlugin() {
   return {
     name: "stub-load-deps",
     setup(build) {
-      build.onResolve({ filter: /^(@chainpay\/sdk|\.\.\/config\/client|\.\.\/config\/public|\.\/seller)$/ }, (args) => ({ path: args.path, namespace: "stub-dep" }));
+      build.onResolve({ filter: /^(@chainpayhq\/sdk|\.\.\/config\/client|\.\.\/config\/public|\.\/seller)$/ }, (args) => ({ path: args.path, namespace: "stub-dep" }));
       build.onLoad({ filter: /.*/, namespace: "stub-dep" }, (args) => ({ contents: stubs[args.path], loader: "js" }));
     },
   };

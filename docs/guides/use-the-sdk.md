@@ -4,7 +4,15 @@ Read protocol state and receipts, or build transaction plans for an external
 wallet to sign. The SDK talks to Solana RPC; read-only use needs neither an MCP
 connection nor a wallet. **Start by reading the protocol configuration.**
 
-## 1. Build the workspace package
+## 1. Install the SDK
+
+In a TypeScript application, install the public package:
+
+```bash
+npm install @chainpayhq/sdk
+```
+
+To work on ChainPay itself, build the workspace package instead:
 
 Run from the repository root with Node.js and npm installed:
 
@@ -13,18 +21,18 @@ npm ci --include=dev --ignore-scripts
 npm --prefix sdk run build
 ```
 
-`@chainpay/sdk` is a private workspace package. These commands build the checked-out
-source and make the local package available; they do not install a published SDK.
+These commands build the checked-out source and make the local package available.
 
 **Expected:** `sdk/dist/index.js` exists and TypeScript finishes without errors.
 
 ## 2. Run your first read
 
-From the same repository root:
+From the application directory where you installed the package, or from the
+repository root after building the workspace package:
 
 ```bash
 node --input-type=module <<'JS'
-import { ChainPayClient, deriveConfigAddress } from '@chainpay/sdk';
+import { ChainPayClient, deriveConfigAddress } from '@chainpayhq/sdk';
 
 const client = new ChainPayClient({
   rpcUrl: process.env.CHAINPAY_RPC_URL ?? 'https://api.devnet.solana.com',

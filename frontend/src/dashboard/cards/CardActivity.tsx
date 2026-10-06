@@ -3,7 +3,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent } from "@astryxdesign/core/Layout";
 import { FileText, Lock, Receipt, Snowflake, Sun } from "lucide-react";
-import type { CardActivityRow, CardEvidence, CardView } from "@chainpay/sdk";
+import type { CardActivityRow, CardEvidence, CardView } from "@chainpayhq/sdk";
 import { ReceiptEvidenceCard } from "../../receipts/ReceiptCard";
 import { activityEvidence } from "./evidence";
 import { ACTIVITY_TITLES, activityPills, rowNeedsReview, type StatePill } from "./lifecycle";

@@ -8,7 +8,7 @@ import {
   hexToBytes,
   preparePayment,
   toWeb3Transaction,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { encodeCanonicalBase58 } from "../dist/proof.js";
 
 export const RESOURCE = "http://127.0.0.1:3402/data";

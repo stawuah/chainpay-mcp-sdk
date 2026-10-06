@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createPrivateKey, sign as signMessage } from "node:crypto";
 import test from "node:test";
 import { Keypair } from "@solana/web3.js";
-import { canonicalPaymentRequest, SPL_TOKEN_PROGRAM_ID } from "@chainpay/sdk";
+import { canonicalPaymentRequest, SPL_TOKEN_PROGRAM_ID } from "@chainpayhq/sdk";
 import { checkPaymentRequirements } from "../dist/tools/check_payment_requirements.js";
 
 test("requirements check returns the exact missing payment details", async () => {

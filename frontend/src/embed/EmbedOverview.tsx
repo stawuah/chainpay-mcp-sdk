@@ -1,6 +1,6 @@
 import { BrandLogo } from "../brand/Brand";
 import { useEffect, useState } from "react";
-import { loadOpsSnapshot, type OpsReceiptRow, type OpsSnapshot } from "@chainpay/sdk";
+import { loadOpsSnapshot, type OpsReceiptRow, type OpsSnapshot } from "@chainpayhq/sdk";
 import { publicReceiptClient } from "../config/client";
 import { SpendMeter } from "../dashboard/charts/SpendMeter";
 import { LoadedReceiptCard } from "../receipts/InboxReceipt";

@@ -1,4 +1,4 @@
-import type { CardActivityRow, CardCaptureLifecycle, CardEvidence, CardView, StatementView } from "@chainpay/sdk";
+import type { CardActivityRow, CardCaptureLifecycle, CardEvidence, CardView, StatementView } from "@chainpayhq/sdk";
 
 /*
  * Activity rows → ReceiptCard evidence (contracts §9). Card evidence is a

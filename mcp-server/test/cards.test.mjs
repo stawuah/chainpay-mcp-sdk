@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomInt } from "node:crypto";
 import { Keypair } from "@solana/web3.js";
-import { findCardNumberLike, maxObligationCents } from "@chainpay/sdk";
+import { findCardNumberLike, maxObligationCents } from "@chainpayhq/sdk";
 import { TOOL_DEFINITIONS, callTool } from "../dist/index.js";
 import { parseScope, CARD_TOOLS } from "../dist/authorization.js";
 import { renderDocsHtml } from "../dist/docs.js";

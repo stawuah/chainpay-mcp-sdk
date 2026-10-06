@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { Mandate } from "@chainpay/sdk";
+import type { Mandate } from "@chainpayhq/sdk";
 import { ArrowRight, Bot, Clock3, CreditCard, Inbox, ShieldCheck } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
 import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";

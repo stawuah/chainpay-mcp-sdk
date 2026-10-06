@@ -5,7 +5,7 @@ import {
   type MandateRequestPayload,
   type SignedMandateRequest,
   type TokenProgram,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import type { AgentInboxItem } from "../owner/runtime";
 import { formatTokenUnits } from "../receipts/model";
 

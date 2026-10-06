@@ -18,7 +18,7 @@ import {
   type CardView,
   type RestoreArgs,
   type StatementView,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { CARD_AGENT_TOOLS, type CardPrivateRead, type CardRecoveryView, type CardsSource, type CreateCardInput, type PrivacyCheckResult, type ReaderMember, type RecoveryReport, type RepaymentLookup } from "./source";
 import { assertCoSignedRestore, reviewedRestore } from "./signingGuards";
 

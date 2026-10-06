@@ -1,30 +1,44 @@
 {
-  "name": "@chainpay/sdk",
-  "private": true,
+  "name": "@chainpayhq/sdk",
   "version": "0.1.0",
+  "description": "Policy-controlled Solana Devnet payments and receipt verification for ChainPay integrations",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stawuah/chainpay-mcp-sdk.git",
+    "directory": "sdk"
+  },
+  "homepage": "https://github.com/stawuah/chainpay-mcp-sdk/tree/master/sdk#readme",
+  "bugs": "https://github.com/stawuah/chainpay-mcp-sdk/issues",
+  "keywords": ["chainpay", "solana", "devnet", "stablecoin", "payments", "receipts"],
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "dist/index.js",
-  "types": "src/index.ts",
+  "types": "dist/index.d.ts",
   "bin": {
     "chainpay": "./dist/cli.js"
   },
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
     "./known-assets": {
-      "types": "./src/known-assets.ts",
+      "types": "./dist/known-assets.d.ts",
       "import": "./dist/known-assets.js"
     },
     "./cards/private-repayment": {
-      "types": "./src/cards/private-repayment.ts",
+      "types": "./dist/cards/private-repayment.d.ts",
       "import": "./dist/cards/private-repayment.js"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
+    "prepack": "npm run build",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {

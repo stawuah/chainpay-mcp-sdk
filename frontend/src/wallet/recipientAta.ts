@@ -1,4 +1,4 @@
-import { buildCreateAssociatedTokenAccountInstruction, type ChainPayInstruction, type TokenProgram } from "@chainpay/sdk";
+import { buildCreateAssociatedTokenAccountInstruction, type ChainPayInstruction, type TokenProgram } from "@chainpayhq/sdk";
 import type { Transaction } from "@solana/web3.js";
 import { ensureAssociatedTokenAccount } from "./tokenAccount";
 

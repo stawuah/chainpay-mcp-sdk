@@ -24,7 +24,7 @@ async function loadBundle(entry, name) {
     platform: "node",
     outfile,
     loader: { ".css": "empty" },
-    external: ["@chainpay/sdk", "react", "react-dom", "react/jsx-runtime"],
+    external: ["@chainpayhq/sdk", "react", "react-dom", "react/jsx-runtime"],
   });
   try {
     return await import(`${pathToFileURL(outfile).href}?t=${Date.now()}`);
@@ -410,7 +410,7 @@ test("an imported request is rechecked at the acceptance deadline", async () => 
 
 test("a correctly signed request for another cluster is refused before approval", async () => {
   const { Keypair } = require("@solana/web3.js");
-  const { signMandateRequest, encodeMandateRequestLink } = await import("@chainpay/sdk");
+  const { signMandateRequest, encodeMandateRequestLink } = await import("@chainpayhq/sdk");
   const key = Keypair.fromSeed(new Uint8Array(32).fill(43));
   const signed = await signMandateRequest({ ...fixture.vendor.request.payload, cluster: "mainnet-beta", requester: key.publicKey.toBase58() }, key.secretKey);
   await assert.rejects(requests.validatePermissionRequestForApproval(signed, SLOT), /different Solana cluster/);

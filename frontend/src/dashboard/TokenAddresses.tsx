@@ -2,7 +2,7 @@ import { useState } from "react";
 import { SectionHeader } from "../ui/workspace/SectionHeader";
 import { Button } from "@astryxdesign/core/Button";
 import { Copy } from "lucide-react";
-import { deriveAssociatedTokenAddress } from "@chainpay/sdk";
+import { deriveAssociatedTokenAddress } from "@chainpayhq/sdk";
 import { TokenIcon } from "../ui/TokenIcon";
 import { copyValue, type StablecoinOption } from "../owner/runtime";
 

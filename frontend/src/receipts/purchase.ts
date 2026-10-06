@@ -2,7 +2,7 @@ import {
   hexToBytes,
   verifyReceiptPurchase,
   type SignedPaymentRequest,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { formatTokenUnits, type PurchaseProofState, type ReceiptView } from "./model";
 
 /** Keeps a hostile audit link from making the page decode megabytes. */

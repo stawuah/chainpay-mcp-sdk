@@ -1,4 +1,4 @@
-import { relayObservedPolicy } from "@chainpay/sdk";
+import { relayObservedPolicy } from "@chainpayhq/sdk";
 import { BACKEND_URL } from "../config/client";
 import { authorizedFetch } from "../session";
 import { policyView } from "./load";

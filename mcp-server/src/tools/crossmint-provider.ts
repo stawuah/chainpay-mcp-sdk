@@ -1,4 +1,4 @@
-import { CROSSMINT_STAGING_BASE_URL, crossmintOrderUrl, parseCrossmintOrder } from "@chainpay/sdk";
+import { CROSSMINT_STAGING_BASE_URL, crossmintOrderUrl, parseCrossmintOrder } from "@chainpayhq/sdk";
 
 export function requireCrossmintEnabled() {
   if (process.env.CHAINPAY_CROSSMINT_ENABLED !== "true") throw new Error("Crossmint checkout is disabled pending provider acceptance. Nothing was submitted.");

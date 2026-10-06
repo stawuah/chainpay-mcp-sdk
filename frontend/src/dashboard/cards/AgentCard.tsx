@@ -1,5 +1,5 @@
 import { Clock3, Lock, Snowflake, TriangleAlert } from "lucide-react";
-import type { CardView } from "@chainpay/sdk";
+import type { CardView } from "@chainpayhq/sdk";
 import { CONNECTION_PATH } from "../../brand/Brand";
 import { CARD_ISSUER_ENV, type CardIssuerEnvironment } from "../../config/public";
 import { cardStatus } from "./lifecycle";

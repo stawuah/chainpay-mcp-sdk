@@ -1,4 +1,4 @@
-import type { AssociatedTokenAccountPreparation } from "@chainpay/sdk";
+import type { AssociatedTokenAccountPreparation } from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import { serializeTransaction, solanaAddress, toolResult } from "./common.js";
 

@@ -11,7 +11,7 @@ export type DeliveryPublishInput = {
 
 /**
  * Optional PR-07 hook. Wired to Axum when a host seller key and backend URL
- * are configured. Callers must sign with `@chainpay/sdk` delivery helpers so
+ * are configured. Callers must sign with `@chainpayhq/sdk` delivery helpers so
  * canonical bytes match the relay fixtures.
  */
 export type DeliveryPublisher = {

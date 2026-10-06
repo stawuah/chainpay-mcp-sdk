@@ -24,7 +24,7 @@ import {
 import "./receipt-card.css";
 import { printReceipt } from "./print";
 import { sharePublicReceipt, shareStatusCopy } from "./share";
-import { isCardEvidence, mayRenderAsSplSettlement, type ReceiptEvidence } from "@chainpay/sdk";
+import { isCardEvidence, mayRenderAsSplSettlement, type ReceiptEvidence } from "@chainpayhq/sdk";
 import { CardEvidenceCard } from "./CardEvidenceCard";
 
 function Field({ label, value }: { label: string; value: string }) {

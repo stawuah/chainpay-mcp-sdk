@@ -5,7 +5,7 @@ import {
   mandateRequestSummary,
   signMandateRequest,
   type SignedMandateRequest,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { assertSafeHttpUrl, parseSellerSecretKey, sellerIdentity, type MerchantConfig } from "./config.js";
 
 const MAX_U64 = 18_446_744_073_709_551_615n;

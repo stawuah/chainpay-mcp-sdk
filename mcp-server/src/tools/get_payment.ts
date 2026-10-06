@@ -1,4 +1,4 @@
-import { opsReceiptPolicy, receiptPolicy, relayObservedPolicy, type ReceiptPolicy } from "@chainpay/sdk";
+import { opsReceiptPolicy, receiptPolicy, relayObservedPolicy, type ReceiptPolicy } from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import { hex32, solanaAddress, toolResult } from "./common.js";
 import { verifiedReceiptPurpose } from "./receipt-context.js";

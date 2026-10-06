@@ -6,7 +6,7 @@ import "../../src/theme/astryx.css";
 import "../../src/styles.css";
 import { createRoot } from "react-dom/client";
 import { PublicKey, type Transaction } from "@solana/web3.js";
-import type { Mandate } from "@chainpay/sdk";
+import type { Mandate } from "@chainpayhq/sdk";
 import { Dashboard } from "../../src/dashboard/Dashboard";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
 import { Router } from "../../src/routing/Router";

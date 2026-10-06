@@ -4,7 +4,7 @@ import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { Bot, Copy } from "lucide-react";
-import type { CardView } from "@chainpay/sdk";
+import type { CardView } from "@chainpayhq/sdk";
 import { buildMcpClientConfig, copyValue } from "../../owner/runtime";
 import type { CardAgentConnection, CardsSource } from "./source";
 import { errorText } from "./shared";

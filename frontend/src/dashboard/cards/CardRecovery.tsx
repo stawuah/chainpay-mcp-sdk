@@ -3,7 +3,7 @@ import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
-import { formatUsdCents, type CardView } from "@chainpay/sdk";
+import { formatUsdCents, type CardView } from "@chainpayhq/sdk";
 import type { CardRecoveryView, CardsSource, RecoveryRules } from "./source";
 import { errorText } from "./shared";
 import { formatWhen, shortKey } from "./ui";

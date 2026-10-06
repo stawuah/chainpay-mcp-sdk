@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { ArrowLeft, CircleCheck, CircleHelp, CircleX, Clock3, Snowflake, TriangleAlert } from "lucide-react";
-import { availableCents, CardsApiError, type CardActivityRow, type CardView } from "@chainpay/sdk";
+import { availableCents, CardsApiError, type CardActivityRow, type CardView } from "@chainpayhq/sdk";
 import { CARD_SECTIONS, type CardSection } from "../../routing/paths";
 import { PageHeader } from "../PageHeader";
 import { activationLines, cardStatus, ISSUER_FREEZE_COPY } from "./lifecycle";

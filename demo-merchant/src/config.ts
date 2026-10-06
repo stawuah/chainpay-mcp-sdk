@@ -1,5 +1,5 @@
 import { Keypair } from "@solana/web3.js";
-import { publicKey, type TokenProgram } from "@chainpay/sdk";
+import { publicKey, type TokenProgram } from "@chainpayhq/sdk";
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 

@@ -1,5 +1,5 @@
 import express, { type Express, type Request, type Response } from "express";
-import type { X402PaymentReferences } from "@chainpay/sdk";
+import type { X402PaymentReferences } from "@chainpayhq/sdk";
 import { paymentRequiredForConfig, type MerchantConfig } from "./config.js";
 import { mountCardShops, type CardShopDependencies } from "./card-shops.js";
 import { createDeliveryController, type DeliveryController, type DeliveryPublisher } from "./delivery.js";

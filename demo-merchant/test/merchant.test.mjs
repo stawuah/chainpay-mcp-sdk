@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { Keypair } from "@solana/web3.js";
-import { DEFAULT_PROGRAM_ID } from "@chainpay/sdk";
+import { DEFAULT_PROGRAM_ID } from "@chainpayhq/sdk";
 import { createMerchantApp } from "../dist/app.js";
 import { customPaymentRequired, standardV2PaymentRequired } from "../dist/config.js";
 import {

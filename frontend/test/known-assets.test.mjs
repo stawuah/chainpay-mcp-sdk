@@ -64,7 +64,7 @@ test("naming an asset does not enable it", () => {
 });
 
 test("the dashboard re-exports the SDK table instead of keeping a copy", () => {
-  assert.match(reexport, /from "@chainpay\/sdk\/known-assets"/);
+  assert.match(reexport, /from "@chainpayhq\/sdk\/known-assets"/);
   assert.doesNotMatch(reexport, /mints:/, "a second mint table would drift from the SDK's");
 });
 

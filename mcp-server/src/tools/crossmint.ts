@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import { deriveCrossmintPaymentReferences, crossmintFieldsToPreparePaymentInput, crossmintPaymentTransaction, crossmintTermsToPrepareFields, validateCrossmintCheckoutOrder, type CrossmintPaymentTerms } from "@chainpay/sdk";
+import { deriveCrossmintPaymentReferences, crossmintFieldsToPreparePaymentInput, crossmintPaymentTransaction, crossmintTermsToPrepareFields, validateCrossmintCheckoutOrder, type CrossmintPaymentTerms } from "@chainpayhq/sdk";
 import { authorizeMandate } from "../authorization.js";
 import { materializeUnsignedTransaction, serializeTransaction, solanaAddress, toolResult } from "./common.js";
 import type { ChainPayMcpContext } from "./context.js";

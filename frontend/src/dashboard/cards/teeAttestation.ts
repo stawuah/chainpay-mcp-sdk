@@ -6,7 +6,7 @@ import {
   teeMeasurementAllowlist,
   verifyTee,
   type TeeMeasurement,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import type { PrivacyCheckResult } from "./source";
 
 /*

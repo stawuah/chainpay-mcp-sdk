@@ -3,7 +3,7 @@ import {
   signDeliveryAttestation,
   verifyDeliveryAttestation,
   type SignedDeliveryAttestation,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import type { SellerPublishConfig } from "./config.js";
 import type { DeliveryPublishInput, DeliveryPublisher } from "./delivery.js";
 

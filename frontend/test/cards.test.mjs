@@ -34,7 +34,7 @@ await esbuild.build({
   entryPoints: ["test/fixtures/cards-test-entry.ts"],
   bundle: true, format: "esm", platform: "browser", jsx: "automatic", outfile,
   loader: { ".css": "empty", ".png": "empty", ".svg": "empty", ".webp": "empty" },
-  external: ["react", "react-dom", "react/jsx-runtime", "react-dom/client", "@chainpay/sdk", "@solana/web3.js", "buffer", "@phala/dcap-qvl"],
+  external: ["react", "react-dom", "react/jsx-runtime", "react-dom/client", "@chainpayhq/sdk", "@solana/web3.js", "buffer", "@phala/dcap-qvl"],
   define: { "import.meta.env": "{}" },
   logLevel: "error",
 });
@@ -174,7 +174,7 @@ test("restore refuses values the owner wasn't shown", () => {
 
 test("co-signed restore: signs only the reviewed values, for this card, already signed by the authorizer", async () => {
   const { Keypair, PublicKey, Transaction, TransactionInstruction } = await import("@solana/web3.js");
-  const sdk = await import("@chainpay/sdk");
+  const sdk = await import("@chainpayhq/sdk");
   const owner = Keypair.generate();
   const authorizer = Keypair.generate();
   const cardId = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
@@ -373,7 +373,7 @@ test("card face carries a Sandbox mark while the issuer is a sandbox, and no bac
 });
 
 test("/verify/card checks disclosed fields against the on-chain commitment, with the exact copy", async () => {
-  const { encodeDisclosureFragment } = await import("@chainpay/sdk");
+  const { encodeDisclosureFragment } = await import("@chainpayhq/sdk");
   const source = m.createFixtureCardsSource({ unlocked: true, delayMs: 0 });
   const view = await source.getCard(m.FIXTURE_CARD_IDS.data);
   const bundle = await source.disclose(view, [2, 9]);
@@ -400,7 +400,7 @@ test("/verify/card: an empty page offers a paste field and opens the link locall
   for (const bad of ["", "https://chainpay.example/verify/card", "https://chainpay.example/verify/card#other=1", "disclose="]) {
     assert.equal(m.disclosureFragmentFromInput(bad), null, bad);
   }
-  const { encodeDisclosureFragment } = await import("@chainpay/sdk");
+  const { encodeDisclosureFragment } = await import("@chainpayhq/sdk");
   const source = m.createFixtureCardsSource({ unlocked: true, delayMs: 0 });
   const bundle = await source.disclose(await source.getCard(m.FIXTURE_CARD_IDS.data), [2, 9]);
   const commitment = await source.commitmentFor(bundle.binding);
@@ -436,7 +436,7 @@ test("/verify/card: an empty page offers a paste field and opens the link locall
 });
 
 test("/verify/card: an RPC failure or a missing checkpoint offers a retry that reads again", async () => {
-  const { encodeDisclosureFragment } = await import("@chainpay/sdk");
+  const { encodeDisclosureFragment } = await import("@chainpayhq/sdk");
   const source = m.createFixtureCardsSource({ unlocked: true, delayMs: 0 });
   const bundle = await source.disclose(await source.getCard(m.FIXTURE_CARD_IDS.data), [2, 9]);
   const commitment = await source.commitmentFor(bundle.binding);
@@ -462,7 +462,7 @@ test("/verify/card: an RPC failure or a missing checkpoint offers a retry that r
 });
 
 test("/verify/card: only a verified check says the values match or points at the owner wallet", async () => {
-  const { encodeDisclosureFragment } = await import("@chainpay/sdk");
+  const { encodeDisclosureFragment } = await import("@chainpayhq/sdk");
   const source = m.createFixtureCardsSource({ unlocked: true, delayMs: 0 });
   const bundle = await source.disclose(await source.getCard(m.FIXTURE_CARD_IDS.data), [2, 9]);
   const commitment = await source.commitmentFor(bundle.binding);
@@ -599,7 +599,7 @@ test("repayment offers both methods when ChainPay does, and the private one says
 
 async function restoreFixture() {
   const { Keypair, PublicKey, Transaction, TransactionInstruction } = await import("@solana/web3.js");
-  const sdk = await import("@chainpay/sdk");
+  const sdk = await import("@chainpayhq/sdk");
   const owner = Keypair.generate();
   const authorizer = Keypair.generate();
   const cardId = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
@@ -682,7 +682,7 @@ test("F1: the rules a restore may write come from the owner's private records; t
 
 test("F2: card setup signs only the exact setup instructions for THIS card", async () => {
   const { Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, ComputeBudgetProgram } = await import("@solana/web3.js");
-  const sdk = await import("@chainpay/sdk");
+  const sdk = await import("@chainpayhq/sdk");
   const owner = Keypair.generate();
   const ownerKey = owner.publicKey.toBase58();
   const programId = sdk.CARD_POLICY_PROGRAM_ID;

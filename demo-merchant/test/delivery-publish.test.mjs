@@ -14,7 +14,7 @@ import {
   defaultTrustedSellerMapping,
   signDeliveryAttestation,
   verifyDeliveryAttestation,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { createMerchantApp } from "../dist/app.js";
 import { loadSellerPublishConfig, sellerPublishConfigFromSecret } from "../dist/config.js";
 import { bindServedResponseLifecycle, serializeJsonBody, sha256Hex } from "../dist/delivery.js";

@@ -32,7 +32,7 @@ await esbuild.build({
   entryPoints: ["src/dashboard/cards/PrivateRepayOptIn.tsx"],
   bundle: true, format: "esm", platform: "browser", jsx: "automatic", outfile,
   loader: { ".css": "empty" },
-  external: ["react", "react-dom", "react/jsx-runtime", "react-dom/client", "@chainpay/sdk", "@chainpay/sdk/*"],
+  external: ["react", "react-dom", "react/jsx-runtime", "react-dom/client", "@chainpayhq/sdk", "@chainpayhq/sdk/*"],
   define: { "import.meta.env": "{}" },
   logLevel: "error",
 });

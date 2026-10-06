@@ -1,5 +1,5 @@
 import { CARD_TOOLS, authorizeTool } from "./authorization.js";
-import { ChainPayClient, isDuplicateInvoiceError, publicKey, redactCardNumbers, redactCardNumbersInInput } from "@chainpay/sdk";
+import { ChainPayClient, isDuplicateInvoiceError, publicKey, redactCardNumbers, redactCardNumbersInInput } from "@chainpayhq/sdk";
 import { createMandate } from "./tools/create_mandate.js";
 import { checkPaymentRequirements } from "./tools/check_payment_requirements.js";
 import { createDemoPaymentRequest } from "./tools/demo-payment-request.js";

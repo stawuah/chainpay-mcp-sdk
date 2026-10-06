@@ -6,7 +6,7 @@ import {
   type PaymentReceipt,
   type ReceiptPolicy,
   type SignedPaymentRequest,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 
 const RELAY_TIMEOUT_MS = 10_000;

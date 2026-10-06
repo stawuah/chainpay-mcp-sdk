@@ -5,7 +5,7 @@ import {
   deriveAssociatedTokenAddress,
   type PreparedTransaction,
   type TokenProgram,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import {
   chainpayClient,

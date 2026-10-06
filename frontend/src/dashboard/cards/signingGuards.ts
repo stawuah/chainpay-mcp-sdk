@@ -13,7 +13,7 @@ import {
   type ChainPayInstruction,
   type PreparedCard,
   type RestoreArgs,
-} from "@chainpay/sdk";
+} from "@chainpayhq/sdk";
 import { RECOVERY_NUMBER_KEYS, type RecoveryNumberKey, type RecoveryReport, type RecoveryRules } from "./source";
 
 /*

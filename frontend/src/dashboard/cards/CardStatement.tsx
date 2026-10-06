@@ -5,7 +5,7 @@ import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { Selector } from "@astryxdesign/core/Selector";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { Check, FileText, Receipt, TriangleAlert } from "lucide-react";
-import { centsToTokenBaseUnits, formatUsdCents, parseSignedCents, type CardView, type OpenStatementView, type StatementLine, type StatementView } from "@chainpay/sdk";
+import { centsToTokenBaseUnits, formatUsdCents, parseSignedCents, type CardView, type OpenStatementView, type StatementLine, type StatementView } from "@chainpayhq/sdk";
 import { CardEvidenceCard } from "../../receipts/CardEvidenceCard";
 import { statementEvidence } from "./evidence";
 import { MISMATCH_COPY, STATEMENT_STATE_LABEL, STATEMENT_STEPS } from "./lifecycle";

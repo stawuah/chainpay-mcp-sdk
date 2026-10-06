@@ -1,4 +1,4 @@
-import { bytesToHex, verifyPaymentRequest, type SignedPaymentRequest } from "@chainpay/sdk";
+import { bytesToHex, verifyPaymentRequest, type SignedPaymentRequest } from "@chainpayhq/sdk";
 import type { ChainPayMcpContext } from "./context.js";
 import { requiredString, solanaAddress, toolResult } from "./common.js";
 import { quotePayment } from "./quote_payment.js";
