@@ -144,6 +144,14 @@ Private endpoints derive the principal from a verified bearer credential:
   Only an identity-matched provider response advancing to `delivery` or
   `completed` verifies the order; failures preserve settlement. Later reads
   update order evidence without replacing the settled signature or receipt.
+  While Crossmint still reports `awaiting-payment` with nothing received, the
+  relay also posts the payment's own finalized signature to
+  `POST /orders/{orderId}/payment` (`{"type":"crypto-tx-id","txId":…}`, same
+  `X-API-KEY`). It does this once when the payment confirms and again on each
+  readback until Crossmint shows a received transaction. A failure is stored
+  on the job's `error` and never changes the settlement or receipt. If
+  Crossmint reports a different transaction, the relay records that and does
+  not overwrite it.
 - `PUT /v1/mandates/{pda}/request`: owner session only. Body is a signed
   mandate request `{payload, signature}` (see `sdk/src/mandate-request.ts`).
   The relay checks the requester signature and every field, then reads the

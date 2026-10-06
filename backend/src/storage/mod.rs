@@ -671,6 +671,15 @@ impl StatusStore {
             }
             StorageBackend::Memory(state) => {
                 let mut state = state.write().await;
+                // One job per idempotency key, as Convex and PostgreSQL enforce.
+                if state.x402_payments.values().any(|old| {
+                    old.idempotency_key == record.idempotency_key
+                        && old.x402_payment_id != record.x402_payment_id
+                }) {
+                    return Err(StorageError::Remote(
+                        "conflict: Idempotency key already exists".into(),
+                    ));
+                }
                 if state
                     .x402_payments
                     .get(&record.x402_payment_id)

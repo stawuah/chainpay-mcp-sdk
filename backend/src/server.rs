@@ -1,5 +1,7 @@
 #[path = "server_cards.rs"]
 mod card_routes;
+#[path = "server_crossmint.rs"]
+mod crossmint_orders;
 #[path = "server_delivery.rs"]
 mod delivery_routes;
 #[path = "server_mandate_requests.rs"]
@@ -209,6 +211,8 @@ pub struct BackendState {
     pub cards: Option<std::sync::Arc<crate::connectors::card_issuer::CardsConnector>>,
     /// Owner webhooks; `None` unless `OWNER_WEBHOOKS_ENABLED=true`.
     pub webhooks: Option<std::sync::Arc<crate::webhooks::OwnerWebhooks>>,
+    /// Crossmint staging Orders API and the server key (`CROSSMINT_API_KEY`).
+    pub(crate) crossmint: crossmint_orders::CrossmintApi,
 }
 
 #[derive(Debug, Error)]
@@ -245,6 +249,7 @@ impl BackendState {
             signer_provider,
             cards,
             webhooks,
+            crossmint: crossmint_orders::CrossmintApi::from_env(),
         })
     }
 }
@@ -1773,56 +1778,17 @@ async fn record_crossmint_order_proof(
         .connector_reference
         .as_deref()
         .ok_or(ApiError::NotFound)?;
-    if order_id.len() > 128
-        || order_id.is_empty()
-        || !order_id
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
-    {
-        return Err(ApiError::BadRequest(
-            "Invalid stored Crossmint order ID".into(),
-        ));
-    }
-    let key = std::env::var("CROSSMINT_API_KEY")
-        .map_err(|_| ApiError::BadRequest("Crossmint staging readback is not configured".into()))?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| ApiError::BadRequest("Crossmint readback unavailable".into()))?;
-    let mut response = client
-        .get(format!(
-            "https://staging.crossmint.com/api/2022-06-09/orders/{order_id}"
-        ))
-        .header("X-API-KEY", key)
-        .send()
-        .await
-        .map_err(|_| {
-            ApiError::BadRequest("Crossmint readback unavailable; settlement is unchanged".into())
-        })?;
-    if !response.status().is_success() {
-        return Err(ApiError::BadRequest(
-            "Crossmint readback rejected; settlement is unchanged".into(),
-        ));
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| ApiError::BadRequest("Crossmint readback incomplete".into()))?
-    {
-        if bytes.len() + chunk.len() > 128_000 {
-            return Err(ApiError::BadRequest("Crossmint response too large".into()));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    let body: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| ApiError::BadRequest("Invalid Crossmint response".into()))?;
+    let body = crossmint_orders::fetch_order(&state.crossmint, order_id).await?;
     let (phase, proof) = crossmint_observation(&body, order_id, &principal.wallet, &job.challenge)?;
+    // This readback is also the retry for the payment notice: while Crossmint
+    // still awaits payment, tell it which finalized transaction paid the order.
+    let notice =
+        crossmint_orders::send_payment_notice_if_due(&state.crossmint, order_id, &payment, &body)
+            .await;
     request.order_phase = phase;
     request.proof = proof;
     request.response_status = 200;
-    request.error = None;
+    request.error = notice;
     persist_crossmint_observation(State(state), Extension(principal), Json(request)).await
 }
 

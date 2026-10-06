@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { prepareCrossmintPayment, executeCrossmintPayment, crossmintPaymentStatus } from "../dist/tools/crossmint.js";
 import { fetchCrossmintOrder } from "../dist/tools/crossmint-provider.js";
@@ -9,6 +9,8 @@ import { normalizeToolOutcome } from "../dist/outcome.js";
 
 const addr = () => Keypair.generate().publicKey.toBase58();
 const MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+/** What api.devnet.solana.com's getGenesisHash returns (not the truncated CAIP-2 reference). */
+const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 /** Crossmint's memo shape: a JWT naming the order, between fixed markers. */
 function memoFor(orderIdentifier, nonce = "nonce-1") {
   const segment = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -28,7 +30,7 @@ function fixture() {
   const raw = { order: { orderId: "order_1", phase: "payment", lineItems: [{ chain: "solana", tokenLocator: "solana:token-address", metadata: { name: "Test item" }, quantity: 1, delivery: { status: "awaiting-payment", recipient: { locator: `solana:${delivery}`, walletAddress: delivery } } }], quote: { status: "valid", expiresAt: "2030-01-01T00:00:00Z", totalPrice: { amount: "1.234567", currency: "usdc" } }, payment: { method: "solana", currency: "usdc", status: "awaiting-payment", preparation: { chain: "solana", payerAddress: owner, serializedTransaction: crossmintWire(instruction, owner, memo), transactionParameters: { amount: "1234567", memo } } } } };
   let preparations = 0;
   const context = { principal: { wallet: owner, scope: null }, backendUrl: "https://relay.invalid", backendAuthToken: "caller-token", client: {
-    connection: { getGenesisHash: async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1", getLatestBlockhash: async () => ({ blockhash: PublicKey.default.toBase58(), lastValidBlockHeight: 1 }) },
+    connection: { getGenesisHash: async () => DEVNET_GENESIS_HASH, getLatestBlockhash: async () => ({ blockhash: PublicKey.default.toBase58(), lastValidBlockHeight: 1 }) },
     getMandate: async () => ({ address: mandate, owner, approvedAgent: owner, sourceTokenAccount: source, allowedMint: mint }),
     preparePayment: async () => { preparations++; return { receiptAddress: addr(), preflight: { valid: true, checks: [] }, transaction: { feePayer: owner, requiredSigners: [owner], instructions: [{ name: "execute_payment", programId: instruction.programId.toBase58(), keys: instruction.keys.map(k => ({ address: k.pubkey.toBase58(), isSigner: k.isSigner, isWritable: k.isWritable })), data }] } }; },
   } };
@@ -281,4 +283,56 @@ test("status keeps payment, delivery and refund apart: completed order, failed d
   assert.equal(crossmint.deliveries[0].failureCode, "slippage-tolerance-exceeded");
   assert.equal(result.structuredContent.providerDelivery, "failed");
   assert.equal(f.preparations(), 0);
+});
+
+test("only Devnet's full genesis hash passes the network check", async t => {
+  for (const genesis of ["EtWTRABZaYq6iMfeYKouRu166VU2xqa1", "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"]) {
+    configure(t); const f = fixture(); const calls = [];
+    f.context.client.connection.getGenesisHash = async () => genesis;
+    globalThis.fetch = async (url, init) => { calls.push({ url, init }); return Response.json(f.raw); };
+    await assert.rejects(prepareCrossmintPayment(f.context, f.args), /requires Solana Devnet/);
+    assert.equal(calls.length, 0, "the provider is not asked about an order on another network");
+  }
+});
+
+/** Submit a reviewed order and answer the relay POST with `status`. */
+async function submitWithRelayAnswer(t, status, body) {
+  const { f, args } = await reviewed(t);
+  const posts = [];
+  globalThis.fetch = async (url, init = {}) => {
+    if (url.endsWith("/connector")) return new Response(null, { status: 404 });
+    if (url.startsWith("https://staging.crossmint.com")) return Response.json(f.raw);
+    if (/\/v1\/payments$/.test(url)) { posts.push(JSON.parse(init.body)); return typeof body === "string" ? new Response(body, { status }) : Response.json(body, { status }); }
+    throw new Error(`unexpected ${url}`);
+  };
+  return { f, args, posts, result: await executeCrossmintPayment(f.context, args) };
+}
+
+test("a relay 5xx after broadcast is an unknown outcome to resume, never a rejection", async t => {
+  for (const [status, body] of [[500, { error: "storage error: Convex storage error: storage request rejected (409)" }], [502, "Bad Gateway"], [409, { error: "conflict" }]]) {
+    const { f, args, posts, result } = await submitWithRelayAnswer(t, status, body);
+    const outcome = result.structuredContent;
+    assert.equal(posts.length, 1);
+    assert.notEqual(outcome.action, "backend_rejected");
+    assert.equal(outcome.action, "crossmint_payment_pending");
+    assert.equal(outcome.status, "unknown");
+    assert.equal(outcome.httpStatus, status);
+    // The same deterministic id the relay assigns and the dashboard tracks.
+    const expected = `payment_${createHash("sha256").update(`${f.context.principal.wallet}:${posts[0].idempotency_key}`).digest("hex")}`;
+    assert.equal(outcome.payment_id, expected);
+    assert.deepEqual(outcome.continuation, { tool: "get_crossmint_payment", arguments: { paymentId: expected } });
+    assert.match(outcome.message, /may already have been sent/);
+    assert.match(outcome.message, /Do not retry/);
+    assert.equal(normalizeToolOutcome(result).kind, "payment_pending");
+    assert.equal(args.invoiceHash, posts[0].invoice_hash);
+  }
+});
+
+test("only a relay refusal before broadcast is reported as backend_rejected", async t => {
+  for (const status of [400, 401, 403, 404, 422]) {
+    const { result } = await submitWithRelayAnswer(t, status, { error: "refused" });
+    assert.equal(result.structuredContent.action, "backend_rejected");
+    assert.equal(result.structuredContent.httpStatus, status);
+    assert.equal(result.isError, true);
+  }
 });
