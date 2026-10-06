@@ -36,7 +36,7 @@ export async function submitSettlement(context: ChainPayMcpContext, endpoint: st
     const transport = describeTransportFailure(cause);
     console.error(`[chainpay] settlement submission failed: ${transport}`);
     if (!wallet) throw new Error(`Submission outcome is unknown (${transport}); the authenticated owner must reconcile the original idempotency key`);
-    const paymentId = `payment_${createHash("sha256").update(`${wallet}:${body.idempotency_key}`).digest("hex")}`;
+    const paymentId = relayPaymentId(wallet, body.idempotency_key);
     return Response.json({
       action: "payment_outcome_unknown",
       status: "unknown",
@@ -61,4 +61,49 @@ function describeTransportFailure(cause: unknown): string {
     return cause.message && cause.name !== "TimeoutError" ? `${name}: ${cause.message}` : name;
   }
   return "unknown transport failure";
+}
+
+/**
+ * The relay's payment id for a settlement: `deterministic_id("payment", …)` over
+ * the owner-scoped idempotency key, as `backend/src/server_recovery.rs` derives it.
+ */
+export function relayPaymentId(wallet: string, idempotencyKey: string): string {
+  return `payment_${createHash("sha256").update(`${wallet}:${idempotencyKey}`).digest("hex")}`;
+}
+
+/**
+ * Relay answers that prove a settlement was refused before broadcast. The same
+ * set as the dashboard (`frontend/src/owner/runtime.ts`). Every other non-OK
+ * answer (5xx, 409, a proxy or gateway error) can arrive after the relay sent
+ * the transaction, so it must never be reported as a rejection.
+ */
+const RELAY_REJECTED_BEFORE_BROADCAST = new Set([400, 401, 403, 404, 422]);
+
+export function relayRejectedBeforeBroadcast(status: number): boolean {
+  return RELAY_REJECTED_BEFORE_BROADCAST.has(status);
+}
+
+/**
+ * The settlement payload for a non-OK relay answer that is not a pre-broadcast
+ * rejection: status unknown, the deterministic payment id to resume with, and
+ * an explicit instruction not to retry. Callers treat it like a pending payment.
+ */
+export function relayOutcomeUnknown(
+  context: ChainPayMcpContext,
+  idempotencyKey: string,
+  httpStatus: number,
+  relayPayload: Record<string, unknown>,
+): Record<string, unknown> {
+  const wallet = context.principal?.wallet;
+  const paymentId = wallet ? relayPaymentId(wallet, idempotencyKey) : undefined;
+  return {
+    status: "unknown",
+    ...(paymentId ? { payment_id: paymentId } : { idempotency_key: idempotencyKey }),
+    httpStatus,
+    ...(typeof relayPayload.error === "string" ? { relayError: relayPayload.error } : {}),
+    ...(paymentId ? { continuation: { tool: "wait_for_payment", arguments: { paymentId } } } : {}),
+    message: `The relay answered HTTP ${httpStatus}, so this payment may already have been sent. `
+      + (paymentId ? "Check it with this paymentId. " : "The authenticated owner must reconcile the original idempotency key. ")
+      + "Do not retry, sign, or approve a replacement.",
+  };
 }

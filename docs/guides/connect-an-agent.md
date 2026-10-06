@@ -111,7 +111,7 @@ A mandate is the owner's on-chain spending permission for one approved agent.
    `POST /connections` on the MCP HTTP server, using the owner session bearer.
 3. Copy the returned connection token into the client's private configuration.
    It is shown once and stored hashed. Never commit or paste it into a prompt.
-4. Call `get_mandate` with `{"address":"YOUR_MANDATE_PDA"}`.
+4. Call `get_mandate` with `{"address":"YOUR_MANDATE_PDA"}` (or `{"mandate":…}`, the name the payment and x402 tools use).
 
 **Expected:** the selected mandate is readable. Other mandates, unselected tools,
 and owner-management tools are rejected for that connection.

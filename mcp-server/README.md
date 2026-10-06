@@ -78,6 +78,14 @@ signing mode. Human mode prepares or relays externally signed transactions;
 delegated mode sends unsigned wires to Axum's mandate-bound provider signer.
 MCP never accepts a private key or provider credential.
 
+Only a relay answer of 400, 401, 403, 404 or 422 is reported as a rejection
+(`backend_rejected`, `managed_backend_rejected`, or a thrown x402 error), as in
+the dashboard. Any other non-OK answer, such as a 5xx or a gateway error page,
+may arrive after the transaction was broadcast. Those return
+`payment_pending` (or `x402_payment_pending`) with `status: "unknown"` and
+the deterministic `payment_id` to resume with. Do not retry or sign a
+replacement.
+
 `prepare_token_accounts` lets the authenticated owner ask the assistant to
 inspect one mint or every enabled registry asset. It returns at most one missing
 ATA creation per call for explicit wallet review. After that transaction

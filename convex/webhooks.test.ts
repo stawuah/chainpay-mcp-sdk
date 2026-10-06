@@ -62,6 +62,8 @@ describe("owner webhook outbox", () => {
     expect(row.state).toBe("delivered"); expect(row.delivered_at_ms).toBe(90_001);
     const scheduled = await call(t, "redeliver_webhook", { owner: "owner", delivery_id: id, now: "95000" });
     expect(scheduled.result).toBe("scheduled"); expect(scheduled.delivery.attempts).toBe(0); expect(scheduled.delivery.event_id).toBe(ev.event_id);
+    expect(scheduled.delivery.delivered_at_ms).toBeNull();
+    expect((await history(t, "owner", "whk_a"))[0].delivered_at_ms).toBeNull();
     // Attempt cap: an expired lease at the cap is exhausted, not re-sent.
     expect(await claim(t, 95_000, "lease-f", 1_000, 1)).toHaveLength(1);
     expect(await claim(t, 96_000, "lease-g", 1_000, 1)).toHaveLength(0);

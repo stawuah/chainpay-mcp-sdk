@@ -335,3 +335,40 @@ test("a DuplicateInvoice from preparation is a typed tool result, not a crash", 
   assert.equal(result.structuredContent.receiptAddress, original.address);
   assert.equal(result.structuredContent.message, "This invoice was already paid. Nothing new was submitted.");
 });
+
+test("execute_payment reports a possibly-broadcast relay failure as pending, never as a rejection", async () => {
+  const previous = globalThis.fetch;
+  const ctx = {
+    ...executeContext(),
+    principal: { wallet: OWNER, scope: null },
+  };
+  ctx.client.connection = {
+    getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 1 }),
+  };
+  const args = paymentArgs(purchase);
+  const expectedId = `payment_${createHash("sha256").update(`${OWNER}:${MANDATE}:${args.invoiceHash}`).digest("hex")}`;
+  try {
+    for (const signing of [{ signingMode: "human" }, { signingMode: "delegated", signedTransaction: undefined }]) {
+      for (const [status, body] of [[500, JSON.stringify({ error: "storage write failed" })], [502, "<html>Bad gateway</html>"], [409, "{}"]]) {
+        globalThis.fetch = async () => new Response(body, { status });
+        const result = await executePayment(ctx, { ...args, ...signing });
+        assert.equal(result.isError, undefined, `${signing.signingMode} ${status}`);
+        assert.equal(result.structuredContent.action, "payment_pending");
+        assert.equal(result.structuredContent.status, "unknown");
+        assert.equal(result.structuredContent.payment_id, expectedId);
+        assert.equal(result.structuredContent.httpStatus, status);
+        assert.match(result.structuredContent.message, /Do not retry/);
+        assert.deepEqual(result.structuredContent.continuation, { tool: "wait_for_payment", arguments: { paymentId: expectedId } });
+      }
+      for (const status of [400, 401, 403, 404, 422]) {
+        globalThis.fetch = async () => Response.json({ error: "refused" }, { status });
+        const result = await executePayment(ctx, { ...args, ...signing });
+        assert.equal(result.isError, true);
+        assert.equal(result.structuredContent.action, signing.signingMode === "human" ? "backend_rejected" : "managed_backend_rejected");
+        assert.equal(result.structuredContent.httpStatus, status);
+      }
+    }
+  } finally {
+    globalThis.fetch = previous;
+  }
+});

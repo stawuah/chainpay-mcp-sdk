@@ -1413,31 +1413,51 @@ async fn persist_payment_with_events(
     Ok(())
 }
 
+/// Label a stored x402 challenge for the owner's job list.
+///
+/// Two shapes reach this store. A dashboard or direct caller may persist the
+/// merchant's raw 402 document (`x402Version: 2` or `version: "x402/1.0"`).
+/// ChainPay MCP persists its *normalized* challenge instead: the option it
+/// actually settled, with `protocol: "chainpay-custom-x402/1.0"`,
+/// `proofKind: "settled-receipt-pda"` and a top-level `amount`. A standard v2
+/// challenge that an allowlisted receipt merchant accepted is normalized onto
+/// that receipt-proof rail, and MCP marks it with `sourceProtocol: "x402-v2"`
+/// (older rows carry only its `protocolLabel`). Both normalized forms were paid
+/// through a mandate, so they are payable.
 fn classify_x402_challenge(challenge: &Value) -> (String, bool, Option<String>) {
+    let str_field =
+        |value: &Value, field: &str| value.get(field).and_then(Value::as_str).map(str::to_owned);
+    let first_accept = challenge
+        .get("accepts")
+        .and_then(Value::as_array)
+        .and_then(|accepts| accepts.first());
+
+    if challenge.get("protocol").and_then(Value::as_str) == Some(NORMALIZED_X402_PROTOCOL) {
+        let from_v2 = challenge.get("sourceProtocol").and_then(Value::as_str) == Some("x402-v2")
+            || challenge
+                .get("protocolLabel")
+                .and_then(Value::as_str)
+                .is_some_and(|label| label.starts_with("Standard x402 v2"));
+        let protocol = if from_v2 {
+            "standard_x402_v2_receipt"
+        } else {
+            "chainpay_custom_x402"
+        };
+        return (protocol.into(), true, str_field(challenge, "amount"));
+    }
     if challenge.get("x402Version").and_then(Value::as_u64) == Some(2) {
-        let amount = challenge
-            .get("accepts")
-            .and_then(Value::as_array)
-            .and_then(|accepts| accepts.first())
-            .and_then(|option| option.get("maxAmountRequired"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+        // x402 v2 names the price `amount`; `maxAmountRequired` is the v1 name.
+        let amount = first_accept.and_then(|option| {
+            str_field(option, "amount").or_else(|| str_field(option, "maxAmountRequired"))
+        });
         return ("standard_x402_v2".into(), false, amount);
     }
     if challenge.get("version").and_then(Value::as_str) == Some("x402/1.0") {
-        let amount = challenge
-            .get("amount")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| {
-                challenge
-                    .get("accepts")
-                    .and_then(Value::as_array)
-                    .and_then(|accepts| accepts.first())
-                    .and_then(|option| option.get("amount"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            });
+        let amount = str_field(challenge, "amount").or_else(|| {
+            first_accept.and_then(|option| {
+                str_field(option, "amount").or_else(|| str_field(option, "maxAmountRequired"))
+            })
+        });
         return ("chainpay_custom_x402".into(), true, amount);
     }
     if challenge.get("version").and_then(Value::as_str) == Some("mpp")
@@ -1447,6 +1467,9 @@ fn classify_x402_challenge(challenge: &Value) -> (String, bool, Option<String>) 
     }
     ("unknown".into(), false, None)
 }
+
+/// `CUSTOM_PROTOCOL` in `sdk/src/x402-challenge.ts`, which MCP stores.
+const NORMALIZED_X402_PROTOCOL: &str = "chainpay-custom-x402/1.0";
 
 fn x402_status_label(status: X402PaymentStatus) -> String {
     match status {
@@ -3376,6 +3399,67 @@ mod tests {
         let (protocol, payable, _) = classify_x402_challenge(&json!({ "version": "mpp" }));
         assert_eq!(protocol, "mpp");
         assert!(!payable);
+    }
+
+    #[test]
+    fn classifies_raw_v2_by_its_amount_field() {
+        let (protocol, payable, amount) = classify_x402_challenge(&json!({
+            "x402Version": 2,
+            "accepts": [{ "scheme": "exact", "amount": "100000" }]
+        }));
+        assert_eq!(protocol, "standard_x402_v2");
+        assert!(!payable);
+        assert_eq!(amount.as_deref(), Some("100000"));
+    }
+
+    /// The challenge exactly as ChainPay MCP's `normalizeV2Challenge` relayed it
+    /// in the live Devnet run (labels and fields copied from that job).
+    fn mcp_normalized_challenge(extra: Value) -> Value {
+        let mut challenge = json!({
+            "protocol": "chainpay-custom-x402/1.0",
+            "protocolLabel": "Standard x402 v2 challenge settled through ChainPay mandate receipt proof",
+            "proofKind": "settled-receipt-pda",
+            "network": "solana-devnet",
+            "scheme": "exact",
+            "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+            "recipient": "5WQjAiMXfTqaFfs8cVjSzdeNK4u4LVL8CRYzfGavJYKH",
+            "amount": "100000",
+            "resource": "https://chainpay-demo-merchant.vercel.app/data",
+            "tokenProgram": "spl-token",
+            "nonce": "n",
+            "invoiceHash": "666cfd93",
+            "paymentId": "ab91",
+            "signatureReference": "cd"
+        });
+        if let (Some(target), Some(extra)) = (challenge.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        challenge
+    }
+
+    #[test]
+    fn classifies_mcp_normalized_v2_challenge_as_payable() {
+        for challenge in [
+            mcp_normalized_challenge(json!({})),
+            mcp_normalized_challenge(json!({ "sourceProtocol": "x402-v2" })),
+        ] {
+            let (protocol, payable, amount) = classify_x402_challenge(&challenge);
+            assert_eq!(protocol, "standard_x402_v2_receipt");
+            assert!(payable);
+            assert_eq!(amount.as_deref(), Some("100000"));
+        }
+    }
+
+    #[test]
+    fn classifies_mcp_normalized_custom_challenge_as_payable() {
+        let (protocol, payable, amount) = classify_x402_challenge(&mcp_normalized_challenge(
+            json!({ "protocolLabel": "ChainPay custom receipt-proof flow (x402/1.0)." }),
+        ));
+        assert_eq!(protocol, "chainpay_custom_x402");
+        assert!(payable);
+        assert_eq!(amount.as_deref(), Some("100000"));
     }
 
     #[test]

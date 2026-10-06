@@ -23,6 +23,32 @@ test("custom x402/1.0 challenges are payable with exact amount strings", async (
   assert.equal(summary.amount, "10000");
 });
 
+test("MCP-normalized challenges (what the relay stores) are payable", async () => {
+  const jobs = await loadModule({}, "../src/spend/x402Display.ts");
+  const normalized = {
+    protocol: "chainpay-custom-x402/1.0",
+    protocolLabel: "Standard x402 v2 challenge settled through ChainPay mandate receipt proof",
+    proofKind: "settled-receipt-pda",
+    amount: "100000",
+  };
+  const legacy = jobs.summarizeX402Challenge(normalized);
+  assert.equal(legacy.protocol, "standard_x402_v2_receipt");
+  assert.equal(legacy.payable, true);
+  assert.equal(legacy.amount, "100000");
+  assert.equal(legacy.blockedReason, undefined);
+  assert.equal(jobs.summarizeX402Challenge({ ...normalized, protocolLabel: "x", sourceProtocol: "x402-v2" }).protocol, "standard_x402_v2_receipt");
+  const custom = jobs.summarizeX402Challenge({ ...normalized, protocolLabel: "ChainPay custom receipt-proof flow (x402/1.0)." });
+  assert.equal(custom.protocol, "chainpay_custom_x402");
+  assert.equal(custom.payable, true);
+});
+
+test("raw x402 v2 reads the v2 amount field", async () => {
+  const jobs = await loadModule({}, "../src/spend/x402Display.ts");
+  const v2 = jobs.summarizeX402Challenge({ x402Version: 2, accepts: [{ amount: "100000" }] });
+  assert.equal(v2.amount, "100000");
+  assert.equal(v2.payable, false);
+});
+
 test("standard x402 v2 and MPP stay visible but blocked", async () => {
   const jobs = await loadModule({}, "../src/spend/x402Display.ts");
   const v2 = jobs.summarizeX402Challenge({

@@ -57,8 +57,11 @@ export const TOOL_DEFINITIONS = [
     description: "Read one spending permission on-chain. Use after connect or when the owner names a permission. Report status, token, limits, and whether it is ready for payments.",
     inputSchema: {
       type: "object",
-      properties: { address: { type: "string", description: "Mandate PDA address" } },
-      required: ["address"],
+      properties: {
+        address: { type: "string", description: "Mandate PDA address" },
+        mandate: { type: "string", description: "Same as address; the name the x402 and payment tools use" },
+      },
+      anyOf: [{ required: ["address"] }, { required: ["mandate"] }],
       additionalProperties: false,
     },
   },

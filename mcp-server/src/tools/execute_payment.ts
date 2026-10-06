@@ -1,4 +1,4 @@
-import { submitSettlement } from "./settlement-submit.js";
+import { relayOutcomeUnknown, relayRejectedBeforeBroadcast, submitSettlement } from "./settlement-submit.js";
 import type { ChainPayMcpContext } from "./context.js";
 import { bytesToHex, verifyPaymentRequest, type SignedPaymentRequest } from "@chainpayhq/sdk";
 import { materializeUnsignedTransaction, serializeTransaction, toolResult } from "./common.js";
@@ -52,6 +52,7 @@ export async function executePayment(
     );
   }
 
+  const idempotencyKey = `${parsed.input.mandate}:${bytesToHex(parsed.input.invoiceHash)}`;
   const signedTransaction = typeof input.signedTransaction === "string"
     ? input.signedTransaction.trim()
     : undefined;
@@ -78,7 +79,7 @@ export async function executePayment(
         Authorization: `Bearer ${context.backendAuthToken}`,
       },
       body: JSON.stringify({
-        idempotency_key: `${parsed.input.mandate}:${bytesToHex(parsed.input.invoiceHash)}`,
+        idempotency_key: idempotencyKey,
         mandate: parsed.input.mandate,
         invoice_hash: bytesToHex(parsed.input.invoiceHash),
         receipt_address: prepared.receiptAddress,
@@ -94,7 +95,10 @@ export async function executePayment(
     const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
     if (payload.code === "DuplicateInvoice") return duplicateInvoice(payload, prepared.receiptAddress);
     if (!response.ok) {
-      return toolResult({ action: "managed_backend_rejected", httpStatus: response.status, ...payload }, true);
+      if (relayRejectedBeforeBroadcast(response.status)) {
+        return toolResult({ action: "managed_backend_rejected", httpStatus: response.status, ...payload }, true);
+      }
+      return relayAnswerUnknown(context, idempotencyKey, response.status, payload, prepared.receiptAddress);
     }
     if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
       return toolResult({
@@ -139,7 +143,7 @@ export async function executePayment(
           : {}),
       },
       body: JSON.stringify({
-        idempotency_key: `${parsed.input.mandate}:${bytesToHex(parsed.input.invoiceHash)}`,
+        idempotency_key: idempotencyKey,
         mandate: parsed.input.mandate,
         invoice_hash: bytesToHex(parsed.input.invoiceHash),
         receipt_address: prepared.receiptAddress,
@@ -152,10 +156,14 @@ export async function executePayment(
         ...(paymentRequest ? { payment_request: paymentRequest } : {}),
       }),
     });
-    const payload = await response.json() as Record<string, unknown>;
+    // A gateway error page is not JSON; its status still decides the outcome.
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
     if (payload.code === "DuplicateInvoice") return duplicateInvoice(payload, prepared.receiptAddress);
     if (!response.ok) {
-      return toolResult({ action: "backend_rejected", httpStatus: response.status, ...payload }, true);
+      if (relayRejectedBeforeBroadcast(response.status)) {
+        return toolResult({ action: "backend_rejected", httpStatus: response.status, ...payload }, true);
+      }
+      return relayAnswerUnknown(context, idempotencyKey, response.status, payload, prepared.receiptAddress);
     }
     if (payload.status !== "confirmed" || typeof payload.signature !== "string") {
       return toolResult({
@@ -185,6 +193,25 @@ export async function executePayment(
     requirements: requirementsFromPreflight(prepared.preflight),
     transaction: serializeTransaction(prepared.transaction),
     unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction),
+  });
+}
+
+/**
+ * A non-OK relay answer that does not prove the payment was refused before
+ * broadcast. Reported as pending with the deterministic payment id, never as a
+ * rejection, so neither the agent nor the dashboard offers a retry.
+ */
+function relayAnswerUnknown(
+  context: ChainPayMcpContext,
+  idempotencyKey: string,
+  httpStatus: number,
+  payload: Record<string, unknown>,
+  receiptAddress: string,
+) {
+  return toolResult({
+    action: "payment_pending",
+    ...relayOutcomeUnknown(context, idempotencyKey, httpStatus, payload),
+    receiptAddress,
   });
 }
 

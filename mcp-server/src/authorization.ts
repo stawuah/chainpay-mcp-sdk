@@ -82,6 +82,9 @@ export async function authorizeTool(context: ChainPayMcpContext, name: string, a
   // Existing-operation resume is authorized again by Axum against the stored
   // owner and mandate. It never prepares or signs a new payment.
   if (["execute_x402_payment", "execute_crossmint_payment", "get_crossmint_payment"].includes(name) && typeof args.paymentId === "string" && /^payment_/.test(args.paymentId)) return;
+  if (name === "get_mandate" && args.address !== undefined && args.mandate !== undefined && args.address !== args.mandate) {
+    throw new AuthorizationError("address and mandate differ");
+  }
   let address = name === "get_mandate" && typeof args.address === "string" ? args.address : typeof args.mandate === "string" ? args.mandate : typeof args.mandateAddress === "string" ? args.mandateAddress : undefined;
   if (!address && typeof args.receiptAddress === "string") {
     const receipt = await context.client.getPayment(args.receiptAddress);
