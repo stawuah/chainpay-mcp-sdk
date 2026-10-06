@@ -43,7 +43,10 @@ npm --prefix demo-merchant run dev
 
 Startup queries the live asset registry and fails if the mint is disabled or
 the token program differs. Success prints a listening message for
-`http://127.0.0.1:3402/data`. The server binds to loopback.
+`http://127.0.0.1:3402/data`. The server binds to loopback unless
+`CHAINPAY_MERCHANT_HOST` names another interface (for example `0.0.0.0` in a
+container). Set `CHAINPAY_X402_RESOURCE_URL` to the public URL whenever the
+server is reached through any other address: it is part of every invoice hash.
 
 In another terminal:
 
@@ -56,6 +59,43 @@ unpaid resource, not settlement. Do not use `curl -f` here: 402 is intentional.
 For local HTTP testing through MCP, set `CHAINPAY_X402_ALLOW_HTTP=true` in the
 MCP process. Deployed resources should use HTTPS and MCP's explicit
 `CHAINPAY_X402_ALLOWED_ORIGINS` allowlist.
+
+## Standard x402 v2 challenge shape
+
+`CHAINPAY_X402_CHALLENGE_SHAPE=v2` makes `GET /data` answer with a standard
+x402 v2 document (`x402Version: 2`, CAIP-2 network, `amount`, `payTo`). ChainPay
+MCP settles it through the mandate only when the merchant origin is in its
+`CHAINPAY_X402_RECEIPT_MERCHANTS`; the proof is still the receipt PDA, not a
+sponsor countersign.
+
+| Variable | v2 requirement |
+| --- | --- |
+| `CHAINPAY_X402_CHALLENGE_SHAPE` | `v2` (default `custom`). |
+| `CHAINPAY_X402_MERCHANT_OWNER` | **Required.** The merchant's wallet, sent as `payTo`. Startup fails if it is unset or equals `CHAINPAY_X402_ALLOWED_AGENT`. |
+| `CHAINPAY_X402_RECIPIENT_TOKEN_ACCOUNT` | Must be the associated token account of the merchant owner for `CHAINPAY_X402_MINT` and token program. Startup also reads it on chain: it must exist, hold that mint, and be owned by the merchant owner. |
+
+Payers derive the recipient from `payTo`, so a mismatch would send funds to a
+different account than the one this merchant verifies. That is why these are
+startup errors, not warnings.
+
+## Host on Vercel
+
+[`vercel.json`](vercel.json) and [`api/index.js`](api/index.js) deploy this
+directory as one Vercel function. Create a Vercel project with **Root
+Directory** `demo-merchant`. The install runs `npm ci` at the repository root,
+so the root lockfile and its `rpc-websockets` 9.3.7 override apply (a fresh
+standalone install resolves a newer `rpc-websockets` whose ESM-only `uuid`
+fails with `ERR_REQUIRE_ESM` on Node runtimes without `require(esm)`).
+
+Set the same variables as a local run in the project's environment. On a
+production deployment `CHAINPAY_X402_RESOURCE_URL` defaults to
+`https://$VERCEL_PROJECT_PRODUCTION_URL/data`; preview deployments must set it.
+`PORT` and `CHAINPAY_MERCHANT_HOST` do not apply. The startup checks above run
+on the first request of each instance; a failure answers 503 and logs the
+reason. Add the deployment origin to MCP's `CHAINPAY_X402_ALLOWED_ORIGINS`
+(and `CHAINPAY_X402_RECEIPT_MERCHANTS` for v2). Seller statements are
+published after the response finishes, which a serverless instance may not
+wait for; host the merchant on a long-running server if you need them.
 
 ## Settlement proof and optional seller statement
 

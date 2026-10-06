@@ -234,7 +234,8 @@ export async function webhookOperation(ctx: MutationCtx, op: string, a: Record<s
     const subscription = await subscriptionById(ctx, d.subscription_id);
     if (!subscription || subscription.status !== "active") return { result: "endpoint_disabled" };
     const now = safeNumber(a.now);
-    const patch = { state: "pending" as const, attempts: 0, next_attempt_at_ms: now, lease_token: null, lease_expires_at_ms: null, updated_at_ms: now };
+    // A new attempt is not delivered yet: clear the previous success time.
+    const patch = { state: "pending" as const, attempts: 0, next_attempt_at_ms: now, lease_token: null, lease_expires_at_ms: null, delivered_at_ms: null, updated_at_ms: now };
     await ctx.db.patch(d._id, patch);
     return { result: "scheduled", delivery: deliveryRow({ ...d, ...patch }) };
   }

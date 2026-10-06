@@ -85,3 +85,22 @@ test("hosted x402 rejects non-allowlisted resource origins before fetching",asyn
   try {await assert.rejects(executeX402Payment({client:{}},{resource:"https://127.0.0.1/private"}),/not in CHAINPAY_X402_ALLOWED_ORIGINS/);}
   finally {if(original===undefined)delete process.env.CHAINPAY_X402_ALLOWED_ORIGINS;else process.env.CHAINPAY_X402_ALLOWED_ORIGINS=original;}
 });
+
+test("get_mandate accepts mandate as an alias for address, through authorization and the tool", async()=>{
+  const f=fixture();
+  f.context.client.getMintDecimals=async()=>6;
+  const read=[];
+  const getMandate=f.context.client.getMandate;
+  f.context.client.getMandate=async(address)=>{read.push(address);return {...await getMandate(address),allowedMint:key(),maxPerPayment:1n,totalLimit:2n,amountSpent:0n};};
+  const byMandate=await callTool(f.context,"get_mandate",{mandate:f.address});
+  assert.equal(byMandate.isError,undefined);
+  assert.equal(byMandate.structuredContent.found,true);
+  const byAddress=await callTool(f.context,"get_mandate",{address:f.address});
+  assert.equal(byAddress.structuredContent.found,true);
+  assert.equal(read.at(-1),f.address);
+  assert.ok(read.every((address)=>address===f.address));
+  // Two different PDAs are refused before anything is read.
+  const before=read.length;
+  await assert.rejects(authorizeTool(f.context,"get_mandate",{address:f.address,mandate:key()}),/differ/);
+  assert.equal(read.length,before);
+});

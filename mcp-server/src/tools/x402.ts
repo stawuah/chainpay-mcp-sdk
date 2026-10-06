@@ -1,4 +1,4 @@
-import { submitSettlement } from "./settlement-submit.js";
+import { relayOutcomeUnknown, relayRejectedBeforeBroadcast, submitSettlement } from "./settlement-submit.js";
 import {
   SPL_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -42,6 +42,11 @@ type NormalizedX402Challenge = CustomChallengeOption & {
   invoiceHash: string;
   paymentId: string;
   signatureReference: string;
+  /**
+   * Set when a standard x402 v2 challenge was normalized onto the receipt-proof
+   * rail. The relay stores this challenge and labels the job from it.
+   */
+  sourceProtocol?: "x402-v2";
 };
 
 function resourceUrl(value: unknown): string {
@@ -178,6 +183,7 @@ async function normalizeV2Challenge(
     invoiceHash: fields.invoiceHash,
     paymentId: fields.paymentId,
     signatureReference: fields.signatureReference,
+    sourceProtocol: "x402-v2",
   };
 }
 
@@ -312,7 +318,13 @@ async function relaySignedPayment(
     }),
   });
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new Error(`Axum rejected x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
+  if (!response.ok) {
+    if (relayRejectedBeforeBroadcast(response.status)) {
+      throw new Error(`Axum rejected x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
+    }
+    // Possibly broadcast: resume by paymentId, never re-prepare.
+    return relayOutcomeUnknown(context, `x402:${mandate}:${challenge.invoiceHash}`, response.status, payload);
+  }
 
   return payload;
 }
@@ -352,7 +364,13 @@ async function relayManagedPayment(
     }),
   });
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new Error(`Axum rejected delegated x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
+  if (!response.ok) {
+    if (relayRejectedBeforeBroadcast(response.status)) {
+      throw new Error(`Axum rejected delegated x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
+    }
+    // Possibly broadcast: resume by paymentId, never re-prepare.
+    return relayOutcomeUnknown(context, `x402:${mandate}:${challenge.invoiceHash}`, response.status, payload);
+  }
 
   return payload;
 }

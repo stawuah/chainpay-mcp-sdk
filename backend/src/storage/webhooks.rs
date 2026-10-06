@@ -1500,6 +1500,9 @@ fn apply_redeliver(delivery: &mut WebhookDelivery, now: u64) {
     delivery.next_attempt_at_ms = now;
     delivery.lease_token = None;
     delivery.lease_expires_at_ms = None;
+    // The new attempt has not been delivered. Keeping the old time would show
+    // `delivered_at_ms` next to `pending` or `retry_scheduled`.
+    delivery.delivered_at_ms = None;
     delivery.updated_at_ms = now;
 }
 
@@ -1807,6 +1810,12 @@ pub(crate) mod tests {
             ),
             (ev.event_id.as_str(), 0, WebhookDeliveryState::Pending)
         );
+        assert_eq!(scheduled.delivered_at_ms, None);
+        let row = &store
+            .list_webhook_deliveries(&owner, &sub, 50)
+            .await
+            .unwrap()[0];
+        assert_eq!(row.delivered_at_ms, None);
         // Attempt cap: a lease that expires at the cap becomes exhausted.
         let claimed = store
             .claim_webhook_deliveries(95_000, 50, 1_000, "lease-f", 1)

@@ -1,5 +1,5 @@
 import { Keypair } from "@solana/web3.js";
-import { publicKey, type TokenProgram } from "@chainpayhq/sdk";
+import { deriveAssociatedTokenAddress, publicKey, type TokenProgram } from "@chainpayhq/sdk";
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 
@@ -7,12 +7,18 @@ export type ChallengeShape = "custom" | "v2";
 
 export type MerchantConfig = {
   port: number;
+  /** Interface `server.ts` binds. Loopback unless CHAINPAY_MERCHANT_HOST says otherwise. */
+  host: string;
   resource: string;
   mint: string;
   /** Custom x402/1.0 payTo: recipient token account, not a merchant owner address. */
   recipient: string;
-  /** Standard x402 v2 payTo: merchant wallet owner (ATA derived at settlement). */
-  merchantOwner: string;
+  /**
+   * Standard x402 v2 payTo: merchant wallet owner (ATA derived at settlement).
+   * Required in v2 mode; `recipient` must be its associated token account.
+   * Unused by the custom challenge.
+   */
+  merchantOwner?: string;
   amount: string;
   tokenProgram: TokenProgram;
   allowedAgent: string;
@@ -95,6 +101,51 @@ export function assertSafeHttpUrl(value: string, name: string): URL {
   return parsed;
 }
 
+/**
+ * Interface for `app.listen`. Defaults to loopback so a local run is never
+ * reachable from the network by accident. A container or VM host sets
+ * `CHAINPAY_MERCHANT_HOST=0.0.0.0` (or `::`); Vercel ignores it (see vercel.ts).
+ */
+function listenHost(env: NodeJS.Dict<string>): string {
+  const host = env.CHAINPAY_MERCHANT_HOST?.trim() || "127.0.0.1";
+  if (!/^[A-Za-z0-9.:\-[\]]{1,253}$/.test(host)) {
+    throw new Error("CHAINPAY_MERCHANT_HOST must be a hostname or IP address, such as 127.0.0.1 or 0.0.0.0");
+  }
+  return host;
+}
+
+/**
+ * The v2 challenge tells payers to pay `payTo`'s associated token account for
+ * the mint. Read that owner explicitly. Falling back to another address (the
+ * old default was the allowed agent) sends the payment to the wrong wallet,
+ * and then this merchant rejects the receipt because the recipient token
+ * account does not match. Fail at startup instead.
+ */
+function standardV2MerchantOwner(
+  env: NodeJS.Dict<string>,
+  expected: { recipient: string; mint: string; tokenProgram: TokenProgram; allowedAgent: string },
+): string {
+  const configured = env.CHAINPAY_X402_MERCHANT_OWNER?.trim();
+  if (!configured) {
+    throw new Error(
+      "CHAINPAY_X402_MERCHANT_OWNER is required when CHAINPAY_X402_CHALLENGE_SHAPE=v2: "
+      + "set it to the merchant wallet that owns CHAINPAY_X402_RECIPIENT_TOKEN_ACCOUNT",
+    );
+  }
+  const owner = publicKey(configured).toBase58();
+  if (owner === expected.allowedAgent) {
+    throw new Error("CHAINPAY_X402_MERCHANT_OWNER must be the merchant's wallet, not CHAINPAY_X402_ALLOWED_AGENT");
+  }
+  const associated = deriveAssociatedTokenAddress(owner, expected.mint, expected.tokenProgram);
+  if (associated !== expected.recipient) {
+    throw new Error(
+      "CHAINPAY_X402_RECIPIENT_TOKEN_ACCOUNT must be the associated token account of "
+      + `CHAINPAY_X402_MERCHANT_OWNER for CHAINPAY_X402_MINT (expected ${associated})`,
+    );
+  }
+  return owner;
+}
+
 export function loadMerchantConfig(env: NodeJS.Dict<string> = process.env): MerchantConfig {
   const port = Number(env.PORT ?? "3402");
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("PORT must be a valid TCP port");
@@ -123,15 +174,17 @@ export function loadMerchantConfig(env: NodeJS.Dict<string> = process.env): Merc
   if (challengeShape !== "custom" && challengeShape !== "v2") {
     throw new Error("CHAINPAY_X402_CHALLENGE_SHAPE must be custom or v2");
   }
-  const merchantOwner = publicKey(
-    env.CHAINPAY_X402_MERCHANT_OWNER?.trim() || allowedAgent,
-  ).toBase58();
+  const merchantOwner = challengeShape === "v2"
+    ? standardV2MerchantOwner(env, { recipient, mint, tokenProgram, allowedAgent })
+    : undefined;
+  const host = listenHost(env);
   return {
     port,
+    host,
     resource,
     mint,
     recipient,
-    merchantOwner,
+    ...(merchantOwner ? { merchantOwner } : {}),
     amount,
     tokenProgram,
     allowedAgent,
@@ -161,6 +214,8 @@ export function customPaymentRequired(config: MerchantConfig): CustomPaymentRequ
 
 /** Industry-shaped x402 v2 challenge. payTo is the merchant owner; proof remains receipt-PDA. */
 export function standardV2PaymentRequired(config: MerchantConfig): StandardV2PaymentRequired {
+  const merchantOwner = config.merchantOwner;
+  if (!merchantOwner) throw new Error("A v2 challenge needs an explicit merchant owner");
   return {
     x402Version: 2,
     resource: {
@@ -173,9 +228,9 @@ export function standardV2PaymentRequired(config: MerchantConfig): StandardV2Pay
       network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
       amount: config.amount,
       asset: config.mint,
-      payTo: config.merchantOwner,
+      payTo: merchantOwner,
       maxTimeoutSeconds: 300,
-      extra: { feePayer: config.merchantOwner },
+      extra: { feePayer: merchantOwner },
     }],
   };
 }

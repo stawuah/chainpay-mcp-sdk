@@ -20,6 +20,7 @@ export function x402JobResumable(job: X402JobLike): boolean {
 const PROTOCOL_LABELS: Record<string, string> = {
   chainpay_custom_x402: "ChainPay custom x402/1.0",
   standard_x402_v2: "Standard x402 v2",
+  standard_x402_v2_receipt: "Standard x402 v2, settled with a ChainPay receipt",
   mpp: "MPP (pay.sh sibling 402)",
   unknown: "Unknown 402 challenge",
 };
@@ -38,8 +39,23 @@ export function summarizeX402Challenge(challenge: unknown): X402ProtocolSummary 
     ? challenge as Record<string, unknown>
     : {};
 
+  // ChainPay MCP stores its normalized challenge, not the merchant's raw 402
+  // document. Mirrors classify_x402_challenge in backend/src/server.rs.
+  if (value.protocol === "chainpay-custom-x402/1.0") {
+    const fromV2 = value.sourceProtocol === "x402-v2"
+      || (typeof value.protocolLabel === "string" && value.protocolLabel.startsWith("Standard x402 v2"));
+    const protocol = fromV2 ? "standard_x402_v2_receipt" : "chainpay_custom_x402";
+    return {
+      protocol,
+      label: PROTOCOL_LABELS[protocol],
+      payable: true,
+      amount: typeof value.amount === "string" ? value.amount : undefined,
+    };
+  }
+
   if (value.x402Version === 2) {
-    const amount = firstAcceptField(value, "maxAmountRequired");
+    // x402 v2 names the price `amount`; `maxAmountRequired` is the v1 name.
+    const amount = firstAcceptField(value, "amount") ?? firstAcceptField(value, "maxAmountRequired");
     return {
       protocol: "standard_x402_v2",
       label: PROTOCOL_LABELS.standard_x402_v2,
@@ -52,7 +68,7 @@ export function summarizeX402Challenge(challenge: unknown): X402ProtocolSummary 
   if (value.version === "x402/1.0") {
     const amount = typeof value.amount === "string"
       ? value.amount
-      : firstAcceptField(value, "amount");
+      : firstAcceptField(value, "amount") ?? firstAcceptField(value, "maxAmountRequired");
     return {
       protocol: "chainpay_custom_x402",
       label: PROTOCOL_LABELS.chainpay_custom_x402,
