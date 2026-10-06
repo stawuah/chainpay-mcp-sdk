@@ -15,6 +15,7 @@
 //!   cargo build-sbf --features litesvm-mock --sbf-out-dir target/mock
 //!   cargo build-sbf --manifest-path ../chainpay/Cargo.toml --sbf-out-dir target/chainpay
 //!   solana program dump -u devnet ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1 target/permission/permission.so
+//!   solana program dump -u devnet 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4 target/chainpay-devnet/chainpay.so
 
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::{AccountDeserialize, InstructionData, ToAccountMetas};
@@ -158,12 +159,19 @@ impl Card {
     }
 
     fn with_prefund(prefund_lamports: u64) -> Self {
+        Self::with_programs(prefund_lamports, chainpay_so())
+    }
+
+    /// `chainpay` is the ChainPay binary `repay_statement` calls: this
+    /// checkout's build, or the program deployed on Devnet.
+    fn with_programs(prefund_lamports: u64, chainpay: PathBuf) -> Self {
         let mut svm = LiteSVM::new();
         let so = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/mock/card_policy.so");
         svm.add_program_from_file(card_policy::ID, &so)
             .expect("build the mock binary first: cargo build-sbf --features litesvm-mock --sbf-out-dir target/mock");
-        svm.add_program_from_file(chainpay::ID, chainpay_so())
-            .expect("build ChainPay first: cargo build-sbf --manifest-path ../chainpay/Cargo.toml --sbf-out-dir target/chainpay");
+        svm.add_program_from_file(chainpay::ID, &chainpay).expect(
+            "build ChainPay first (make card-policy-test builds it and dumps the Devnet binary)",
+        );
         let owner = Keypair::new();
         let authorizer = Keypair::new();
         let stranger = Keypair::new();
@@ -2298,6 +2306,20 @@ fn chainpay_so() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/chainpay/chainpay.so")
 }
 
+/// ChainPay as deployed on Devnet (`3H9TV…`, dumped by `make card-policy-test`).
+/// It still writes the 282-byte v1 receipt; this checkout's build writes 371.
+fn chainpay_devnet_so() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/chainpay-devnet/chainpay.so")
+}
+
+/// Both ChainPay binaries `repay_statement` may call, with the receipt size each creates.
+fn chainpay_binaries() -> [(PathBuf, usize); 2] {
+    [
+        (chainpay_so(), CHAINPAY_RECEIPT_SPACE),
+        (chainpay_devnet_so(), CHAINPAY_RECEIPT_SPACE_V1),
+    ]
+}
+
 fn chainpay_ix<A: ToAccountMetas, D: InstructionData>(accounts: A, data: D) -> Instruction {
     Instruction {
         program_id: chainpay::ID,
@@ -2644,6 +2666,170 @@ fn card_owing_2010() -> Card {
     card.capture(1, 2_000, 1).unwrap();
     assert_eq!(card.policy().statement_outstanding_cents, 2_010);
     card
+}
+
+fn card_owing_2010_on(chainpay: PathBuf) -> Card {
+    let mut card = Card::ready_with(Card::with_programs(MOCK_PREFUND, chainpay));
+    card.buy(1, 1, 2_000).unwrap();
+    card.capture(1, 2_000, 1).unwrap();
+    assert_eq!(card.policy().statement_outstanding_cents, 2_010);
+    card
+}
+
+/// Lane B (Devnet, 2026-10-06): against the deployed ChainPay, the first
+/// repayment failed on rent (the agent was funded for a 371-byte receipt and
+/// left holding a non-exempt remainder after a 282-byte one), and
+/// `record_repayment` refused every 282-byte receipt. Both binaries must work.
+#[test]
+fn repayment_works_with_the_deployed_and_the_local_chainpay_receipt() {
+    for (binary, receipt_len) in chainpay_binaries() {
+        let mut card = card_owing_2010_on(binary.clone());
+        let repay = card.with_chainpay();
+        let (mandate, partner) = (repay.mandate, repay.partner);
+        let agent = card.repay_agent();
+        let owner = card.owner.pubkey();
+        let owner_before = card.lamports(&owner);
+        card.repay_statement(1, cents_to_units(2_010))
+            .unwrap_or_else(|code| panic!("{binary:?}: repay_statement failed ({code})"));
+        let receipt_key = card.receipt_key(&mandate, 1);
+        let account = card.svm.get_account(&receipt_key).expect("receipt");
+        assert_eq!(account.owner, chainpay::ID);
+        assert_eq!(account.data.len(), receipt_len, "{binary:?}");
+        assert_eq!(
+            account.lamports,
+            card.svm.minimum_balance_for_rent_exemption(receipt_len)
+        );
+        // The agent ends empty and the owner paid exactly this receipt's rent
+        // plus the one-signature fee: the unused top-up came back.
+        assert_eq!(card.lamports(&agent), 0, "{binary:?}");
+        assert_eq!(
+            owner_before - card.lamports(&owner),
+            account.lamports + 5_000,
+            "{binary:?}"
+        );
+        assert_eq!(token_amount(&card, &partner), cents_to_units(2_010));
+
+        // Every record_repayment check still holds on this layout.
+        let elsewhere = card.with_chainpay().stranger_account;
+        assert_eq!(
+            card.record_repayment_with("authorizer", 1, 2_010, receipt_key, elsewhere),
+            Err(err_code("RepaymentRecipientMismatch"))
+        );
+        assert_eq!(
+            card.record_repayment("authorizer", 1, 2_011),
+            Err(err_code("RepaymentExceedsReceipt"))
+        );
+        assert_eq!(
+            card.record_repayment("owner", 1, 2_010),
+            Err(err_code("Unauthorized"))
+        );
+        // Same bytes under another owner, or resized by one byte, never count.
+        let original = account.clone();
+        let mut forged = original.clone();
+        forged.owner = card_policy::ID;
+        card.svm.set_account(receipt_key, forged).unwrap();
+        assert_eq!(
+            card.record_repayment("authorizer", 1, 2_010),
+            Err(err_code("InvalidRepaymentReceipt"))
+        );
+        for len in [receipt_len - 1, receipt_len + 1] {
+            let mut resized = original.clone();
+            resized.data.resize(len, 0);
+            card.svm.set_account(receipt_key, resized).unwrap();
+            assert_eq!(
+                card.record_repayment("authorizer", 1, 2_010),
+                Err(err_code("InvalidRepaymentReceipt")),
+                "{binary:?} len {len}"
+            );
+        }
+        card.svm.set_account(receipt_key, original).unwrap();
+        card.record_repayment("authorizer", 1, 2_010)
+            .unwrap_or_else(|code| panic!("{binary:?}: record_repayment failed ({code})"));
+        assert_eq!(card.policy().statement_outstanding_cents, 0);
+        assert_eq!(
+            card.record_repayment("authorizer", 1, 2_010),
+            Err(err_code("DuplicateRepayment"))
+        );
+    }
+}
+
+/// A repay agent that already holds lamports ends rent-exempt, and the owner
+/// tops up only what the receipt's rent needs beyond them.
+#[test]
+fn a_prefunded_repay_agent_stays_rent_exempt_with_either_chainpay() {
+    for (binary, receipt_len) in chainpay_binaries() {
+        let mut card = card_owing_2010_on(binary.clone());
+        card.with_chainpay();
+        let agent = card.repay_agent();
+        let held = card.svm.minimum_balance_for_rent_exemption(0) + 12_345;
+        card.svm.airdrop(&agent, held).unwrap();
+        let owner = card.owner.pubkey();
+        let owner_before = card.lamports(&owner);
+        card.repay_statement(1, cents_to_units(1_000))
+            .unwrap_or_else(|code| panic!("{binary:?}: repay_statement failed ({code})"));
+        let left = card.lamports(&agent);
+        assert!(
+            left >= card.svm.minimum_balance_for_rent_exemption(0) && left <= held,
+            "{binary:?}: agent left with {left}"
+        );
+        let rent = card.svm.minimum_balance_for_rent_exemption(receipt_len);
+        // Owner top-up plus what the agent spent pays exactly the receipt rent.
+        assert_eq!(
+            owner_before - card.lamports(&owner) + (held - left),
+            rent + 5_000,
+            "{binary:?}"
+        );
+    }
+}
+
+/// Another program's receipt-sized account with the right discriminator, or a
+/// receipt from an ordinary mandate, never clears the statement on v1 either.
+#[test]
+fn a_foreign_v1_receipt_never_clears_the_statement() {
+    let mut card = card_owing_2010_on(chainpay_devnet_so());
+    let repay = card.with_chainpay();
+    let (source, partner, mint, config, asset) = (
+        repay.source,
+        repay.partner,
+        repay.mint,
+        repay.config,
+        repay.asset,
+    );
+    let owner = card.owner.insecure_clone();
+    let ordinary = card.create_mandate(&owner, source, owner.pubkey()).unwrap();
+    let receipt = card.receipt_key(&ordinary, 1);
+    let ix = chainpay_ix(
+        chainpay::client::accounts::ExecutePayment {
+            config,
+            asset_registry: asset,
+            mandate: ordinary,
+            receipt,
+            agent: owner.pubkey(),
+            allowed_mint: mint,
+            source_token_account: source,
+            recipient_token_account: partner,
+            token_program: SPL_TOKEN,
+            system_program: SYSTEM,
+        },
+        chainpay::client::args::ExecutePayment {
+            params: chainpay::types::PaymentParams {
+                invoice_hash: hash("stmt", 1),
+                payment_id: [1; 32],
+                signature_reference: [2; 32],
+                amount: cents_to_units(2_010),
+            },
+        },
+    );
+    card.send_as(ix, "owner").unwrap();
+    assert_eq!(
+        card.svm.get_account(&receipt).unwrap().data.len(),
+        CHAINPAY_RECEIPT_SPACE_V1
+    );
+    assert_eq!(
+        card.record_repayment_with("authorizer", 1, 2_010, receipt, partner),
+        Err(err_code("InvalidRepaymentReceipt"))
+    );
+    assert_eq!(card.policy().statement_outstanding_cents, 2_010);
 }
 
 #[test]

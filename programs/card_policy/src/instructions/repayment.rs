@@ -118,7 +118,9 @@ pub fn repay_statement(
     );
 
     // The repay agent is the receipt's rent payer. It must end the instruction
-    // either empty or rent-exempt, so top it up to exactly that.
+    // either empty or rent-exempt. Which receipt ChainPay creates depends on
+    // the deployed ChainPay (v1: 282 bytes, v2: 371), so fund the larger one
+    // and hand back whatever the CPI did not spend (below).
     let rent = Rent::get()?;
     let receipt_rent = rent.minimum_balance(CHAINPAY_RECEIPT_SPACE);
     let held = a.repay_agent.lamports();
@@ -146,6 +148,7 @@ pub fn repay_statement(
     let bump = [ctx.bumps.repay_agent];
     let seeds: [&[u8]; 3] = [REPAY_AGENT_SEED, binding_key.as_ref(), &bump];
     let signer = [&seeds[..]];
+    let funded = held.saturating_add(top_up);
     chainpay::cpi::execute_payment(
         CpiContext::new_with_signer(
             a.chainpay_program.key(),
@@ -170,6 +173,25 @@ pub fn repay_statement(
             amount,
         },
     )?;
+
+    // Return the part of this instruction's top-up the receipt did not use, so
+    // the agent ends as it started (empty, or at its prior rent-exempt
+    // balance) and the owner pays exactly the rent of the receipt created.
+    let spent = funded.saturating_sub(a.repay_agent.lamports());
+    let refund = top_up.saturating_sub(spent);
+    if refund > 0 {
+        transfer(
+            CpiContext::new_with_signer(
+                a.system_program.key(),
+                Transfer {
+                    from: a.repay_agent.to_account_info(),
+                    to: a.owner.to_account_info(),
+                },
+                &signer,
+            ),
+            refund,
+        )?;
+    }
     Ok(())
 }
 
@@ -200,6 +222,51 @@ pub struct RecordRepayment<'info> {
     pub mint: UncheckedAccount<'info>,
 }
 
+/// The ChainPay receipt fields `record_repayment` checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainpayReceiptFields {
+    pub mandate: Pubkey,
+    pub invoice_hash: [u8; 32],
+    pub mint: Pubkey,
+    pub recipient_token_account: Pubkey,
+    pub amount: u64,
+    pub agent: Pubkey,
+    pub status: u8,
+    pub bump: u8,
+}
+
+/// Decode a ChainPay `PaymentReceipt` in either layout ChainPay has written:
+/// v1 (282 bytes, deployed on Devnet) or v2 (371 bytes: v1 plus the policy
+/// snapshot after `bump`). Only those two exact sizes with the
+/// `PaymentReceipt` discriminator are accepted. Every field read here has the
+/// same offset in both layouts.
+pub fn decode_chainpay_receipt(data: &[u8]) -> Result<ChainpayReceiptFields> {
+    require!(
+        (data.len() == CHAINPAY_RECEIPT_SPACE_V1 || data.len() == CHAINPAY_RECEIPT_SPACE)
+            && data.starts_with(PaymentReceipt::DISCRIMINATOR),
+        CardPolicyError::InvalidRepaymentReceipt
+    );
+    if data.len() == CHAINPAY_RECEIPT_SPACE {
+        // The full v2 account must also decode as the current IDL's receipt.
+        PaymentReceipt::try_deserialize(&mut &data[..])
+            .map_err(|_| error!(CardPolicyError::InvalidRepaymentReceipt))?;
+    }
+    let bytes32 = |at: usize| -> [u8; 32] { data[at..at + 32].try_into().unwrap() };
+    // 8 discriminator | mandate 8 | invoice_hash 40 | payment_id 72 | mint 104
+    // | source 136 | recipient 168 | amount 200 | agent 208 | executed_at_slot 240
+    // | signature_reference 248 | status 280 | bump 281
+    Ok(ChainpayReceiptFields {
+        mandate: Pubkey::new_from_array(bytes32(8)),
+        invoice_hash: bytes32(40),
+        mint: Pubkey::new_from_array(bytes32(104)),
+        recipient_token_account: Pubkey::new_from_array(bytes32(168)),
+        amount: u64::from_le_bytes(data[200..208].try_into().unwrap()),
+        agent: Pubkey::new_from_array(bytes32(208)),
+        status: data[280],
+        bump: data[281],
+    })
+}
+
 /// What a verified receipt proves, in cents of the card's USD currency.
 pub struct VerifiedReceipt {
     pub paid_cents: u64,
@@ -220,8 +287,7 @@ pub fn verify_repayment_receipt(
     );
     let r = {
         let data = receipt.try_borrow_data()?;
-        PaymentReceipt::try_deserialize(&mut &data[..])
-            .map_err(|_| error!(CardPolicyError::InvalidRepaymentReceipt))?
+        decode_chainpay_receipt(&data)?
     };
     let expected = Pubkey::create_program_address(
         &[
@@ -358,4 +424,78 @@ fn apply_repayment(
     event.amount_cents = amount_cents;
     event.state_after = method;
     append_ledger(policy, event, period_index, now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v2_receipt() -> PaymentReceipt {
+        PaymentReceipt {
+            mandate: Pubkey::new_from_array([1; 32]),
+            invoice_hash: [2; 32],
+            payment_id: [3; 32],
+            mint: Pubkey::new_from_array([4; 32]),
+            source_token_account: Pubkey::new_from_array([5; 32]),
+            recipient_token_account: Pubkey::new_from_array([6; 32]),
+            amount: 5_020_000,
+            agent: Pubkey::new_from_array([7; 32]),
+            executed_at_slot: 508_105_839,
+            signature_reference: [8; 32],
+            status: CHAINPAY_RECEIPT_SETTLED,
+            bump: 254,
+            snapshot_version: 1,
+            policy_max_per_payment: 9,
+            policy_total_limit: 10,
+            policy_amount_spent_after: 11,
+            policy_payment_count_after: 12,
+            policy_max_payment_count: 13,
+            policy_expires_at_slot: 14,
+            policy_cooldown_slots: 15,
+            reserved: [0; 32],
+        }
+    }
+
+    fn encode(receipt: &PaymentReceipt) -> Vec<u8> {
+        let mut data = Vec::new();
+        receipt.try_serialize(&mut data).unwrap();
+        data
+    }
+
+    #[test]
+    fn both_receipt_layouts_decode_to_the_same_fields() {
+        let receipt = v2_receipt();
+        let v2 = encode(&receipt);
+        assert_eq!(v2.len(), CHAINPAY_RECEIPT_SPACE);
+        // v1 is v2 without the snapshot appended after `bump`.
+        let v1 = v2[..CHAINPAY_RECEIPT_SPACE_V1].to_vec();
+        assert_eq!(v1.len(), 282);
+        let expected = ChainpayReceiptFields {
+            mandate: receipt.mandate,
+            invoice_hash: receipt.invoice_hash,
+            mint: receipt.mint,
+            recipient_token_account: receipt.recipient_token_account,
+            amount: receipt.amount,
+            agent: receipt.agent,
+            status: receipt.status,
+            bump: receipt.bump,
+        };
+        assert_eq!(decode_chainpay_receipt(&v2).unwrap(), expected);
+        assert_eq!(decode_chainpay_receipt(&v1).unwrap(), expected);
+    }
+
+    #[test]
+    fn other_sizes_and_discriminators_are_refused() {
+        let v2 = encode(&v2_receipt());
+        for len in [0, 8, 281, 283, 300, 370, 372] {
+            let mut data = v2.clone();
+            data.resize(len, 0);
+            assert!(decode_chainpay_receipt(&data).is_err(), "len {len}");
+        }
+        for len in [CHAINPAY_RECEIPT_SPACE_V1, CHAINPAY_RECEIPT_SPACE] {
+            let mut data = v2[..len].to_vec();
+            data[0] ^= 1;
+            assert!(decode_chainpay_receipt(&data).is_err(), "len {len}");
+        }
+    }
 }

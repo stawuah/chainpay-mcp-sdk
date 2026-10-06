@@ -58,13 +58,16 @@ contract-smoke:
 card-policy-build:
 	cd programs/card_policy && cargo build-sbf
 
-# The LiteSVM suite also loads ChainPay (the repay_statement CPI target, built
-# from this checkout at its real program id) and MagicBlock's permission program
-# as deployed on Devnet (dumped once; needs network the first time).
+# The LiteSVM suite also loads ChainPay (the repay_statement CPI target) twice:
+# built from this checkout at its real program id, and as deployed on Devnet,
+# which still writes the older 282-byte receipt. It also loads MagicBlock's
+# permission program as deployed on Devnet. Devnet binaries are dumped once
+# (needs network the first time).
 card-policy-test:
 	cd programs/card_policy && cargo build-sbf --features litesvm-mock --sbf-out-dir target/mock
 	cargo build-sbf --manifest-path programs/chainpay/Cargo.toml --sbf-out-dir programs/card_policy/target/chainpay
 	test -s programs/card_policy/target/permission/permission.so || (mkdir -p programs/card_policy/target/permission && solana program dump -u devnet ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1 programs/card_policy/target/permission/permission.so)
+	test -s programs/card_policy/target/chainpay-devnet/chainpay.so || (mkdir -p programs/card_policy/target/chainpay-devnet && solana program dump -u devnet 3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4 programs/card_policy/target/chainpay-devnet/chainpay.so)
 	cd programs/card_policy && cargo test --locked
 
 # Builds the splitter with throwaway test keys, then runs the adversarial suite.
