@@ -8,6 +8,16 @@
 //! never released on a timer, only by reconciliation against PER and issuer
 //! truth. Every verified request gets HTTP 200 so Lithic does not retry a
 //! decision we already made, and the decision is persisted before replying.
+//!
+//! A decline on our own deadline answers `SUSPECTED_FRAUD`. Lithic's ASA
+//! `result` has no timeout or system-error value (APPROVED, CHALLENGE,
+//! SUSPECTED_FRAUD, AVS_INVALID, INSUFFICIENT_FUNDS, DRIVER_NUMBER_INVALID,
+//! VEHICLE_NUMBER_INVALID, UNAUTHORIZED_MERCHANT, VELOCITY_EXCEEDED,
+//! CARD_PAUSED); its own `CUSTOMER_ASA_TIMEOUT` appears only when we do not
+//! answer at all (6 s), which risks voids. `INSUFFICIENT_FUNDS` would invite
+//! the acquirer to retry, i.e. a second hold beside one that may have landed.
+//! The timeout stays distinguishable on our side: row `ambiguous`,
+//! `needsReconcile`, metric `asa_timeouts`.
 
 use super::program::{self, reservation_state};
 use super::tee::{TeeRead, TxOutcome};
@@ -244,36 +254,49 @@ pub async fn decide(
     let merchant_hash = program::merchant_id_hash(&request.acceptor_id);
     let claim_id = format!("card-asa:v1:{}", request.token);
     let intent = claim_intent(cards, &card_id, request, &merchant_hash);
-    let claim = cards
-        .store
-        .claim_operation(
-            &claim_id,
+    // The claim and the pending row are sequential (the row exists before
+    // anything reaches PER); the checkout-intent lookup only reads, so it
+    // runs alongside them instead of after (one storage round trip less on
+    // the decision path). A lost claim simply drops the lookup.
+    let claim_and_pending = async {
+        let (won, _, stored_intent, _) = cards
+            .store
+            .claim_operation(
+                &claim_id,
+                &owner,
+                intent.clone(),
+                json!({"state":"pending"}),
+            )
+            .await
+            .map_err(|_| ())?;
+        if won {
+            create_pending(cards, request, &card, &owner, &card_id, &merchant_hash).await?;
+        }
+        Ok::<_, ()>((won, stored_intent))
+    };
+    let (claim, checkout_intent) = tokio::join!(
+        claim_and_pending,
+        find_intent(
+            cards,
             &owner,
-            intent.clone(),
-            json!({"state":"pending"}),
+            &card_id,
+            &merchant_hash,
+            request.amount_cents
         )
-        .await;
-    let (won, _, stored_intent, _) = match claim {
-        Ok(claim) => claim,
-        Err(_) => return SUSPECTED_FRAUD,
+    );
+    // A failed pending write after a won claim declines too; the pending row
+    // (if any) is found by reconciliation.
+    let Ok((won, stored_intent)) = claim else {
+        return SUSPECTED_FRAUD;
     };
     if !won {
         return duplicate(cards, request, &card, &intent, &stored_intent, deadline).await;
-    }
-    // The pending row exists before anything reaches PER, so a crash between
-    // here and the decision is found by reconciliation (stale pending).
-    if create_pending(cards, request, &card, &owner, &card_id, &merchant_hash)
-        .await
-        .is_err()
-    {
-        return SUSPECTED_FRAUD;
     }
     let decision = evaluate(
         cards,
         request,
         &card,
-        &card_id,
-        &owner,
+        checkout_intent,
         &merchant_hash,
         deadline,
     )
@@ -342,8 +365,7 @@ async fn evaluate(
     cards: &Arc<CardsConnector>,
     request: &AsaRequest,
     card: &StoredCardRecord,
-    card_id: &str,
-    owner: &str,
+    checkout_intent: Option<StoredCardRecord>,
     merchant_hash: &[u8; 32],
     deadline: Instant,
 ) -> Decision {
@@ -385,9 +407,7 @@ async fn evaluate(
         return Decision::decline(SUSPECTED_FRAUD, "declined_internal", "internal");
     };
     // Every approval must come from a ChainPay-opened checkout intent.
-    let Some(intent) =
-        find_intent(cards, owner, card_id, merchant_hash, request.amount_cents).await
-    else {
+    let Some(intent) = checkout_intent else {
         return Decision::decline(UNAUTHORIZED_MERCHANT, "declined", "intent_missing");
     };
     let Some(intent_id) = intent.record["intentId"]
@@ -451,9 +471,24 @@ async fn evaluate(
             single_message,
         },
     );
-    let outcome = cards.per.submit(vec![instruction], deadline).await;
     let reservation = program::reservation_pda(&policy, &auth_id);
+    // Confirmation and the Reservation read run in the same rounds. Approval
+    // still needs the Reservation itself, visible to the authorizer on PER
+    // with the expected state and amount; seen in the same round as (or
+    // before) the status, it is the same evidence `observe` waits for.
+    let watched = cards
+        .per
+        .submit_watching(vec![instruction], &reservation, deadline)
+        .await;
+    let outcome = watched.outcome;
     let mut decision = match &outcome {
+        TxOutcome::Confirmed { .. } | TxOutcome::Unknown { .. } if watched.account.is_some() => {
+            reservation_decision(
+                watched.account.as_deref().unwrap_or_default(),
+                request.amount_cents,
+                single_message,
+            )
+        }
         TxOutcome::Confirmed { .. } => {
             observe(
                 cards,
@@ -512,6 +547,44 @@ async fn evaluate(
     decision
 }
 
+/// The decision a visible Reservation supports: approve only with the
+/// expected state and amount; visible but anything else never approves.
+fn reservation_decision(data: &[u8], amount: u64, single_message: bool) -> Decision {
+    match program::decode_reservation(data) {
+        Ok(r)
+            if !single_message
+                && r.state == reservation_state::RESERVED
+                && r.amount_reserved_cents == amount =>
+        {
+            Decision {
+                result: APPROVED,
+                state: "reserved",
+                reason: None,
+                program_error: None,
+                signature: None,
+                intent_id: None,
+                reserved_cents: amount,
+            }
+        }
+        Ok(r)
+            if single_message
+                && r.state == reservation_state::CAPTURED
+                && r.captured_cents == amount =>
+        {
+            Decision {
+                result: APPROVED,
+                state: "captured",
+                reason: None,
+                program_error: None,
+                signature: None,
+                intent_id: None,
+                reserved_cents: 0,
+            }
+        }
+        _ => Decision::decline(SUSPECTED_FRAUD, "ambiguous", "internal"),
+    }
+}
+
 /// Approve only after the Reservation PDA is visible to the authorizer with
 /// the expected state and amount. Not seen by the deadline → ambiguous.
 async fn observe(
@@ -527,40 +600,7 @@ async fn observe(
             return Decision::decline(SUSPECTED_FRAUD, "ambiguous", "internal");
         }
         if let TeeRead::Visible { data, .. } = cards.per.read(reservation, remaining).await {
-            return match program::decode_reservation(&data) {
-                Ok(r)
-                    if !single_message
-                        && r.state == reservation_state::RESERVED
-                        && r.amount_reserved_cents == amount =>
-                {
-                    Decision {
-                        result: APPROVED,
-                        state: "reserved",
-                        reason: None,
-                        program_error: None,
-                        signature: None,
-                        intent_id: None,
-                        reserved_cents: amount,
-                    }
-                }
-                Ok(r)
-                    if single_message
-                        && r.state == reservation_state::CAPTURED
-                        && r.captured_cents == amount =>
-                {
-                    Decision {
-                        result: APPROVED,
-                        state: "captured",
-                        reason: None,
-                        program_error: None,
-                        signature: None,
-                        intent_id: None,
-                        reserved_cents: 0,
-                    }
-                }
-                // Visible but not what we asked for: never approve.
-                _ => Decision::decline(SUSPECTED_FRAUD, "ambiguous", "internal"),
-            };
+            return reservation_decision(&data, amount, single_message);
         }
         let pause =
             Duration::from_millis(40).min(deadline.saturating_duration_since(Instant::now()));
@@ -637,34 +677,43 @@ async fn persist(
     decision: &Decision,
 ) -> Result<(), ()> {
     let decided_at = rfc3339(now_ms());
-    let updated = cards
-        .update_txn(&request.token, |record| {
-            if record["state"] != "pending" {
-                // An events webhook or reconciliation got there first; keep
-                // their state and only attach the decision.
-                record["decision"] = json!({"result": decision.result, "reason": decision.reason, "at": decided_at});
-                return true;
+    let write = cards.update_txn(&request.token, |record| {
+        if record["state"] != "pending" {
+            // An events webhook or reconciliation got there first; keep
+            // their state and only attach the decision.
+            record["decision"] = json!({"result": decision.result, "reason": decision.reason, "at": decided_at});
+            return true;
+        }
+        record["state"] = json!(decision.state);
+        record["decision"] = json!({"result": decision.result, "reason": decision.reason, "programError": decision.program_error, "at": decided_at});
+        record["intentId"] = json!(decision.intent_id);
+        record["reservedCents"] = json!(cents(decision.reserved_cents));
+        if decision.state == "captured" {
+            record["capturedCents"] = json!(cents(request.amount_cents));
+            record["singleMessage"] = json!(true);
+        }
+        if let Some(signature) = &decision.signature {
+            if let Some(list) = record["perTx"].as_array_mut() {
+                list.push(json!(signature));
             }
-            record["state"] = json!(decision.state);
-            record["decision"] = json!({"result": decision.result, "reason": decision.reason, "programError": decision.program_error, "at": decided_at});
-            record["intentId"] = json!(decision.intent_id);
-            record["reservedCents"] = json!(cents(decision.reserved_cents));
-            if decision.state == "captured" {
-                record["capturedCents"] = json!(cents(request.amount_cents));
-                record["singleMessage"] = json!(true);
+        }
+        if decision.state == "ambiguous" {
+            record["needsReconcile"] = json!(true);
+        }
+        true
+    });
+    // An approval consumed its intent on PER (`authorize` marks it used), so
+    // the Convex mirror is marked alongside the decision write rather than
+    // after it: both finish before the reply, in one round trip less.
+    let consumed = async {
+        if decision.result == APPROVED && decision.state != "account_verification" {
+            if let Some(intent_id) = &decision.intent_id {
+                mark_intent(cards, intent_id, "consumed", Some(&request.token)).await;
             }
-            if let Some(signature) = &decision.signature {
-                if let Some(list) = record["perTx"].as_array_mut() {
-                    list.push(json!(signature));
-                }
-            }
-            if decision.state == "ambiguous" {
-                record["needsReconcile"] = json!(true);
-            }
-            true
-        })
-        .await
-        .map_err(|_| ())?;
+        }
+    };
+    let (updated, ()) = tokio::join!(write, consumed);
+    let updated = updated.map_err(|_| ())?;
     let Some(updated) = updated else {
         return Err(());
     };
@@ -716,7 +765,6 @@ async fn persist(
     }
     if decision.result == APPROVED && decision.state != "account_verification" {
         if let Some(intent_id) = &decision.intent_id {
-            mark_intent(cards, intent_id, "consumed", Some(&request.token)).await;
             if let Some(card_id) = updated.record["cardId"].as_str() {
                 close_intent_later(cards.clone(), card_id.to_owned(), intent_id.clone());
             }

@@ -1060,6 +1060,47 @@ async fn concurrent_cold_start_attestation_checks_run_once() {
     assert_eq!(h.cards.attestation_checks() - before, 5);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checkout_steps_land_attestation_before_the_authorization() {
+    // Cold instance: no attestation yet. Issuing the intent and redeeming it
+    // run the check off the ASA's deadline, so the purchase that follows is
+    // approved instead of declining while a check is still in flight.
+    let h = Harness::with(AttestationMode::Enforce, true).await;
+    *h.cards.attestation_next.lock().unwrap() = Some(AttestationStatus {
+        hardware: "verified",
+        measurements: "match",
+        mode: "enforce",
+        checked_at_ms: now_ms(),
+        observed: None,
+        detail: None,
+        tcb_status: Some("UpToDate".into()),
+    });
+    assert!(
+        !h.cards
+            .attestation()
+            .await
+            .permits_approval(AttestationMode::Enforce, now_ms())
+    );
+    let before = h.cards.attestation_checks();
+    let (status, cap) = h.intent_unredeemed("demo-approved", "100").await;
+    assert_eq!(status, 200, "{cap}");
+    assert!(
+        h.cards.attestation_checks() > before,
+        "intent issue warmed attestation"
+    );
+    let (status, run) = h
+        .call(
+            "POST",
+            "/v1/cards/checkout/redeem",
+            Some(RUNNER),
+            Some(json!({"capability": cap["capability"]})),
+        )
+        .await;
+    assert_eq!(status, 200, "{run}");
+    let token = run["lithicToken"].as_str().unwrap().to_owned();
+    assert_eq!(h.sim.state.lock().unwrap().asa_results[&token], "APPROVED");
+}
+
 async fn futures_join_all<T: Send + 'static>(handles: Vec<tokio::task::JoinHandle<T>>) -> Vec<T> {
     let mut out = Vec::with_capacity(handles.len());
     for handle in handles {
@@ -2185,3 +2226,135 @@ mod activation_tests;
 mod private_repay_tests;
 #[path = "tests_statements.rs"]
 mod statements_tests;
+
+/// Live Devnet 2026-10-06: an allowed purchase timed out (`ambiguous`), the
+/// issuer declined, then the merchant force-posted the clearing anyway. The
+/// row must read as the late capture it is, not as a reversal.
+async fn ambiguous_then_force_posted(h: &Harness, token: &str, flaky: bool) -> (Value, Value) {
+    h.intent("demo-approved", "100").await;
+    h.per.knobs.lock().unwrap().confirm_delay = Duration::from_millis(2_600);
+    assert_eq!(
+        h.asa(token, 100, "demo-approved", "AUTHORIZATION").await.1,
+        "SUSPECTED_FRAUD"
+    );
+    h.per.knobs.lock().unwrap().confirm_delay = Duration::ZERO;
+    assert_eq!(h.txn(token).await["state"], "ambiguous");
+    h.sim.authorization(
+        token,
+        &h.card_token,
+        100,
+        "DEMO-DATAAPI",
+        "SUSPECTED_FRAUD",
+        "AUTHORIZATION",
+    );
+    h.sim
+        .add_event(token, &format!("{token}-c"), "CLEARING", 100, "DEBIT");
+    if flaky {
+        // Resolution reads the Reservation twice (decide, then money); the
+        // re-read after the capture fails, as a slow TEE read or a close by
+        // a concurrent webhook pass would make it.
+        let reservation = program::reservation_pda(
+            &h.policy,
+            &program::auth_id_hash(h.cards.config.issuer_code, token),
+        );
+        h.per.knobs.lock().unwrap().flaky_reads = Some((reservation, 2));
+    }
+    assert_eq!(
+        h.deliver(&format!("w-{token}"), h.sim.webhook(token)).await,
+        200
+    );
+    h.per.knobs.lock().unwrap().flaky_reads = None;
+    let record = h.txn(token).await;
+    let (status, page) = h
+        .owner(
+            "GET",
+            &format!("/v1/cards/{}/activity?limit=10", h.card_id),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200, "{page}");
+    let row = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rowId"] == format!("asa:{token}"))
+        .unwrap()
+        .clone();
+    (record, row)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clearing_after_an_ambiguous_decline_reads_as_a_late_capture() {
+    let h = Harness::new().await;
+    let (record, row) = ambiguous_then_force_posted(&h, "late-1", false).await;
+    assert_eq!(record["state"], "reversed", "{record}");
+    assert_eq!(record["capturedCents"], "100");
+    assert_eq!(record["flags"]["lateCapture"], true, "{record}");
+    assert_eq!(
+        (
+            row["kind"].as_str(),
+            row["lifecycle"].as_str(),
+            row["amountCents"].as_str()
+        ),
+        (Some("capture"), Some("late_capture"), Some("100"))
+    );
+    assert_eq!(h.program_count("capture"), 1, "booked once on PER");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn late_capture_flag_survives_a_failed_reservation_re_read() {
+    let h = Harness::new().await;
+    let (record, row) = ambiguous_then_force_posted(&h, "late-2", true).await;
+    assert_eq!(record["state"], "reversed", "{record}");
+    assert_eq!(record["capturedCents"], "100", "{record}");
+    // Before the fix the flag came only from the PER re-read: missing here,
+    // and the row read `reversal / reversed` (live Devnet 2026-10-06).
+    assert_eq!(record["flags"]["lateCapture"], true, "{record}");
+    assert_eq!(
+        (row["kind"].as_str(), row["lifecycle"].as_str()),
+        (Some("capture"), Some("late_capture"))
+    );
+}
+
+#[test]
+fn released_holds_with_captured_money_project_as_late_captures() {
+    use super::routes::transaction_kind;
+    // Rows stored before Axum mirrored the flag: the live $1 row.
+    assert_eq!(
+        transaction_kind("reversed", &json!({}), "100"),
+        ("capture", "late_capture")
+    );
+    assert_eq!(
+        transaction_kind("expired", &json!({}), "100"),
+        ("capture", "late_capture")
+    );
+    assert_eq!(
+        transaction_kind("expired", &json!({"lateCapture": true}), "0"),
+        ("capture", "late_capture")
+    );
+    // A plain release stays a reversal.
+    assert_eq!(
+        transaction_kind("reversed", &json!({}), "0"),
+        ("reversal", "reversed")
+    );
+    assert_eq!(
+        transaction_kind("expired", &json!(null), "0"),
+        ("reversal", "expired")
+    );
+    assert_eq!(
+        transaction_kind("captured", &json!({}), "100"),
+        ("capture", "captured")
+    );
+    assert_eq!(
+        transaction_kind("captured", &json!({"lateCapture": true}), "100"),
+        ("capture", "late_capture")
+    );
+    assert_eq!(
+        transaction_kind("reserved", &json!({}), "0"),
+        ("authorization", "reserved")
+    );
+    assert_eq!(
+        transaction_kind("pending", &json!({}), "0"),
+        ("authorization", "pending")
+    );
+}

@@ -2,7 +2,7 @@
 //! PER through [`TeeClient`]; tests swap in a deterministic in-process model
 //! of `card_policy` so every lifecycle path runs without the network.
 
-use super::tee::{TeeClient, TeeRead, TxOutcome};
+use super::tee::{TeeClient, TeeRead, TxOutcome, Watched};
 use solana_address::Address;
 use solana_message::Instruction;
 use std::sync::Arc;
@@ -35,6 +35,16 @@ impl Per {
         }
     }
 
+    /// Prepare the authorization path off the decision path: session,
+    /// blockhash, pooled connections ([`TeeClient::prime`]).
+    pub async fn prime(&self) {
+        match self {
+            Self::Live(tee) => tee.prime().await,
+            #[cfg(test)]
+            Self::Fake(_) => {}
+        }
+    }
+
     pub fn signing_key(&self) -> &ed25519_dalek::SigningKey {
         match self {
             Self::Live(tee) => tee.signing_key(),
@@ -48,6 +58,30 @@ impl Per {
             Self::Live(tee) => tee.submit(instructions, deadline).await,
             #[cfg(test)]
             Self::Fake(fake) => fake.submit(instructions, deadline).await,
+        }
+    }
+
+    /// Submit a transaction that creates `watch` and confirm it while
+    /// reading `watch` in the same rounds ([`TeeClient::submit_watching`]).
+    pub async fn submit_watching(
+        &self,
+        instructions: Vec<Instruction>,
+        watch: &Address,
+        deadline: Instant,
+    ) -> Watched {
+        match self {
+            Self::Live(tee) => tee.submit_watching(instructions, watch, deadline).await,
+            // The model applies effects at once but reports them only after
+            // its confirmation delay, so a read is only meaningful then.
+            #[cfg(test)]
+            Self::Fake(fake) => {
+                let outcome = fake.submit(instructions, deadline).await;
+                let account = match (&outcome, fake.read(watch)) {
+                    (TxOutcome::Confirmed { .. }, TeeRead::Visible { data, .. }) => Some(data),
+                    _ => None,
+                };
+                Watched { outcome, account }
+            }
         }
     }
 

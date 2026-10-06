@@ -27,7 +27,7 @@ jobs:
       - run: npm run check:convex
       - run: npm run test:convex
       - run: npm run test:migration
-      - run: node --test scripts/check-release-env.test.mjs scripts/check-deploy-revision.test.mjs scripts/cutover-vercel-convex.test.mjs scripts/stage-vercel.test.mjs
+      - run: node --test scripts/check-release-env.test.mjs scripts/check-deploy-revision.test.mjs scripts/cutover-vercel-convex.test.mjs scripts/stage-vercel.test.mjs scripts/private-settlement.test.mjs
       - run: npm --prefix sdk test
       - run: npm --prefix mcp-server test
       - run: npm --prefix demo-merchant test
