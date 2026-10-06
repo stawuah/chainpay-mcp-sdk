@@ -1012,6 +1012,42 @@ pub async fn embed_session(
 
 // ---------------------------------------------------------------- activity
 
+/// Activity `kind` / `lifecycle` for a transaction row.
+///
+/// A hold that ends `reversed` or `expired` with money captured on it is a
+/// late capture: `card_policy` ends a hold that captured before its release
+/// `CAPTURED` (`reverse`), so captured cents on a released hold can only come
+/// from a clearing after the release (`capture` flags `FLAG_LATE_CAPTURE`).
+/// The row's own flag is the first signal; captured cents are the fallback
+/// for rows written before Axum mirrored the flag itself (live Devnet,
+/// 2026-10-06: a $1 force post read as a reversal).
+pub(super) fn transaction_kind(
+    state: &str,
+    flags: &Value,
+    captured_cents: &str,
+) -> (&'static str, &'static str) {
+    let late = flags["lateCapture"] == true
+        || (matches!(state, "reversed" | "expired")
+            && parse_cents(captured_cents).is_some_and(|c| c > 0));
+    match state {
+        "forced_capture" => ("exception", "forced_capture"),
+        "refunded" => ("refund", "refunded"),
+        "captured" | "partially_captured" if flags["refunded"] == true => ("refund", "refunded"),
+        "captured" | "partially_captured" if late => ("capture", "late_capture"),
+        "captured" => ("capture", "captured"),
+        "partially_captured" => ("capture", "partially_captured"),
+        "reversed" | "expired" if late => ("capture", "late_capture"),
+        "reversed" => ("reversal", "reversed"),
+        "expired" => ("reversal", "expired"),
+        "declined" | "declined_internal" => ("authorization", "declined"),
+        "ambiguous" => ("authorization", "ambiguous"),
+        "account_verification" => ("authorization", "reserved"),
+        "unsolicited" => ("exception", "pending"),
+        "reserved" => ("authorization", "reserved"),
+        _ => ("authorization", "pending"),
+    }
+}
+
 fn lifecycle_row(
     cards: &CardsConnector,
     row: &StoredCardRecord,
@@ -1040,34 +1076,11 @@ fn lifecycle_row(
                 .unwrap_or("")
                 .to_owned();
             let state = r["state"].as_str().unwrap_or("pending");
-            let flags = &r["flags"];
-            let (kind, lifecycle) = match state {
-                "forced_capture" => ("exception", "forced_capture"),
-                "refunded" => ("refund", "refunded"),
-                "captured" | "partially_captured" if flags["refunded"] == true => {
-                    ("refund", "refunded")
-                }
-                "captured" | "partially_captured" if flags["lateCapture"] == true => {
-                    ("capture", "late_capture")
-                }
-                "captured" => ("capture", "captured"),
-                "partially_captured" => ("capture", "partially_captured"),
-                "reversed" if flags["lateCapture"] == true => ("capture", "late_capture"),
-                "reversed" => ("reversal", "reversed"),
-                "expired" => ("reversal", "expired"),
-                "declined" | "declined_internal" => ("authorization", "declined"),
-                "ambiguous" => ("authorization", "ambiguous"),
-                "account_verification" => ("authorization", "reserved"),
-                "unsolicited" => ("exception", "pending"),
-                _ => (
-                    "authorization",
-                    if state == "reserved" {
-                        "reserved"
-                    } else {
-                        "pending"
-                    },
-                ),
-            };
+            let (kind, lifecycle) = transaction_kind(
+                state,
+                &r["flags"],
+                r["capturedCents"].as_str().unwrap_or("0"),
+            );
             let amount = match kind {
                 "capture" | "exception" => r["capturedCents"].as_str(),
                 "refund" => r["refundedCents"].as_str(),

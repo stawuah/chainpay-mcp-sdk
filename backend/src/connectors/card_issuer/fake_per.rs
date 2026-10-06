@@ -118,6 +118,9 @@ pub struct Knobs {
     /// Scheduled `write_commitment` actions wait (base layer is slow or the
     /// action was dropped) until [`FakePer::release_commitments`].
     pub hold_commitments: bool,
+    /// Reads of this account succeed this many more times, then fail with
+    /// an RPC error (a flaky rollup read mid-pass).
+    pub flaky_reads: Option<(Address, usize)>,
 }
 
 pub struct FakePer {
@@ -327,6 +330,14 @@ impl FakePer {
     pub fn read(&self, address: &Address) -> TeeRead {
         if self.knobs.lock().unwrap().outage {
             return TeeRead::RpcError("outage".into());
+        }
+        if let Some((flaky, left)) = self.knobs.lock().unwrap().flaky_reads.as_mut() {
+            if flaky == address {
+                if *left == 0 {
+                    return TeeRead::RpcError("flaky".into());
+                }
+                *left -= 1;
+            }
         }
         if self.knobs.lock().unwrap().lost {
             return TeeRead::NotVisible { slot: Some(1) };

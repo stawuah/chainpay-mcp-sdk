@@ -369,17 +369,24 @@ impl CardsConnector {
         self.attestation.read().await.clone()
     }
 
-    /// Re-check attestation if it is older than 10 minutes. Runs in the
-    /// background so it never spends the ASA budget.
+    /// Called when an authorization request arrives, in the background so it
+    /// never spends the ASA budget itself: prime the rollup path (session,
+    /// blockhash, pooled connections) and re-check attestation if it is older
+    /// than 10 minutes. The two run concurrently, not one after the other:
+    /// on a cold instance the attestation check (quote + Intel collateral) is
+    /// already in flight while the ASA does its storage round trips, and the
+    /// ASA joins that same check instead of starting it late.
     pub fn refresh_attestation_if_stale(self: &Arc<Self>) {
         let this = self.clone();
         tokio::spawn(async move {
-            this.per.warm().await;
-            let stale = now_ms().saturating_sub(this.attestation.read().await.checked_at_ms)
-                > 10 * 60 * 1000;
-            if stale {
-                this.refresh_attestation().await;
-            }
+            let attest = async {
+                let stale = now_ms().saturating_sub(this.attestation.read().await.checked_at_ms)
+                    > 10 * 60 * 1000;
+                if stale {
+                    this.refresh_attestation().await;
+                }
+            };
+            tokio::join!(this.per.prime(), attest);
         });
     }
 

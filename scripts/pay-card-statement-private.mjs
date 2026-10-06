@@ -11,10 +11,19 @@
 //
 // Passing an override amount on purpose is how the negative evidence run is
 // produced (the attempt's reference, the wrong amount).
+//
+// `transferOutcome` reports what happened on chain, not only what
+// MagicBlock's send call answered: "settled" once a finalized Devnet
+// settlement with the relay's checks is found (scripts/private-settlement.mjs),
+// "sent" when the send was accepted but no settlement showed up within
+// PRIVATE_SETTLEMENT_WAIT_MS (default 120000), "unknown" when neither is
+// known. `sendOutcome` keeps the SDK's raw answer. The relay's
+// `private-submit` remains the step that verifies and discharges.
 import { readFileSync } from "node:fs";
 import { ed25519 } from "@noble/curves/ed25519";
 import { Connection, Keypair, Transaction, VersionedTransaction } from "@solana/web3.js";
 import { payStatementPrivately } from "../sdk/dist/cards/private-repayment.js";
+import { reportedOutcome, waitForSettlement } from "./private-settlement.mjs";
 
 const [attemptPath, override] = process.argv.slice(2);
 const RPC = process.env.CHAINPAY_RPC_URL ?? "https://api.devnet.solana.com";
@@ -57,4 +66,16 @@ const out = await payStatementPrivately({
   },
   onStep: (step) => console.error(`step ${JSON.stringify(step)}`),
 });
-console.log(JSON.stringify({ attemptId: attempt.attemptId, amountBaseUnits: attempt.amountBaseUnits, override: Boolean(override), ms: Date.now() - started, ...out }, null, 2));
+const waitMs = Number(process.env.PRIVATE_SETTLEMENT_WAIT_MS ?? 120_000);
+console.error("step {\"step\":\"settlement\"}");
+const settlement = await waitForSettlement(connection, attempt, { sinceMs: started, timeoutMs: waitMs });
+console.log(JSON.stringify({
+  attemptId: attempt.attemptId,
+  amountBaseUnits: attempt.amountBaseUnits,
+  override: Boolean(override),
+  ms: Date.now() - started,
+  ...out,
+  sendOutcome: out.transferOutcome,
+  transferOutcome: reportedOutcome(out.transferOutcome, settlement),
+  settlement,
+}, null, 2));

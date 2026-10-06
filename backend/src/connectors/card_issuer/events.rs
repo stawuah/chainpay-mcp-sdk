@@ -848,7 +848,17 @@ fn note_exception(record: &mut Value, label: &str, id_hex: &str) {
 /// fallback until the reservation is re-read).
 fn apply_label(record: &mut Value, label: &str, amount: u64) {
     match label {
-        "capture" => add_cents(record, "capturedCents", amount),
+        "capture" => {
+            add_cents(record, "capturedCents", amount);
+            // `capture` on a hold PER already released (a clearing after the
+            // void of an `ambiguous` decline, or after expiry) is a late
+            // capture: the program sets `FLAG_LATE_CAPTURE` on exactly these
+            // states. Mirror it here instead of relying only on the re-read
+            // below, which a slow read or a concurrent close can miss.
+            if matches!(record["state"].as_str(), Some("reversed" | "expired")) {
+                flag(record, "lateCapture");
+            }
+        }
         "reverse" | "expire" => add_cents(record, "reversedCents", amount),
         "late_capture" => {
             add_cents(record, "capturedCents", amount);

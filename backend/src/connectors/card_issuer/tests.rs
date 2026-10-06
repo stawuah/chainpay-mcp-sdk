@@ -2127,3 +2127,135 @@ mod activation_tests;
 mod private_repay_tests;
 #[path = "tests_statements.rs"]
 mod statements_tests;
+
+/// Live Devnet 2026-10-06: an allowed purchase timed out (`ambiguous`), the
+/// issuer declined, then the merchant force-posted the clearing anyway. The
+/// row must read as the late capture it is, not as a reversal.
+async fn ambiguous_then_force_posted(h: &Harness, token: &str, flaky: bool) -> (Value, Value) {
+    h.intent("demo-approved", "100").await;
+    h.per.knobs.lock().unwrap().confirm_delay = Duration::from_millis(2_600);
+    assert_eq!(
+        h.asa(token, 100, "demo-approved", "AUTHORIZATION").await.1,
+        "SUSPECTED_FRAUD"
+    );
+    h.per.knobs.lock().unwrap().confirm_delay = Duration::ZERO;
+    assert_eq!(h.txn(token).await["state"], "ambiguous");
+    h.sim.authorization(
+        token,
+        &h.card_token,
+        100,
+        "DEMO-DATAAPI",
+        "SUSPECTED_FRAUD",
+        "AUTHORIZATION",
+    );
+    h.sim
+        .add_event(token, &format!("{token}-c"), "CLEARING", 100, "DEBIT");
+    if flaky {
+        // Resolution reads the Reservation twice (decide, then money); the
+        // re-read after the capture fails, as a slow TEE read or a close by
+        // a concurrent webhook pass would make it.
+        let reservation = program::reservation_pda(
+            &h.policy,
+            &program::auth_id_hash(h.cards.config.issuer_code, token),
+        );
+        h.per.knobs.lock().unwrap().flaky_reads = Some((reservation, 2));
+    }
+    assert_eq!(
+        h.deliver(&format!("w-{token}"), h.sim.webhook(token)).await,
+        200
+    );
+    h.per.knobs.lock().unwrap().flaky_reads = None;
+    let record = h.txn(token).await;
+    let (status, page) = h
+        .owner(
+            "GET",
+            &format!("/v1/cards/{}/activity?limit=10", h.card_id),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200, "{page}");
+    let row = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rowId"] == format!("asa:{token}"))
+        .unwrap()
+        .clone();
+    (record, row)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clearing_after_an_ambiguous_decline_reads_as_a_late_capture() {
+    let h = Harness::new().await;
+    let (record, row) = ambiguous_then_force_posted(&h, "late-1", false).await;
+    assert_eq!(record["state"], "reversed", "{record}");
+    assert_eq!(record["capturedCents"], "100");
+    assert_eq!(record["flags"]["lateCapture"], true, "{record}");
+    assert_eq!(
+        (
+            row["kind"].as_str(),
+            row["lifecycle"].as_str(),
+            row["amountCents"].as_str()
+        ),
+        (Some("capture"), Some("late_capture"), Some("100"))
+    );
+    assert_eq!(h.program_count("capture"), 1, "booked once on PER");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn late_capture_flag_survives_a_failed_reservation_re_read() {
+    let h = Harness::new().await;
+    let (record, row) = ambiguous_then_force_posted(&h, "late-2", true).await;
+    assert_eq!(record["state"], "reversed", "{record}");
+    assert_eq!(record["capturedCents"], "100", "{record}");
+    // Before the fix the flag came only from the PER re-read: missing here,
+    // and the row read `reversal / reversed` (live Devnet 2026-10-06).
+    assert_eq!(record["flags"]["lateCapture"], true, "{record}");
+    assert_eq!(
+        (row["kind"].as_str(), row["lifecycle"].as_str()),
+        (Some("capture"), Some("late_capture"))
+    );
+}
+
+#[test]
+fn released_holds_with_captured_money_project_as_late_captures() {
+    use super::routes::transaction_kind;
+    // Rows stored before Axum mirrored the flag: the live $1 row.
+    assert_eq!(
+        transaction_kind("reversed", &json!({}), "100"),
+        ("capture", "late_capture")
+    );
+    assert_eq!(
+        transaction_kind("expired", &json!({}), "100"),
+        ("capture", "late_capture")
+    );
+    assert_eq!(
+        transaction_kind("expired", &json!({"lateCapture": true}), "0"),
+        ("capture", "late_capture")
+    );
+    // A plain release stays a reversal.
+    assert_eq!(
+        transaction_kind("reversed", &json!({}), "0"),
+        ("reversal", "reversed")
+    );
+    assert_eq!(
+        transaction_kind("expired", &json!(null), "0"),
+        ("reversal", "expired")
+    );
+    assert_eq!(
+        transaction_kind("captured", &json!({}), "100"),
+        ("capture", "captured")
+    );
+    assert_eq!(
+        transaction_kind("captured", &json!({"lateCapture": true}), "100"),
+        ("capture", "late_capture")
+    );
+    assert_eq!(
+        transaction_kind("reserved", &json!({}), "0"),
+        ("authorization", "reserved")
+    );
+    assert_eq!(
+        transaction_kind("pending", &json!({}), "0"),
+        ("authorization", "pending")
+    );
+}

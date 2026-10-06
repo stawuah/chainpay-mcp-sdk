@@ -80,6 +80,17 @@ impl TxOutcome {
     }
 }
 
+/// [`TeeClient::submit_watching`]: the transaction outcome as far as it is
+/// known by the deadline, plus the watched account's bytes if a read saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Watched {
+    pub outcome: TxOutcome,
+    pub account: Option<Vec<u8>>,
+}
+
+/// Pause between status/read rounds while a transaction confirms.
+const POLL_PAUSE: Duration = Duration::from_millis(40);
+
 #[derive(Clone)]
 struct Grant {
     token: String,
@@ -304,8 +315,18 @@ impl TeeClient {
         parse_account_read(&body)
     }
 
+    /// Cached for [`BLOCKHASH_TTL`]. One fetch at a time: a caller arriving
+    /// during a fetch (the prefetch from [`TeeClient::prime`]) waits for it,
+    /// but never longer than its own `timeout`.
     async fn latest_blockhash(&self, timeout: Duration) -> Result<[u8; 32], TeeError> {
-        let mut cached = self.blockhash.lock().await;
+        let started = Instant::now();
+        let mut cached = tokio::time::timeout(timeout, self.blockhash.lock())
+            .await
+            .map_err(|_| TeeError::Network)?;
+        let timeout = timeout.saturating_sub(started.elapsed());
+        if timeout.is_zero() {
+            return Err(TeeError::Network);
+        }
         if let Some((hash, at)) = *cached {
             if at.elapsed() < BLOCKHASH_TTL {
                 return Ok(hash);
@@ -333,35 +354,129 @@ impl TeeClient {
     /// Build, sign (authorizer as fee payer) and submit, then confirm before
     /// `deadline`. `Unknown` means the transaction may still land.
     pub async fn submit(&self, instructions: Vec<Instruction>, deadline: Instant) -> TxOutcome {
-        let remaining = || deadline.saturating_duration_since(Instant::now());
-        let blockhash = match self
-            .latest_blockhash(remaining().max(Duration::from_millis(1)))
-            .await
-        {
-            Ok(hash) => hash,
-            Err(error) => {
-                return TxOutcome::Failed {
-                    signature: None,
-                    reason: error.to_string(),
+        match self.send(instructions, deadline).await {
+            Ok(signature) => self.confirm(signature, deadline).await,
+            Err(outcome) => outcome,
+        }
+    }
+
+    /// [`TeeClient::submit`] for a transaction that creates `watch`: each
+    /// confirmation round asks for the signature status **and** reads `watch`
+    /// concurrently, so the account the caller must observe before acting
+    /// (the ASA's Reservation) is usually seen in the same round trip that
+    /// confirms the transaction, instead of one read after it. Nothing is
+    /// decided here: the caller still checks the account's contents.
+    pub async fn submit_watching(
+        &self,
+        instructions: Vec<Instruction>,
+        watch: &Address,
+        deadline: Instant,
+    ) -> Watched {
+        let signature = match self.send(instructions, deadline).await {
+            Ok(signature) => signature,
+            Err(outcome) => {
+                return Watched {
+                    outcome,
+                    account: None,
                 };
             }
         };
+        self.watch(signature, watch, deadline).await
+    }
+
+    async fn watch(&self, signature: String, account: &Address, deadline: Instant) -> Watched {
+        let unknown = |signature: &str| TxOutcome::Unknown {
+            signature: Some(signature.to_owned()),
+        };
+        let mut confirmed: Option<TxOutcome> = None;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Watched {
+                    outcome: confirmed.unwrap_or_else(|| unknown(&signature)),
+                    account: None,
+                };
+            }
+            let status = async {
+                if confirmed.is_some() {
+                    return None;
+                }
+                let body = self
+                    .rpc(
+                        "getSignatureStatuses",
+                        json!([[signature], {"searchTransactionHistory": false}]),
+                        remaining,
+                    )
+                    .await
+                    .ok()?;
+                parse_signature_status(&body, &signature)
+            };
+            let (status, read) = tokio::join!(status, self.read_account(account, remaining));
+            let status = status.or_else(|| confirmed.clone());
+            match (status, read) {
+                // The program refused it or the node dropped it: final, and
+                // whatever the read saw is not this transaction's doing.
+                (
+                    Some(outcome @ (TxOutcome::ProgramError { .. } | TxOutcome::Failed { .. })),
+                    _,
+                ) => {
+                    return Watched {
+                        outcome,
+                        account: None,
+                    };
+                }
+                (status, TeeRead::Visible { data, .. }) => {
+                    return Watched {
+                        outcome: status.unwrap_or_else(|| unknown(&signature)),
+                        account: Some(data),
+                    };
+                }
+                (Some(outcome), _) => confirmed = Some(outcome),
+                (None, _) => {}
+            }
+            let pause = POLL_PAUSE.min(deadline.saturating_duration_since(Instant::now()));
+            if pause.is_zero() {
+                return Watched {
+                    outcome: confirmed.unwrap_or_else(|| unknown(&signature)),
+                    account: None,
+                };
+            }
+            tokio::time::sleep(pause).await;
+        }
+    }
+
+    /// Sign and send. `Ok(signature)` once the node accepted it, or when the
+    /// send failed in a way that may still have reached the node (the
+    /// caller confirms either way); `Err` when nothing can have landed.
+    async fn send(
+        &self,
+        instructions: Vec<Instruction>,
+        deadline: Instant,
+    ) -> Result<String, TxOutcome> {
+        let remaining = || deadline.saturating_duration_since(Instant::now());
+        let blockhash = self
+            .latest_blockhash(remaining().max(Duration::from_millis(1)))
+            .await
+            .map_err(|error| TxOutcome::Failed {
+                signature: None,
+                reason: error.to_string(),
+            })?;
         let mut all = vec![program::set_compute_unit_limit(400_000)];
         all.extend(instructions);
         let mut tx = program::unsigned_transaction(&self.authorizer, &all, blockhash);
         if program::sign_transaction(&mut tx, &[&self.key]).is_err() {
-            return TxOutcome::Failed {
+            return Err(TxOutcome::Failed {
                 signature: None,
                 reason: "authorizer is not a signer".into(),
-            };
+            });
         }
         let signature = bs58::encode(tx.signatures[0].as_ref()).into_string();
         let wire = BASE64.encode(program::serialize_transaction(&tx));
         if remaining().is_zero() {
-            return TxOutcome::Failed {
+            return Err(TxOutcome::Failed {
                 signature: None,
                 reason: "deadline before send".into(),
-            };
+            });
         }
         match self
             .rpc(
@@ -371,20 +486,30 @@ impl TeeClient {
             )
             .await
         {
-            Ok(body) if body.get("error").is_some() => {
-                // A JSON-RPC error on send means the node refused it outright.
-                return TxOutcome::Failed {
-                    signature: Some(signature),
-                    reason: "send rejected".into(),
-                };
-            }
-            Ok(_) => {}
-            // The request may have reached the node: outcome unknown.
-            Err(_) => {
-                return self.confirm(signature, deadline).await;
-            }
+            // A JSON-RPC error on send means the node refused it outright.
+            Ok(body) if body.get("error").is_some() => Err(TxOutcome::Failed {
+                signature: Some(signature),
+                reason: "send rejected".into(),
+            }),
+            // Accepted, or the request may have reached the node: confirm.
+            Ok(_) | Err(_) => Ok(signature),
         }
-        self.confirm(signature, deadline).await
+    }
+
+    /// Off the decision path: sign in if needed, prefetch the blockhash an
+    /// authorization will use, and leave two pooled connections to the
+    /// rollup so the first concurrent status + read round does not pay a
+    /// TLS handshake. Best effort; every hot-path call still has its own
+    /// deadline and fallbacks.
+    pub async fn prime(&self) {
+        if self.warm().await.is_err() {
+            return;
+        }
+        let budget = Duration::from_millis(1_500);
+        let _ = tokio::join!(
+            self.latest_blockhash(budget),
+            self.rpc("getSlot", json!([{"commitment":"confirmed"}]), budget),
+        );
     }
 
     pub async fn confirm(&self, signature: String, deadline: Instant) -> TxOutcome {
@@ -1118,5 +1243,236 @@ mod tests {
         assert_eq!(logins.load(Ordering::SeqCst), 2);
         assert!(!format!("{client:?}").contains("secret-token"));
         task.abort();
+    }
+
+    /// A MagicBlock-shaped rollup double with a fixed latency on every
+    /// request, counting requests per method. `sendTransaction` lands the
+    /// transaction `land_after` later; until then its status is unknown and
+    /// the watched account reads `null`.
+    struct SlowRollup {
+        url: String,
+        calls: Arc<std::sync::Mutex<Vec<String>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for SlowRollup {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    async fn slow_rollup(rtt: Duration, land_after: Duration, program_error: bool) -> SlowRollup {
+        use axum::response::IntoResponse;
+        let calls: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let landed: Arc<std::sync::Mutex<Option<Instant>>> = Arc::default();
+        let (c, l) = (calls.clone(), landed.clone());
+        let app = Router::new()
+            .route(
+                "/auth/challenge",
+                get(move || async move {
+                    tokio::time::sleep(rtt).await;
+                    Json(json!({"challenge":"sign me"}))
+                }),
+            )
+            .route(
+                "/auth/login",
+                post(move || async move {
+                    tokio::time::sleep(rtt).await;
+                    Json(json!({"token":"t","expiresAt": now_ms() + 30 * REFRESH_WINDOW_MS}))
+                }),
+            )
+            .route(
+                "/",
+                post(move |Json(body): Json<Value>| {
+                    let (c, l) = (c.clone(), l.clone());
+                    async move {
+                        tokio::time::sleep(rtt).await;
+                        let method = body["method"].as_str().unwrap_or("").to_owned();
+                        c.lock().unwrap().push(method.clone());
+                        let landed = l.lock().unwrap().is_some_and(|at| Instant::now() >= at);
+                        let result = match method.as_str() {
+                            "getLatestBlockhash" => json!({"context":{"slot":1},"value":{"blockhash": bs58::encode([7u8; 32]).into_string(),"lastValidBlockHeight":9}}),
+                            "getSlot" => json!(1),
+                            "sendTransaction" => {
+                                *l.lock().unwrap() = Some(Instant::now() + land_after);
+                                json!("sig")
+                            }
+                            "getSignatureStatuses" if landed && program_error => json!({"context":{"slot":2},"value":[{"err":{"InstructionError":[1,{"Custom":6016}]},"confirmationStatus":"confirmed"}]}),
+                            "getSignatureStatuses" if landed => json!({"context":{"slot":2},"value":[{"err":null,"confirmationStatus":"confirmed"}]}),
+                            "getSignatureStatuses" => json!({"context":{"slot":2},"value":[null]}),
+                            // A failed transaction creates nothing.
+                            "getAccountInfo" if landed && !program_error => json!({"context":{"slot":2},"value":{"owner":"o","data":["AQI=","base64"]}}),
+                            "getAccountInfo" => json!({"context":{"slot":2},"value":null}),
+                            _ => return (StatusCode::BAD_REQUEST, Json(json!({}))).into_response(),
+                        };
+                        Json(json!({"jsonrpc":"2.0","id":1,"result": result})).into_response()
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        SlowRollup { url, calls, task }
+    }
+
+    fn count(calls: &std::sync::Mutex<Vec<String>>, method: &str) -> usize {
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| *m == method)
+            .count()
+    }
+
+    /// The pre-2026-10-06 ASA path: `submit` (blockhash, send, poll status)
+    /// and only then poll the Reservation.
+    async fn sequential(client: &TeeClient, watch: &Address, deadline: Instant) -> Option<Vec<u8>> {
+        if !matches!(
+            client.submit(vec![], deadline).await,
+            TxOutcome::Confirmed { .. }
+        ) {
+            return None;
+        }
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            if let TeeRead::Visible { data, .. } = client.read_account(watch, remaining).await {
+                return Some(data);
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    }
+
+    /// Benchmark-style check with a mocked slow rollup (150 ms per request,
+    /// the transaction lands as it is sent). Prints the timings:
+    /// `cargo test -p chainpay-backend authorization_path -- --nocapture`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn authorization_path_round_trips_before_and_after() {
+        let rtt = Duration::from_millis(150);
+        let watch = Address::from([4; 32]);
+        let budget = Duration::from_millis(2_000);
+
+        // Before: cold session, no prefetch, confirm then read.
+        let before = slow_rollup(rtt, Duration::ZERO, false).await;
+        let client = TeeClient::new(&before.url, SigningKey::from_bytes(&[5; 32])).unwrap();
+        let started = Instant::now();
+        let seen = sequential(&client, &watch, started + budget).await;
+        let before_ms = started.elapsed();
+        assert!(seen.is_some());
+        let before_rpcs = before.calls.lock().unwrap().len();
+
+        // After: primed while the ASA does its storage round trips (session,
+        // blockhash, two pooled connections), then send + concurrent rounds.
+        let after = slow_rollup(rtt, Duration::ZERO, false).await;
+        let client = TeeClient::new(&after.url, SigningKey::from_bytes(&[5; 32])).unwrap();
+        client.prime().await;
+        let primed = after.calls.lock().unwrap().len();
+        let started = Instant::now();
+        let watched = client
+            .submit_watching(vec![], &watch, started + budget)
+            .await;
+        let after_ms = started.elapsed();
+        assert_eq!(watched.account.as_deref(), Some(&[1u8, 2][..]));
+        assert!(matches!(watched.outcome, TxOutcome::Confirmed { .. }));
+        eprintln!(
+            "authorization path @ {rtt:?}/request: before {before_ms:?} ({before_rpcs} rpc + 2 sign-in, all sequential), after {after_ms:?} ({} rpc on the path after priming)",
+            after.calls.lock().unwrap().len() - primed
+        );
+        // Before: sign-in 2 + blockhash + send + status + read = 6 sequential
+        // round trips. After: send + one (status ∥ read) round = 2.
+        assert!(before_ms >= rtt * 6, "{before_ms:?}");
+        assert!(after_ms < rtt * 3, "{after_ms:?}");
+        assert_eq!(count(&after.calls, "sendTransaction"), 1);
+        assert_eq!(
+            count(&after.calls, "getLatestBlockhash"),
+            1,
+            "prefetched once"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_rollup_slower_than_the_deadline_stays_unknown_and_never_shows_an_account() {
+        let rollup = slow_rollup(
+            Duration::from_millis(50),
+            Duration::from_millis(3_000),
+            false,
+        )
+        .await;
+        let client = TeeClient::new(&rollup.url, SigningKey::from_bytes(&[5; 32])).unwrap();
+        let started = Instant::now();
+        let watched = client
+            .submit_watching(
+                vec![],
+                &Address::from([4; 32]),
+                started + Duration::from_millis(600),
+            )
+            .await;
+        // Fail closed: no account, outcome unknown (it may still land), and
+        // the deadline holds (one in-flight request of slack at most).
+        assert_eq!(watched.account, None);
+        assert!(matches!(
+            watched.outcome,
+            TxOutcome::Unknown { signature: Some(_) }
+        ));
+        assert!(
+            started.elapsed() < Duration::from_millis(750),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(count(&rollup.calls, "getAccountInfo") >= 2, "kept watching");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_program_rejection_is_final_while_watching() {
+        let rollup = slow_rollup(Duration::from_millis(20), Duration::ZERO, true).await;
+        let client = TeeClient::new(&rollup.url, SigningKey::from_bytes(&[5; 32])).unwrap();
+        let watched = client
+            .submit_watching(
+                vec![],
+                &Address::from([4; 32]),
+                Instant::now() + Duration::from_secs(2),
+            )
+            .await;
+        assert_eq!(watched.account, None);
+        assert!(matches!(
+            watched.outcome,
+            TxOutcome::ProgramError { code: 6016, .. }
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_blockhash_fetch_in_flight_never_holds_a_caller_past_its_deadline() {
+        let rollup = slow_rollup(Duration::from_millis(800), Duration::ZERO, false).await;
+        let client =
+            Arc::new(TeeClient::new(&rollup.url, SigningKey::from_bytes(&[5; 32])).unwrap());
+        client.warm().await.unwrap();
+        let prefetch = {
+            let client = client.clone();
+            tokio::spawn(async move { client.latest_blockhash(Duration::from_secs(5)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let started = Instant::now();
+        let outcome = client
+            .submit(vec![], Instant::now() + Duration::from_millis(200))
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                TxOutcome::Failed {
+                    signature: None,
+                    ..
+                }
+            ),
+            "nothing sent: {outcome:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(count(&rollup.calls, "sendTransaction"), 0);
+        prefetch.await.unwrap().unwrap();
     }
 }
