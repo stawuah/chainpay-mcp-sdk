@@ -7,6 +7,13 @@ import { fetchCrossmintOrder, requireCrossmintEnabled } from "./crossmint-provid
 import { requirementsFromPreflight } from "./check_payment_requirements.js";
 import { submitSettlement } from "./settlement-submit.js";
 
+/**
+ * Solana Devnet's full genesis hash, as `getGenesisHash` returns it. The
+ * 32-character `solana:EtWT…` CAIP-2 reference is a truncation of this value
+ * and never equals what the RPC reports.
+ */
+const SOLANA_DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
+
 function backend(context: ChainPayMcpContext) {
   if (!context.principal || !context.backendUrl || !context.backendAuthToken) throw new Error("Crossmint requires an authenticated caller and Axum relay");
   return { url: context.backendUrl.replace(/\/$/, ""), headers: { Authorization: `Bearer ${context.backendAuthToken}`, "Content-Type": "application/json" } };
@@ -52,7 +59,7 @@ async function preparedOrder(context: ChainPayMcpContext, args: Record<string, u
   const agent = solanaAddress(args.agent, "agent");
   const mandate = await authorizeMandate(context, mandateAddress);
   if (agent !== mandate.approvedAgent) throw new Error("Agent differs from the approved mandate agent");
-  if (await context.client.connection.getGenesisHash() !== "EtWTRABZaYq6iMfeYKouRu166VU2xqa1") throw new Error("Crossmint staging requires Solana Devnet");
+  if (await context.client.connection.getGenesisHash() !== SOLANA_DEVNET_GENESIS_HASH) throw new Error("Crossmint staging requires Solana Devnet");
   if (typeof args.orderId !== "string") throw new Error("orderId is required");
   let order = await fetchCrossmintOrder(args.orderId);
   if (args.preparePayer === true) {
@@ -78,6 +85,12 @@ export async function prepareCrossmintPayment(context: ChainPayMcpContext, args:
   const continuation = { tool: "execute_crossmint_payment", arguments: { orderId: terms.orderId, mandate: args.mandate, agent, invoiceHash: fields.invoiceHash, expectedTerms: fingerprint, signingMode: "human" } };
   return toolResult({ action: "crossmint_agent_signature_required", payment, crossmint: requestView(terms), receiptAddress: prepared.receiptAddress, preflight: prepared.preflight, requirements: requirementsFromPreflight(prepared.preflight), transaction: serializeTransaction(prepared.transaction), unsignedTransaction: await materializeUnsignedTransaction(context.client, prepared.transaction), continuation, message: "Review this Devnet order and sign the ChainPay transaction. No payment has been submitted." });
 }
+
+/**
+ * Relay answers that prove the payment was refused before broadcast. The same
+ * set as the dashboard's `callMcpTool`; every other failure may follow a send.
+ */
+const RELAY_REJECTED_BEFORE_BROADCAST = new Set([400, 401, 403, 404, 422]);
 
 /** The re-fetched order no longer matches what the owner reviewed. */
 class ReviewRequired extends Error {
@@ -123,8 +136,20 @@ export async function executeCrossmintPayment(context: ChainPayMcpContext, args:
       crossmint: { order_id: terms.orderId, terms: { ...terms, authorization: { payload, mac } } },
     }),
   });
-  const payment = await response.json() as Record<string, unknown>;
-  if (!response.ok) return toolResult({ action: "backend_rejected", httpStatus: response.status, ...payment }, true);
+  const payment = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) {
+    if (RELAY_REJECTED_BEFORE_BROADCAST.has(response.status)) return toolResult({ action: "backend_rejected", httpStatus: response.status, ...payment }, true);
+    // Any other failure (5xx, 409, a proxy error) can arrive after the relay
+    // broadcast the transaction, so it is never reported as a rejection.
+    const paymentId = `payment_${createHash("sha256").update(`${context.principal!.wallet}:${args.mandate}:${fields.invoiceHash}`).digest("hex")}`;
+    return toolResult({
+      action: "crossmint_payment_pending", status: "unknown", payment_id: paymentId, httpStatus: response.status,
+      ...(typeof payment.error === "string" ? { relayError: payment.error } : {}),
+      receiptAddress: prepared.receiptAddress, crossmint: requestView(terms),
+      continuation: { tool: "get_crossmint_payment", arguments: { paymentId } },
+      message: `The relay answered HTTP ${response.status}, so this payment may already have been sent. Resume with paymentId to check it. Do not retry or prepare a replacement.`,
+    });
+  }
   if (payment.status === "confirmed" && typeof payment.payment_id === "string") {
     try { return await crossmintPaymentStatus(context, { paymentId: payment.payment_id }); }
     catch { return toolResult({ ...payment, action: "crossmint_settled", receiptAddress: prepared.receiptAddress, providerStatus: "unknown", crossmint: { orderId: terms.orderId }, message: "Payment confirmed; order readback is unavailable. Resume this paymentId without paying again." }); }

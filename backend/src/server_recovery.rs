@@ -305,6 +305,21 @@ pub(super) fn transaction_error(
     record.updated_at_ms = now_ms();
     record
 }
+/// The Crossmint metadata a stored job was written from (see
+/// `persist_payment_with_events`): the order is the connector reference, the
+/// bound terms are the challenge, and the resource is the order URL unless it
+/// is the synthetic `crossmint:order:<id>` placeholder.
+fn crossmint_metadata_from_job(
+    job: X402PaymentRecord,
+) -> Result<CrossmintPaymentMetadata, ApiError> {
+    let order_id = job.connector_reference.ok_or_else(conflict)?;
+    let order_url = (job.resource != format!("crossmint:order:{order_id}")).then_some(job.resource);
+    Ok(CrossmintPaymentMetadata {
+        order_id,
+        order_url,
+        terms: job.challenge,
+    })
+}
 pub(super) async fn payment(
     state: &BackendState,
     mut record: PaymentRecord,
@@ -355,36 +370,47 @@ pub(super) async fn payment(
         }
     }
     record.updated_at_ms = now_ms();
-    let x402 = state
+    let job = state
         .store
         .find_x402_by_idempotency(&record.idempotency_key)
         .await?;
-    let metadata = match x402 {
-        Some(r) => Some(X402PaymentMetadata {
-            resource: r.resource,
-            challenge: r.challenge,
-        }),
-        None => state
-            .store
-            .operation_record(&record.payment_id)
-            .await?
-            .and_then(|(_, intent, _)| {
-                serde_json::from_value::<Option<X402PaymentMetadata>>(intent["x402"].clone())
-                    .ok()
-                    .flatten()
-            }),
+    let (metadata, crossmint) = match job {
+        // The stored job keeps its own connector. Rewriting a Crossmint job as
+        // x402 would write a second row (`x402_<id>`) under the same
+        // idempotency key, which a unique store refuses after the broadcast.
+        Some(job) => match job.connector {
+            ConnectorKind::X402 => (
+                Some(X402PaymentMetadata {
+                    resource: job.resource,
+                    challenge: job.challenge,
+                }),
+                None,
+            ),
+            ConnectorKind::Crossmint => (None, Some(crossmint_metadata_from_job(job)?)),
+        },
+        // No row yet: rebuild it from the bound intent, so a recovered
+        // settlement keeps its connector row instead of losing what it paid.
+        None => {
+            let intent = state
+                .store
+                .operation_record(&record.payment_id)
+                .await?
+                .map(|(_, intent, _)| intent);
+            let bound = |field: &str| intent.as_ref().map(|intent| intent[field].clone());
+            (
+                bound("x402").and_then(|value| {
+                    serde_json::from_value::<Option<X402PaymentMetadata>>(value)
+                        .ok()
+                        .flatten()
+                }),
+                bound("crossmint").and_then(|value| {
+                    serde_json::from_value::<Option<CrossmintPaymentMetadata>>(value)
+                        .ok()
+                        .flatten()
+                }),
+            )
+        }
     };
-    // A Crossmint job is rebuilt from the same bound intent, so a recovered
-    // settlement keeps its connector row instead of losing the order it paid.
-    let crossmint = state
-        .store
-        .operation_record(&record.payment_id)
-        .await?
-        .and_then(|(_, intent, _)| {
-            serde_json::from_value::<Option<CrossmintPaymentMetadata>>(intent["crossmint"].clone())
-                .ok()
-                .flatten()
-        });
     let connector = match (&metadata, &crossmint) {
         (Some(x402), _) => Some(ConnectorMetadata::X402(x402)),
         (None, Some(crossmint)) => Some(ConnectorMetadata::Crossmint(crossmint)),
@@ -402,6 +428,12 @@ pub(super) async fn payment(
         }
     }
     persist_payment_with_events(state, &record, connector, &events).await?;
+    // Crossmint may not match a delegated (CPI) transfer on its own, so it is
+    // told the transaction once the receipt is stored. Best effort: a failure
+    // is recorded on the job and retried by the order-status readback.
+    if let (true, None, Some(crossmint)) = (confirmed_now, &metadata, &crossmint) {
+        crossmint_orders::notify_after_confirmation(state, &record, crossmint).await;
+    }
     Ok(state
         .store
         .get_payment(&record.payment_id)
@@ -1826,6 +1858,253 @@ mod tests {
         };
         json!({"owner": DEFAULT_PROGRAM_ID, "data": [encoded, "base64"]})
     }
+    /// Lane A (Devnet, 2026-10-06): reconciling a Crossmint job rewrote it as
+    /// `x402_<id>` under the same idempotency key. The store refused the second
+    /// row, the submit answered 500 after broadcast and the job never left
+    /// `submitted`. Reconciliation must keep the job's own connector.
+    #[tokio::test]
+    async fn reconciling_a_crossmint_payment_keeps_its_connector_row_and_tells_crossmint() {
+        let (mut state, principal, mut request) = fixture();
+        let order_id = "order_once";
+        let terms = json!({"orderId":order_id,"payerAddress":principal.wallet,"amount":"10"});
+        request.crossmint = Some(CrossmintPaymentMetadata {
+            order_id: order_id.into(),
+            order_url: None,
+            terms: terms.clone(),
+        });
+        let (_, record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
+            .await
+            .unwrap();
+        // What the submit route stores after broadcasting: a submitted Crossmint job.
+        let mut submitted = record.clone();
+        submitted.status = PaymentStatus::Submitted;
+        persist_payment(&state, &submitted, connector_metadata(&request))
+            .await
+            .unwrap();
+        let receipt = receipt_data(&record);
+        let mandate = mandate_account_data(&record, false, false, u64::MAX);
+        let fixture_record = record.clone();
+        let rpc = Router::new().fallback(move |Json(request): Json<Value>| {
+            let receipt = receipt.clone();
+            let mandate = mandate.clone();
+            let fixture_record = fixture_record.clone();
+            async move {
+                let result = match request["method"].as_str().unwrap() {
+                    "getSignatureStatuses" => {
+                        json!({"value":[{"slot":7,"confirmationStatus":"finalized","err":null}]})
+                    }
+                    "getAccountInfo" => {
+                        let address = request["params"][0].as_str().unwrap();
+                        json!({"value":rpc_account_info(address,&fixture_record.mandate,&mandate,&receipt)})
+                    }
+                    "getSlot" => json!(1),
+                    other => panic!("Unexpected RPC {other}"),
+                };
+                Json(json!({"jsonrpc":"2.0","id":1,"result":result}))
+            }
+        });
+        // Crossmint staging: the order still awaits payment, as in Lane A.
+        let (provider_url, posts, provider_task) =
+            crossmint_provider(&principal.wallet, StatusCode::CREATED).await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        state.config.rpc.url = format!("http://{}", listener.local_addr().unwrap());
+        let rpc_task = tokio::spawn(async move { axum::serve(listener, rpc).await.unwrap() });
+        state.rpc = RpcClient::new(state.config.rpc.clone()).unwrap();
+        state.crossmint = crossmint_api(&provider_url);
+
+        let confirmed = payment(&state, submitted).await.unwrap();
+        assert_eq!(confirmed.status, PaymentStatus::Confirmed);
+        let job = state
+            .store
+            .find_x402_by_idempotency(&record.idempotency_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.connector, ConnectorKind::Crossmint);
+        assert_eq!(
+            job.x402_payment_id,
+            deterministic_id("crossmint", &record.idempotency_key)
+        );
+        assert_eq!(job.connector_reference.as_deref(), Some(order_id));
+        assert_eq!(job.challenge, terms);
+        assert_eq!(job.status, X402PaymentStatus::Confirmed);
+        assert_eq!(job.error, None);
+        assert!(
+            state
+                .store
+                .list_connector_jobs(&principal.wallet, ConnectorKind::X402, None, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "no x402 row is written for a Crossmint payment"
+        );
+        // Crossmint was told the finalized transaction, once, for the bound order.
+        assert_eq!(
+            posts.lock().unwrap().clone(),
+            vec![(
+                format!("/api/2022-06-09/orders/{order_id}/payment"),
+                json!({"type":"crypto-tx-id","txId":record.signature.clone().unwrap()})
+            )]
+        );
+        // Reconciling again is a no-op: no second notice, still one row.
+        let again = payment(&state, confirmed).await.unwrap();
+        assert_eq!(again.status, PaymentStatus::Confirmed);
+        assert_eq!(posts.lock().unwrap().len(), 1);
+        rpc_task.abort();
+        provider_task.abort();
+    }
+
+    type CrossmintPosts = Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+
+    /// Crossmint staging with one order that still awaits payment. POSTs are
+    /// recorded and answered with `post_status`.
+    async fn crossmint_provider(
+        payer: &str,
+        post_status: StatusCode,
+    ) -> (String, CrossmintPosts, tokio::task::JoinHandle<()>) {
+        let posts = CrossmintPosts::default();
+        let seen = posts.clone();
+        let payer = payer.to_owned();
+        let provider = Router::new().fallback(move |request: Request<axum::body::Body>| {
+            let seen = seen.clone();
+            let payer = payer.clone();
+            async move {
+                let method = request.method().clone();
+                let path = request.uri().path().to_owned();
+                let body = axum::body::to_bytes(request.into_body(), 4096)
+                    .await
+                    .unwrap();
+                if method == axum::http::Method::POST {
+                    seen.lock()
+                        .unwrap()
+                        .push((path, serde_json::from_slice(&body).unwrap()));
+                    return (post_status, Json(json!({})));
+                }
+                (
+                    StatusCode::OK,
+                    Json(json!({"orderId":"order_once","phase":"payment","lineItems":[],"payment":{"method":"solana","status":"awaiting-payment","preparation":{"payerAddress":payer}}})),
+                )
+            }
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+        (url, posts, task)
+    }
+
+    fn crossmint_api(url: &str) -> crossmint_orders::CrossmintApi {
+        crossmint_orders::CrossmintApi {
+            base_url: format!("{url}/api/2022-06-09"),
+            api_key: Some("sk_staging_fixture".into()),
+        }
+    }
+
+    /// The order-status readback is the retry: while Crossmint still awaits
+    /// payment it is told again, and a refusal is stored on the job.
+    #[tokio::test]
+    async fn order_status_readback_retries_the_crossmint_notice() {
+        for (post_status, expect_error) in [
+            (StatusCode::CREATED, false),
+            (StatusCode::BAD_GATEWAY, true),
+        ] {
+            let (mut state, principal, mut request) = fixture();
+            request.crossmint = Some(CrossmintPaymentMetadata {
+                order_id: "order_once".into(),
+                order_url: None,
+                terms: json!({"orderId":"order_once","payerAddress":principal.wallet}),
+            });
+            let (_, mut record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
+                .await
+                .unwrap();
+            record.status = PaymentStatus::Confirmed;
+            persist_payment(&state, &record, connector_metadata(&request))
+                .await
+                .unwrap();
+            let (url, posts, task) = crossmint_provider(&principal.wallet, post_status).await;
+            state.crossmint = crossmint_api(&url);
+            let user_key = record
+                .idempotency_key
+                .strip_prefix(&format!("{}:", principal.wallet))
+                .unwrap()
+                .to_owned();
+            let Json(job) = record_crossmint_order_proof(
+                State(state.clone()),
+                Extension(principal.clone()),
+                Json(CrossmintOrderProofRequest {
+                    mandate: record.mandate.clone(),
+                    idempotency_key: user_key,
+                    proof: json!({}),
+                    order_phase: "unknown".into(),
+                    response_status: 200,
+                    error: None,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                posts.lock().unwrap().clone(),
+                vec![(
+                    "/api/2022-06-09/orders/order_once/payment".to_owned(),
+                    json!({"type":"crypto-tx-id","txId":record.signature.clone().unwrap()})
+                )]
+            );
+            assert_eq!(job.status, X402PaymentStatus::Confirmed);
+            assert_eq!(job.proof.unwrap()["paymentStatus"], "awaiting-payment");
+            match job.error {
+                Some(error) if expect_error => assert!(error.contains("HTTP 502"), "{error}"),
+                None if !expect_error => {}
+                other => panic!("unexpected job error {other:?}"),
+            }
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_crossmint_is_recorded_on_the_job_and_never_undoes_confirmation() {
+        let (mut state, principal, mut request) = fixture();
+        let metadata = CrossmintPaymentMetadata {
+            order_id: "order_once".into(),
+            order_url: None,
+            terms: json!({"orderId":"order_once","payerAddress":principal.wallet}),
+        };
+        request.crossmint = Some(metadata.clone());
+        let (_, mut record) = reserve_payment(&state, &principal, &request, SigningMode::Human)
+            .await
+            .unwrap();
+        record.status = PaymentStatus::Confirmed;
+        persist_payment(&state, &record, connector_metadata(&request))
+            .await
+            .unwrap();
+        // Port 9 (discard) refuses connections on loopback.
+        state.crossmint = crossmint_orders::CrossmintApi {
+            base_url: "http://127.0.0.1:9/api/2022-06-09".into(),
+            api_key: Some("sk_staging_fixture".into()),
+        };
+        crossmint_orders::notify_after_confirmation(&state, &record, &metadata).await;
+        let job = state
+            .store
+            .find_x402_by_idempotency(&record.idempotency_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.connector, ConnectorKind::Crossmint);
+        assert_eq!(job.status, X402PaymentStatus::Confirmed);
+        let error = job.error.unwrap();
+        assert!(error.contains("Crossmint has not been told"), "{error}");
+        assert!(error.contains("do not pay again"));
+        assert!(!error.contains("sk_staging_fixture"));
+        assert_eq!(
+            state
+                .store
+                .get_payment(&record.payment_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PaymentStatus::Confirmed
+        );
+    }
+
     #[tokio::test]
     async fn timeout_recovers_finalized_receipt_and_preserves_verified_proof() {
         let (mut state, principal, request) = fixture();

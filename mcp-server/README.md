@@ -154,16 +154,23 @@ Axum independently reads provider status; supplied proof/phase fields are
 ignored. Provider failures preserve confirmed settlement and report unknown
 order status. The existing order claim is never automatically released.
 
+`execute_crossmint_payment` reports `backend_rejected` only for relay answers
+that prove nothing was broadcast (400, 401, 403, 404, 422), matching the
+dashboard. Any other failure, such as a 5xx after the relay sent the
+transaction, returns `crossmint_payment_pending` with `status: "unknown"` and
+the deterministic `paymentId` to resume. Never retry or prepare a replacement.
+
 Keep the server and `VITE_CHAINPAY_CROSSMINT` visibility flags off until the
 operator has separately authorized and documented a staging acceptance payment:
 matching final receipt, provider order advancement, and recovery evidence.
 The provider's documented prepared-transaction workflow does not establish
 that replacing its transfer with ChainPay CPI will be recognized. In the
 mandate payment the token transfer is an inner (CPI) instruction, and its
-authority and fee payer are not Crossmint's `payerAddress`. **Whether Crossmint
-credits such a payment, even with the exact memo, is unproven** until one
-explicitly approved Devnet acceptance payment settles and Crossmint advances
-that order. Passing local fixtures, including a real staging order response,
+authority and fee payer are not Crossmint's `payerAddress`. On the first Devnet acceptance payment
+(2026-10-06) the order stayed `awaiting-payment` for five minutes after
+finality and was credited 13 seconds after an explicit `crypto-tx-id`
+notification, which the relay now sends (see the backend README). **Whether
+Crossmint also detects such a payment on its own is unproven.** Passing local fixtures, including a real staging order response,
 proves the software paths, not that provider compatibility assumption.
 
 ## Verify changes
