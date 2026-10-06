@@ -24,7 +24,7 @@ import { PRIVACY_COPY, PRIVACY_SHORT } from "./privacyCopy";
 
 export const CREATE_STEPS: { id: CreateStepId; label: string; detail: string }[] = [
   { id: "prepare", label: "Get a card number ready", detail: "ChainPay asks the card network for a paused card." },
-  { id: "base", label: "Create the card on Solana", detail: "3 approvals in your wallet. These only set up the card's accounts." },
+  { id: "base", label: "Create the card on Solana", detail: "3 approvals in your wallet, set to Devnet. These only set up the card's accounts." },
   { id: "session", label: "Open your private session", detail: "1 message. It opens your private session, which reads and writes your card's private rules. It doesn't move money." },
   { id: "rules", label: "Save the limits privately", detail: "1 approval. Your limits go into the private rollup, not the public chain." },
   { id: "activate", label: "Turn the card on", detail: "ChainPay copies the limits to the card network and opens the card." },
