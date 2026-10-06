@@ -15,8 +15,13 @@ pub const AUTH_GUARD_SEED: &[u8] = b"auth_guard";
 pub const REPAY_AGENT_SEED: &[u8] = b"repay_agent";
 /// ChainPay receipt PDA seeds: `[b"receipt", mandate, invoice_hash]`.
 pub const CHAINPAY_RECEIPT_SEED: &[u8] = b"receipt";
-/// `8 + PaymentReceipt::LEN` in programs/chainpay/src/state.rs (v2 receipt).
+/// `8 + PaymentReceipt::LEN` in programs/chainpay/src/state.rs (v2 receipt,
+/// with the policy snapshot appended after `bump`).
 pub const CHAINPAY_RECEIPT_SPACE: usize = 8 + 32 * 8 + 8 * 2 + 2 + 1 + 8 * 7 + 32;
+/// The v1 receipt (ChainPay before c9f9663): the same fields up to `bump`, no
+/// snapshot. The ChainPay program deployed on Devnet (last deployed
+/// 2026-08-15) writes this layout.
+pub const CHAINPAY_RECEIPT_SPACE_V1: usize = 8 + 32 * 8 + 8 * 2 + 2;
 /// `RECEIPT_STATUS_SETTLED` in the chainpay program.
 pub const CHAINPAY_RECEIPT_SETTLED: u8 = 1;
 /// Domains for the receipt's `payment_id` / `signature_reference`, derived from

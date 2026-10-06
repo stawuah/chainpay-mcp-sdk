@@ -19,6 +19,8 @@
  * that link by design, so the method never claims "paid by your wallet".
  */
 
+import { PublicKey } from "@solana/web3.js";
+
 export const MAGICBLOCK_PAYMENTS_API = "https://payments.magicblock.app";
 export const PRIVATE_REPAYMENT_METHOD = "magicblock_private_payments";
 export const PRIVATE_REPAYMENT_DEVNET_USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -290,10 +292,11 @@ const ESPL = {
   initializeShuttleEphemeralAta: 11,
   delegateShuttleEphemeralAta: 13,
   depositAndQueueTransfer: 16,
+  setupAndDelegateShuttleEphemeralAtaWithMerge: 24,
   ensureTransferQueueCrank: 17,
   depositAndDelegateShuttleWithMergeToEncryptedDestination: 34,
 } as const;
-const DEPOSIT_TAGS: readonly number[] = [0, 1, 2, 4, 6, 7, 11, 13, 34];
+const DEPOSIT_TAGS: readonly number[] = [0, 1, 2, 4, 6, 7, 11, 13, 24, 34];
 const TRANSFER_TAGS: readonly number[] = [0, 16, 17];
 
 type DecodedInstruction = { programId: string; accounts: string[]; data: Uint8Array };
@@ -388,7 +391,7 @@ export function verifyBuiltTransaction(
     if (ix.programId === SYSTEM_PROGRAM && ix.data.length >= 12 && ix.data[0] === 2 && ix.data[1] === 0 && ix.data[2] === 0 && ix.data[3] === 0) lamports += u64(ix.data, 4);
     if (ix.programId !== EPHEMERAL_SPL_PROGRAM) continue;
     if (!ix.data.length || !tags.includes(ix.data[0])) refuse(kind, "includes a token instruction ChainPay doesn't expect");
-    if ([ESPL.depositSplTokens, ESPL.depositAndQueueTransfer, ESPL.depositAndDelegateShuttleWithMergeToEncryptedDestination].includes(ix.data[0] as 2)) moves.push(ix);
+    if ([ESPL.depositSplTokens, ESPL.depositAndQueueTransfer, ESPL.setupAndDelegateShuttleEphemeralAtaWithMerge, ESPL.depositAndDelegateShuttleWithMergeToEncryptedDestination].includes(ix.data[0] as 2)) moves.push(ix);
   }
   if (lamports > MAX_LAMPORTS) refuse(kind, "moves more SOL than rent needs");
   if (moves.length !== 1) refuse(kind, "doesn't move exactly one amount");
@@ -398,6 +401,9 @@ export function verifyBuiltTransaction(
       // [tag][amount u64]; accounts: eata, vault, mint, source, vault token, authority, token program
       if (move.data.length !== 9 || move.accounts[2] !== expect.mint || move.accounts[5] !== expect.owner) refuse(kind, "deposits from the wrong account or mint");
       if (u64(move.data, 1) !== expect.amountBaseUnits) refuse(kind, "deposits a different amount");
+    } else if (move.data[0] === ESPL.setupAndDelegateShuttleEphemeralAtaWithMerge) {
+      if (kind !== "deposit") refuse(kind, "is not a transfer");
+      checkShuttleDepositWithMerge(move, expect, kind);
     } else if (move.data[0] === ESPL.depositAndDelegateShuttleWithMergeToEncryptedDestination) {
       // [tag][shuttle u32][amount u64]...; accounts: payer .. shuttle owner(5) .. mint(13)
       if (move.accounts[0] !== expect.owner || move.accounts[5] !== expect.owner || move.accounts[13] !== expect.mint) refuse(kind, "deposits from the wrong account or mint");
@@ -419,6 +425,48 @@ export function verifyBuiltTransaction(
     if (error instanceof PrivateRepaymentError) throw error;
     refuse(kind, "could not be read");
   }
+}
+
+function associatedTokenAccount(owner: string, mint: string, allowOffCurve = false): string {
+  const ownerKey = new PublicKey(owner);
+  if (!allowOffCurve && !PublicKey.isOnCurve(ownerKey.toBytes())) throw new Error("owner is off curve");
+  return PublicKey.findProgramAddressSync(
+    [ownerKey.toBuffer(), new PublicKey(SPL_TOKEN_PROGRAM).toBuffer(), new PublicKey(mint).toBuffer()],
+    new PublicKey(ASSOCIATED_TOKEN_PROGRAM),
+  )[0].toBase58();
+}
+
+/**
+ * Ephemeral SPL tag 24, `SetupAndDelegateShuttleEphemeralAtaWithMerge`
+ * (e-token/src/processor/deposit_and_delegate_shuttle_ephemeral_ata_with_merge.rs;
+ * built by `delegateSpl` in @magicblock-labs/ephemeral-rollups-sdk 0.17.3).
+ * It moves `amount` from the owner's token account into MagicBlock's vault and
+ * merges it, on the rollup, into `destination`. For a deposit to the owner's
+ * own private balance, source and destination are both the owner's USDC ATA.
+ *
+ * Data: [24][shuttle_id u32][amount u64][validator 32?] (13 or 45 bytes).
+ * Accounts: 0 payer (signer), 1 rent PDA, 2 shuttle metadata, 3 shuttle EATA,
+ * 4 shuttle wallet ATA, 5 shuttle owner (signer), 6 owner program (ESPL),
+ * 7 buffer, 8 delegation record, 9 delegation metadata, 10 delegation program,
+ * 11 associated token program, 12 system program, 13 destination token account,
+ * 14 mint, 15 token program, 16 global vault, 17 owner source token account,
+ * 18 vault token account.
+ */
+function checkShuttleDepositWithMerge(move: DecodedInstruction, expect: { owner: string; mint: string; amountBaseUnits: bigint }, kind: string): void {
+  if (move.data.length !== 13 && move.data.length !== 45) refuse(kind, "has an unexpected deposit layout");
+  if (move.accounts.length !== 19) refuse(kind, "has an unexpected deposit layout");
+  const a = move.accounts;
+  if (a[0] !== expect.owner || a[5] !== expect.owner) refuse(kind, "deposits for a different owner");
+  if (a[14] !== expect.mint || a[15] !== SPL_TOKEN_PROGRAM) refuse(kind, "deposits from the wrong account or mint");
+  if (a[6] !== EPHEMERAL_SPL_PROGRAM || a[10] !== DELEGATION_PROGRAM || a[11] !== ASSOCIATED_TOKEN_PROGRAM || a[12] !== SYSTEM_PROGRAM) refuse(kind, "has an unexpected deposit layout");
+  const ownerAta = associatedTokenAccount(expect.owner, expect.mint);
+  // The rollup merge credits `destination`: anything but the owner's own
+  // account would hand the deposit to someone else.
+  if (a[17] !== ownerAta) refuse(kind, "deposits from the wrong account or mint");
+  if (a[13] !== ownerAta) refuse(kind, "deposits into someone else's balance");
+  const vault = PublicKey.findProgramAddressSync([new PublicKey(expect.mint).toBuffer()], new PublicKey(EPHEMERAL_SPL_PROGRAM))[0].toBase58();
+  if (a[16] !== vault || a[18] !== associatedTokenAccount(vault, expect.mint, true)) refuse(kind, "deposits into a vault ChainPay doesn't expect");
+  if (u64(move.data, 5) !== expect.amountBaseUnits) refuse(kind, "deposits a different amount");
 }
 
 export type PayStep =

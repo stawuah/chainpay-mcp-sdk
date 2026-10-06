@@ -848,13 +848,23 @@ pub async fn freeze(
             json!({"state": "submitted"}),
         )
         .await?;
-    let op_id = program::hex(&Sha256::digest(op.as_bytes())[..16]);
+    // A card that is already frozen (and not since unfrozen, which clears
+    // `freeze.onChain`) keeps its freeze operation: a second request, even
+    // with a new clientOperationId, resumes that one instead of starting
+    // another.
+    let existing = card.record["freeze"]["opId"]
+        .as_str()
+        .filter(|_| card.record["freeze"]["onChain"] == true)
+        .map(str::to_owned);
+    let op_id = existing
+        .clone()
+        .unwrap_or_else(|| program::hex(&Sha256::digest(op.as_bytes())[..16]));
     let result = json!({"freezeOperationId": op_id, "onChain": "submitted", "issuer": "pending_issuer_confirmation"});
     // The claim only names the operation. A retry with the same id redoes
     // any half of the freeze that is not confirmed yet (PER `freeze` and
     // Lithic PAUSED are both idempotent), so an early failure never leaves
     // the card open while the client is told "submitted".
-    if !won
+    if (!won || existing.is_some())
         && card.record["freeze"]["opId"] == op_id.as_str()
         && card.record["freeze"]["onChainState"] == "confirmed"
         && card.record["freeze"]["issuer"] == "confirmed"
@@ -863,7 +873,11 @@ pub async fn freeze(
     }
     let (policy, period) = card_pdas(&card)?;
     let issuer = cards.card_issuer(&card).ok_or_else(CardsError::internal)?;
-    let at = rfc3339(now_ms());
+    let at = card.record["freeze"]["at"]
+        .as_str()
+        .filter(|_| existing.is_some())
+        .map(str::to_owned)
+        .unwrap_or_else(|| rfc3339(now_ms()));
     cards
         .update_card(card_id, |record| {
             record["freeze"] = json!({"onChain": true, "issuer": "pending_issuer_confirmation", "wantedIssuerState": "PAUSED", "opId": op_id, "at": at});

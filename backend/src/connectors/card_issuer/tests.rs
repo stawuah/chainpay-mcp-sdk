@@ -1068,6 +1068,64 @@ async fn futures_join_all<T: Send + 'static>(handles: Vec<tokio::task::JoinHandl
     out
 }
 
+/// Lane B (Devnet, 2026-10-06): freezing an already-frozen card started a
+/// second freeze operation. It returns the existing one, with no new PER
+/// `freeze`, until the card is unfrozen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn freezing_a_frozen_card_returns_the_existing_freeze_operation() {
+    let h = Harness::new().await;
+    let freeze = |id: &'static str| {
+        let h = &h;
+        async move {
+            h.owner(
+                "POST",
+                &format!("/v1/cards/{}/freeze", h.card_id),
+                Some(json!({"clientOperationId": id, "reason": "lost trust"})),
+            )
+            .await
+        }
+    };
+    let (status, first) = freeze("freeze-first-1").await;
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(h.program_count("freeze"), 1);
+    let (_, card) = h
+        .owner("GET", &format!("/v1/cards/{}", h.card_id), None)
+        .await;
+    assert_eq!(
+        card["freeze"],
+        json!({"onChain": true, "issuer": "confirmed"})
+    );
+    let activity_before = h
+        .owner("GET", &format!("/v1/cards/{}/activity", h.card_id), None)
+        .await
+        .1;
+
+    let (status, second) = freeze("freeze-second-2").await;
+    assert_eq!(status, 200, "{second}");
+    assert_eq!(second["freezeOperationId"], first["freezeOperationId"]);
+    assert_eq!(h.program_count("freeze"), 1, "no second freeze on PER");
+    let activity_after = h
+        .owner("GET", &format!("/v1/cards/{}/activity", h.card_id), None)
+        .await
+        .1;
+    assert_eq!(activity_after, activity_before, "no second freeze activity");
+
+    // After the owner's unfreeze, a new freeze is a new operation.
+    h.per.with_card(&h.policy, |c| c.policy.frozen = false);
+    let (status, body) = h
+        .owner(
+            "POST",
+            &format!("/v1/cards/{}/unfreeze-mirror", h.card_id),
+            Some(json!({"clientOperationId": "unfreeze-0003", "expectedPolicyVersion": 1})),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let (status, third) = freeze("freeze-third-3").await;
+    assert_eq!(status, 200, "{third}");
+    assert_ne!(third["freezeOperationId"], first["freezeOperationId"]);
+    assert_eq!(h.program_count("freeze"), 2);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn freeze_pauses_the_issuer_card_and_new_authorizations_decline() {
     let h = Harness::new().await;

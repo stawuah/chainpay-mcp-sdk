@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getAddressEncoder } from "@solana/addresses";
+import { PublicKey } from "@solana/web3.js";
 import {
   PRIVATE_REPAYMENT_DEVNET_USDC,
   PRIVATE_REPAYMENT_METHOD,
@@ -10,6 +11,7 @@ import {
   preparePrivateRepayment,
   privateRepaymentDisclosure,
   submitPrivateRepayment,
+  verifyBuiltTransaction,
   waitForPrivateRepayment,
 } from "../dist/cards/private-repayment.js";
 
@@ -93,7 +95,7 @@ function fakeMagicBlock({ balances, tamper = {} }) {
       case "/v1/spl/challenge": return json(200, { challenge: "sign-me" });
       case "/v1/spl/login": return json(200, { token: TOKEN });
       case "/v1/spl/private-balance": return json(200, { balance: String(balances[Math.min(i++, balances.length - 1)]), location: "ephemeral" });
-      case "/v1/spl/deposit": return json(200, { kind: "deposit", transactionBase64: depositTx({ amount: body.amount, ...tamper.deposit }), sendTo: "base", recentBlockhash: "bh", lastValidBlockHeight: 1, requiredSigners: [OWNER] });
+      case "/v1/spl/deposit": return json(200, { kind: "deposit", transactionBase64: (tamper.depositBuilder ?? depositTx)({ amount: body.amount, ...tamper.deposit }), sendTo: "base", recentBlockhash: "bh", lastValidBlockHeight: 1, requiredSigners: [OWNER] });
       case "/v1/spl/transfer": return json(200, { kind: "transfer", transactionBase64: transferTx({ amount: body.amount, to: body.to, ref: body.clientRefId, ...tamper.transfer }), sendTo: "ephemeral", sendRpcEndpoint: "https://devnet-tee.magicblock.app", recentBlockhash: "bh", lastValidBlockHeight: 1, requiredSigners: [OWNER], fees: { lamports: "0", tokens: "0" } });
       case "/v1/transaction/send": return json(200, { signature: "sig-transfer", confirmed: true });
       default: return json(404, { error: { code: "NOT_FOUND", message: "no" } });
@@ -237,4 +239,78 @@ test("ChainPay routes: prepare, submit, and polling past settlement_pending", as
   assert.equal(done.state, "discharged");
   assert.deepEqual(calls.at(-1).body, { method: PRIVATE_REPAYMENT_METHOD, attemptId: "p1", cluster: "devnet" });
   assert.equal(calls.at(-1).auth, "Bearer owner-session");
+});
+
+// ---- tag 24 SetupAndDelegateShuttleEphemeralAtaWithMerge (MagicBlock's deposit since Oct 2026)
+const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+const DELEGATION = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
+const SYSTEM = "11111111111111111111111111111111";
+const ata = (owner, mint, offCurve = false) => {
+  if (!offCurve) assert.ok(PublicKey.isOnCurve(new PublicKey(owner).toBytes()));
+  return PublicKey.findProgramAddressSync([new PublicKey(owner).toBuffer(), new PublicKey(SPL_TOKEN).toBuffer(), new PublicKey(mint).toBuffer()], new PublicKey(ATA_PROGRAM))[0].toBase58();
+};
+const vaultOf = (mint) => PublicKey.findProgramAddressSync([new PublicKey(mint).toBuffer()], new PublicKey(ESPL))[0].toBase58();
+
+/**
+ * MagicBlock's deposit as observed live on Devnet (Lane B, 2026-10-06): ESPL 1,
+ * ATA create x2, ESPL 0, 6, 4, then 24, which carries the amount. Built the
+ * way @magicblock-labs/ephemeral-rollups-sdk 0.17.3 `delegateSpl` builds it.
+ */
+function shuttleDepositTx({ owner = OWNER, amount, mint = PRIVATE_REPAYMENT_DEVNET_USDC, destination, source, payer = owner, shuttleOwner = owner, tokenProgram = SPL_TOKEN, vault, validator = true, dataLength, tag = 24, extra = [] }) {
+  const ownerAta = ata(owner, mint);
+  const v = vault ?? vaultOf(mint);
+  let data = [tag, ...le(1234, 4), ...le(amount, 8), ...(validator ? Array.from(addressBytes("MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo")) : [])];
+  if (dataLength !== undefined) data = [...data, ...new Array(64).fill(0)].slice(0, dataLength);
+  const accounts = [payer, FILLER[0], FILLER[1], FILLER[2], FILLER[3], shuttleOwner, ESPL, FILLER[4], FILLER[5], "SysvarS1otHashes111111111111111111111111111", DELEGATION, ATA_PROGRAM, SYSTEM, destination ?? ownerAta, mint, tokenProgram, v, source ?? ownerAta, ata(v, mint, true)];
+  return legacyTx(owner, [
+    ...extra,
+    { program: ESPL, accounts: [FILLER[0], owner], data: [1] },
+    { program: ATA_PROGRAM, accounts: [owner, ownerAta, owner, mint, SYSTEM, SPL_TOKEN], data: [1] },
+    { program: ESPL, accounts: [FILLER[1], owner, mint, owner, SYSTEM], data: [0] },
+    { program: ESPL, accounts: [FILLER[1], owner], data: [6, 255, 0] },
+    { program: ESPL, accounts: [owner, FILLER[1], DELEGATION], data: [4] },
+    { program: ESPL, accounts, data },
+  ]);
+}
+
+test("MagicBlock's shuttle deposit (tag 24) is accepted only to the owner's own balance, for the exact amount", async () => {
+  const expect = { kind: "deposit", owner: OWNER, mint: PRIVATE_REPAYMENT_DEVNET_USDC, amountBaseUnits: 10_000_000n };
+  for (const validator of [true, false]) {
+    verifyBuiltTransaction({ transactionBase64: shuttleDepositTx({ amount: 10_000_000, validator }) }, expect);
+  }
+  const partnerAta = ata(PARTNER, PRIVATE_REPAYMENT_DEVNET_USDC);
+  const cases = {
+    amount: { amount: 10_000_001 },
+    mint: { mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" },
+    "destination (someone else's balance)": { destination: partnerAta },
+    "source account": { source: partnerAta },
+    "shuttle owner": { shuttleOwner: PARTNER },
+    payer: { payer: PARTNER },
+    "token program": { tokenProgram: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" },
+    vault: { vault: FILLER[3] },
+    "data length": { dataLength: 14 },
+    "unknown tag (25, private transfer variant)": { tag: 25 },
+    "second amount-bearing deposit": { extra: [{ program: ESPL, accounts: [FILLER[0], FILLER[1], PRIVATE_REPAYMENT_DEVNET_USDC, FILLER[2], FILLER[3], OWNER, SPL_TOKEN], data: [2, ...le(1, 8)] }] },
+    "withdrawal": { extra: [{ program: ESPL, accounts: [FILLER[0]], data: [3, ...le(1, 8)] }] },
+  };
+  for (const [name, tamper] of Object.entries(cases)) {
+    assert.throws(
+      () => verifyBuiltTransaction({ transactionBase64: shuttleDepositTx({ amount: 10_000_000, ...tamper }) }, expect),
+      (e) => e instanceof PrivateRepaymentError && e.code === "unexpected_transaction",
+      name,
+    );
+  }
+  // A transfer may never carry a deposit.
+  assert.throws(
+    () => verifyBuiltTransaction({ transactionBase64: shuttleDepositTx({ amount: 10_050_000 }) }, { kind: "transfer", owner: OWNER, mint: PRIVATE_REPAYMENT_DEVNET_USDC, amountBaseUnits: 10_050_000n, recipientWallet: PARTNER, clientRefId: "418273645512" }),
+    (e) => e.code === "unexpected_transaction",
+  );
+});
+
+test("payStatementPrivately signs MagicBlock's current shuttle deposit, then the transfer", async () => {
+  const mb = fakeMagicBlock({ balances: [50_000, 50_000, 10_050_000], tamper: { depositBuilder: shuttleDepositTx } });
+  const sent = [];
+  const out = await payStatementPrivately({ attempt: attempt(), signer, magicblock: { fetch: mb.fetch }, sendBase: async (signed) => { sent.push(signed); return "sig-deposit"; }, sleep: async () => {} });
+  assert.deepEqual(out, { depositSignature: "sig-deposit", transferSignature: "sig-transfer", transferOutcome: "sent" });
+  assert.deepEqual(sent, [`signed:${shuttleDepositTx({ amount: 10_000_000 })}`]);
 });
