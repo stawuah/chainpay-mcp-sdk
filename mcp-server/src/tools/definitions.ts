@@ -345,6 +345,10 @@ export const TOOL_DEFINITIONS = [
           type: "string",
           description: "Optional base64 transaction signed outside ChainPay; omit on the first call",
         },
+        retryFailedPaymentId: {
+          type: "string",
+          description: "Only after the user approves again: the paymentId of an attempt the chain refused (status failed) for this same invoice. Opens a new attempt; the receipt PDA still allows one payment per invoice",
+        },
       },
       anyOf: [{ required: ["paymentId"] }, { required: ["resource", "mandate", "agent", "signingMode"] }],
       additionalProperties: false,

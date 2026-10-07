@@ -325,6 +325,7 @@ async function relaySignedPayment(
   mandate: string,
   agent: string,
   signedTransaction: string,
+  idempotencyKey: string,
 ): Promise<Record<string, unknown>> {
   if (!context.backendUrl) throw new Error("CHAINPAY_BACKEND_URL must be configured to relay a signed x402 transaction");
   const response = await submitSettlement(context, `${context.backendUrl.replace(/\/$/, "")}/v1/payments`, {
@@ -334,7 +335,7 @@ async function relaySignedPayment(
       ...(context.backendAuthToken ? { Authorization: `Bearer ${context.backendAuthToken}` } : {}),
     },
     body: JSON.stringify({
-      idempotency_key: `x402:${mandate}:${challenge.invoiceHash}`,
+      idempotency_key: idempotencyKey,
       mandate,
       invoice_hash: challenge.invoiceHash,
       receipt_address: prepared.receiptAddress,
@@ -356,7 +357,7 @@ async function relaySignedPayment(
       throw new Error(`Axum rejected x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
     }
     // Possibly broadcast: resume by paymentId, never re-prepare.
-    return relayOutcomeUnknown(context, `x402:${mandate}:${challenge.invoiceHash}`, response.status, payload);
+    return relayOutcomeUnknown(context, idempotencyKey, response.status, payload);
   }
 
   return payload;
@@ -368,6 +369,7 @@ async function relayManagedPayment(
   prepared: PreparedPayment,
   mandate: string,
   agent: string,
+  idempotencyKey: string,
 ): Promise<Record<string, unknown>> {
   if (!context.backendUrl || !context.backendAuthToken) {
     throw new Error("Delegated x402 requires CHAINPAY_BACKEND_URL and a verified caller session or scoped connection");
@@ -380,7 +382,7 @@ async function relayManagedPayment(
       Authorization: `Bearer ${context.backendAuthToken}`,
     },
     body: JSON.stringify({
-      idempotency_key: `x402:${mandate}:${challenge.invoiceHash}`,
+      idempotency_key: idempotencyKey,
       mandate,
       invoice_hash: challenge.invoiceHash,
       receipt_address: prepared.receiptAddress,
@@ -402,7 +404,7 @@ async function relayManagedPayment(
       throw new Error(`Axum rejected delegated x402 settlement (${response.status}): ${JSON.stringify(payload)}`);
     }
     // Possibly broadcast: resume by paymentId, never re-prepare.
-    return relayOutcomeUnknown(context, `x402:${mandate}:${challenge.invoiceHash}`, response.status, payload);
+    return relayOutcomeUnknown(context, idempotencyKey, response.status, payload);
   }
 
   return payload;
@@ -555,14 +557,14 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
           receiptAddress: prepared.receiptAddress,
         }, true);
       }
+      const idempotencyKey = await x402OperationKey(context, mandate, challenge, args.retryFailedPaymentId);
       const settlement = signingMode === "delegated"
-        ? await relayManagedPayment(context, challenge, prepared, mandate, agent)
-        : await relaySignedPayment(context, challenge, prepared, mandate, agent, signedTransaction);
+        ? await relayManagedPayment(context, challenge, prepared, mandate, agent, idempotencyKey)
+        : await relaySignedPayment(context, challenge, prepared, mandate, agent, signedTransaction, idempotencyKey);
       if (settlement.status !== "confirmed" || typeof settlement.signature !== "string") {
-        return toolResult({ action: settlement.status === "failed" ? "x402_payment_failed" : "x402_payment_pending", status: settlement.status, resource, challenge, settlement, receiptAddress: prepared.receiptAddress,
-          continuation: { tool: "execute_x402_payment", arguments: { paymentId: settlement.payment_id } }, message: "Resume execute_x402_payment with paymentId to check settlement and deliver the original resource; do not request another approval." }, settlement.status === "failed");
+        return unsettledResult(settlement, { resource, challenge, receiptAddress: prepared.receiptAddress }, { resource, mandate, agent, signingMode, settleIfReceiptMerchant: true });
       }
-      return deliverX402(context, resource, challenge, prepared.receiptAddress, mandate, agent, settlement, `x402:${mandate}:${challenge.invoiceHash}`);
+      return deliverX402(context, resource, challenge, prepared.receiptAddress, mandate, agent, settlement, idempotencyKey);
     }
     return toolResult(await quoteStandardV2AgainstMandate(context, detected.option, mandate, agent), true);
   }
@@ -596,14 +598,75 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
     }, true);
   }
 
+  const idempotencyKey = await x402OperationKey(context, mandate, challenge, args.retryFailedPaymentId);
   const settlement = signingMode === "delegated"
-    ? await relayManagedPayment(context, challenge, prepared, mandate, agent)
-    : await relaySignedPayment(context, challenge, prepared, mandate, agent, signedTransaction);
+    ? await relayManagedPayment(context, challenge, prepared, mandate, agent, idempotencyKey)
+    : await relaySignedPayment(context, challenge, prepared, mandate, agent, signedTransaction, idempotencyKey);
   if (settlement.status !== "confirmed" || typeof settlement.signature !== "string") {
-    return toolResult({ action: settlement.status === "failed" ? "x402_payment_failed" : "x402_payment_pending", status: settlement.status, resource, challenge, settlement, receiptAddress: prepared.receiptAddress,
-      continuation: { tool: "execute_x402_payment", arguments: { paymentId: settlement.payment_id } }, message: "Resume execute_x402_payment with paymentId to check settlement and deliver the original resource; do not request another approval." }, settlement.status === "failed");
+    return unsettledResult(settlement, { resource, challenge, receiptAddress: prepared.receiptAddress }, { resource, mandate, agent, signingMode });
   }
-  return deliverX402(context, resource, challenge, prepared.receiptAddress, mandate, agent, settlement, `x402:${mandate}:${challenge.invoiceHash}`);
+  return deliverX402(context, resource, challenge, prepared.receiptAddress, mandate, agent, settlement, idempotencyKey);
+}
+
+/** The relay's error for an invoice whose receipt already exists (`server_receipts.rs`). */
+const DUPLICATE_INVOICE_MESSAGE = "This invoice was already paid. Nothing new was submitted.";
+
+/**
+ * The relay operation key for one attempt at an x402 invoice.
+ *
+ * A standard v2 challenge carries no nonce, so its invoice hash is fixed by mint, recipient,
+ * amount and resource, and every attempt from one mandate maps to the same relay operation.
+ * Once the chain refuses that operation it stays `failed`, by design, and resuming it cannot
+ * change that. `retryFailedPaymentId` names the refused operation and opens the next attempt
+ * for the same invoice. Paying twice stays impossible: the receipt PDA is seeded by mandate
+ * and invoice hash, so the program accepts at most one payment for this invoice, and the
+ * relay re-reads the receipt before it signs.
+ */
+async function x402OperationKey(
+  context: ChainPayMcpContext,
+  mandate: string,
+  challenge: NormalizedX402Challenge,
+  retryFailedPaymentId: unknown,
+): Promise<string> {
+  const key = `x402:${mandate}:${challenge.invoiceHash}`;
+  if (retryFailedPaymentId === undefined) return key;
+  if (typeof retryFailedPaymentId !== "string" || !/^payment_[a-f0-9]{64}$/.test(retryFailedPaymentId)) {
+    throw new Error("retryFailedPaymentId must be an existing paymentId");
+  }
+  if (!context.backendUrl) throw new Error("CHAINPAY_BACKEND_URL is required to retry a refused payment");
+  const response = await fetch(`${context.backendUrl.replace(/\/$/, "")}/v1/payments/${retryFailedPaymentId}/x402`, {
+    headers: context.backendAuthToken ? { Authorization: `Bearer ${context.backendAuthToken}` } : {},
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new Error(`The payment to retry is unavailable (${response.status})`);
+  const { payment } = await response.json() as { payment: Record<string, unknown> };
+  if (payment.status !== "failed") {
+    throw new Error(`Only a payment the chain refused can be retried; ${retryFailedPaymentId} is ${String(payment.status)}. Resume it with paymentId instead.`);
+  }
+  if (payment.error === DUPLICATE_INVOICE_MESSAGE) throw new Error("This invoice was already paid; there is nothing to retry");
+  if (payment.mandate !== mandate || payment.invoice_hash !== challenge.invoiceHash) {
+    throw new Error("retryFailedPaymentId belongs to a different mandate or invoice");
+  }
+  return `${key}:after:${retryFailedPaymentId}`;
+}
+
+/**
+ * What an agent may do after a settlement that is not confirmed. A refused payment moved no
+ * funds and resuming it changes nothing; a retry is a new attempt and needs the user again.
+ */
+function unsettledResult(settlement: Record<string, unknown>, extra: Record<string, unknown>, retry: Record<string, unknown>) {
+  const failed = settlement.status === "failed";
+  const paymentId = settlement.payment_id;
+  if (!failed) {
+    return toolResult({ action: "x402_payment_pending", status: settlement.status, ...extra, settlement,
+      continuation: { tool: "execute_x402_payment", arguments: { paymentId } }, message: "Resume execute_x402_payment with paymentId to check settlement and deliver the original resource; do not request another approval." });
+  }
+  if (settlement.error === DUPLICATE_INVOICE_MESSAGE) {
+    return toolResult({ action: "x402_payment_failed", status: settlement.status, ...extra, settlement, message: DUPLICATE_INVOICE_MESSAGE }, true);
+  }
+  return toolResult({ action: "x402_payment_failed", status: settlement.status, ...extra, settlement,
+    retry: { tool: "execute_x402_payment", requiresUserApproval: true, arguments: { ...retry, retryFailedPaymentId: paymentId } },
+    message: "The chain refused this payment and no funds moved; settlement.error says why. Resuming this paymentId cannot change that. Fix the cause, ask the user to approve again, then call execute_x402_payment with the retry arguments." }, true);
 }
 
 async function deliverX402(context: ChainPayMcpContext, resource: string, challenge: NormalizedX402Challenge, receiptAddress: string, mandate: string, agent: string, settlement: Record<string, unknown>, idempotencyKey: string) {
@@ -658,7 +721,7 @@ async function resumeX402Payment(context: ChainPayMcpContext, paymentId: string)
   if (!response.ok) throw new Error(`Existing x402 operation unavailable (${response.status})`);
   const saved=await response.json() as {payment:Record<string,unknown>;resource:string;challenge:NormalizedX402Challenge;idempotency_key:string};
   const payment=saved.payment;
-  if (payment.status!=="confirmed") return toolResult({action:payment.status==="failed"?"x402_payment_failed":"x402_payment_pending",status:payment.status,settlement:payment,continuation:{tool:"execute_x402_payment",arguments:{paymentId}},message:"Resume this paymentId; no new preparation or approval is needed."},payment.status==="failed");
+  if (payment.status!=="confirmed") return unsettledResult(payment,{},{resource:saved.resource,mandate:payment.mandate,agent:payment.agent,signingMode:payment.signing_mode,...(saved.challenge.sourceProtocol==="x402-v2"?{settleIfReceiptMerchant:true}:{})});
   if (saved.challenge.resource!==saved.resource || typeof payment.signature!=="string" || typeof payment.receipt_address!=="string" || typeof payment.mandate!=="string" || typeof payment.agent!=="string") throw new Error("Stored x402 settlement context is incomplete");
   return deliverX402(context,resourceUrl(saved.resource),labelStoredChallenge(saved.challenge),payment.receipt_address,payment.mandate,payment.agent,payment,saved.idempotency_key);
 }
