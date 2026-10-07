@@ -43,13 +43,13 @@ export type PaymentWidgetView = {
   explorerUrl?: string;
   reason?: string;
   reasonKind?: "limits" | "signature" | "expired" | "paid" | "recipient" | "permission" | "funds" | "other";
-  /** True only when this result proves nothing was signed or broadcast. */
+  /** True only when this call was refused before submitting a new payment. */
   rejectedBeforeBroadcast?: boolean;
 };
 
 export const WIDGET_TOOLS = new Set(["quote_payment_request", "execute_payment", "wait_for_payment"]);
 
-/** Results that prove the payment never reached Solana. */
+/** Execution/quote results that prove this call submitted no new payment. */
 const REJECTED_BEFORE_BROADCAST = new Set([
   "payment_request_rejected",
   "payment_request_blocked",
@@ -243,8 +243,10 @@ export async function paymentWidgetView(
   result: unknown,
 ): Promise<PaymentWidgetView | undefined> {
   if (!WIDGET_TOOLS.has(toolName)) return undefined;
-  const data = record(record(result)?.structuredContent);
-  if (!data) return undefined;
+  const raw = record(record(result)?.structuredContent);
+  if (!raw) return undefined;
+  // wait_for_payment nests the latest record while settlement is pending.
+  const data = raw.action === "payment_pending" ? { ...record(raw.payment), ...raw } : raw;
   const action = text(data.action);
 
   const verification = record(data.verification);
@@ -262,7 +264,7 @@ export async function paymentWidgetView(
   const cluster = text(payload?.cluster) ?? "devnet";
 
   const [decimals, mandate] = await Promise.all([
-    mintDecimals(context, mint, typeof payload?.decimals === "number" ? payload.decimals : undefined),
+    mintDecimals(context, mint),
     readMandate(context, mandateAddress),
   ]);
   const format = (value: bigint | undefined) => value === undefined || decimals === undefined ? undefined : formatTokenAmount(value, decimals);
@@ -270,10 +272,19 @@ export async function paymentWidgetView(
 
   const checks = preflightChecks(data);
   const signingMode = text(args.signingMode) ?? text(data.signing_mode) ?? text(data.signingMode);
-  const { state, currentStep } = stateFor(action, data, signingMode);
+  let { state, currentStep } = stateFor(action, data, signingMode);
+  // A status lookup failure says nothing about a previously submitted payment.
+  if (toolName === "wait_for_payment" && (
+    (action !== "payment_terminal" && action !== "payment_pending")
+    || (action === "payment_pending" && !text(data.signature))
+  )) {
+    state = "unknown";
+    currentStep = undefined;
+  }
+  if (action === "payment_request_quoted" && record(result)?.isError === true) state = "blocked";
 
   const remainingUnits = mandate ? mandate.totalLimit - mandate.amountSpent : undefined;
-  const limits: PaymentWidgetView["limits"] = mandate
+  const limits: PaymentWidgetView["limits"] = mandate && mandate.allowedMint === mint
     ? {
         requested: format(amountUnits),
         cap: format(mandate.maxPerPayment),
@@ -301,7 +312,7 @@ export async function paymentWidgetView(
     recipientShort: shortAddress(recipient),
     limits,
     mandate: mandateAddress,
-    paymentId: text(data.payment_id) ?? text(data.paymentId),
+    paymentId: text(data.payment_id) ?? text(data.paymentId) ?? (toolName === "wait_for_payment" ? text(args.paymentId) : undefined),
   };
 
   if (state === "ready") {
@@ -332,7 +343,9 @@ export async function paymentWidgetView(
   }
   if (state === "blocked") {
     Object.assign(view, blockedReason(data, checks, { cap: limits?.cap, remaining: limits?.remaining, symbol }));
-    if (action && REJECTED_BEFORE_BROADCAST.has(action)) view.rejectedBeforeBroadcast = true;
+    if (toolName !== "wait_for_payment" && action && (REJECTED_BEFORE_BROADCAST.has(action) || action === "payment_request_quoted")) {
+      view.rejectedBeforeBroadcast = true;
+    }
   }
   return view;
 }

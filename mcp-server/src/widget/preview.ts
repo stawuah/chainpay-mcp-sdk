@@ -20,7 +20,7 @@ export const WIDGET_PREVIEW_FIXTURES: Record<string, Record<string, unknown>> = 
   paying: { ...base, state: "paying", currentStep: 3 },
   confirming: { ...base, state: "confirming", currentStep: 4, slow: true, signature: sig, explorerUrl: `https://explorer.solana.com/tx/${sig}?cluster=devnet` },
   settled: {
-    ...base, state: "settled", signature: sig, tx: sig, txShort: "5Tq8…Wv2a", receiptShort: "Rc7m…2bLp", receiptUrl: "https://example.invalid/verify/sample",
+    ...base, state: "settled", signature: sig, txShort: "5Tq8…Wv2a", receiptShort: "Rc7m…2bLp", receiptUrl: "https://example.invalid/verify/sample",
     explorerUrl: `https://explorer.solana.com/tx/${sig}?cluster=devnet`, limits: { requested: "10", cap: "21", remaining: "20" },
   },
   blocked: {

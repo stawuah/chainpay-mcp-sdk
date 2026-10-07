@@ -163,10 +163,10 @@ test("the server lists and reads the payment card as an MCP App", async () => {
   assert.equal(read.result.contents[0].mimeType, "text/html;profile=mcp-app");
   assert.doesNotMatch(html, /__CHAINPAY_LOGO__|__TOKEN_ICONS__|__PREVIEW__/, "every placeholder is filled");
   assert.match(html, /data:image\/svg\+xml;base64,/, "the USDC art is inlined");
-  for (const step of ["Request verified", "Guardrails passed", "Delegated authorization confirmed", "Submitting to Solana", "Waiting for confirmation", "Receipt recorded"]) {
+  for (const step of ["Payment prepared", "Guardrails passed", "Payment authorization confirmed", "Submitting to Solana", "Waiting for confirmation", "Receipt recorded"]) {
     assert.ok(html.includes(step), step);
   }
-  assert.ok(html.includes("No transaction was signed or submitted. No funds moved."));
+  assert.ok(html.includes("No new payment was submitted by this call."));
   assert.doesNotMatch(html, /x402|execute_payment|quote_payment_request/, "the card never shows tool names or x402");
 
   const missing = await server.handle({ jsonrpc: "2.0", id: 4, method: "resources/read", params: { uri: "ui://chainpay/nope.html" } });
@@ -236,4 +236,62 @@ test("the demo store refuses to sign without a payout account", async () => {
   } finally {
     if (previous !== undefined) process.env.CHAINPAY_DEMO_MERCHANT_USDC_RECIPIENT = previous;
   }
+});
+
+test("status lookup errors never claim an existing payment was blocked before broadcast", async () => {
+  for (const action of ["backend_rejected", "backend_required"]) {
+    const view = await paymentWidgetView(context(), "wait_for_payment", { paymentId: "existing" }, result({ action }));
+    assert.equal(view.state, "unknown");
+    assert.equal(view.paymentId, "existing");
+    assert.equal(view.rejectedBeforeBroadcast, undefined);
+  }
+});
+
+test("pending status reads use the nested payment record", async () => {
+  const view = await paymentWidgetView(context(), "wait_for_payment", { paymentId: "existing" }, result({
+    action: "payment_pending", paymentId: "existing",
+    payment: { signature: "signed-tx", mandate: MANDATE, mint: USDC, amount: "10000000", status: "submitted" },
+  }));
+  assert.equal(view.state, "confirming");
+  assert.equal(view.signature, "signed-tx");
+  assert.equal(view.amount, "10");
+  assert.equal(view.limits.remaining, "30");
+});
+
+test("a quote failing the second preflight is blocked rather than ready", async () => {
+  const view = await paymentWidgetView(context(), "quote_payment_request", quoteArgs(), {
+    ...result({ action: "payment_request_quoted", verification: { valid: true, payload: payload() },
+      quote: { preflight: { valid: false, checks: checksWith({ total_limit: "Total limit exceeded" }) } } }),
+    isError: true,
+  });
+  assert.equal(view.state, "blocked");
+  assert.equal(view.reasonKind, "limits");
+  assert.equal(view.rejectedBeforeBroadcast, true);
+});
+
+test("a wrong-mint request never displays the mandate's balance in the requested token", async () => {
+  const args = quoteArgs();
+  args.request.payload.mint = Keypair.generate().publicKey.toBase58();
+  const view = await paymentWidgetView(context(), "quote_payment_request", args, result({
+    action: "payment_request_blocked", verification: { valid: true, payload: args.request.payload },
+    check: { preflight: { valid: false, checks: checksWith({ mint: "Wrong mint" }) } },
+  }));
+  assert.equal(view.limits, undefined);
+});
+
+test("unavailable mint decimals are never replaced by caller-supplied decimals", async () => {
+  const ctx = context();
+  ctx.client.getMintDecimals = async () => { throw new Error("RPC unavailable"); };
+  const view = await paymentWidgetView(ctx, "quote_payment_request", quoteArgs(), result({ action: "payment_request_rejected" }));
+  assert.equal(view.amount, undefined);
+  assert.equal(view.decimals, undefined);
+});
+
+test("a pending lookup without a latest signature preserves uncertainty", async () => {
+  const view = await paymentWidgetView(context(), "wait_for_payment", { paymentId: "existing" }, result({
+    action: "payment_pending", paymentId: "existing", message: "Status service is unavailable",
+  }));
+  assert.equal(view.state, "unknown");
+  assert.equal(view.currentStep, undefined);
+  assert.equal(view.rejectedBeforeBroadcast, undefined);
 });

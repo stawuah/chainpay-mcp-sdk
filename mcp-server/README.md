@@ -203,6 +203,21 @@ notification, which the relay now sends (see the backend README). **Whether
 Crossmint also detects such a payment on its own is unproven.** Passing local fixtures, including a real staging order response,
 proves the software paths, not that provider compatibility assumption.
 
+## Payment card evidence
+
+The card distinguishes a refused new submission from the status of an existing
+payment. Status-service failures remain unknown; a signed or previously paid
+invoice never receives a claim that nothing was signed or that no funds moved.
+Pending status reads use the backend's latest nested payment record. A failed
+second quote preflight is blocked even if the initial requirements check passed.
+
+Amounts require mint decimals read from chain. A request for a different mint
+never displays the mandate's limits as though they were denominated in that token.
+Updates retain descriptive fields only for the same payment ID; stale polling
+responses cannot replace a newer card. Host runtime regression tests exercise
+copying transaction signatures and replacing cards. These are simulated host
+checks, not live ChatGPT/Claude or settlement acceptance.
+
 ## Verify changes
 
 From the repository root:

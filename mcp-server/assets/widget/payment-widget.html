@@ -153,7 +153,7 @@ const PILL = {
   signature: ["tone-info", I.clock, "Needs signature"],
   loading: ["tone-info", I.clock, "Loading"],
 };
-const STEPS = ["Request verified", "Guardrails passed", "Delegated authorization confirmed", "Submitting to Solana", "Waiting for confirmation", "Receipt recorded"];
+const STEPS = ["Payment prepared", "Guardrails passed", "Payment authorization confirmed", "Submitting to Solana", "Waiting for confirmation", "Receipt recorded"];
 const KICKER = { ready: "ChainPay payment", paying: "ChainPay payment", confirming: "ChainPay payment", settled: "Payment complete", blocked: "Payment blocked", unknown: "ChainPay payment", signature: "ChainPay payment", loading: "ChainPay payment" };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -235,17 +235,17 @@ function body(m) {
         <div class="cpw-actions trio">
           ${m.receiptUrl ? `<a class="cpw-btn primary" href="${esc(m.receiptUrl)}" target="_blank" rel="noopener">Open receipt ${I.ext}</a>` : ""}
           ${m.explorerUrl ? `<a class="cpw-btn" href="${esc(m.explorerUrl)}" target="_blank" rel="noopener">View on Solana Explorer ${I.ext}</a>` : ""}
-          <button type="button" class="cpw-btn" data-copy="${esc(m.tx)}">Copy transaction</button>
+          <button type="button" class="cpw-btn" data-copy="${esc(m.signature)}">Copy transaction</button>
         </div>
-        <div class="cpw-fallback"><input readonly aria-label="Transaction signature" value="${esc(m.tx)}"><small>Copying isn't allowed here. Select the signature and press Ctrl/Cmd+C.</small></div>
+        <div class="cpw-fallback"><input readonly aria-label="Transaction signature" value="${esc(m.signature)}"><small>Copying isn't allowed here. Select the signature and press Ctrl/Cmd+C.</small></div>
         <p class="cpw-foot">Paid within your on-chain spending permission.</p></div>`;
     case "blocked":
       return `<div class="cpw-reason" role="alert"><b>${I.octagon}${esc(m.reason)}</b></div>
         ${m.reasonKind === "limits" ? limitsPanel(m) : ""}
         ${m.rejectedBeforeBroadcast === true
-          ? `<p class="cpw-foot strong">No transaction was signed or submitted. No funds moved.</p>`
+          ? `<p class="cpw-foot strong">No new payment was submitted by this call.</p>`
           : m.signature
-            ? `<p class="cpw-foot strong">Transaction failed on-chain. No tokens were transferred. <a href="${esc(m.explorerUrl)}" target="_blank" rel="noopener">View on Solana Explorer</a></p>`
+            ? `<p class="cpw-foot strong">The payment was reported as failed. Check the transaction before trying again. <a href="${esc(m.explorerUrl)}" target="_blank" rel="noopener">View on Solana Explorer</a></p>`
             : ""}`;
     case "signature":
       return `<p class="cpw-note">Sign this payment in your wallet to continue. Nothing has been submitted yet.</p>`;
@@ -322,13 +322,16 @@ function openLink(url) {
   request("ui/open-link", { url }).catch(() => window.open(url, "_blank", "noopener"));
 }
 
-// Fields a later result can't prove (merchant, product, checks) survive from the earlier one.
+// Only descriptive fields survive an update for the same identified payment.
 function apply(view) {
   if (!view || view.version !== 1) return;
-  const keep = model && model.paymentId && view.paymentId && model.paymentId !== view.paymentId ? {} : (model || {});
-  const next = { ...keep };
-  for (const [key, value] of Object.entries(view)) if (value !== undefined && value !== null) next[key] = value;
-  if (view.limits) next.limits = { ...(keep.limits || {}), ...view.limits };
+  const samePayment = model?.paymentId && view.paymentId === model.paymentId;
+  const next = { ...view };
+  if (samePayment) {
+    for (const key of ["merchant", "product", "amount", "symbol", "decimals", "recipient", "recipientShort"]) {
+      if (next[key] == null) next[key] = model[key];
+    }
+  }
   if (next.state === "settled" && next.limits) delete next.limits.after;
   model = next;
   render(root, model);
@@ -346,10 +349,14 @@ async function maybePoll() {
   if (polling || !model || !model.paymentId) return;
   if (!["paying", "confirming", "unknown"].includes(model.state)) return;
   polling = true;
+  const initialPaymentId = model.paymentId;
   const deadline = Date.now() + 120000;
   try {
     while (Date.now() < deadline && ["paying", "confirming", "unknown"].includes(model.state)) {
-      const result = await callTool("wait_for_payment", { paymentId: model.paymentId, timeoutMs: "15000", pollMs: "1000" });
+      const paymentId = model.paymentId;
+      const result = await callTool("wait_for_payment", { paymentId, timeoutMs: "15000", pollMs: "1000" });
+      // Ignore an old poll if the host has replaced this card in the meantime.
+      if (model.paymentId !== paymentId || !["paying", "confirming", "unknown"].includes(model.state)) return;
       fromResult(result);
       if (!["paying", "confirming", "unknown"].includes(model.state)) return;
       await new Promise((r) => setTimeout(r, 2000));
@@ -358,6 +365,7 @@ async function maybePoll() {
     // The host may not let the card call tools. The chat still reports the outcome.
   } finally {
     polling = false;
+    if (model.paymentId !== initialPaymentId) void maybePoll();
   }
   if (["paying", "confirming"].includes(model.state) && !model.slow) { model = { ...model, slow: true }; render(root, model); reportSize(); }
 }
