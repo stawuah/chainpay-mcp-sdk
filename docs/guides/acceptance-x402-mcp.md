@@ -12,6 +12,15 @@ explicitly approved Devnet run after Dre authorizes a wallet signature.
 - MCP HTTP with scoped connection token, or stdio with `CHAINPAY_CALLER_TOKEN`
 - For v2-shaped merchant challenges: `CHAINPAY_X402_CHALLENGE_SHAPE=v2` on demo-merchant
 
+Save the allowlist variables on the MCP project itself, then redeploy. Variables
+passed to one deploy (`vercel deploy -e`) do not carry to the next production
+deploy. If MCP answers `Merchant origin is not in CHAINPAY_X402_ALLOWED_ORIGINS`,
+the deploy serving the agent does not have the origin. The value is the exact
+origin (`https://chainpay-demo-merchant.vercel.app`): no path, no trailing slash.
+
+Challenge amounts are token base units. The demo merchant's `"amount": "100000"`
+is 0.1 USDC (6 decimals), not 100,000 USDC.
+
 ## Steps
 
 1. `get_mandate` — confirm remaining limit and status

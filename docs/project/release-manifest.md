@@ -82,7 +82,7 @@ Prepared by: <name> · Reviewed by: <name>
 | VITE_SUPPORT_LIVE, VITE_SUPPORT_CLUSTER, VITE_SUPPORT_PROGRAM_ID, VITE_SUPPORT_TRACKER_URL, VITE_SUPPORT_RECIPIENT_A/B (#56) | web build | |
 | OWNER_WEBHOOKS_ENABLED (#57), OWNER_WEBHOOKS_SECRET_KID | relay | |
 | OWNER_WEBHOOKS_DISPATCH_URL (#57) | GitHub repo variable | |
-| CHAINPAY_X402_ALLOWED_ORIGINS, CHAINPAY_X402_RECEIPT_MERCHANTS | relay, MCP | |
+| CHAINPAY_X402_ALLOWED_ORIGINS, CHAINPAY_X402_RECEIPT_MERCHANTS | relay, MCP | MCP Production set 2026-10-07 to `https://chainpay-demo-merchant.vercel.app`; Preview not set |
 | CHAINPAY_SHARED_PET / VITE_CHAINPAY_SHARED_PET | relay + Convex / web | |
 | Managed signing provider (healthz `managed_signing`) | relay | |
 
