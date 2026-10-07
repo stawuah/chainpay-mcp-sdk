@@ -64,6 +64,28 @@ and [configuration reference](../docs/reference/configuration.md) in the reposit
 | `GET /inbox`, `POST /agent/chat` | Owner-session history and assistant |
 | `GET /logo.svg`, `/brand/chainpay-icon.svg`, `/og-image.png` | Public brand assets for docs and link unfurlers |
 | `GET /assets/brands/*` | Official token marks used on the docs page (USDC, Solana, PYUSD) |
+| `GET /demo/store`, `POST /demo/store/requests` | Public Devnet demo merchant (Halden Data Co.): signs 10 and 25 USDC payment requests. Needs `CHAINPAY_DEMO_MERCHANT_USDC_RECIPIENT` |
+| `GET /widget/preview?state=` | Payment card with labelled sample values, for design review |
+
+### Payment card (MCP Apps)
+
+`quote_payment_request`, `execute_payment` and `wait_for_payment` declare a UI
+resource, so hosts that support [MCP Apps](https://github.com/modelcontextprotocol/ext-apps)
+render their results as a ChainPay payment card. ChatGPT gets the same card
+through `openai/outputTemplate`. The card is served through `resources/list` and
+`resources/read` as `ui://chainpay/payment-widget.html`. It reads only
+`structuredContent.widget`, which [src/widget/view.ts](src/widget/view.ts)
+builds from the tool result and an on-chain mandate read. The card never
+advances a step on a timer. While a payment is pending it calls
+`wait_for_payment` through the host. Hosts without MCP Apps support still get
+the unchanged text result.
+
+Demo store environment:
+
+| Variable | Purpose |
+| --- | --- |
+| `CHAINPAY_DEMO_MERCHANT_USDC_RECIPIENT` | The demo merchant's Devnet USDC token account (classic SPL Token). The store refuses to sign without it |
+| `CHAINPAY_DEMO_MERCHANT_SECRET_KEY` | Keeps the merchant key, and therefore its displayed name, stable across serverless instances |
 
 The [protocol reference](../docs/guides/connect-an-agent.md#protocol-reference)
 describes supported versions, headers, discovery, and transport limitations.

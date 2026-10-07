@@ -499,7 +499,7 @@ export function negotiateLegacyProtocolVersion(params: Record<string, unknown>):
 export function modernDiscoverResult(): Record<string, unknown> {
   return decorateModernResult({
     supportedVersions: [...SUPPORTED_PROTOCOL_VERSIONS],
-    capabilities: { tools: {} },
+    capabilities: { tools: {}, resources: {}, extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } } },
     instructions: SERVER_INSTRUCTIONS,
     ttlMs: DISCOVER_TTL_MS,
     cacheScope: PUBLIC_CACHE_SCOPE,

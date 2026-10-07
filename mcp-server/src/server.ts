@@ -30,6 +30,7 @@ import {
   MAX_MCP_BYTES,
 } from "./protocol.js";
 import type { ChainPayMcpContext } from "./tools/context.js";
+import { listUiResources, readUiResource, MCP_APP_MIME, UI_EXTENSION } from "./widget/resource.js";
 import process from "node:process";
 
 export {
@@ -55,8 +56,27 @@ export {
 } from "./protocol.js";
 export type { JsonRpcId, JsonRpcRequest, JsonRpcResponse } from "./protocol.js";
 
-const LEGACY_METHODS = new Set(["initialize", "ping", "tools/list", "tools/call"]);
-const MODERN_METHODS = new Set(["server/discover", "tools/list", "tools/call"]);
+const LEGACY_METHODS = new Set(["initialize", "ping", "tools/list", "tools/call", "resources/list", "resources/read", "resources/templates/list"]);
+const MODERN_METHODS = new Set(["server/discover", "tools/list", "tools/call", "resources/list", "resources/read", "resources/templates/list"]);
+const RESOURCE_NOT_FOUND = -32002;
+
+/** The payment card is the only resource: a public, static MCP Apps view. */
+function handleResourceMethod(message: ValidatedMessage, id: JsonRpcId | undefined, era: ProtocolClassification["era"]): JsonRpcResponse | undefined {
+  const wrap = (result: Record<string, unknown>) => jsonRpcSuccess(id, era === "modern" ? decorateModernResult(result) : result);
+  switch (message.method) {
+    case "resources/list":
+      return wrap(listUiResources());
+    case "resources/templates/list":
+      return wrap({ resourceTemplates: [] });
+    case "resources/read": {
+      const result = readUiResource(message.params.uri);
+      if (!result) return jsonRpcFailure(id, RESOURCE_NOT_FOUND, "Resource not found", { uri: message.params.uri }, 404);
+      return wrap(result);
+    }
+    default:
+      return undefined;
+  }
+}
 const MAX_STDIO_IN_FLIGHT = 32;
 
 export type HandleOptions = {
@@ -130,7 +150,7 @@ function handleLegacy(
     case "initialize":
       return jsonRpcSuccess(id, {
         protocolVersion: negotiateLegacyProtocolVersion(message.params),
-        capabilities: { tools: { listChanged: false } },
+        capabilities: { tools: { listChanged: false }, resources: { listChanged: false }, extensions: { [UI_EXTENSION]: { mimeTypes: [MCP_APP_MIME] } } },
         serverInfo: { name: SERVER_INFO.name, version: SERVER_INFO.version },
         instructions: SERVER_INSTRUCTIONS,
       });
@@ -138,6 +158,10 @@ function handleLegacy(
       return jsonRpcSuccess(id, {});
     case "tools/list":
       return jsonRpcSuccess(id, { tools: listedToolDefinitions(TOOL_DEFINITIONS) });
+    case "resources/list":
+    case "resources/read":
+    case "resources/templates/list":
+      return handleResourceMethod(message, id, "legacy") ?? null;
     case "tools/call": {
       const name = message.params.name;
       if (typeof name !== "string" || name.length === 0) {
@@ -195,6 +219,10 @@ async function handleModern(
         return jsonRpcFailure(id, INVALID_PARAMS, "Unknown cursor", undefined, 400);
       }
       return jsonRpcSuccess(id, modernToolsListResult(TOOL_DEFINITIONS));
+    case "resources/list":
+    case "resources/read":
+    case "resources/templates/list":
+      return handleResourceMethod(message, id, "modern") ?? null;
     case "tools/call": {
       const name = message.params.name;
       if (typeof name !== "string" || name.length === 0) {

@@ -5,6 +5,7 @@ import { checkPaymentRequirements } from "./tools/check_payment_requirements.js"
 import { createDemoPaymentRequest } from "./tools/demo-payment-request.js";
 import type { ChainPayMcpContext } from "./tools/context.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
+import { paymentWidgetView } from "./widget/view.js";
 import { executePayment } from "./tools/execute_payment.js";
 import { exportReceipts } from "./tools/export-receipts.js";
 import { getMandate } from "./tools/get_mandate.js";
@@ -97,17 +98,17 @@ export async function callTool(
   }
   await authorizeTool(context, name, args);
   try {
-    return await dispatchTool(context, name, args);
+    return await withPaymentWidget(context, name, args, await dispatchTool(context, name, args));
   } catch (error) {
     // Any tool that reaches the receipt check reports a paid invoice the same
     // way: typed, in plain words, and with nothing new submitted.
     if (isDuplicateInvoiceError(error)) {
-      return toolResult({
+      return withPaymentWidget(context, name, args, toolResult({
         action: "duplicate_invoice",
         code: "DuplicateInvoice",
         message: error.message,
         receiptAddress: error.receiptAddress,
-      }, true);
+      }, true));
     }
     // Card tools never echo anything card-like, whatever threw (review F3).
     if (CARD_TOOLS.has(name) && error instanceof Error) {
@@ -115,6 +116,22 @@ export async function callTool(
     }
     throw error;
   }
+}
+
+/**
+ * Adds the payment card's view to a payment tool result. The card is extra:
+ * if building it fails, the tool result goes out unchanged.
+ */
+async function withPaymentWidget<T>(context: ChainPayMcpContext, name: string, args: Record<string, unknown>, result: T): Promise<T> {
+  let widget;
+  try {
+    widget = await paymentWidgetView(context, name, args, result);
+  } catch {
+    return result;
+  }
+  if (!widget) return result;
+  const response = result as { structuredContent?: Record<string, unknown> };
+  return { ...result, structuredContent: { ...response.structuredContent, widget } } as T;
 }
 
 async function dispatchTool(

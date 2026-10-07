@@ -1,3 +1,5 @@
+import { PAYMENT_WIDGET_TOOL_META } from "../widget/resource.js";
+
 export const TOOL_DEFINITIONS = [
   {
     name: "prepare_crossmint_payment",
@@ -100,6 +102,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "quote_payment_request",
+    _meta: PAYMENT_WIDGET_TOOL_META,
     description: "Verify a merchant-signed invoice and quote it against a permission without moving funds. Use for signed requests; tell the owner pass/fail on limits, token, recipient, expiry, and policy.",
     inputSchema: {
       type: "object",
@@ -235,6 +238,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "execute_payment",
+    _meta: PAYMENT_WIDGET_TOOL_META,
     description: "Settle an invoice through human wallet approval or delegated agent signing. Use only after requirements are ready and the owner asks to pay. Share the verify link when settlement confirms.",
     inputSchema: {
       type: "object",
@@ -395,6 +399,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "wait_for_payment",
+    _meta: PAYMENT_WIDGET_TOOL_META,
     description: "Poll until a submitted payment confirms or fails. Use after execute_payment returns pending. Tell the owner to keep the same paymentId—do not start a second payment.",
     inputSchema: {
       type: "object",
