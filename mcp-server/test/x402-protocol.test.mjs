@@ -697,3 +697,63 @@ test("an x402 relay 5xx after submit is pending with the deterministic paymentId
     }
   });
 });
+
+test("an agent without SOL for fee and receipt rent gets agent_needs_sol before anything is submitted", async () => {
+  await allowOrigin(async () => {
+    const fixture = preparedFixture();
+    const envelope = customEnvelope({ mint: address(), payTo: address() });
+    const calls = [];
+    const old = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push(String(url));
+      if (String(url) === RESOURCE) {
+        return new Response(JSON.stringify(envelope), {
+          status: 402,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Payment-Required": Buffer.from(JSON.stringify(envelope), "utf8").toString("base64"),
+          },
+        });
+      }
+      throw new Error(`unexpected ${url}`);
+    };
+    const context = {
+      backendUrl: "https://backend.example",
+      backendAuthToken: "fixture",
+      client: {
+        getSupportedAsset: async () => ({ enabled: true, tokenProgram: SPL_TOKEN_PROGRAM_ID }),
+        getCurrentSlot: async () => 1n,
+        preparePayment: async () => ({
+          receiptAddress: fixture.receiptAddress,
+          preflight: fixture.preflight,
+          transaction: fixture.transaction,
+        }),
+        connection: {
+          getBalance: async () => 0,
+          getMinimumBalanceForRentExemption: async (space) => {
+            assert.equal(space, 371);
+            return 3_473_040;
+          },
+        },
+      },
+    };
+    try {
+      for (const signingMode of ["human", "delegated"]) {
+        const result = await executeX402Payment(context, {
+          resource: RESOURCE,
+          mandate: fixture.mandate,
+          agent: fixture.agent,
+          signingMode,
+        });
+        assert.equal(result.isError, true);
+        assert.equal(result.structuredContent.action, "agent_needs_sol");
+        assert.equal(result.structuredContent.agent, fixture.agent);
+        assert.equal(result.structuredContent.balanceLamports, 0);
+        assert.equal(result.structuredContent.requiredLamports, 3_483_040);
+      }
+      assert.ok(calls.every((url) => url === RESOURCE), "nothing reaches the relay");
+    } finally {
+      globalThis.fetch = old;
+    }
+  });
+});

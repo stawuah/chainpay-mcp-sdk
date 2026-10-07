@@ -6,6 +6,7 @@ import {
   type PaymentReceipt,
   type PreparedPayment,
 } from "@chainpayhq/sdk";
+import { PublicKey } from "@solana/web3.js";
 import type { ChainPayMcpContext } from "./context.js";
 import {
   materializeUnsignedTransaction,
@@ -35,6 +36,10 @@ import { requirementsFromPreflight } from "./check_payment_requirements.js";
 
 const MAX_RESOURCE_BODY_BYTES = 1_048_576;
 const RESOURCE_TIMEOUT_MS = 10_000;
+/** 8-byte discriminator + `PaymentReceipt::LEN` in programs/chainpay/src/state.rs. */
+const RECEIPT_ACCOUNT_SPACE = 8 + 363;
+/** Base signature fee plus headroom for a priority fee. */
+const AGENT_FEE_HEADROOM_LAMPORTS = 10_000;
 
 type NormalizedX402Challenge = CustomChallengeOption & {
   tokenProgram: "spl-token" | "token-2022";
@@ -198,6 +203,34 @@ async function normalizeV2Challenge(
  * separate, is never satisfied by the local-HTTP demo escape hatch, and fails closed when
  * unset: no receipt merchants configured means no v2 settlement.
  */
+/**
+ * The approved agent is the fee payer and pays rent for the new receipt PDA. An agent
+ * wallet with no SOL does not exist on chain, so Solana preflight answers only
+ * `AccountNotFound`, after the relay has already accepted the job. Checking here names the
+ * wallet to fund before anything is signed or submitted. A failed balance read does not
+ * block: the relay's own preflight still runs.
+ */
+async function agentFeeShortfall(context: ChainPayMcpContext, agent: string) {
+  const connection = context.client.connection;
+  if (typeof connection?.getBalance !== "function" || typeof connection.getMinimumBalanceForRentExemption !== "function") return null;
+  let balance: number;
+  let required: number;
+  try {
+    balance = await connection.getBalance(new PublicKey(agent), "confirmed");
+    required = await connection.getMinimumBalanceForRentExemption(RECEIPT_ACCOUNT_SPACE) + AGENT_FEE_HEADROOM_LAMPORTS;
+  } catch {
+    return null;
+  }
+  if (balance >= required) return null;
+  return {
+    action: "agent_needs_sol",
+    agent,
+    balanceLamports: balance,
+    requiredLamports: required,
+    message: `The agent wallet ${agent} pays the network fee and the receipt rent but holds ${balance} lamports; it needs at least ${required}. Send SOL to the agent, then retry. Nothing was signed or submitted.`,
+  };
+}
+
 function receiptMerchantAllowlisted(resource: string): boolean {
   const configured = (process.env.CHAINPAY_X402_RECEIPT_MERCHANTS ?? "")
     .split(",")
@@ -499,6 +532,8 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
       if (!prepared.preflight.valid) {
         return toolResult({ action: "x402_rejected_by_preflight", challenge, receiptAddress: prepared.receiptAddress, preflight: prepared.preflight }, true);
       }
+      const v2Shortfall = await agentFeeShortfall(context, agent);
+      if (v2Shortfall) return toolResult({ ...v2Shortfall, challenge, receiptAddress: prepared.receiptAddress }, true);
       const signedTransaction = typeof args.signedTransaction === "string" ? args.signedTransaction.trim() : "";
       if (signingMode === "human" && !signedTransaction) {
         return toolResult({
@@ -536,6 +571,8 @@ export async function executeX402Payment(context: ChainPayMcpContext, args: Reco
   if (!prepared.preflight.valid) {
     return toolResult({ action: "x402_rejected_by_preflight", challenge, receiptAddress: prepared.receiptAddress, preflight: prepared.preflight }, true);
   }
+  const shortfall = await agentFeeShortfall(context, agent);
+  if (shortfall) return toolResult({ ...shortfall, challenge, receiptAddress: prepared.receiptAddress }, true);
 
   const signedTransaction = typeof args.signedTransaction === "string" ? args.signedTransaction.trim() : "";
   if (signingMode === "human" && !signedTransaction) {
