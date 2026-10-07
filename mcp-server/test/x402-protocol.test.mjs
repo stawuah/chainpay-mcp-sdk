@@ -643,61 +643,6 @@ test("MPP WWW-Authenticate returns mpp_unsupported without settlement", async ()
   });
 });
 
-test("an x402 relay 5xx after submit is pending with the deterministic paymentId; 4xx still rejects", async () => {
-  const { createHash } = await import("node:crypto");
-  await allowOrigin(async () => {
-    const mint = address();
-    const recipient = address();
-    const owner = address();
-    const fixture = preparedFixture();
-    const envelope = customEnvelope({ mint, payTo: recipient });
-    let relayStatus = 500;
-    let relayBody = JSON.stringify({ error: "storage write failed" });
-    const old = globalThis.fetch;
-    globalThis.fetch = async (url, init = {}) => {
-      if (String(url) === RESOURCE && !init.headers?.["X-PAYMENT"]) {
-        return new Response(JSON.stringify(envelope), { status: 402, headers: { "Content-Type": "application/json" } });
-      }
-      if (String(url).endsWith("/v1/payments")) return new Response(relayBody, { status: relayStatus });
-      throw new Error(`unexpected ${url}`);
-    };
-    let invoiceHash;
-    const context = {
-      backendUrl: "https://backend.example",
-      backendAuthToken: "fixture",
-      principal: { wallet: owner, scope: null },
-      client: {
-        getSupportedAsset: async () => ({ enabled: true, tokenProgram: SPL_TOKEN_PROGRAM_ID }),
-        getCurrentSlot: async () => 1n,
-        preparePayment: async (input) => {
-          invoiceHash = Buffer.from(input.invoiceHash).toString("hex");
-          return { receiptAddress: fixture.receiptAddress, preflight: fixture.preflight, transaction: fixture.transaction };
-        },
-      },
-    };
-    const args = { resource: RESOURCE, mandate: fixture.mandate, agent: fixture.agent, signingMode: "human", signedTransaction: "signed-wire" };
-    try {
-      for (const [status, body] of [[500, relayBody], [502, "<html>Bad gateway</html>"]]) {
-        relayStatus = status;
-        relayBody = body;
-        const result = await executeX402Payment(context, args);
-        assert.notEqual(result.isError, true, `HTTP ${status}`);
-        assert.equal(result.structuredContent.action, "x402_payment_pending");
-        assert.equal(result.structuredContent.status, "unknown");
-        const expectedId = `payment_${createHash("sha256").update(`${owner}:x402:${fixture.mandate}:${invoiceHash}`).digest("hex")}`;
-        assert.equal(result.structuredContent.settlement.payment_id, expectedId);
-        assert.deepEqual(result.structuredContent.continuation, { tool: "execute_x402_payment", arguments: { paymentId: expectedId } });
-        assert.match(result.structuredContent.settlement.message, /Do not retry/);
-      }
-      relayStatus = 422;
-      relayBody = JSON.stringify({ error: "invalid transaction" });
-      await assert.rejects(executeX402Payment(context, args), /Axum rejected x402 settlement \(422\)/);
-    } finally {
-      globalThis.fetch = old;
-    }
-  });
-});
-
 test("a refused x402 payment offers an approved retry, and the retry opens a new attempt for the same invoice", async () => {
   await allowOrigin(async () => {
     const fixture = preparedFixture();
@@ -761,6 +706,61 @@ test("a refused x402 payment offers an approved retry, and the retry opens a new
       }
       await assert.rejects(executeX402Payment(context, { ...args, retryFailedPaymentId: "not-an-id" }), /existing paymentId/);
       assert.equal(keys.length, 2, "a rejected retry never reaches settlement");
+    } finally {
+      globalThis.fetch = old;
+    }
+  });
+});
+
+test("an x402 relay 5xx after submit is pending with the deterministic paymentId; 4xx still rejects", async () => {
+  const { createHash } = await import("node:crypto");
+  await allowOrigin(async () => {
+    const mint = address();
+    const recipient = address();
+    const owner = address();
+    const fixture = preparedFixture();
+    const envelope = customEnvelope({ mint, payTo: recipient });
+    let relayStatus = 500;
+    let relayBody = JSON.stringify({ error: "storage write failed" });
+    const old = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      if (String(url) === RESOURCE && !init.headers?.["X-PAYMENT"]) {
+        return new Response(JSON.stringify(envelope), { status: 402, headers: { "Content-Type": "application/json" } });
+      }
+      if (String(url).endsWith("/v1/payments")) return new Response(relayBody, { status: relayStatus });
+      throw new Error(`unexpected ${url}`);
+    };
+    let invoiceHash;
+    const context = {
+      backendUrl: "https://backend.example",
+      backendAuthToken: "fixture",
+      principal: { wallet: owner, scope: null },
+      client: {
+        getSupportedAsset: async () => ({ enabled: true, tokenProgram: SPL_TOKEN_PROGRAM_ID }),
+        getCurrentSlot: async () => 1n,
+        preparePayment: async (input) => {
+          invoiceHash = Buffer.from(input.invoiceHash).toString("hex");
+          return { receiptAddress: fixture.receiptAddress, preflight: fixture.preflight, transaction: fixture.transaction };
+        },
+      },
+    };
+    const args = { resource: RESOURCE, mandate: fixture.mandate, agent: fixture.agent, signingMode: "human", signedTransaction: "signed-wire" };
+    try {
+      for (const [status, body] of [[500, relayBody], [502, "<html>Bad gateway</html>"]]) {
+        relayStatus = status;
+        relayBody = body;
+        const result = await executeX402Payment(context, args);
+        assert.notEqual(result.isError, true, `HTTP ${status}`);
+        assert.equal(result.structuredContent.action, "x402_payment_pending");
+        assert.equal(result.structuredContent.status, "unknown");
+        const expectedId = `payment_${createHash("sha256").update(`${owner}:x402:${fixture.mandate}:${invoiceHash}`).digest("hex")}`;
+        assert.equal(result.structuredContent.settlement.payment_id, expectedId);
+        assert.deepEqual(result.structuredContent.continuation, { tool: "execute_x402_payment", arguments: { paymentId: expectedId } });
+        assert.match(result.structuredContent.settlement.message, /Do not retry/);
+      }
+      relayStatus = 422;
+      relayBody = JSON.stringify({ error: "invalid transaction" });
+      await assert.rejects(executeX402Payment(context, args), /Axum rejected x402 settlement \(422\)/);
     } finally {
       globalThis.fetch = old;
     }
