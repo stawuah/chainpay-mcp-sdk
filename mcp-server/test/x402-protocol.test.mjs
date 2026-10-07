@@ -697,3 +697,72 @@ test("an x402 relay 5xx after submit is pending with the deterministic paymentId
     }
   });
 });
+
+test("a refused x402 payment offers an approved retry, and the retry opens a new attempt for the same invoice", async () => {
+  await allowOrigin(async () => {
+    const fixture = preparedFixture();
+    const envelope = customEnvelope({ mint: address(), payTo: address() });
+    const refusedId = `payment_${"a".repeat(64)}`;
+    const keys = [];
+    let invoiceHash;
+    let stored = {};
+    const old = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      const target = String(url);
+      if (target === RESOURCE && !init.headers?.["X-PAYMENT"]) {
+        return new Response(JSON.stringify(envelope), { status: 402, headers: { "Content-Type": "application/json" } });
+      }
+      if (target.endsWith("/v1/payments")) {
+        const key = JSON.parse(init.body).idempotency_key;
+        keys.push(key);
+        return Response.json({
+          payment_id: refusedId,
+          status: "failed",
+          error: "Transaction rejected by chain or preflight: AccountNotFound",
+        });
+      }
+      if (target.endsWith(`/v1/payments/${refusedId}/x402`)) return Response.json({ payment: stored });
+      throw new Error(`unexpected ${url}`);
+    };
+    const context = {
+      backendUrl: "https://backend.example",
+      backendAuthToken: "fixture",
+      client: {
+        getSupportedAsset: async () => ({ enabled: true, tokenProgram: SPL_TOKEN_PROGRAM_ID }),
+        getCurrentSlot: async () => 1n,
+        preparePayment: async (input) => {
+          invoiceHash = Buffer.from(input.invoiceHash).toString("hex");
+          return { receiptAddress: fixture.receiptAddress, preflight: fixture.preflight, transaction: fixture.transaction };
+        },
+      },
+    };
+    const args = { resource: RESOURCE, mandate: fixture.mandate, agent: fixture.agent, signingMode: "human", signedTransaction: "signed-wire" };
+    try {
+      const refused = await executeX402Payment(context, args);
+      assert.equal(refused.isError, true);
+      assert.equal(refused.structuredContent.action, "x402_payment_failed");
+      assert.equal(refused.structuredContent.continuation, undefined, "resuming a refused payment changes nothing");
+      assert.equal(refused.structuredContent.retry.requiresUserApproval, true);
+      assert.equal(refused.structuredContent.retry.arguments.retryFailedPaymentId, refusedId);
+      assert.equal(keys[0], `x402:${fixture.mandate}:${invoiceHash}`);
+
+      stored = { status: "failed", error: "Transaction rejected by chain or preflight: AccountNotFound", mandate: fixture.mandate, invoice_hash: invoiceHash };
+      await executeX402Payment(context, { ...args, retryFailedPaymentId: refusedId });
+      assert.equal(keys[1], `x402:${fixture.mandate}:${invoiceHash}:after:${refusedId}`);
+
+      for (const [payment, pattern] of [
+        [{ ...stored, status: "submitted" }, /Only a payment the chain refused can be retried/],
+        [{ ...stored, error: "This invoice was already paid. Nothing new was submitted." }, /already paid/],
+        [{ ...stored, invoice_hash: "b".repeat(64) }, /different mandate or invoice/],
+        [{ ...stored, mandate: address() }, /different mandate or invoice/],
+      ]) {
+        stored = payment;
+        await assert.rejects(executeX402Payment(context, { ...args, retryFailedPaymentId: refusedId }), pattern);
+      }
+      await assert.rejects(executeX402Payment(context, { ...args, retryFailedPaymentId: "not-an-id" }), /existing paymentId/);
+      assert.equal(keys.length, 2, "a rejected retry never reaches settlement");
+    } finally {
+      globalThis.fetch = old;
+    }
+  });
+});
