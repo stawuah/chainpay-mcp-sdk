@@ -8,6 +8,9 @@ import { CHAINPAY_ICON_SVG, CHAINPAY_LOGO_SVG } from "./logo.js";
 import { createChainPayOgImage } from "./og-image.js";
 import { runChainPayAgent, type ChainPayAgentRequest } from "./agent.js";
 import { createMcpServer } from "./server.js";
+import { allowDemoStoreRequest, createDemoStoreRequest, DemoStoreError, renderDemoStoreHtml } from "./demo-store.js";
+import { paymentWidgetHtml } from "./widget/resource.js";
+import { widgetPreviewScript } from "./widget/preview.js";
 import {
   classifyProtocol,
   headerForcesModern,
@@ -136,6 +139,33 @@ function writeRpc(res: ServerResponse, response: ReturnType<typeof jsonRpcFailur
   writeJson(res, jsonRpcHttpStatus(response), response, headers);
 }
 
+async function handleDemoStoreRequest(req: IncomingMessage, res: ServerResponse, context: ChainPayMcpContext, url: URL): Promise<void> {
+  const noStore = { "Cache-Control": "no-store" };
+  // Same-origin only: the page posts to itself, and nothing else should mint signed invoices.
+  const origin = singleHeader(req.headers, "origin");
+  const forwardedProto = singleHeader(req.headers, "x-forwarded-proto");
+  const self = `${forwardedProto && forwardedProto !== "multiple" ? forwardedProto : url.protocol.replace(":", "")}://${url.host}`;
+  if (origin && origin !== "multiple" && origin !== self) {
+    writeJson(res, 403, { error: "Origin is not allowed" }, noStore);
+    return;
+  }
+  const client = (singleHeader(req.headers, "x-forwarded-for") ?? "").split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+  if (!allowDemoStoreRequest(client)) {
+    writeJson(res, 429, { error: "Too many requests. Wait a minute and try again." }, { ...noStore, "Retry-After": "60" });
+    return;
+  }
+  let body: unknown;
+  try { body = await readJsonValue(req); } catch { writeJson(res, 400, { error: "Invalid JSON" }, noStore); return; }
+  const product = body && typeof body === "object" ? (body as Record<string, unknown>).product : undefined;
+  try {
+    const created = await createDemoStoreRequest(context, product, self);
+    writeJson(res, 200, { request: created.request, product: created.product }, noStore);
+  } catch (error) {
+    if (error instanceof DemoStoreError) { writeJson(res, error.status, { error: error.message }, noStore); return; }
+    writeJson(res, 502, { error: error instanceof Error ? error.message : "The store couldn't sign this request." }, noStore);
+  }
+}
+
 async function handleMcpPost(
   req: IncomingMessage,
   res: ServerResponse,
@@ -243,6 +273,20 @@ export function createHttpHandler(
       // The request target and Host header are untrusted, including on public
       // routes. An uncaught rejection in this async listener stops Node.
       writeJson(res, 400, { error: "Invalid request URL" });
+      return;
+    }
+    // The demo store and widget preview are public, same-origin pages: they
+    // run before the cross-origin policy, which governs the MCP endpoint.
+    if (url.pathname === "/demo/store" && req.method === "GET") {
+      writeHtml(res, renderDemoStoreHtml(), { "Cache-Control": "no-store" });
+      return;
+    }
+    if (url.pathname === "/demo/store/requests" && req.method === "POST") {
+      await handleDemoStoreRequest(req, res, context, url);
+      return;
+    }
+    if (url.pathname === "/widget/preview" && req.method === "GET") {
+      writeHtml(res, paymentWidgetHtml(widgetPreviewScript(url.searchParams.get("state") ?? "ready")), { "Cache-Control": "no-store" });
       return;
     }
     const cors = corsHeaders(req.headers.origin, resolved.allowedOrigins);

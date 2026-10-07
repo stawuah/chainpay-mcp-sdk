@@ -20,7 +20,7 @@ type DemoMerchant = {
 
 let cachedMerchant: DemoMerchant | undefined;
 
-function demoMerchant(): DemoMerchant {
+export function demoMerchant(): DemoMerchant {
   if (cachedMerchant) return cachedMerchant;
 
   const encoded = process.env.CHAINPAY_DEMO_MERCHANT_SECRET_KEY?.trim();
@@ -40,7 +40,7 @@ function demoMerchant(): DemoMerchant {
   }
 }
 
-function signCanonicalPayload(payload: PaymentRequestPayload, merchant: Keypair): string {
+export function signCanonicalPayload(payload: PaymentRequestPayload, merchant: Keypair): string {
   const message = Buffer.from(canonicalPaymentRequest(payload), "utf8");
   const privateKey = createPrivateKey({
     key: Buffer.concat([
@@ -53,7 +53,7 @@ function signCanonicalPayload(payload: PaymentRequestPayload, merchant: Keypair)
   return signMessage(null, message, privateKey).toString("base64");
 }
 
-async function assertRecipientTokenAccount(
+export async function assertRecipientTokenAccount(
   context: ChainPayMcpContext,
   recipient: string,
   mint: string,

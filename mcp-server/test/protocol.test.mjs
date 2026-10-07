@@ -175,7 +175,7 @@ test("modern discover, list, and public call do not require initialize", async (
   const discovered = await server.handle(modernRequest("discover-1", "server/discover"));
   assert.equal(discovered.result.resultType, "complete");
   assert.deepEqual(discovered.result.supportedVersions, [...SUPPORTED_PROTOCOL_VERSIONS]);
-  assert.deepEqual(discovered.result.capabilities, { tools: {} });
+  assert.deepEqual(discovered.result.capabilities, { tools: {}, resources: {}, extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } } });
   assert.equal(discovered.result.ttlMs, 300000);
   assert.equal(discovered.result.cacheScope, "public");
   assert.equal(discovered.result._meta[SERVER_INFO_KEY].name, "chainpay-mcp");
@@ -437,8 +437,8 @@ test("HTTP modern discover/list/call and header failures", async () => {
 
     const unknownRpc = await fetch(`${base}/mcp`, {
       method: "POST",
-      headers: modernHeaders("resources/list"),
-      body: JSON.stringify(modernRequest(8, "resources/list")),
+      headers: modernHeaders("prompts/list"),
+      body: JSON.stringify(modernRequest(8, "prompts/list")),
     });
     assert.equal(unknownRpc.status, 404);
     assert.equal((await unknownRpc.json()).error.code, METHOD_NOT_FOUND);

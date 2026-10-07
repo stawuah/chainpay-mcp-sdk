@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChainPay payment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --blue: #0052ff; --blue-press: #003ecc; --blue-soft: #eff4ff;
+  --ink: #14213d; --body: #56647d;
+  --line: #dbe2ef; --line-strong: #c6d1e6;
+  --ok: #166534; --ok-bg: #dcfce7; --ok-line: #86efac;
+  --err: #b91c1c; --err-bg: #fee2e2; --err-line: #fca5a5;
+  --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 1px 2px 6px; background: transparent; color: var(--ink); font: 400 14px/20px var(--sans); }
+
+
+/* ---------- Widget ---------- */
+.cpw { width: 100%; max-width: 560px; margin: 0 auto; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: #fff; color: var(--ink); font: 400 14px/20px var(--sans); box-shadow: 0 1px 2px rgb(20 33 61 / 6%), 0 4px 12px rgb(20 33 61 / 4%); }
+.cpw-amount b, .cpw-rows dd, .cpw-bar-labels, .cpw-meta code { font-variant-numeric: tabular-nums; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.cpw-na { color: var(--body); font-family: var(--sans); font-weight: 400; }
+.cpw-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cpw-logo { display: block; height: 24px; width: auto; }
+.cpw-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 0 10px; border: 1px solid; border-radius: 999px; font: 600 12px/16px var(--sans); white-space: nowrap; }
+.cpw-pill svg { width: 14px; height: 14px; flex: none; }
+.tone-info { color: var(--blue); background: var(--blue-soft); border-color: #c7d7ff; }
+.tone-ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok-line); }
+.tone-err { color: var(--err); background: var(--err-bg); border-color: var(--err-line); }
+.tone-neutral { color: var(--body); background: #fff; border-color: var(--line-strong); border-style: dashed; }
+
+.cpw-kicker { margin: 18px 0 0; color: var(--ink); font: 600 13px/18px var(--sans); }
+.cpw-amount { display: flex; align-items: center; gap: 10px; margin: 8px 0 0; }
+.cpw-amount img { width: 24px; height: 24px; flex: none; }
+.cpw-amount b { min-width: 0; font: 500 32px/1.1 var(--mono); letter-spacing: -0.02em; overflow-wrap: break-word; }
+.cpw-what { margin: 8px 0 0; color: var(--ink); font-size: 14px; }
+.cpw-meta { margin: 2px 0 0; color: var(--body); font-size: 13px; }
+.cpw-meta code { font: 500 12px var(--mono); color: var(--ink); }
+
+.cpw-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.cpw-section h3 { margin: 0 0 10px; color: var(--ink); font: 600 13px/18px var(--sans); }
+
+.cpw-checks { display: grid; grid-template-columns: 1fr; gap: 8px 16px; margin: 0; padding: 0; list-style: none; }
+@media (min-width: 480px) { .cpw-checks { grid-template-columns: 1fr 1fr; } }
+.cpw-checks li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 18px; }
+.cpw-checks svg { width: 16px; height: 16px; flex: none; margin-top: 1px; color: var(--ok); stroke-width: 1.75; }
+
+.cpw-limits { margin-top: 16px; padding: 14px 16px; border-radius: 12px; background: var(--blue-soft); }
+.cpw-limits h3 { margin: 0 0 10px; font: 600 13px/18px var(--sans); }
+.cpw-rows { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; margin: 0; }
+.cpw-rows dt { color: var(--body); font-size: 13px; }
+.cpw-rows dd { margin: 0; text-align: right; font: 500 13px/18px var(--mono); overflow-wrap: break-word; }
+.cpw-bar { margin: 2px 0 14px; }
+.cpw-track { position: relative; height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.cpw-fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--blue); }
+.cpw-bar.over .cpw-fill { background: var(--err); }
+.cpw-bar.over .cpw-track { overflow: visible; }
+.cpw-tick { position: absolute; top: -5px; bottom: -5px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--ink); box-shadow: 0 0 0 1.5px #fff; }
+.cpw-bar-labels { position: relative; display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--body); font: 500 13px/18px var(--mono); }
+.cpw-bar-labels { flex-wrap: wrap; }
+.cpw-bar-labels { row-gap: 2px; }
+.cpw-bar-labels > span { white-space: nowrap; }
+.cpw-bar-labels > span:last-child:not(.at-tick) { margin-left: auto; }
+.cpw-bar-labels b { color: var(--ink); font-weight: 500; }
+.cpw-bar-labels .at-tick { position: absolute; top: 0; white-space: nowrap; }
+.cpw-bar-labels .at-end { position: absolute; top: 22px; right: 0; white-space: nowrap; color: var(--err); }
+.cpw-bar-labels .at-end b { color: var(--err); }
+.cpw-bar.over .cpw-bar-labels { height: 40px; }
+.cpw-fill.allowed { background: var(--err-line) !important; border-radius: 999px 0 0 999px; }
+.cpw-fill.excess { background: var(--err) !important; border-radius: 0 999px 999px 0; }
+.cpw-verdict { display: flex; align-items: center; gap: 6px; margin-top: 12px; font: 600 13px/18px var(--sans); }
+.cpw-verdict svg { width: 16px; height: 16px; }
+.cpw-verdict.ok { color: var(--ok); }
+.cpw-verdict.err { color: var(--err); }
+
+.cpw-note { margin: 16px 0 0; color: var(--body); font-size: 13px; line-height: 19px; }
+.cpw-note.strong { color: var(--ink); font-weight: 500; }
+
+/* Timeline */
+.cpw-steps { position: relative; margin: 0; padding: 0; list-style: none; }
+.cpw-steps li { position: relative; display: flex; align-items: center; gap: 10px; min-height: 32px; font-size: 13px; color: var(--body); }
+.cpw-steps li:not(:last-child)::after { content: ""; position: absolute; left: 7.5px; top: 25px; bottom: -7px; width: 1px; background: var(--line); }
+.cpw-steps li.done { color: var(--ink); }
+.cpw-steps li.current { color: var(--ink); font-weight: 600; }
+.cpw-mark { position: relative; z-index: 1; width: 16px; height: 16px; flex: none; display: grid; place-items: center; border-radius: 50%; background: #fff; }
+.cpw-mark svg { width: 16px; height: 16px; color: var(--ok); }
+.upcoming .cpw-mark { border: 1.5px solid var(--line-strong); }
+.current .cpw-mark { border: 1.5px solid var(--blue); width: 18px; height: 18px; margin: -1px; }
+.current .cpw-mark::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--blue); animation: cpw-pulse 1.6s ease-in-out infinite; }
+@keyframes cpw-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .current .cpw-mark::before { animation: none; } }
+
+/* Settled details */
+.cpw-done-title { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font: 500 15px/20px var(--sans); }
+.cpw-done-title svg { width: 16px; height: 16px; color: var(--ok); }
+.cpw-fallback { display: none; margin-top: 10px; }
+.cpw-fallback.show { display: block; }
+.cpw-fallback input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--body); border-radius: 10px; font: 500 12px var(--mono); color: var(--ink); }
+.cpw-fallback small { display: block; margin-top: 4px; color: var(--body); font-size: 12px; }
+.cpw-rows.detail dd { text-align: right; }
+.cpw-rows .ok { color: var(--ok); font-family: var(--sans); font-weight: 600; }
+.cpw-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.cpw-actions.trio { display: grid; grid-template-columns: 1fr 1fr; }
+.cpw-actions.trio .primary { grid-column: 1 / -1; }
+.cpw-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 13px; border: 1px solid var(--line-strong); border-radius: 10px; background: #fff; color: var(--ink); font: 500 14px var(--sans); text-decoration: none; cursor: pointer; transition: background-color 120ms ease-out; }
+.cpw-btn:hover { background: #f5f7fb; }
+.cpw-btn.primary { border-color: var(--blue); background: var(--blue); color: #fff; }
+.cpw-btn.primary:hover { background: var(--blue-press); }
+.cpw-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* Blocked */
+.cpw-reason { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--err-line); border-radius: 12px; background: var(--err-bg); }
+.cpw-reason b { display: flex; align-items: center; gap: 6px; color: var(--err); font: 600 13px/18px var(--sans); }
+.cpw-reason b svg { width: 16px; height: 16px; flex: none; }
+.cpw-reason p { margin: 4px 0 0; color: var(--ink); font-size: 13px; line-height: 19px; }
+.cpw-foot { margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--line); color: var(--body); font-size: 13px; }
+.cpw-foot.strong { color: var(--ink); font-weight: 500; }
+.cpw-foot a { color: var(--blue); }
+
+@media (max-width: 400px) { .cpw { padding: 16px; } .cpw-amount b { font-size: 28px; } .cpw-actions .cpw-btn { flex: 1 1 100%; } .cpw-bar-labels > span:not(.at-tick):not(.at-end) { white-space: normal; } .cpw-actions.trio { grid-template-columns: 1fr; } }
+.cpw[hidden], .cpw-amount[hidden] { display: none; }
+</style>
+</head>
+<body>
+__PREVIEW__
+<div id="root"></div>
+<p id="cpw-status" class="sr-only" role="status"></p>
+<script>
+const LOGO = __CHAINPAY_LOGO__;
+const TOKEN_ICONS = __TOKEN_ICONS__;
+
+const I = {
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
+  octagon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.586 16.726A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2h6.624a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586z"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>',
+  help: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke-dasharray="3 3"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>',
+  ext: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>',
+};
+
+const PILL = {
+  ready: ["tone-info", I.clock, "Ready to pay"],
+  paying: ["tone-info", I.clock, "Paying"],
+  confirming: ["tone-info", I.clock, "Confirming"],
+  settled: ["tone-ok", I.check, "Settled"],
+  blocked: ["tone-err", I.octagon, "Blocked"],
+  unknown: ["tone-neutral", I.help, "Status unknown"],
+  signature: ["tone-info", I.clock, "Needs signature"],
+  loading: ["tone-info", I.clock, "Loading"],
+};
+const STEPS = ["Payment prepared", "Guardrails passed", "Payment authorization confirmed", "Submitting to Solana", "Waiting for confirmation", "Receipt recorded"];
+const KICKER = { ready: "ChainPay payment", paying: "ChainPay payment", confirming: "ChainPay payment", settled: "Payment complete", blocked: "Payment blocked", unknown: "ChainPay payment", signature: "ChainPay payment", loading: "ChainPay payment" };
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const amt = (v, sym) => v == null ? `<span class="cpw-na">Unavailable</span>` : `${esc(v)} ${esc(sym)}`;
+// Compare decimal amount strings exactly (no floats): "10.5" -> 10500000n at 6 decimals.
+function units(v, d) {
+  if (v == null || !/^\d+(\.\d+)?$/.test(String(v))) return null;
+  const [w, f = ""] = String(v).split(".");
+  return BigInt(w + f.padEnd(d, "0").slice(0, d));
+}
+const ratio = (a, b) => b === 0n ? 0 : Number((a * 10000n) / b) / 100;
+
+function limitsPanel(m) {
+  const L = m.limits;
+  if (!L) return "";
+  const d = m.decimals ?? 6;
+  const req = units(L.requested, d), cap = units(L.cap, d), rem = units(L.remaining, d);
+  // The bar measures against whichever limit binds: the per-payment cap or what is left.
+  const remBinds = rem != null && cap != null && rem < cap;
+  const lim = remBinds ? rem : cap;
+  const limLabel = remBinds ? `${L.remaining} ${m.symbol} remaining` : `${L.cap} ${m.symbol} maximum`;
+  const over = req != null && lim != null && req > lim;
+  let bar = "";
+  if (req != null && lim != null) {
+    const scale = over ? req : lim;
+    const pct = ratio(req, scale), limPct = ratio(lim, scale);
+    const label = `${L.requested} ${m.symbol} requested, ${limLabel}`;
+    bar = `<div class="cpw-bar${over ? " over" : ""}" role="img" aria-label="${esc(label)}">
+      <div class="cpw-track">${over
+        ? `<div class="cpw-fill allowed" style="width:${limPct}%"></div><div class="cpw-fill excess" style="left:${limPct}%;width:${(100 - limPct).toFixed(2)}%"></div><span class="cpw-tick" style="left:${limPct}%"></span>`
+        : `<div class="cpw-fill" style="width:${pct}%"></div>`}</div>
+      <div class="cpw-bar-labels">${over
+        ? `<span class="at-tick" style="${limPct > 70 ? `right:${(100 - limPct).toFixed(2)}%` : limPct < 30 ? `left:${limPct}%` : `left:${limPct}%;transform:translateX(-50%)`}"><b>${esc(limLabel)}</b></span><span class="at-end"><b>${esc(L.requested)} ${esc(m.symbol)}</b> requested</span>`
+        : `<span><b>${esc(L.requested)} ${esc(m.symbol)}</b> requested</span><span><b>${esc(limLabel)}</b></span>`}</div>
+    </div>`;
+  }
+  const verdict = m.state === "blocked" || over ? "" : L.withinLimits === true
+    ? `<p class="cpw-verdict ok">${I.check}Within limits</p>` : "";
+  return `<div class="cpw-limits"><h3>Spending limits</h3>${bar}
+    <dl class="cpw-rows">
+      <dt>Requested</dt><dd>${amt(L.requested, m.symbol)}</dd>
+      <dt>Per-payment cap</dt><dd>${amt(L.cap, m.symbol)}</dd>
+      <dt>Remaining allowance</dt><dd>${amt(L.remaining, m.symbol)}</dd>
+      ${L.after != null ? `<dt>After payment</dt><dd>${amt(L.after, m.symbol)}</dd>` : ""}
+    </dl>
+    ${verdict}</div>`;
+}
+
+function body(m) {
+  switch (m.state) {
+    case "ready":
+      return `<div class="cpw-section"><h3>Security checks</h3><ul class="cpw-checks">
+        ${m.checks.map((c) => `<li>${I.check}<span>${esc(c)}</span></li>`).join("")}</ul>
+        ${limitsPanel(m)}
+        <p class="cpw-note">The agent can pay this invoice without accessing your wallet key.</p></div>`;
+    case "paying":
+    case "confirming": {
+      const cur = m.currentStep;
+      const rows = STEPS.map((s, i) => {
+        const cls = i < cur ? "done" : i === cur ? "current" : "upcoming";
+        const sr = i < cur ? "Done: " : i === cur ? "In progress: " : "Not started: ";
+        return `<li class="${cls}"${i === cur ? ' aria-current="step"' : ""}><span class="cpw-mark">${i < cur ? I.check : ""}</span><span class="sr-only">${sr}</span>${esc(s)}</li>`;
+      }).join("");
+      const slow = m.slow
+        ? `<p class="cpw-note">Still confirming on Solana Devnet. Your receipt will appear in Payments once it's final.</p>` : "";
+      return `<div class="cpw-section"><ol class="cpw-steps" aria-label="Payment progress">${rows}</ol>${slow}
+        ${m.explorerUrl && (m.state === "confirming" || m.slow) ? `<div class="cpw-actions"><a class="cpw-btn" href="${esc(m.explorerUrl)}" target="_blank" rel="noopener">View on Solana Explorer ${I.ext}</a></div>` : ""}</div>`;
+    }
+    case "settled":
+      return `<div class="cpw-section"><p class="cpw-done-title">${I.check}${esc(m.amount)} ${esc(m.symbol)} paid</p>
+        <dl class="cpw-rows detail">
+          ${m.merchant ? `<dt>Merchant</dt><dd style="font-family:var(--sans)">${esc(m.merchant)}</dd>` : ""}
+          ${m.product ? `<dt>Product</dt><dd style="font-family:var(--sans)">${esc(m.product)}</dd>` : ""}
+          <dt>Status</dt><dd class="ok">Settled</dd>
+          <dt>Transaction</dt><dd>${esc(m.txShort)}</dd>
+          ${m.receiptShort ? `<dt>Receipt</dt><dd>${esc(m.receiptShort)}</dd>` : ""}
+          <dt>Remaining allowance</dt><dd>${amt(m.limits?.remaining, m.symbol)}</dd>
+        </dl>
+        <div class="cpw-actions trio">
+          ${m.receiptUrl ? `<a class="cpw-btn primary" href="${esc(m.receiptUrl)}" target="_blank" rel="noopener">Open receipt ${I.ext}</a>` : ""}
+          ${m.explorerUrl ? `<a class="cpw-btn" href="${esc(m.explorerUrl)}" target="_blank" rel="noopener">View on Solana Explorer ${I.ext}</a>` : ""}
+          <button type="button" class="cpw-btn" data-copy="${esc(m.signature)}">Copy transaction</button>
+        </div>
+        <div class="cpw-fallback"><input readonly aria-label="Transaction signature" value="${esc(m.signature)}"><small>Copying isn't allowed here. Select the signature and press Ctrl/Cmd+C.</small></div>
+        <p class="cpw-foot">Paid within your on-chain spending permission.</p></div>`;
+    case "blocked":
+      return `<div class="cpw-reason" role="alert"><b>${I.octagon}${esc(m.reason)}</b></div>
+        ${m.reasonKind === "limits" ? limitsPanel(m) : ""}
+        ${m.rejectedBeforeBroadcast === true
+          ? `<p class="cpw-foot strong">No new payment was submitted by this call.</p>`
+          : m.signature
+            ? `<p class="cpw-foot strong">The payment was reported as failed. Check the transaction before trying again. <a href="${esc(m.explorerUrl)}" target="_blank" rel="noopener">View on Solana Explorer</a></p>`
+            : ""}`;
+    case "signature":
+      return `<p class="cpw-note">Sign this payment in your wallet to continue. Nothing has been submitted yet.</p>`;
+    case "loading":
+      return `<p class="cpw-note">Reading the payment…</p>`;
+    default:
+      return `<p class="cpw-note">We couldn't confirm what happened to this payment. Check Payments in your ChainPay dashboard before trying again.</p>`;
+  }
+}
+
+const STATUS = {
+  ready: (m) => `Ready to pay ${m.amount} ${m.symbol}${m.merchant ? ` to ${m.merchant}` : ""}.`,
+  signature: () => "Waiting for a wallet signature.",
+  loading: () => "",
+  paying: () => "Paying.",
+  confirming: () => "Waiting for confirmation on Solana.",
+  settled: (m) => `Payment settled. ${m.amount} ${m.symbol} paid.`,
+  blocked: (m) => `Payment blocked. ${m.reason}`,
+  unknown: () => "Payment status unknown.",
+};
+function announce(text) { const el = document.getElementById("cpw-status"); if (el) el.textContent = text; }
+
+function render(root, m) {
+  // A refusal we can't place before or after broadcast is not "blocked"; it's unknown.
+  if (m.state === "blocked" && m.rejectedBeforeBroadcast !== true && !m.signature) m = { ...m, state: "unknown" };
+  const [tone, icon, label] = PILL[m.state] || PILL.unknown;
+  root.innerHTML = `<article class="cpw">
+    <header class="cpw-head">${LOGO}<span class="cpw-pill ${tone}">${icon}${esc(label)}</span></header>
+    <p class="cpw-kicker">${esc(KICKER[m.state] || KICKER.unknown)}</p>
+    <div class="cpw-amount"${m.amount == null ? ' hidden' : ""}>${TOKEN_ICONS[m.symbol] ? `<img src="${TOKEN_ICONS[m.symbol]}" alt="" width="24" height="24">` : ""}<b>${esc(m.amount)} ${esc(m.symbol)}</b></div>
+    ${[m.product, m.merchant].filter(Boolean).length ? `<p class="cpw-what">${[m.product, m.merchant].filter(Boolean).map(esc).join(" · ")}</p>` : ""}
+    <p class="cpw-meta">${esc(m.cluster || "Solana")}${m.recipientShort ? ` · To <code>${esc(m.recipientShort)}</code>` : ""}</p>
+    <div class="cpw-body">${body(m)}</div>
+  </article>`;
+  announce(STATUS[m.state] ? STATUS[m.state](m) : STATUS.unknown());
+  root.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(b.dataset.copy);
+      const t = b.textContent; b.textContent = "Copied"; announce("Transaction signature copied.");
+      setTimeout(() => (b.textContent = t), 1500);
+    } catch {
+      const fb = root.querySelector(".cpw-fallback"); fb?.classList.add("show");
+      const input = fb?.querySelector("input"); input?.focus(); input?.select();
+      announce("Copying isn't allowed here. The signature is selected; press Ctrl or Cmd plus C.");
+    }
+  }));
+}
+
+/* ---------- Host bridge: MCP Apps (ui/*) with an OpenAI Apps fallback ---------- */
+const root = document.getElementById("root");
+let model = null;
+let rpcId = 0;
+const pending = new Map();
+const inIframe = window.parent && window.parent !== window;
+
+function post(message) { if (inIframe) window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*"); }
+function request(method, params, timeoutMs = 30000) {
+  if (!inIframe) return Promise.reject(new Error("No host"));
+  const id = ++rpcId;
+  post({ id, method, params });
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    setTimeout(() => { if (pending.delete(id)) reject(new Error(`${method} timed out`)); }, timeoutMs);
+  });
+}
+
+async function callTool(name, args) {
+  if (window.openai?.callTool) return window.openai.callTool(name, args);
+  return request("tools/call", { name, arguments: args }, 60000);
+}
+
+function openLink(url) {
+  if (window.openai?.openExternal) { window.openai.openExternal({ href: url }); return; }
+  request("ui/open-link", { url }).catch(() => window.open(url, "_blank", "noopener"));
+}
+
+// Only descriptive fields survive an update for the same identified payment.
+function apply(view) {
+  if (!view || view.version !== 1) return;
+  const samePayment = model?.paymentId && view.paymentId === model.paymentId;
+  const next = { ...view };
+  if (samePayment) {
+    for (const key of ["merchant", "product", "amount", "symbol", "decimals", "recipient", "recipientShort"]) {
+      if (next[key] == null) next[key] = model[key];
+    }
+  }
+  if (next.state === "settled" && next.limits) delete next.limits.after;
+  model = next;
+  render(root, model);
+  reportSize();
+  maybePoll();
+}
+
+function fromResult(result) {
+  const structured = result && (result.structuredContent || result);
+  apply(structured && structured.widget);
+}
+
+let polling = false;
+async function maybePoll() {
+  if (polling || !model || !model.paymentId) return;
+  if (!["paying", "confirming", "unknown"].includes(model.state)) return;
+  polling = true;
+  const initialPaymentId = model.paymentId;
+  const deadline = Date.now() + 120000;
+  try {
+    while (Date.now() < deadline && ["paying", "confirming", "unknown"].includes(model.state)) {
+      const paymentId = model.paymentId;
+      const result = await callTool("wait_for_payment", { paymentId, timeoutMs: "15000", pollMs: "1000" });
+      // Ignore an old poll if the host has replaced this card in the meantime.
+      if (model.paymentId !== paymentId || !["paying", "confirming", "unknown"].includes(model.state)) return;
+      fromResult(result);
+      if (!["paying", "confirming", "unknown"].includes(model.state)) return;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  } catch {
+    // The host may not let the card call tools. The chat still reports the outcome.
+  } finally {
+    polling = false;
+    if (model.paymentId !== initialPaymentId) void maybePoll();
+  }
+  if (["paying", "confirming"].includes(model.state) && !model.slow) { model = { ...model, slow: true }; render(root, model); reportSize(); }
+}
+
+let lastHeight = 0;
+function reportSize() {
+  const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+  if (height === lastHeight) return;
+  lastHeight = height;
+  post({ method: "ui/notifications/size-changed", params: { width: Math.ceil(document.documentElement.scrollWidth), height } });
+}
+if (window.ResizeObserver) new ResizeObserver(reportSize).observe(document.documentElement);
+
+root.addEventListener("click", (event) => {
+  const link = event.target.closest && event.target.closest("a[href^='http']");
+  if (!link) return;
+  event.preventDefault();
+  openLink(link.href);
+});
+
+window.addEventListener("message", (event) => {
+  if (event.source !== window.parent) return;
+  const message = event.data;
+  if (!message || message.jsonrpc !== "2.0") return;
+  if (message.id !== undefined && pending.has(message.id) && !message.method) {
+    const { resolve, reject } = pending.get(message.id);
+    pending.delete(message.id);
+    if (message.error) reject(new Error(message.error.message || "Host error")); else resolve(message.result);
+    return;
+  }
+  if (message.method === "ui/notifications/tool-result") fromResult(message.params);
+});
+
+window.addEventListener("openai:set_globals", () => { if (window.openai?.toolOutput) fromResult(window.openai.toolOutput); });
+
+function start() {
+  if (window.__CHAINPAY_WIDGET_PREVIEW__) return;
+  render(root, { state: "loading", cluster: "Solana" });
+  if (window.openai) {
+    if (window.openai.toolOutput) fromResult(window.openai.toolOutput);
+    return;
+  }
+  request("ui/initialize", {
+    protocolVersion: "2026-01-26",
+    appInfo: { name: "chainpay-payment-widget", version: "1" },
+    appCapabilities: { availableDisplayModes: ["inline"] },
+  }).then(() => post({ method: "ui/notifications/initialized", params: {} })).catch(() => {});
+}
+start();
+</script>
+</body>
+</html>
