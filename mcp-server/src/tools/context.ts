@@ -9,4 +9,6 @@ export type ChainPayMcpContext = {
   /** Optional Rust backend URL used for signed-transaction relay and status tracking. */
   backendUrl?: string;
   backendAuthToken?: string;
+  /** Live payment-card progress; absent in stdio, where cards can't watch it. */
+  flows?: import("../payment-flows.js").PaymentFlowStore;
 };

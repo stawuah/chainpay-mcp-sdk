@@ -325,6 +325,8 @@ function openLink(url) {
 // Only descriptive fields survive an update for the same identified payment.
 function apply(view) {
   if (!view || view.version !== 1) return;
+  if (view.flowId) { applyFlow(view); return; }
+  stopFlow();
   const samePayment = model?.paymentId && view.paymentId === model.paymentId;
   const next = { ...view };
   if (samePayment) {
@@ -341,12 +343,116 @@ function apply(view) {
 
 function fromResult(result) {
   const structured = result && (result.structuredContent || result);
-  apply(structured && structured.widget);
+  const view = structured && structured.widget;
+  apply(view);
+  if (view && view.flowId) watchFlow(view);
+}
+
+/* ---------- Live card: the steps the server recorded for this payment ----------
+   The agent pays; each tool records the step it really reached. The card only
+   shows recorded steps, revealed in order no faster than one every 0.4 s. */
+const ACTIVE = ["paying", "confirming"];
+const REVEAL_MS = 400;
+let target = null;
+let revealTimer = null;
+let flowPoll = null;
+
+function stopFlow() {
+  if (revealTimer !== null) clearTimeout(revealTimer);
+  revealTimer = null;
+  target = null;
+  if (flowPoll) flowPoll.controller.abort();
+  flowPoll = null;
+}
+
+function stepOf(view) {
+  if (view.state === "settled") return STEPS.length;
+  return ACTIVE.includes(view.state) && Number.isInteger(view.currentStep) ? view.currentStep : null;
+}
+
+function applyFlow(view) {
+  const sameFlow = target?.flowId === view.flowId;
+  if (sameFlow && Number.isFinite(view.updatedAt) && Number.isFinite(target.updatedAt) && view.updatedAt < target.updatedAt) return;
+  if (sameFlow && target.state === "settled" && view.state !== "settled") return;
+  if (!sameFlow) stopFlow();
+  // Host tool results have no store timestamp. They still carry new evidence.
+  if (sameFlow && view.updatedAt === undefined) view = { ...view, updatedAt: target.updatedAt };
+  target = view;
+  if (model?.flowId === view.flowId && model.state === "settled" && view.state === "settled") {
+    model = { ...view };
+    render(root, model);
+    reportSize();
+    return;
+  }
+  if (!model || model.flowId !== view.flowId || !ACTIVE.includes(model.state)) {
+    // First sight of this card: start from the first recorded step, never ahead of it.
+    const step = stepOf(view);
+    model = step === null ? { ...view } : { ...view, state: step >= 4 ? "confirming" : "paying", currentStep: Math.min(step, 0) };
+    render(root, model);
+    reportSize();
+  }
+  if (!revealTimer) revealTimer = setTimeout(reveal, REVEAL_MS);
+}
+
+function reveal() {
+  revealTimer = null;
+  if (!target || !model) return;
+  const want = stepOf(target);
+  const shown = ACTIVE.includes(model.state) ? model.currentStep : null;
+  if (want !== null && shown !== null && shown < want) {
+    const step = shown + 1;
+    model = { ...target, state: step >= 4 && target.state !== "settled" ? "confirming" : "paying", currentStep: step };
+  } else if (want !== null && target.state !== "settled") {
+    model = { ...target };
+  } else {
+    // Settled once every step is shown; blocked and unknown show at once.
+    model = { ...target };
+  }
+  render(root, model);
+  reportSize();
+  if (ACTIVE.includes(model.state) && stepOf(target) !== model.currentStep) revealTimer = setTimeout(reveal, REVEAL_MS);
+  else if (ACTIVE.includes(model.state) && target.state === "settled") revealTimer = setTimeout(reveal, REVEAL_MS);
+}
+
+async function pollFlow(statusUrl, flowId) {
+  if (flowPoll?.flowId === flowId) return;
+  if (flowPoll) flowPoll.controller.abort();
+  const session = { flowId, controller: new AbortController() };
+  flowPoll = session;
+  const active = () => flowPoll === session && target?.flowId === flowId;
+  const deadline = Date.now() + 10 * 60 * 1000;
+  let misses = 0;
+  while (active() && Date.now() < deadline) {
+    try {
+      const response = await fetch(statusUrl, { cache: "no-store", credentials: "omit", signal: session.controller.signal });
+      if (!active()) return;
+      if (response.status === 404) break;
+      if (response.ok) {
+        const body = await response.json();
+        if (!active()) return;
+        misses = 0;
+        applyFlow({ ...body.view, updatedAt: body.updatedAt });
+        if (["settled", "blocked"].includes(body.view.state)) break;
+      } else if (++misses > 10) break;
+    } catch {
+      // The host may block this request; the tool results still update the card.
+      if (++misses > 10) break;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (flowPoll === session) flowPoll = null;
+}
+
+function watchFlow(view) {
+  const boot = window.__CHAINPAY_FLOW__;
+  const statusUrl = boot?.view.flowId === view.flowId ? boot.statusUrl : (view.flowUrl ? `${view.flowUrl}/status` : null);
+  if (statusUrl) pollFlow(statusUrl, view.flowId);
 }
 
 let polling = false;
 async function maybePoll() {
-  if (polling || !model || !model.paymentId) return;
+  if (!inIframe && !window.openai) return;
+  if (polling || !model || model.flowId || !model.paymentId) return;
   if (!["paying", "confirming", "unknown"].includes(model.state)) return;
   polling = true;
   const initialPaymentId = model.paymentId;
@@ -354,9 +460,9 @@ async function maybePoll() {
   try {
     while (Date.now() < deadline && ["paying", "confirming", "unknown"].includes(model.state)) {
       const paymentId = model.paymentId;
-      const result = await callTool("wait_for_payment", { paymentId, timeoutMs: "15000", pollMs: "1000" });
+      const result = await callTool("wait_for_payment", { paymentId, ...(model.flowId ? { flowId: model.flowId } : {}), timeoutMs: "15000", pollMs: "1000" });
       // Ignore an old poll if the host has replaced this card in the meantime.
-      if (model.paymentId !== paymentId || !["paying", "confirming", "unknown"].includes(model.state)) return;
+      if (model.flowId || model.paymentId !== paymentId || !["paying", "confirming", "unknown"].includes(model.state)) return;
       fromResult(result);
       if (!["paying", "confirming", "unknown"].includes(model.state)) return;
       await new Promise((r) => setTimeout(r, 2000));
@@ -404,6 +510,12 @@ window.addEventListener("openai:set_globals", () => { if (window.openai?.toolOut
 function start() {
   if (window.__CHAINPAY_WIDGET_PREVIEW__) return;
   render(root, { state: "loading", cluster: "Solana" });
+  if (window.__CHAINPAY_FLOW__) {
+    // The /pay/<flowId> page: watch the same card in a browser tab.
+    applyFlow(window.__CHAINPAY_FLOW__.view);
+    watchFlow(window.__CHAINPAY_FLOW__.view);
+    return;
+  }
   if (window.openai) {
     if (window.openai.toolOutput) fromResult(window.openai.toolOutput);
     return;

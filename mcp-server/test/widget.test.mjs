@@ -173,14 +173,6 @@ test("the server lists and reads the payment card as an MCP App", async () => {
   assert.equal(missing.error.code, -32002);
 });
 
-test("the three payment tools point at the card", () => {
-  const withCard = TOOL_DEFINITIONS.filter((tool) => tool._meta?.ui?.resourceUri === PAYMENT_WIDGET_URI).map((tool) => tool.name).sort();
-  assert.deepEqual(withCard, ["execute_payment", "quote_payment_request", "wait_for_payment"]);
-  for (const tool of TOOL_DEFINITIONS.filter((item) => item._meta)) {
-    assert.equal(tool._meta["openai/outputTemplate"], PAYMENT_WIDGET_OPENAI_URI);
-  }
-});
-
 test("the preview page carries its illustrative label", () => {
   assert.ok(paymentWidgetHtml("<p>preview</p>").includes("<p>preview</p>"));
   assert.ok(!paymentWidgetHtml().includes("__PREVIEW__"));

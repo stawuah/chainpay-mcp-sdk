@@ -45,8 +45,12 @@ export type PaymentWidgetView = {
   reasonKind?: "limits" | "signature" | "expired" | "paid" | "recipient" | "permission" | "funds" | "other";
   /** True only when this call was refused before submitting a new payment. */
   rejectedBeforeBroadcast?: boolean;
+  /** The live payment card this view belongs to, when one was opened. */
+  flowId?: string;
+  flowUrl?: string;
 };
 
+/** Tools whose results carry a card view. execute and wait also update an open card. */
 export const WIDGET_TOOLS = new Set(["quote_payment_request", "execute_payment", "wait_for_payment"]);
 
 /** Execution/quote results that prove this call submitted no new payment. */

@@ -1,9 +1,11 @@
-import { relayOutcomeUnknown, relayRejectedBeforeBroadcast, submitSettlement } from "./settlement-submit.js";
+import { relayOutcomeUnknown, relayPaymentId, relayRejectedBeforeBroadcast, submitSettlement } from "./settlement-submit.js";
 import type { ChainPayMcpContext } from "./context.js";
 import { bytesToHex, verifyPaymentRequest, type SignedPaymentRequest } from "@chainpayhq/sdk";
 import { materializeUnsignedTransaction, serializeTransaction, toolResult } from "./common.js";
 import { parsePaymentInput, requireObject } from "./payment-input.js";
 import { requirementsFromPreflight } from "./check_payment_requirements.js";
+import { assertFlowOwner, isFlowId, recordFlow } from "../payment-flows.js";
+import { merchantDisplayName } from "../widget/merchants.js";
 
 export async function executePayment(
   context: ChainPayMcpContext,
@@ -15,13 +17,32 @@ export async function executePayment(
     throw new Error("signingMode must be human or delegated");
   }
   const parsed = parsePaymentInput(input);
+  // A live payment card, if one was opened. Steps are recorded only once they
+  // have really happened; the final outcome is recorded with the tool result.
+  if (input.flowId !== undefined && !isFlowId(input.flowId)) throw new Error("flowId is not a ChainPay payment card id");
+  const flowId = input.flowId as string | undefined;
+  const flowPaymentId = relayPaymentId(context.principal?.wallet ?? "", `${parsed.input.mandate}:${bytesToHex(parsed.input.invoiceHash)}`);
+  if (flowId) await assertFlowOwner(context, flowId, flowPaymentId);
+  if (flowId && input.request === undefined) throw new Error("A live payment card requires its merchant-signed request");
   let paymentRequest: SignedPaymentRequest | undefined;
   if (input.request !== undefined) {
     const checked = await checkedPaymentRequest(context, input.request, parsed.input);
     if ("rejected" in checked) return checked.rejected;
     paymentRequest = checked.request;
+    // Merchant-signed and verified: the card can name the merchant and product.
+    await recordFlow(context, flowId, {
+      state: "paying",
+      currentStep: 0,
+      merchant: merchantDisplayName(checked.request.payload.merchant),
+      product: checked.request.payload.description ?? checked.request.payload.lineItems?.[0]?.label,
+    }, flowPaymentId);
   }
   const prepared = await context.client.preparePayment(parsed.input, parsed.agent);
+  if (prepared.preflight.valid) {
+    // Prepared and within policy. Supplied signed bytes are not proof of
+    // authorization until the relay validates them and returns a signature.
+    await recordFlow(context, flowId, { state: "paying", currentStep: 2 }, flowPaymentId);
+  }
   if (!prepared.preflight.valid) {
     return toolResult(
       {

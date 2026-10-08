@@ -15,7 +15,8 @@ Capability map:
 - Discover: list_mandates, get_spend_overview, get_mandate, get_protocol_config, get_asset, get_supported_assets, find_compatible_mandate
 - Policy: create_mandate, update_mandate, pause_mandate, revoke_mandate
 - Quote and check: check_payment_requirements, quote_payment, quote_payment_request, verify_payment_request, create_demo_payment_request
-- Pay: prepare_payment, execute_payment, list_receipts, export_receipts, get_payment, wait_for_payment
+- Pay: open_payment, prepare_payment, execute_payment, list_receipts, export_receipts, get_payment, wait_for_payment
+- Live payment card: once the owner says to pay a merchant-signed request, call open_payment first, then execute_payment with its continuation.arguments, then wait_for_payment with the same flowId. Never call open_payment before the owner approves.
 - Crossmint staging (disabled pending acceptance): prepare_crossmint_payment, execute_crossmint_payment, get_crossmint_payment. Provider order status is separate from on-chain settlement.
 - x402: prepare_x402_payment, execute_x402_payment (primary verb for HTTPS 402 URLs)
 - Private agent cards (Devnet + issuer sandbox): prepare_agent_card (draft for owner review only), request_card_checkout (one-time capability, never a card number), get_card_activity, get_statement (simulated credit), freeze_agent_card (owner session only). There is no tool to unfreeze, raise a limit, grant credit or repay a statement: those need the owner's wallet in the dashboard.
