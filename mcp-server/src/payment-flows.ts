@@ -10,7 +10,7 @@ import type { PaymentWidgetView } from "./widget/view.js";
  * nothing else: no tokens, no keys, no request signature.
  */
 export type PaymentFlowStore = {
-  putFlow(record: PaymentFlowRecord): Promise<void>;
+  putFlow(record: PaymentFlowRecord, expectedUpdatedAt?: number): Promise<void>;
   getFlow(flowId: string, now?: number): Promise<PaymentFlowRecord | undefined>;
 };
 
@@ -44,7 +44,7 @@ function publicView(view: PaymentWidgetView): Record<string, unknown> {
   return visible;
 }
 
-export async function createFlow(context: ChainPayMcpContext, view: PaymentWidgetView): Promise<string | undefined> {
+export async function createFlow(context: ChainPayMcpContext, view: PaymentWidgetView, paymentId: string): Promise<string | undefined> {
   const wallet = context.principal?.wallet;
   if (!context.flows || !wallet) return undefined;
   const flowId = randomBytes(16).toString("base64url");
@@ -52,6 +52,7 @@ export async function createFlow(context: ChainPayMcpContext, view: PaymentWidge
   await context.flows.putFlow({
     flowId,
     wallet,
+    paymentId,
     view: publicView({ ...view, flowId, flowUrl: flowUrl(flowId) }),
     createdAt: now,
     updatedAt: now,
@@ -65,30 +66,46 @@ export async function createFlow(context: ChainPayMcpContext, view: PaymentWidge
  * or storage being unavailable, never blocks a payment: the card just stops
  * updating, and recordFlow re-checks the owner before every write.
  */
-export async function assertFlowOwner(context: ChainPayMcpContext, flowId: string): Promise<void> {
+export async function assertFlowOwner(context: ChainPayMcpContext, flowId: string, paymentId: string): Promise<void> {
   if (!context.flows) return;
   const flow = await context.flows.getFlow(flowId).catch(() => undefined);
   if (flow && flow.wallet !== context.principal?.wallet) throw new Error("This payment card belongs to another wallet");
+  if (flow && flow.paymentId !== paymentId) throw new Error("This payment card belongs to another payment");
 }
 
 /**
  * Best effort: a storage failure is logged and never changes a payment. Fields
  * the new view can't prove (merchant, product) are kept from the earlier one.
  */
-export async function recordFlow(context: ChainPayMcpContext, flowId: string | undefined, view: Partial<PaymentWidgetView>): Promise<void> {
+export async function recordFlow(context: ChainPayMcpContext, flowId: string | undefined, view: Partial<PaymentWidgetView>, paymentId: string): Promise<void> {
   if (!flowId || !context.flows || !context.principal?.wallet) return;
   try {
-    const existing = await context.flows.getFlow(flowId);
-    if (!existing || existing.wallet !== context.principal.wallet) return;
-    const merged: Record<string, unknown> = { ...existing.view };
-    for (const [key, value] of Object.entries(publicView(view as PaymentWidgetView))) {
-      if (value !== undefined) merged[key] = value;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const existing = await context.flows.getFlow(flowId);
+      if (!existing || existing.wallet !== context.principal.wallet || existing.paymentId !== paymentId) return;
+      // Once proven settled, a late submission/status response cannot undo it.
+      if (existing.view.state === "settled") return;
+      const merged: Record<string, unknown> = view.version === 1 ? {} : { ...existing.view };
+      if (view.version === 1) {
+        // Preserve descriptions and known transaction identity, never stale policy
+        // or refusal evidence from a previous call.
+        for (const key of ["amount", "symbol", "decimals", "merchant", "product", "recipientShort", "cluster", "signature", "txShort", "explorerUrl", "paymentId", "flowId", "flowUrl"]) {
+          if (existing.view[key] !== undefined) merged[key] = existing.view[key];
+        }
+      }
+      for (const [key, value] of Object.entries(publicView(view as PaymentWidgetView))) {
+        if (value !== undefined) merged[key] = value;
+      }
+      if (merged.state !== "ready" && merged.limits && typeof merged.limits === "object") {
+        if (merged.state === "settled" || merged.state === "blocked") delete (merged.limits as Record<string, unknown>).after;
+      }
+      try {
+        await context.flows.putFlow({ ...existing, view: merged, updatedAt: Math.max(Date.now(), existing.updatedAt + 1) }, existing.updatedAt);
+        return;
+      } catch (error) {
+        if (attempt === 2 || !(error instanceof Error) || !/Payment flow update conflict|Storage request rejected \(409\)/.test(error.message)) throw error;
+      }
     }
-    if (view.limits) merged.limits = { ...(existing.view.limits as object | undefined), ...view.limits };
-    if (merged.state !== "ready" && merged.limits && typeof merged.limits === "object") {
-      if (merged.state === "settled" || merged.state === "blocked") delete (merged.limits as Record<string, unknown>).after;
-    }
-    await context.flows.putFlow({ ...existing, view: merged, updatedAt: Date.now() });
   } catch (error) {
     console.error(`[chainpay] payment card update skipped: ${error instanceof Error ? error.name : "unknown"}`);
   }

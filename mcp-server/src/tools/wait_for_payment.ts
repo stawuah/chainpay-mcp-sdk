@@ -21,7 +21,7 @@ export async function waitForPayment(
 
   const paymentId = requiredString(args.paymentId, "paymentId");
   if (args.flowId !== undefined && !isFlowId(args.flowId)) throw new Error("flowId is not a ChainPay payment card id");
-  if (typeof args.flowId === "string") await assertFlowOwner(context, args.flowId);
+  if (typeof args.flowId === "string") await assertFlowOwner(context, args.flowId, paymentId);
   const timeoutMs = Number(args.timeoutMs === undefined ? 30_000n : unsignedInteger(args.timeoutMs, "timeoutMs"));
   const pollMs = Number(args.pollMs === undefined ? 500n : unsignedInteger(args.pollMs, "pollMs"));
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 120_000) {

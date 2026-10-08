@@ -7,6 +7,7 @@ import { derivePaymentReferences } from "./payment-request-references.js";
 import { formatTokenAmount, tokenLabel } from "./token-amount.js";
 import { createFlow, flowUrl } from "../payment-flows.js";
 import { shortAddress, type PaymentWidgetView } from "../widget/view.js";
+import { relayPaymentId } from "./settlement-submit.js";
 
 /**
  * Opens the payment card before anything is checked or paid. The owner has
@@ -53,7 +54,7 @@ export async function openPayment(context: ChainPayMcpContext, args: Record<stri
 
   let flowId: string | undefined;
   try {
-    flowId = await createFlow(context, view);
+    flowId = await createFlow(context, view, relayPaymentId(context.principal!.wallet, `${mandate}:${invoiceHash}`));
   } catch (error) {
     console.error(`[chainpay] payment card could not be stored: ${error instanceof Error ? error.name : "unknown"}`);
   }

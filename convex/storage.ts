@@ -183,10 +183,22 @@ export const execute = internalMutation({
       const old = await ctx.db.query("payment_flows").withIndex("by_flow", q => q.eq("flowId", flowId)).unique();
       if (op === "mcp.getFlow") return old && old.expires > safeNumber(a.now) ? old.record_json : null;
       const record = { flowId, wallet: string(a.wallet), record_json: string(a.record_json), expires: safeNumber(a.expires) };
-      jsonValue(record.record_json);
+      const value = json(record.record_json);
       if (record.record_json.length > 32_000) return fail("invalid_argument", "Payment card record is too large");
       // A card keeps its owner: another wallet can never overwrite it.
       if (old && old.wallet !== record.wallet) return fail("forbidden", "Payment card belongs to another wallet");
+      if (a.expectedUpdatedAt === undefined) {
+        if (old) return fail("conflict", "Payment flow update conflict");
+      } else {
+        const expected = safeNumber(a.expectedUpdatedAt);
+        const previous = old ? json(old.record_json) : null;
+        if (!old || old.expires <= Date.now() || old.expires !== record.expires ||
+            previous?.paymentId !== value.paymentId ||
+            safeNumber(previous?.updatedAt) !== expected || safeNumber(value.updatedAt) <= expected ||
+            safeNumber(previous?.createdAt) !== safeNumber(value.createdAt)) {
+          return fail("conflict", "Payment flow update conflict");
+        }
+      }
       if (old) await ctx.db.patch(old._id, record); else await ctx.db.insert("payment_flows", record);
       return null;
     }

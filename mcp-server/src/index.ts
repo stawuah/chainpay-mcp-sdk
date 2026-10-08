@@ -1,5 +1,5 @@
 import { CARD_TOOLS, authorizeTool } from "./authorization.js";
-import { ChainPayClient, isDuplicateInvoiceError, publicKey, redactCardNumbers, redactCardNumbersInInput } from "@chainpayhq/sdk";
+import { ChainPayClient, bytesToHex, isDuplicateInvoiceError, publicKey, redactCardNumbers, redactCardNumbersInInput } from "@chainpayhq/sdk";
 import { createMandate } from "./tools/create_mandate.js";
 import { checkPaymentRequirements } from "./tools/check_payment_requirements.js";
 import { createDemoPaymentRequest } from "./tools/demo-payment-request.js";
@@ -8,6 +8,8 @@ import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { paymentWidgetView } from "./widget/view.js";
 import { flowUrl, isFlowId, recordFlow } from "./payment-flows.js";
 import { openPayment } from "./tools/open_payment.js";
+import { parsePaymentInput } from "./tools/payment-input.js";
+import { relayPaymentId } from "./tools/settlement-submit.js";
 import { executePayment } from "./tools/execute_payment.js";
 import { exportReceipts } from "./tools/export-receipts.js";
 import { getMandate } from "./tools/get_mandate.js";
@@ -116,6 +118,10 @@ export async function callTool(
     if (CARD_TOOLS.has(name) && error instanceof Error) {
       error.message = redactCardNumbersInInput(redactCardNumbers(error.message));
     }
+    const paymentId = flowPaymentIdentity(context, name, args);
+    if (isFlowId(args.flowId) && paymentId) {
+      await recordFlow(context, args.flowId, { version: 1, state: "unknown" }, paymentId);
+    }
     throw error;
   }
 }
@@ -133,12 +139,24 @@ async function withPaymentWidget<T>(context: ChainPayMcpContext, name: string, a
   }
   if (!widget) return result;
   // The card the owner is watching moves to this outcome too.
-  if (isFlowId(args.flowId)) {
+  const paymentId = flowPaymentIdentity(context, name, args);
+  if (isFlowId(args.flowId) && paymentId) {
     Object.assign(widget, { flowId: args.flowId, flowUrl: flowUrl(args.flowId) });
-    await recordFlow(context, args.flowId, widget);
+    await recordFlow(context, args.flowId, widget, paymentId);
   }
   const response = result as { structuredContent?: Record<string, unknown> };
   return { ...result, structuredContent: { ...response.structuredContent, widget } } as T;
+}
+
+function flowPaymentIdentity(context: ChainPayMcpContext, name: string, args: Record<string, unknown>): string | undefined {
+  if (name === "wait_for_payment" && typeof args.paymentId === "string") return args.paymentId;
+  if (name !== "execute_payment" || !context.principal) return undefined;
+  try {
+    const { input } = parsePaymentInput(args);
+    return relayPaymentId(context.principal.wallet, `${input.mandate}:${bytesToHex(input.invoiceHash)}`);
+  } catch {
+    return undefined;
+  }
 }
 
 async function dispatchTool(

@@ -7,6 +7,7 @@ import { callTool, TOOL_DEFINITIONS } from "../dist/index.js";
 import { McpConnectionRegistry } from "../dist/connections.js";
 import { createHttpServer } from "../dist/http.js";
 import { createDemoStoreRequest, DEVNET_USDC_MINT } from "../dist/demo-store.js";
+import { recordFlow } from "../dist/payment-flows.js";
 import { PAYMENT_WIDGET_URI } from "../dist/widget/resource.js";
 
 const USDC = DEVNET_USDC_MINT;
@@ -49,10 +50,10 @@ function harness({ preflight = { valid: true, checks: PASSING }, failPutAfter = 
   const flows = McpConnectionRegistry.inMemory();
   const writes = [];
   const putFlow = flows.putFlow.bind(flows);
-  flows.putFlow = async (record) => {
+  flows.putFlow = async (record, expectedUpdatedAt) => {
     if (writes.length >= failPutAfter) throw new Error("storage down");
     writes.push(structuredClone(record.view));
-    return putFlow(record);
+    return putFlow(record, expectedUpdatedAt);
   };
   const context = {
     principal: { wallet, scope: null },
@@ -132,7 +133,7 @@ test("execute_payment records each step as it really happens, then the outcome",
   assert.equal(writes[1].product, "Market data report");
 
   await withRelay(() => ({ payment_id: "payment_1", status: "confirmed", signature: SIGNATURE, mandate: MANDATE, mint: USDC, amount: "10000000", receipt_address: RECEIPT }), async () => {
-    const waited = await callTool(context, "wait_for_payment", { paymentId: "payment_1", flowId: opened.flowId, timeoutMs: "0" });
+    const waited = await callTool(context, "wait_for_payment", { paymentId: (await flows.getFlow(opened.flowId)).paymentId, flowId: opened.flowId, timeoutMs: "0" });
     assert.equal(waited.structuredContent.action, "payment_terminal");
   });
   const settled = (await flows.getFlow(opened.flowId)).view;
@@ -226,7 +227,7 @@ test("the /pay page and status show only the card, and unknown cards are 404", a
   context.flows = registry;
   const request = await signedRequest();
   const opened = (await callTool(context, "open_payment", { request, mandate: MANDATE, agent: AGENT })).structuredContent;
-  const { server } = createHttpServer({ client: {} }, { host: "127.0.0.1", port: 1 }, registry);
+  const { server } = createHttpServer({ client: {}, flows: registry }, { host: "127.0.0.1", port: 1 }, McpConnectionRegistry.inMemory());
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -250,4 +251,91 @@ test("the /pay page and status show only the card, and unknown cards are 404", a
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+
+test("a card cannot be driven by another payment from the same wallet", async () => {
+  const { context, flows } = harness();
+  const opened = (await callTool(context, "open_payment", { request: await signedRequest(), mandate: MANDATE, agent: AGENT })).structuredContent;
+  const other = (await callTool(context, "open_payment", { request: await signedRequest("annual-license"), mandate: MANDATE, agent: AGENT })).structuredContent;
+  const before = await flows.getFlow(opened.flowId);
+  await withRelay(() => ({}), async (calls) => {
+    await assert.rejects(callTool(context, "execute_payment", { ...other.continuation.arguments, flowId: opened.flowId }), /another payment/);
+    await assert.rejects(callTool(context, "wait_for_payment", { flowId: opened.flowId, paymentId: "payment_other" }), /another payment/);
+    assert.deepEqual(calls, []);
+  });
+  assert.deepEqual(await flows.getFlow(opened.flowId), before);
+});
+
+test("human preparation never records authorization before a signature", async () => {
+  const { context, writes, flows } = harness();
+  const opened = (await callTool(context, "open_payment", { request: await signedRequest(), mandate: MANDATE, agent: AGENT, signingMode: "human" })).structuredContent;
+  await withRelay(() => ({}), async (calls) => {
+    const result = await callTool(context, "execute_payment", opened.continuation.arguments);
+    assert.equal(result.structuredContent.action, "agent_signature_required");
+    assert.deepEqual(calls, []);
+  });
+  assert.ok(writes.every((view) => view.currentStep === undefined || view.currentStep <= 2));
+  assert.equal((await flows.getFlow(opened.flowId)).view.state, "signature");
+});
+
+test("a thrown preparation error updates the open card to unknown", async () => {
+  const { context, flows } = harness();
+  const opened = (await callTool(context, "open_payment", { request: await signedRequest(), mandate: MANDATE, agent: AGENT })).structuredContent;
+  context.client.preparePayment = async () => { throw new Error("RPC unavailable"); };
+  await assert.rejects(callTool(context, "execute_payment", opened.continuation.arguments), /RPC unavailable/);
+  assert.equal((await flows.getFlow(opened.flowId)).view.state, "unknown");
+});
+
+test("concurrent pending updates cannot overwrite a settled card", async () => {
+  const { context, flows } = harness();
+  const opened = (await callTool(context, "open_payment", { request: await signedRequest(), mandate: MANDATE, agent: AGENT })).structuredContent;
+  const { paymentId } = await flows.getFlow(opened.flowId);
+  const originalPut = flows.putFlow.bind(flows);
+  let release;
+  let entered;
+  const blocked = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  let paused = false;
+  flows.putFlow = async (record, expected) => {
+    if (!paused && record.view.state === "confirming") { paused = true; entered(); await gate; }
+    return originalPut(record, expected);
+  };
+  const late = recordFlow(context, opened.flowId, { version: 1, state: "confirming", currentStep: 4 }, paymentId);
+  await blocked;
+  await recordFlow(context, opened.flowId, { version: 1, state: "settled", signature: SIGNATURE, receipt: RECEIPT }, paymentId);
+  release();
+  await late;
+  const view = (await flows.getFlow(opened.flowId)).view;
+  assert.equal(view.state, "settled");
+  assert.equal(view.receipt, RECEIPT);
+});
+
+test("full status updates discard stale refusal and financial evidence", async () => {
+  const { context, flows } = harness();
+  const opened = (await callTool(context, "open_payment", { request: await signedRequest(), mandate: MANDATE, agent: AGENT })).structuredContent;
+  const { paymentId } = await flows.getFlow(opened.flowId);
+  await recordFlow(context, opened.flowId, { version: 1, state: "blocked", reason: "Old refusal", rejectedBeforeBroadcast: true, limits: { remaining: "30" } }, paymentId);
+  await recordFlow(context, opened.flowId, { version: 1, state: "unknown" }, paymentId);
+  const view = (await flows.getFlow(opened.flowId)).view;
+  assert.equal(view.reason, undefined);
+  assert.equal(view.rejectedBeforeBroadcast, undefined);
+  assert.equal(view.limits, undefined);
+  assert.equal(view.amount, "10");
+});
+
+
+test("unverified signed bytes do not advance the authorization step", async () => {
+  const { context, writes } = harness();
+  const opened = (await callTool(context, "open_payment", { request: await signedRequest(), mandate: MANDATE, agent: AGENT, signingMode: "human" })).structuredContent;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    assert.equal(writes.at(-1).currentStep, 2);
+    return Response.json({ error: "Invalid signature" }, { status: 400 });
+  };
+  try {
+    const result = await callTool(context, "execute_payment", { ...opened.continuation.arguments, signedTransaction: "invalid" });
+    assert.equal(result.structuredContent.action, "backend_rejected");
+    assert.ok(writes.every((view) => view.currentStep === undefined || view.currentStep <= 2));
+  } finally { globalThis.fetch = originalFetch; }
 });

@@ -29,6 +29,8 @@ type MemoryConnectionRecord = PublicMcpConnection & { tokenHash: string; revoked
 export type PaymentFlowRecord = {
   flowId: string;
   wallet: string;
+  /** Private binding to the relay operation this card represents. */
+  paymentId: string;
   view: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
@@ -351,25 +353,47 @@ export class McpConnectionRegistry {
     return true;
   }
 
-  /** Insert or replace a flow. An existing flow keeps its owner: another wallet can't overwrite it. */
-  async putFlow(record: PaymentFlowRecord): Promise<void> {
+  /** Create a flow, or atomically update the exact live revision the caller read. */
+  async putFlow(record: PaymentFlowRecord, expectedUpdatedAt?: number): Promise<void> {
+    if (expectedUpdatedAt !== undefined && (!Number.isSafeInteger(expectedUpdatedAt) || record.updatedAt <= expectedUpdatedAt)) {
+      throw new Error("Payment flow update conflict");
+    }
     if (this.convex) {
-      await this.convex.call("mcp.putFlow", { flowId: record.flowId, wallet: record.wallet, record_json: JSON.stringify(record), expires: record.expiresAt });
+      await this.convex.call("mcp.putFlow", { flowId: record.flowId, wallet: record.wallet, record_json: JSON.stringify(record), expires: record.expiresAt, ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }) });
       return;
     }
     if (this.pool) {
-      const result = await this.pool.query(
+      // Bound retention work per write, using the expiry index. Updates below
+      // independently reject expiry, even when cleanup has a larger backlog.
+      await this.pool.query(
+        `DELETE FROM payment_flows WHERE flow_id IN (
+           SELECT flow_id FROM payment_flows WHERE expires_at <= NOW()
+           ORDER BY expires_at LIMIT 100
+         )`,
+      );
+      const result = expectedUpdatedAt === undefined ? await this.pool.query(
         `INSERT INTO payment_flows (flow_id, wallet_address, record, expires_at)
          VALUES ($1, $2, $3::JSONB, to_timestamp($4 / 1000.0))
-         ON CONFLICT (flow_id) DO UPDATE SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at
-         WHERE payment_flows.wallet_address = EXCLUDED.wallet_address`,
+         ON CONFLICT (flow_id) DO NOTHING`,
         [record.flowId, record.wallet, JSON.stringify(record), record.expiresAt],
+      ) : await this.pool.query(
+        `UPDATE payment_flows SET record = $3::JSONB
+         WHERE flow_id = $1 AND wallet_address = $2
+           AND (record->>'updatedAt')::BIGINT = $5
+           AND expires_at > NOW()
+           AND expires_at = to_timestamp($4 / 1000.0)
+           AND record->>'paymentId' = $3::JSONB->>'paymentId'
+           AND record->>'createdAt' = $3::JSONB->>'createdAt'`,
+        [record.flowId, record.wallet, JSON.stringify(record), record.expiresAt, expectedUpdatedAt],
       );
-      if (result.rowCount === 0) throw new Error("Payment flow belongs to another wallet");
+      if (result.rowCount === 0) throw new Error("Payment flow update conflict");
       return;
     }
     const existing = this.flows.get(record.flowId);
     if (existing && existing.wallet !== record.wallet) throw new Error("Payment flow belongs to another wallet");
+    if (expectedUpdatedAt === undefined ? Boolean(existing) : !existing || existing.updatedAt !== expectedUpdatedAt || existing.expiresAt <= Date.now() || existing.expiresAt !== record.expiresAt || existing.createdAt !== record.createdAt || existing.paymentId !== record.paymentId) {
+      throw new Error("Payment flow update conflict");
+    }
     for (const [id, flow] of this.flows) if (flow.expiresAt <= Date.now()) this.flows.delete(id);
     if (this.flows.size >= 10_000 && !existing) throw new Error("Too many live payment flows");
     this.flows.set(record.flowId, structuredClone(record));

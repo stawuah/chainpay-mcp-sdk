@@ -250,13 +250,40 @@ it("exports canonical legacy connector defaults and rejects microsecond-stale Cr
 describe("payment cards", () => {
   it("keeps a card's owner, hides expired cards, and lets only the MCP service touch them", async () => {
     const t = test();
-    const record = (wallet: string, state: string) => JSON.stringify({ flowId: "f1", wallet, view: { state }, createdAt: 1, updatedAt: 2, expiresAt: 1_000 });
-    await call(t, "mcp.putFlow", { flowId: "f1", wallet: "owner", record_json: record("owner", "paying"), expires: 1_000 }, "mcp");
-    await call(t, "mcp.putFlow", { flowId: "f1", wallet: "owner", record_json: record("owner", "settled"), expires: 1_000 }, "mcp");
+    const expires = Date.now() + 60_000;
+    const record = (wallet: string, state: string, updatedAt = 2) => JSON.stringify({ flowId: "f1", wallet, view: { state }, createdAt: 1, updatedAt, expiresAt: expires });
+    await call(t, "mcp.putFlow", { flowId: "f1", wallet: "owner", record_json: record("owner", "paying"), expires }, "mcp");
+    await call(t, "mcp.putFlow", { flowId: "f1", wallet: "owner", record_json: record("owner", "settled", 3), expires, expectedUpdatedAt: 2 }, "mcp");
     expect(JSON.parse(await call(t, "mcp.getFlow", { flowId: "f1", now: 500 }, "mcp")).view.state).toBe("settled");
-    await expect(call(t, "mcp.putFlow", { flowId: "f1", wallet: "intruder", record_json: record("intruder", "blocked"), expires: 1_000 }, "mcp")).rejects.toThrow(/another wallet/);
-    expect(await call(t, "mcp.getFlow", { flowId: "f1", now: 1_000 }, "mcp")).toBeNull();
+    await expect(call(t, "mcp.putFlow", { flowId: "f1", wallet: "intruder", record_json: record("intruder", "blocked"), expires }, "mcp")).rejects.toThrow(/another wallet/);
+    expect(await call(t, "mcp.getFlow", { flowId: "f1", now: expires }, "mcp")).toBeNull();
     await expect(call(t, "mcp.getFlow", { flowId: "f1", now: 500 }, "backend")).rejects.toThrow(/not allowed/);
     expect(await t.mutation(internal.cleanup.expiredCredentials, {})).toBeGreaterThanOrEqual(0);
+  });
+
+  it("rejects stale revisions, blind replacements, and expiry extension", async () => {
+    const t = test();
+    const expires = Date.now() + 60_000;
+    const record = { flowId: "cas", wallet: "owner", paymentId: "payment_1", view: { state: "paying" }, createdAt: 1, updatedAt: 2, expiresAt: expires };
+    const put = (next: typeof record, expectedUpdatedAt?: number) => call(t, "mcp.putFlow", {
+      flowId: next.flowId, wallet: next.wallet, expires: next.expiresAt, record_json: JSON.stringify(next),
+      ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
+    }, "mcp");
+    await put(record);
+    await expect(put({ ...record, updatedAt: 3 })).rejects.toThrow(/conflict/);
+    // Two callers read revision 2; exactly one can publish its replacement.
+    const results = await Promise.allSettled([
+      put({ ...record, updatedAt: 3, view: { state: "confirming" } }, 2),
+      put({ ...record, updatedAt: 4, view: { state: "settled" } }, 2),
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")).toHaveLength(1);
+    const latest = JSON.parse(await call(t, "mcp.getFlow", { flowId: "cas", now: Date.now() }, "mcp"));
+    await expect(put({ ...latest, paymentId: "payment_other", updatedAt: latest.updatedAt + 1 }, latest.updatedAt)).rejects.toThrow(/conflict/);
+    await expect(put({ ...latest, expiresAt: expires + 1, updatedAt: latest.updatedAt + 1 }, latest.updatedAt)).rejects.toThrow(/conflict/);
+    await expect(put({ ...latest }, latest.updatedAt)).rejects.toThrow(/conflict/);
+    await expect(put({ ...latest, flowId: "missing", updatedAt: latest.updatedAt + 1 }, latest.updatedAt)).rejects.toThrow(/conflict/);
+    await put({ ...record, flowId: "expired", expiresAt: Date.now() - 1 });
+    await expect(put({ ...record, flowId: "expired", updatedAt: 3 }, 2)).rejects.toThrow(/conflict/);
   });
 });

@@ -81,9 +81,17 @@ The agent then calls `execute_payment` and `wait_for_payment` with the card's
 passed, authorization and submission, then confirmation and receipt. The card
 reveals recorded steps in order, never one before it is recorded. It reads them
 from `/pay/<flowId>/status`. A card record holds only what the card shows,
-belongs to the wallet that opened it, and expires after 24 hours (Convex
+is bound to the opening wallet and the original payment, and expires after 24 hours (Convex
 `payment_flows`, or PostgreSQL migration `0014_payment_flows.sql`). If storage
-fails, the payment result is unchanged.
+fails, the payment result is unchanged. Updates use atomic revision checks so a
+late response cannot overwrite proven settlement. Status updates discard stale
+refusal and allowance fields; earlier verified merchant descriptions stay bound
+to that same payment. PostgreSQL removes expired records in bounded batches on
+flow writes; Convex removes them with its cleanup cron.
+
+Live cards keep watching through wallet-signature and unknown states. Replacing
+a card cancels its previous polling and animation. These live cards only read
+the public status endpoint; the agent drives execution and reconciliation.
 
 `quote_payment_request` shows the same card in its ready or blocked state.
 Without `open_payment`, `execute_payment` behaves exactly as before. Set

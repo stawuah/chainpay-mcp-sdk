@@ -326,6 +326,7 @@ function openLink(url) {
 function apply(view) {
   if (!view || view.version !== 1) return;
   if (view.flowId) { applyFlow(view); return; }
+  stopFlow();
   const samePayment = model?.paymentId && view.paymentId === model.paymentId;
   const next = { ...view };
   if (samePayment) {
@@ -354,6 +355,15 @@ const ACTIVE = ["paying", "confirming"];
 const REVEAL_MS = 400;
 let target = null;
 let revealTimer = null;
+let flowPoll = null;
+
+function stopFlow() {
+  if (revealTimer !== null) clearTimeout(revealTimer);
+  revealTimer = null;
+  target = null;
+  if (flowPoll) flowPoll.controller.abort();
+  flowPoll = null;
+}
 
 function stepOf(view) {
   if (view.state === "settled") return STEPS.length;
@@ -361,8 +371,19 @@ function stepOf(view) {
 }
 
 function applyFlow(view) {
-  if (target && target.flowId === view.flowId && (view.updatedAt || 0) < (target.updatedAt || 0)) return;
+  const sameFlow = target?.flowId === view.flowId;
+  if (sameFlow && Number.isFinite(view.updatedAt) && Number.isFinite(target.updatedAt) && view.updatedAt < target.updatedAt) return;
+  if (sameFlow && target.state === "settled" && view.state !== "settled") return;
+  if (!sameFlow) stopFlow();
+  // Host tool results have no store timestamp. They still carry new evidence.
+  if (sameFlow && view.updatedAt === undefined) view = { ...view, updatedAt: target.updatedAt };
   target = view;
+  if (model?.flowId === view.flowId && model.state === "settled" && view.state === "settled") {
+    model = { ...view };
+    render(root, model);
+    reportSize();
+    return;
+  }
   if (!model || model.flowId !== view.flowId || !ACTIVE.includes(model.state)) {
     // First sight of this card: start from the first recorded step, never ahead of it.
     const step = stepOf(view);
@@ -391,24 +412,27 @@ function reveal() {
   reportSize();
   if (ACTIVE.includes(model.state) && stepOf(target) !== model.currentStep) revealTimer = setTimeout(reveal, REVEAL_MS);
   else if (ACTIVE.includes(model.state) && target.state === "settled") revealTimer = setTimeout(reveal, REVEAL_MS);
-  maybePoll();
 }
 
-let flowPolling = false;
-async function pollFlow(statusUrl) {
-  if (flowPolling) return;
-  flowPolling = true;
+async function pollFlow(statusUrl, flowId) {
+  if (flowPoll?.flowId === flowId) return;
+  if (flowPoll) flowPoll.controller.abort();
+  const session = { flowId, controller: new AbortController() };
+  flowPoll = session;
+  const active = () => flowPoll === session && target?.flowId === flowId;
   const deadline = Date.now() + 10 * 60 * 1000;
   let misses = 0;
-  while (Date.now() < deadline) {
+  while (active() && Date.now() < deadline) {
     try {
-      const response = await fetch(statusUrl, { cache: "no-store", credentials: "omit" });
+      const response = await fetch(statusUrl, { cache: "no-store", credentials: "omit", signal: session.controller.signal });
+      if (!active()) return;
       if (response.status === 404) break;
       if (response.ok) {
         const body = await response.json();
+        if (!active()) return;
         misses = 0;
         applyFlow({ ...body.view, updatedAt: body.updatedAt });
-        if (!ACTIVE.includes(body.view.state)) break;
+        if (["settled", "blocked"].includes(body.view.state)) break;
       } else if (++misses > 10) break;
     } catch {
       // The host may block this request; the tool results still update the card.
@@ -416,18 +440,19 @@ async function pollFlow(statusUrl) {
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
-  flowPolling = false;
+  if (flowPoll === session) flowPoll = null;
 }
 
 function watchFlow(view) {
-  const statusUrl = window.__CHAINPAY_FLOW__?.statusUrl || (view.flowUrl ? `${view.flowUrl}/status` : null);
-  if (statusUrl) pollFlow(statusUrl);
+  const boot = window.__CHAINPAY_FLOW__;
+  const statusUrl = boot?.view.flowId === view.flowId ? boot.statusUrl : (view.flowUrl ? `${view.flowUrl}/status` : null);
+  if (statusUrl) pollFlow(statusUrl, view.flowId);
 }
 
 let polling = false;
 async function maybePoll() {
   if (!inIframe && !window.openai) return;
-  if (polling || !model || !model.paymentId) return;
+  if (polling || !model || model.flowId || !model.paymentId) return;
   if (!["paying", "confirming", "unknown"].includes(model.state)) return;
   polling = true;
   const initialPaymentId = model.paymentId;
@@ -437,7 +462,7 @@ async function maybePoll() {
       const paymentId = model.paymentId;
       const result = await callTool("wait_for_payment", { paymentId, ...(model.flowId ? { flowId: model.flowId } : {}), timeoutMs: "15000", pollMs: "1000" });
       // Ignore an old poll if the host has replaced this card in the meantime.
-      if (model.paymentId !== paymentId || !["paying", "confirming", "unknown"].includes(model.state)) return;
+      if (model.flowId || model.paymentId !== paymentId || !["paying", "confirming", "unknown"].includes(model.state)) return;
       fromResult(result);
       if (!["paying", "confirming", "unknown"].includes(model.state)) return;
       await new Promise((r) => setTimeout(r, 2000));
