@@ -73,7 +73,9 @@ export async function authorizeTool(context: ChainPayMcpContext, name: string, a
   const principal = context.principal;
   if (!principal) throw new AuthorizationError("Sign in with a wallet session or reconnect with a scoped connection");
   await context.assertActive?.();
-  if (principal.scope && (!principal.scope.tools.includes(name) || OWNER_TOOLS.has(name))) throw new AuthorizationError("Tool is not permitted by this connection");
+  // Opening the payment card is part of paying: a connection that may execute payments may open it.
+  const scopedName = name === "open_payment" ? "execute_payment" : name;
+  if (principal.scope && (!principal.scope.tools.includes(scopedName) || OWNER_TOOLS.has(name))) throw new AuthorizationError("Tool is not permitted by this connection");
   for (const field of ["owner", "wallet", "ownerWallet"]) {
     if (args[field] !== undefined && args[field] !== principal.wallet) throw new AuthorizationError("Wallet differs from verified owner");
   }

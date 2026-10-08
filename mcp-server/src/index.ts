@@ -6,6 +6,8 @@ import { createDemoPaymentRequest } from "./tools/demo-payment-request.js";
 import type { ChainPayMcpContext } from "./tools/context.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { paymentWidgetView } from "./widget/view.js";
+import { flowUrl, isFlowId, recordFlow } from "./payment-flows.js";
+import { openPayment } from "./tools/open_payment.js";
 import { executePayment } from "./tools/execute_payment.js";
 import { exportReceipts } from "./tools/export-receipts.js";
 import { getMandate } from "./tools/get_mandate.js";
@@ -130,6 +132,11 @@ async function withPaymentWidget<T>(context: ChainPayMcpContext, name: string, a
     return result;
   }
   if (!widget) return result;
+  // The card the owner is watching moves to this outcome too.
+  if (isFlowId(args.flowId)) {
+    Object.assign(widget, { flowId: args.flowId, flowUrl: flowUrl(args.flowId) });
+    await recordFlow(context, args.flowId, widget);
+  }
   const response = result as { structuredContent?: Record<string, unknown> };
   return { ...result, structuredContent: { ...response.structuredContent, widget } } as T;
 }
@@ -162,6 +169,8 @@ async function dispatchTool(
       return createDemoPaymentRequest(context, args);
     case "quote_payment_request":
       return quotePaymentRequest(context, args);
+    case "open_payment":
+      return openPayment(context, args);
     case "create_mandate":
       return createMandate(context, args);
     case "check_payment_requirements":

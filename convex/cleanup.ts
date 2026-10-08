@@ -10,7 +10,8 @@ export const expiredCredentials = internalMutation({
     const now = Date.now();
     const auth = await ctx.db.query("owner_auth").withIndex("by_expires", q => q.lte("expires", sorted(now))).take(500);
     const rates = await ctx.db.query("rate_limits").withIndex("by_expires", q => q.lte("expires", now)).take(500);
-    for (const row of [...auth, ...rates]) await ctx.db.delete(row._id);
-    return auth.length + rates.length;
+    const flows = await ctx.db.query("payment_flows").withIndex("by_expires", q => q.lte("expires", now)).take(500);
+    for (const row of [...auth, ...rates, ...flows]) await ctx.db.delete(row._id);
+    return auth.length + rates.length + flows.length;
   },
 });

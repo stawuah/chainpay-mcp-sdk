@@ -11,6 +11,7 @@ import { createMcpServer } from "./server.js";
 import { allowDemoStoreRequest, createDemoStoreRequest, DemoStoreError, renderDemoStoreHtml } from "./demo-store.js";
 import { paymentWidgetHtml } from "./widget/resource.js";
 import { widgetPreviewScript } from "./widget/preview.js";
+import { isFlowId } from "./payment-flows.js";
 import {
   classifyProtocol,
   headerForcesModern,
@@ -260,6 +261,8 @@ export function createHttpHandler(
     throw new Error("CHAINPAY_HTTP_PORT must be a valid TCP port");
   }
 
+  // Payment tools record live card progress in the same storage as connections.
+  context = { ...context, flows: context.flows ?? registry };
   const mcpServer = createMcpServer(context);
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (process.env.CHAINPAY_MAINTENANCE === "true" && req.url !== "/healthz") {
@@ -283,6 +286,19 @@ export function createHttpHandler(
     }
     if (url.pathname === "/demo/store/requests" && req.method === "POST") {
       await handleDemoStoreRequest(req, res, context, url);
+      return;
+    }
+    // Live payment card, public by unguessable id. It holds only what the card shows.
+    const payMatch = url.pathname.match(/^\/pay\/([^/]+)(\/status)?$/);
+    if (payMatch && (req.method === "GET" || req.method === "OPTIONS")) {
+      const open = { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex" };
+      if (req.method === "OPTIONS") { res.writeHead(204, { ...open, "Access-Control-Allow-Methods": "GET" }); res.end(); return; }
+      const flowId = payMatch[1];
+      const flow = isFlowId(flowId) ? await registry.getFlow(flowId).catch(() => undefined) : undefined;
+      if (!flow) { writeJson(res, 404, { error: "This payment card has expired or does not exist." }, open); return; }
+      if (payMatch[2]) { writeJson(res, 200, { view: flow.view, updatedAt: flow.updatedAt }, open); return; }
+      const boot = `<script>window.__CHAINPAY_FLOW__ = ${JSON.stringify({ statusUrl: `/pay/${flowId}/status`, view: flow.view }).replace(/</g, "\\u003c")};</script>`;
+      writeHtml(res, paymentWidgetHtml(boot), open);
       return;
     }
     if (url.pathname === "/widget/preview" && req.method === "GET") {

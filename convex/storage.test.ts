@@ -246,3 +246,17 @@ it("exports canonical legacy connector defaults and rejects microsecond-stale Cr
   const normalized = exported.rows.map(r => JSON.parse(r)).find(r => r.x402_payment_id === "legacy");
   expect(normalized.connector).toBe("x402"); expect(normalized.connector_reference).toBeNull();
 });
+
+describe("payment cards", () => {
+  it("keeps a card's owner, hides expired cards, and lets only the MCP service touch them", async () => {
+    const t = test();
+    const record = (wallet: string, state: string) => JSON.stringify({ flowId: "f1", wallet, view: { state }, createdAt: 1, updatedAt: 2, expiresAt: 1_000 });
+    await call(t, "mcp.putFlow", { flowId: "f1", wallet: "owner", record_json: record("owner", "paying"), expires: 1_000 }, "mcp");
+    await call(t, "mcp.putFlow", { flowId: "f1", wallet: "owner", record_json: record("owner", "settled"), expires: 1_000 }, "mcp");
+    expect(JSON.parse(await call(t, "mcp.getFlow", { flowId: "f1", now: 500 }, "mcp")).view.state).toBe("settled");
+    await expect(call(t, "mcp.putFlow", { flowId: "f1", wallet: "intruder", record_json: record("intruder", "blocked"), expires: 1_000 }, "mcp")).rejects.toThrow(/another wallet/);
+    expect(await call(t, "mcp.getFlow", { flowId: "f1", now: 1_000 }, "mcp")).toBeNull();
+    await expect(call(t, "mcp.getFlow", { flowId: "f1", now: 500 }, "backend")).rejects.toThrow(/not allowed/);
+    expect(await t.mutation(internal.cleanup.expiredCredentials, {})).toBeGreaterThanOrEqual(0);
+  });
+});

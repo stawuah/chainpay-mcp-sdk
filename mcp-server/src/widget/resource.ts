@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHAINPAY_LOGO_SVG } from "../logo.js";
+import { publicMcpOrigin } from "../payment-flows.js";
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -58,16 +59,17 @@ export function paymentWidgetHtml(previewScript = ""): string {
   return cachedHtml.replace("__PREVIEW__", () => previewScript);
 }
 
-const resourceMeta = {
+// The card reads its live progress from this server's /pay/<flowId>/status.
+const resourceMeta = () => ({
   ui: {
-    csp: { connectDomains: [], resourceDomains: FONT_DOMAINS },
+    csp: { connectDomains: [publicMcpOrigin()], resourceDomains: FONT_DOMAINS },
     permissions: { clipboardWrite: {} },
     prefersBorder: false,
   },
-  "openai/widgetCSP": { connect_domains: [], resource_domains: FONT_DOMAINS },
+  "openai/widgetCSP": { connect_domains: [publicMcpOrigin()], resource_domains: FONT_DOMAINS },
   "openai/widgetPrefersBorder": false,
   "openai/widgetDescription": "A ChainPay payment card: amount, safeguards, live settlement progress and the receipt.",
-};
+});
 
 const RESOURCES = [
   { uri: PAYMENT_WIDGET_URI, mimeType: MCP_APP_MIME },
@@ -82,7 +84,7 @@ export function listUiResources() {
       title: "ChainPay payment",
       description: "Payment card for merchant-signed ChainPay payments.",
       mimeType,
-      _meta: resourceMeta,
+      _meta: resourceMeta(),
     })),
   };
 }
@@ -92,6 +94,6 @@ export function readUiResource(uri: unknown) {
   const resource = RESOURCES.find((item) => item.uri === uri);
   if (!resource) return undefined;
   return {
-    contents: [{ uri: resource.uri, mimeType: resource.mimeType, text: paymentWidgetHtml(), _meta: resourceMeta }],
+    contents: [{ uri: resource.uri, mimeType: resource.mimeType, text: paymentWidgetHtml(), _meta: resourceMeta() }],
   };
 }

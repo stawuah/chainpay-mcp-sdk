@@ -237,8 +237,23 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: "execute_payment",
+    name: "open_payment",
     _meta: PAYMENT_WIDGET_TOOL_META,
+    description: "Open the live ChainPay payment card for a merchant-signed request, right after the owner says to pay it. Moves no funds and checks nothing yet. Then call execute_payment with the returned continuation.arguments (it carries flowId), then wait_for_payment with the paymentId and the same flowId. The card shows each step as it really happens. If this app can't show the card, give the owner flowUrl.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request: { type: "object", description: "The merchant-signed request the owner approved: payload and base64 signature" },
+        mandate: { type: "string", description: "Mandate PDA that will pay" },
+        agent: { type: "string", description: "The mandate's approved agent" },
+        signingMode: { type: "string", enum: ["human", "delegated"], description: "Defaults to delegated" },
+      },
+      required: ["request", "mandate", "agent"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "execute_payment",
     description: "Settle an invoice through human wallet approval or delegated agent signing. Use only after requirements are ready and the owner asks to pay. Share the verify link when settlement confirms.",
     inputSchema: {
       type: "object",
@@ -265,6 +280,7 @@ export const TOOL_DEFINITIONS = [
           type: "object",
           description: "The verified merchant-signed request this payment settles, when there is one. Its hash must equal invoiceHash. The relay keeps it with the receipt so the owner can see what was bought.",
         },
+        flowId: { type: "string", description: "The payment card id from open_payment. The card the owner is watching shows each step as it happens." },
       },
       required: [
         "mandate",
@@ -399,7 +415,8 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "wait_for_payment",
-    _meta: PAYMENT_WIDGET_TOOL_META,
+    // The open payment card calls this itself; it never opens a second card.
+    _meta: { "openai/widgetAccessible": true },
     description: "Poll until a submitted payment confirms or fails. Use after execute_payment returns pending. Tell the owner to keep the same paymentId—do not start a second payment.",
     inputSchema: {
       type: "object",
@@ -407,6 +424,7 @@ export const TOOL_DEFINITIONS = [
         paymentId: { type: "string" },
         timeoutMs: { type: "string", description: "Maximum wait in milliseconds, up to 120000" },
         pollMs: { type: "string", description: "Polling interval in milliseconds" },
+        flowId: { type: "string", description: "The payment card id from open_payment. The card the owner is watching shows each step as it happens." },
       },
       required: ["paymentId"],
       additionalProperties: false,

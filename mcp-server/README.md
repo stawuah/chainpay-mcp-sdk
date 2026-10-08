@@ -65,20 +65,31 @@ and [configuration reference](../docs/reference/configuration.md) in the reposit
 | `GET /logo.svg`, `/brand/chainpay-icon.svg`, `/og-image.png` | Public brand assets for docs and link unfurlers |
 | `GET /assets/brands/*` | Official token marks used on the docs page (USDC, Solana, PYUSD) |
 | `GET /demo/store`, `POST /demo/store/requests` | Public Devnet demo merchant (Halden Data Co.): signs 10 and 25 USDC payment requests. Needs `CHAINPAY_DEMO_MERCHANT_USDC_RECIPIENT` |
+| `GET /pay/<flowId>`, `GET /pay/<flowId>/status` | Public by unguessable link for 24 h: the live payment card opened by `open_payment`, as a page and as JSON. Holds only what the card shows |
 | `GET /widget/preview?state=` | Payment card with labelled sample values, for design review |
 
 ### Payment card (MCP Apps)
 
-`quote_payment_request`, `execute_payment` and `wait_for_payment` declare a UI
-resource, so hosts that support [MCP Apps](https://github.com/modelcontextprotocol/ext-apps)
-render their results as a ChainPay payment card. ChatGPT gets the same card
-through `openai/outputTemplate`. The card is served through `resources/list` and
-`resources/read` as `ui://chainpay/payment-widget.html`. It reads only
-`structuredContent.widget`, which [src/widget/view.ts](src/widget/view.ts)
-builds from the tool result and an on-chain mandate read. The card never
-advances a step on a timer. While a payment is pending it calls
-`wait_for_payment` through the host. Hosts without MCP Apps support still get
-the unchanged text result.
+After the owner says to pay a merchant-signed request, the agent calls
+`open_payment`. That opens the ChainPay card in the chat (MCP Apps, or
+`openai/outputTemplate` in ChatGPT) and returns a `flowUrl` that shows the same
+card in a browser tab. Use the link for apps without cards, such as Codex in a
+terminal. Opening the card moves no funds.
+
+The agent then calls `execute_payment` and `wait_for_payment` with the card's
+`flowId`. Each tool records the step it really reached: prepared, guardrails
+passed, authorization and submission, then confirmation and receipt. The card
+reveals recorded steps in order, never one before it is recorded. It reads them
+from `/pay/<flowId>/status`. A card record holds only what the card shows,
+belongs to the wallet that opened it, and expires after 24 hours (Convex
+`payment_flows`, or PostgreSQL migration `0014_payment_flows.sql`). If storage
+fails, the payment result is unchanged.
+
+`quote_payment_request` shows the same card in its ready or blocked state.
+Without `open_payment`, `execute_payment` behaves exactly as before. Set
+`CHAINPAY_PUBLIC_MCP_URL` when the server is not hosted at
+`https://chainpay-mcp.vercel.app`; the card's CSP allows requests to that
+origin only.
 
 Demo store environment:
 

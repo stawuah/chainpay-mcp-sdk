@@ -25,6 +25,16 @@ export type PublicMcpConnection = {
 
 type MemoryConnectionRecord = PublicMcpConnection & { tokenHash: string; revokedAt: string | null };
 
+/** What a payment card shows, keyed by an unguessable id. No tokens, no keys. */
+export type PaymentFlowRecord = {
+  flowId: string;
+  wallet: string;
+  view: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+};
+
 export type RegisterConnectionInput = {
   wallet: string;
   agentName: string;
@@ -116,6 +126,7 @@ export class McpConnectionRegistry {
   private inboxSequence = 0;
 
   private readonly rates = new Map<string, { startedAt: number; count: number }>();
+  private readonly flows = new Map<string, PaymentFlowRecord>();
 
   constructor(private readonly pool?: Pool, private readonly convex?: ConvexStorage) {}
 
@@ -338,6 +349,46 @@ export class McpConnectionRegistry {
     if (current.count >= limit) return false;
     current.count += 1;
     return true;
+  }
+
+  /** Insert or replace a flow. An existing flow keeps its owner: another wallet can't overwrite it. */
+  async putFlow(record: PaymentFlowRecord): Promise<void> {
+    if (this.convex) {
+      await this.convex.call("mcp.putFlow", { flowId: record.flowId, wallet: record.wallet, record_json: JSON.stringify(record), expires: record.expiresAt });
+      return;
+    }
+    if (this.pool) {
+      const result = await this.pool.query(
+        `INSERT INTO payment_flows (flow_id, wallet_address, record, expires_at)
+         VALUES ($1, $2, $3::JSONB, to_timestamp($4 / 1000.0))
+         ON CONFLICT (flow_id) DO UPDATE SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at
+         WHERE payment_flows.wallet_address = EXCLUDED.wallet_address`,
+        [record.flowId, record.wallet, JSON.stringify(record), record.expiresAt],
+      );
+      if (result.rowCount === 0) throw new Error("Payment flow belongs to another wallet");
+      return;
+    }
+    const existing = this.flows.get(record.flowId);
+    if (existing && existing.wallet !== record.wallet) throw new Error("Payment flow belongs to another wallet");
+    for (const [id, flow] of this.flows) if (flow.expiresAt <= Date.now()) this.flows.delete(id);
+    if (this.flows.size >= 10_000 && !existing) throw new Error("Too many live payment flows");
+    this.flows.set(record.flowId, structuredClone(record));
+  }
+
+  async getFlow(flowId: string, now = Date.now()): Promise<PaymentFlowRecord | undefined> {
+    if (this.convex) {
+      const stored = await this.convex.call<string | null>("mcp.getFlow", { flowId, now });
+      return stored ? JSON.parse(stored) as PaymentFlowRecord : undefined;
+    }
+    if (this.pool) {
+      const result = await this.pool.query<{ record: PaymentFlowRecord }>(
+        "SELECT record FROM payment_flows WHERE flow_id = $1 AND expires_at > to_timestamp($2 / 1000.0)",
+        [flowId, now],
+      );
+      return result.rows[0]?.record;
+    }
+    const flow = this.flows.get(flowId);
+    return flow && flow.expiresAt > now ? structuredClone(flow) : undefined;
   }
 
   private async observePostgres(client: PoolClient, hash: string, name: string, now: string): Promise<void> {

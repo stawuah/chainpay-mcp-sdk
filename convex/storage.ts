@@ -9,8 +9,8 @@ import { cardOperation, cardOperations, cardReadOperations } from "./cards";
 import { emitAfterWrite, webhookOperation, webhookOperations, webhookReadOperations } from "./webhooks";
 
 export const backendOperations = new Set(["pet.state","pet.visitors","pet.act","pet.memories","find_other_connector_job_for_owner","put_crossmint_proof","put_mandate_request","get_mandate_request","put_receipt_request","find_receipt_request","put_observed_policy","find_observed_policy","ping", "claim_operation", "operation_record", "operation_owner", "auth_rate", "put_auth", "get_auth", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "put_payment", "get_transaction", "find_transaction_by_idempotency", "put_transaction", "list_x402_for_owner", "find_x402_by_idempotency", "put_x402", "put_managed_signer_challenge", "get_managed_signer_challenge", "consume_managed_signer_challenge", "put_managed_signer", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "put_delivery_attestation", "find_delivery_attestation", ...cardOperations, ...webhookOperations]);
-export const mcpOperations = new Set(["ping", "mcp.register", "mcp.identify", "mcp.observe", "mcp.list", "mcp.revoke", "mcp.appendInboxMessage", "mcp.listInbox", "mcp.rateLimit"]);
-const readOperations = new Set(["get_mandate_request","find_receipt_request","find_observed_policy","find_other_connector_job_for_owner","ping", "operation_record", "operation_owner", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "get_transaction", "find_transaction_by_idempotency", "list_x402_for_owner", "find_x402_by_idempotency", "get_managed_signer_challenge", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "find_delivery_attestation", "mcp.identify", "mcp.list", "mcp.listInbox", ...cardReadOperations, ...webhookReadOperations]);
+export const mcpOperations = new Set(["ping", "mcp.register", "mcp.identify", "mcp.observe", "mcp.list", "mcp.revoke", "mcp.appendInboxMessage", "mcp.listInbox", "mcp.rateLimit", "mcp.putFlow", "mcp.getFlow"]);
+const readOperations = new Set(["get_mandate_request","find_receipt_request","find_observed_policy","find_other_connector_job_for_owner","ping", "operation_record", "operation_owner", "auth_connection", "get_payment", "find_payment_by_idempotency", "find_payment_by_receipt", "get_transaction", "find_transaction_by_idempotency", "list_x402_for_owner", "find_x402_by_idempotency", "get_managed_signer_challenge", "find_managed_signer_by_public_key", "find_managed_signer_by_mandate", "find_delivery_attestation", "mcp.identify", "mcp.list", "mcp.listInbox", "mcp.getFlow", ...cardReadOperations, ...webhookReadOperations]);
 export function isRead(operation: string, args: Record<string, any>): boolean { return readOperations.has(operation) || operation === "get_auth" && args.consume === false; }
 function publicConnection(r: Doc<"agent_connections">) { const { _id, _creationTime, tokenHash, revokedAt, source_json, ...record } = r; return record; }
 function publicInbox(r: Doc<"inbox_messages">) { const { _id, _creationTime, source_json, ...record } = r; return record; }
@@ -177,6 +177,18 @@ export const execute = internalMutation({
       const r = a.record; string(r.wallet); jsonValue(r.content_json);
       if (await ctx.db.query("inbox_messages").withIndex("by_external_id", q => q.eq("id", string(r.id))).unique()) return fail("conflict", "Message already exists");
       const id = await ctx.db.insert("inbox_messages", r); return publicInbox((await ctx.db.get(id))!);
+    }
+    if (op === "mcp.putFlow" || op === "mcp.getFlow") {
+      const flowId = string(a.flowId);
+      const old = await ctx.db.query("payment_flows").withIndex("by_flow", q => q.eq("flowId", flowId)).unique();
+      if (op === "mcp.getFlow") return old && old.expires > safeNumber(a.now) ? old.record_json : null;
+      const record = { flowId, wallet: string(a.wallet), record_json: string(a.record_json), expires: safeNumber(a.expires) };
+      jsonValue(record.record_json);
+      if (record.record_json.length > 32_000) return fail("invalid_argument", "Payment card record is too large");
+      // A card keeps its owner: another wallet can never overwrite it.
+      if (old && old.wallet !== record.wallet) return fail("forbidden", "Payment card belongs to another wallet");
+      if (old) await ctx.db.patch(old._id, record); else await ctx.db.insert("payment_flows", record);
+      return null;
     }
     if (op === "mcp.listInbox") return (await ctx.db.query("inbox_messages").withIndex("by_wallet_created", q => q.eq("wallet", string(a.wallet).trim())).order("desc").take(limit(a.limit, 30))).map(publicInbox);
     return fail("invalid_argument", "Unknown operation");

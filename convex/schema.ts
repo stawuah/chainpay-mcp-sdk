@@ -53,6 +53,8 @@ export default defineSchema({
   support_events: defineTable({ signature: v.string(), index: v.number(), slot: v.number(), blockTime: v.union(v.number(), v.null()), kind: v.union(v.literal("contribution"), v.literal("payout"), v.literal("funding"), v.literal("anomaly")), asset: v.union(v.literal("SOL"), v.literal("USDC")), amount: v.string(), donor: v.union(v.string(), v.null()), note: v.union(v.string(), v.null()), side: v.union(v.literal("A"), v.literal("B"), v.null()) }).index("by_signature", ["signature"]).index("by_slot", ["slot"]),
   support_cursors: defineTable({ account: v.string(), cursor: v.object({ newest: v.union(v.string(), v.null()), pending: v.union(v.object({ top: v.string(), before: v.string() }), v.null()) }) }).index("by_account", ["account"]),
   rate_limits: defineTable({ key: v.string(), count: v.number(), expires: v.number() }).index("by_key", ["key"]).index("by_expires", ["expires"]),
+  // Live payment cards (mcp-server/src/payment-flows.ts): what the card shows, for 24 hours. No tokens or keys.
+  payment_flows: defineTable({ flowId: v.string(), wallet: v.string(), record_json: v.string(), expires: v.number() }).index("by_flow", ["flowId"]).index("by_expires", ["expires"]),
   // Owner webhooks (convex/webhooks.ts). Secrets are AES-GCM envelopes sealed by Axum.
   webhook_subscriptions: defineTable({ subscription_id: v.string(), owner_wallet: v.string(), url: v.string(), description: v.union(v.string(), v.null()), status: v.union(v.literal("active"), v.literal("disabled")), secrets_json: v.string(), created_at_ms: v.number(), updated_at_ms: v.number() })
     .index("by_subscription_id", ["subscription_id"]).index("by_owner_created", ["owner_wallet", "created_at_ms"]),

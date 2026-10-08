@@ -4,6 +4,8 @@ import { bytesToHex, verifyPaymentRequest, type SignedPaymentRequest } from "@ch
 import { materializeUnsignedTransaction, serializeTransaction, toolResult } from "./common.js";
 import { parsePaymentInput, requireObject } from "./payment-input.js";
 import { requirementsFromPreflight } from "./check_payment_requirements.js";
+import { assertFlowOwner, isFlowId, recordFlow } from "../payment-flows.js";
+import { merchantDisplayName } from "../widget/merchants.js";
 
 export async function executePayment(
   context: ChainPayMcpContext,
@@ -15,13 +17,29 @@ export async function executePayment(
     throw new Error("signingMode must be human or delegated");
   }
   const parsed = parsePaymentInput(input);
+  // A live payment card, if one was opened. Steps are recorded only once they
+  // have really happened; the final outcome is recorded with the tool result.
+  if (input.flowId !== undefined && !isFlowId(input.flowId)) throw new Error("flowId is not a ChainPay payment card id");
+  const flowId = input.flowId as string | undefined;
+  if (flowId) await assertFlowOwner(context, flowId);
   let paymentRequest: SignedPaymentRequest | undefined;
   if (input.request !== undefined) {
     const checked = await checkedPaymentRequest(context, input.request, parsed.input);
     if ("rejected" in checked) return checked.rejected;
     paymentRequest = checked.request;
+    // Merchant-signed and verified: the card can name the merchant and product.
+    await recordFlow(context, flowId, {
+      state: "paying",
+      currentStep: 0,
+      merchant: merchantDisplayName(checked.request.payload.merchant),
+      product: checked.request.payload.description ?? checked.request.payload.lineItems?.[0]?.label,
+    });
   }
   const prepared = await context.client.preparePayment(parsed.input, parsed.agent);
+  if (prepared.preflight.valid) {
+    // Prepared and within policy: steps 0 and 1 are done; signing comes next.
+    await recordFlow(context, flowId, { state: "paying", currentStep: signingMode === "delegated" ? 2 : 3 });
+  }
   if (!prepared.preflight.valid) {
     return toolResult(
       {
