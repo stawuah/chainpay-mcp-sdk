@@ -18,8 +18,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|s| s == "issue-access") {
-        if args.len() != 4 {
-            return Err("Usage: chainpay-paypal issue-access <workspace> <principal> <buyer|merchant|agent>".into());
+        if !(4..=5).contains(&args.len()) {
+            return Err("Usage: chainpay-paypal issue-access <workspace> <principal> <buyer|merchant|agent> [days:1..60]".into());
         }
         let role = match args[3].as_str() {
             "buyer" => Role::Buyer,
@@ -27,6 +27,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "agent" => Role::Agent,
             _ => return Err("Invalid role".into()),
         };
+        let days = args
+            .get(4)
+            .map(|s| s.parse::<u64>())
+            .transpose()?
+            .unwrap_or(7);
+        if !(1..=60).contains(&days) {
+            return Err("Grant duration must be 1–60 days".into());
+        }
         let store = Store::connect(&config.database_url).await?;
         let token = store
             .issue_access(
@@ -35,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     workspace: args[1].clone(),
                     role,
                 },
-                7 * 86400,
+                days * 86400,
             )
             .await?;
         println!("{token}");

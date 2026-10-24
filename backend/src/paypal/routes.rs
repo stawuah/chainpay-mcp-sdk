@@ -99,6 +99,13 @@ impl App {
                     ids.push(id.to_string());
                 }
             }
+            if let Some(units) = resource["purchase_units"].as_array() {
+                for unit in units {
+                    if let Some(id) = unit["custom_id"].as_str() {
+                        ids.push(id.to_string());
+                    }
+                }
+            }
             // Refund events may carry their capture only in an 'up' link.
             if let Some(links) = resource["links"].as_array() {
                 for link in links {
@@ -129,6 +136,13 @@ impl App {
                     workspace: task.workspace.clone(),
                     role: Role::Merchant,
                 };
+                if matches!(
+                    event["event_type"].as_str(),
+                    Some("PAYMENT.CAPTURE.REVERSED" | "PAYMENT.CAPTURE.DENIED")
+                ) || (event["event_type"] == "PAYMENT.CAPTURE.REFUNDED" && task.refund.is_none())
+                {
+                    self.store.update(&task.id, &p, |t| { t.payment_review = Some("Verified webhook reports an external payment change; merchant review required".into()); Ok(()) }).await?;
+                }
                 // Recover a lost create response via the verified event's order ID.
                 if task.order_id.is_none()
                     && event["event_type"]
@@ -138,9 +152,15 @@ impl App {
                     if let Some(order_id) = resource["id"].as_str() {
                         match self.provider.order(order_id).await {
                             Ok(value) => {
-                                self.store
+                                if self
+                                    .store
                                     .update(&task.id, &p, |t| observations::order(t, value))
-                                    .await?;
+                                    .await
+                                    .is_err()
+                                {
+                                    resolved = false;
+                                    continue;
+                                }
                             }
                             Err(_) => {
                                 resolved = false;
@@ -153,9 +173,15 @@ impl App {
                     if let Some(refund_id) = resource["id"].as_str() {
                         match self.provider.refund(refund_id).await {
                             Ok(value) => {
-                                self.store
+                                if self
+                                    .store
                                     .update(&task.id, &p, |t| observations::refund(t, value))
-                                    .await?;
+                                    .await
+                                    .is_err()
+                                {
+                                    resolved = false;
+                                    continue;
+                                }
                             }
                             Err(_) => {
                                 resolved = false;

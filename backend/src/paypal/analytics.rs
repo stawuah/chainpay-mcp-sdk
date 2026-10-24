@@ -29,13 +29,14 @@ pub fn projection(tasks: &[Task]) -> Value {
     let unresolved = tasks
         .iter()
         .filter(|t| {
-            [t.order.as_ref(), t.capture.as_ref(), t.refund.as_ref()]
-                .iter()
-                .flatten()
-                .any(|o| o.state != super::domain::OperationState::Observed)
+            t.payment_review.is_some()
+                || [t.order.as_ref(), t.capture.as_ref(), t.refund.as_ref()]
+                    .iter()
+                    .flatten()
+                    .any(|o| o.state != super::domain::OperationState::Observed)
         })
         .count();
-    json!({"currency":"USD","captured":Cents(captured).decimal(),"confirmed_refunds":Cents(refunded).decimal(),"known_net_cost":Cents(captured-refunded).decimal(),"delivered_units":delivered,"failed_units":failed,"unresolved_tasks":unresolved,"task_count":tasks.len(),"scope":"Latest 100 tasks accessible to this principal; not lifetime totals","tasks":tasks.iter().map(|t| observations::receipt(t,true)).collect::<Vec<_>>()})
+    json!({"currency":"USD","captured":Cents(captured).decimal(),"confirmed_refunds":Cents(refunded).decimal(),"known_net_cost":if tasks.iter().any(|t|t.payment_review.is_some()) { None } else { Some(Cents(captured-refunded).decimal()) },"delivered_units":delivered,"failed_units":failed,"unresolved_tasks":unresolved,"task_count":tasks.len(),"scope":"Latest 100 tasks accessible to this principal; not lifetime totals","tasks":tasks.iter().map(|t| observations::receipt(t,true)).collect::<Vec<_>>()})
 }
 
 #[cfg(test)]

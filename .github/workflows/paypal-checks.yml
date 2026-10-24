@@ -51,4 +51,5 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
       - run: cargo test -p chainpay-backend --features paypal --locked
-      - run: cargo test -p chainpay-backend --features paypal --locked paypal:: -- --include-ignored
+      - run: |
+          cargo test -p chainpay-backend --features paypal --locked paypal:: -- --include-ignored

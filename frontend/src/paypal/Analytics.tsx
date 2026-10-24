@@ -3,7 +3,7 @@ import { AgStudio, AgStudioProvider, createWidgets, type AgRegistry, type AgWidg
 import { AgStudioAiModule, AgStudioLicenseManager, createAiHarness, studioTheme, type AgAiHarnessSetup, type AgReportState, type AgWidgetData, type AgWidgetDataFormat } from "ag-studio";
 import { client, money, type Receipt } from "./client";
 
-type Snapshot = { captured: string; confirmed_refunds: string; known_net_cost: string; delivered_units: number; failed_units: number; unresolved_tasks: number; task_count: number; scope: string; tasks: Receipt[] };
+type Snapshot = { captured: string; confirmed_refunds: string; known_net_cost: string | null; delivered_units: number; failed_units: number; unresolved_tasks: number; task_count: number; scope: string; tasks: Receipt[] };
 type WidgetState = AgWidgetData<Record<string, never>, AgWidgetDataFormat<Record<string, never>>> & { type: "costs" | "outcomes" | "receipts" };
 interface Registry extends AgRegistry { widgets: readonly AgWidgetDefinition<"costs" | "outcomes" | "receipts", WidgetState>[] }
 const initialState: AgReportState<Registry> = { selectedPageId: "outcomes", pages: [{ id: "outcomes", layout: { columns: 12, rowHeight: 32, minWidth: 0 }, widgets: { costs: { type: "costs", dataMapping: {} }, outcomes: { type: "outcomes", dataMapping: {} }, receipts: { type: "receipts", dataMapping: {} } }, widgetLayout: { costs: { xTrack: 0, yTrack: 0, xSpan: 12, ySpan: 10 }, outcomes: { xTrack: 0, yTrack: 10, xSpan: 12, ySpan: 10 }, receipts: { xTrack: 0, yTrack: 20, xSpan: 12, ySpan: 15 } } }], panels: { ai: { collapsed: true }, data: { collapsed: true }, edit: { collapsed: true }, filters: { collapsed: true } } };
