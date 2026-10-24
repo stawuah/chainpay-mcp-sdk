@@ -202,6 +202,24 @@ impl Store {
             .await?;
         Ok(())
     }
+
+    pub async fn shared(&self, token: &str) -> Result<Task, Error> {
+        if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(Error::NotFound);
+        }
+        let value: Option<Value> =
+            sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE record->>'share_token'=$1")
+                .bind(token)
+                .fetch_optional(&self.pool)
+                .await?;
+        decode(value.ok_or(Error::NotFound)?)
+    }
+
+    pub(crate) async fn related(&self, ids: &[String]) -> Result<Vec<Task>, Error> {
+        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=ANY($1) OR record->>'order_id'=ANY($1) OR record->>'capture_id'=ANY($1) OR record->>'refund_id'=ANY($1) LIMIT 100")
+            .bind(ids).fetch_all(&self.pool).await?;
+        rows.into_iter().map(decode).collect()
+    }
 }
 
 fn decode(value: Value) -> Result<Task, Error> {
