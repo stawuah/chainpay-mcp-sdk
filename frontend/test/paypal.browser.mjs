@@ -7,7 +7,8 @@ try {
   for (const width of [1440,390]) {
     const context=await browser.newContext({viewport:{width,height:1000}});
     const page=await context.newPage();const errors=[];const external=[];
-    page.on('pageerror',e=>errors.push(e.message));
+    page.on('pageerror',e=>{errors.push(e.message);console.error(e.message);});
+    page.on('console',m=>{if(m.type()==='error') console.error(m.text());});
     page.on('request',r=>{if(r.url().includes('chainpay-relay') || r.url().includes('convex')) external.push(r.url());});
     let tasks=[];
     const receipt={id:'fixture-task',sandbox:true,currency:'USD',gross:'12.00',refund:'4.00',net:'12.00',captured:true,refund_confirmed:false,quote_digest:'fixture-digest',created_at:1792800000,order_id:'ORDER',capture_id:'CAPTURE',units:[
@@ -21,6 +22,8 @@ try {
       if(path.endsWith('/session')) body={id:merchant?'merchant':'buyer',workspace:'fixture',role:merchant?'merchant':'buyer'};
       else if(path.endsWith('/tasks') && request.method()==='POST'){const input=request.postDataJSON();assert.equal(input.documents.length,3);tasks=[receipt];body=receipt;}
       else if(path.endsWith('/tasks')) body={tasks};
+      else if(path.endsWith('/analytics')) body={captured:'12.00',confirmed_refunds:receipt.refund_confirmed?'4.00':'0.00',known_net_cost:receipt.net,delivered_units:2,failed_units:1,unresolved_tasks:0,task_count:1,scope:'Latest 100 tasks accessible to this principal; not lifetime totals',tasks:[receipt]};
+      else if(path.endsWith('/analytics/ask')) body={answer:'Fixture analyst: confirmed net cost is USD 8.00.'};
       else if(path.endsWith('/refund-proposal')) body={amount:'4.00',digest:'refund-fixture',reason:'One failed unit.'};
       else if(path.endsWith('/refund')){assert.ok(merchant);receipt.refund_confirmed=true;receipt.net='8.00';body=receipt;}
       else if(path.endsWith('/share')) body={token:'f'.repeat(64)};
@@ -55,6 +58,19 @@ try {
     await page.getByText('$8.00',{exact:true}).waitFor();
     await page.keyboard.press('Tab');
     assert.ok(await page.evaluate(()=>document.activeElement!==document.body));
+    await page.getByRole('button',{name:'Outcome dashboard',exact:true}).click();
+    await page.getByRole('heading',{name:'Confirmed buyer cost',exact:true}).waitFor().catch(async e=>{await page.screenshot({path:'/private/tmp/paypal-analytics-error.png',fullPage:true});console.error(await page.locator('body').innerText());throw e;});
+    await page.getByRole('heading',{name:'Work outcomes',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Receipt evidence',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Refresh snapshot',exact:true}).click();
+    await page.getByRole('heading',{name:'Confirmed buyer cost',exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await page.screenshot({path:`/private/tmp/chainpay-paypal-analytics-${width}.png`,fullPage:true});
+    if(width===1440){
+      await page.getByText('AI Assistant',{exact:true}).click();
+      await page.getByText('Explain my costs',{exact:true}).click();
+      await page.getByText(/Fixture analyst: confirmed net cost/).waitFor();
+    }
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
     await context.close();
   }

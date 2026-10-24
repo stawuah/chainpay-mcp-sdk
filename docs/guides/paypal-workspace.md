@@ -36,3 +36,24 @@ Checks: frontend tests and both builds, plus `test:paypal-browser` against the
 dedicated dev server. Browser tests use labeled HTTP fixtures and test desktop,
 390px width, role-specific approval controls, no production requests and keyboard
 focus. They do not prove actual sandbox acceptance or model quality.
+
+## Outcome analytics
+
+The separate workspace lazy-loads AG Studio 3.0.0 with three custom widgets:
+confirmed buyer cost, work outcomes, and receipt evidence. Exact USD strings are
+computed by the server; uncaptured quotes and unconfirmed refunds are excluded.
+The view is explicitly limited to the latest 100 authorized tasks. Refresh remounts
+Studio while retaining its report layout; its in-memory AI conversation restarts.
+The custom Outcome analyst sends only the question to the authenticated server,
+which loads fresh scoped evidence. It has no payment tools. The model key stays
+server-side. Treat generated explanations as commentary, not financial authority.
+
+A task's Transaction Search button reads up to five pages for its original
+30-day window, returning only matching known provider IDs. It preserves existing
+payment observations when reporting is delayed, unavailable, or truncated. Enable
+Transaction Search on the dedicated sandbox app before acceptance testing.
+
+AG Studio's trial watermark is preserved. Set the optional public
+`VITE_CHAINPAY_PAYPAL_STUDIO_LICENSE` build variable only to a legitimately issued
+license. Confirm coverage through December 16 before hosting for judges; this code
+does not grant a commercial license or prove sponsor eligibility.

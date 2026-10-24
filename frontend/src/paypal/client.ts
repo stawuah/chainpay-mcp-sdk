@@ -25,9 +25,9 @@ export function exportReceipt(receipt: Receipt): string {
   return ["task_id,currency,gross,captured,confirmed_refund,net_buyer_cost", [receipt.id, receipt.currency, receipt.gross, String(receipt.captured), receipt.refund_confirmed ? receipt.refund : "0.00", receipt.net ?? ""].map(cell).join(",")].join("\r\n");
 }
 export function client(origin: string, token: string) {
-  return async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  return async function request<T>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
     if (!path.startsWith("/") || path.startsWith("//")) throw new Error("Invalid API path");
-    const response = await fetch(`${origin}/v1/paypal${path}`, { method, redirect: "error", credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(35_000), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const response = await fetch(`${origin}/v1/paypal${path}`, { method, redirect: "error", credentials: "omit", cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(100_000)]) : AbortSignal.timeout(100_000), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) });
     if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.error || `Request unavailable (${response.status}). Keep the original task.`); }
     if (response.status === 204 || response.status === 202) return undefined as T;
     return await response.json() as T;

@@ -186,6 +186,9 @@ pub fn router(app: App) -> Router {
         .route("/healthz",get(|| async { Json(json!({"status":"ready","service":"chainpay-paypal","sandbox":true,"provider_acceptance":"unverified"})) }))
         .route("/v1/paypal/session",get(session).delete(logout))
         .route("/v1/paypal/offers",get(offers))
+        .route("/v1/paypal/analytics",get(analytics))
+        .route("/v1/paypal/analytics/ask",post(analytics_ask))
+        .route("/v1/paypal/tasks/{id}/reporting",post(reporting))
         .route("/v1/paypal/tasks",get(list).post(quote))
         .route("/v1/paypal/tasks/{id}",get(read))
         .route("/v1/paypal/tasks/{id}/checkout",post(checkout))
@@ -232,6 +235,76 @@ async fn explain(
 ) -> Result<Json<Value>, Error> {
     let p = app.principal(&headers).await?;
     Ok(Json(app.ai.explain(&app.store, &id, &p).await?))
+}
+
+async fn analytics(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>, Error> {
+    let p = app.principal(&headers).await?;
+    Ok(Json(super::analytics::projection(
+        &app.store.list(&p).await?,
+    )))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Question {
+    question: String,
+}
+async fn analytics_ask(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Json(body): Json<Question>,
+) -> Result<Json<Value>, Error> {
+    let p = app.principal(&headers).await?;
+    Ok(Json(app.ai.analyze(&app.store, &p, &body.question).await?))
+}
+async fn reporting(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Error> {
+    let p = app.principal(&headers).await?;
+    let task = app.store.get(&id, &p).await?;
+    app.store
+        .rate_limit(&format!("reporting:{}", p.workspace), 4)
+        .await?;
+    let start = crate::webhooks::iso8601(task.created_at.saturating_sub(60) * 1000);
+    let end = crate::webhooks::iso8601(domain::now().min(task.created_at + 30 * 86400) * 1000);
+    let ids: Vec<&str> = [
+        task.order_id.as_deref(),
+        task.capture_id.as_deref(),
+        task.refund_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut matches = Vec::new();
+    let mut truncated = false;
+    for page in 1..=5 {
+        let report=app.provider.transactions(&start,&end,page).await.map_err(|_| Error::Invalid("PayPal Reporting unavailable; check app enablement. Existing payment evidence is unchanged"))?;
+        let rows = report["transaction_details"]
+            .as_array()
+            .ok_or(Error::Invalid("Reporting response incomplete"))?;
+        for row in rows {
+            let info = &row["transaction_info"];
+            if info["transaction_id"]
+                .as_str()
+                .is_some_and(|id| ids.contains(&id))
+            {
+                matches.push(json!({"transaction_id":info["transaction_id"],"status":info["transaction_status"],"event_code":info["transaction_event_code"],"amount":info["transaction_amount"],"fee":info["fee_amount"]}));
+            }
+        }
+        let pages = report["total_pages"]
+            .as_u64()
+            .ok_or(Error::Invalid("Reporting pagination unavailable"))?;
+        if u64::from(page) >= pages {
+            break;
+        }
+        if page == 5 {
+            truncated = true;
+        }
+    }
+    Ok(Json(
+        json!({"checked_at":domain::now(),"range_start":start,"range_end":end,"transactions":matches,"truncated":truncated,"source":"PayPal Transaction Search","note":"Reporting may lag three hours. Absence is not failure. This bounded report does not change capture or refund state."}),
+    ))
 }
 
 fn bearer(headers: &HeaderMap) -> Result<&str, Error> {
