@@ -243,10 +243,11 @@ async fn usage(
     conn: &mut sqlx::PgConnection,
     allowance_id: &str,
     exclude_task: &str,
+    now: u64,
 ) -> Result<Usage, Error> {
     let rows = sqlx::query("SELECT cents,created_at FROM paypal_allowance_spend s WHERE allowance_id=$1 AND kind='reserve' AND task_id<>$2 AND NOT EXISTS(SELECT 1 FROM paypal_allowance_spend r WHERE r.allowance_id=s.allowance_id AND r.task_id=s.task_id AND r.kind='release')")
         .bind(allowance_id).bind(exclude_task).fetch_all(conn).await?;
-    let day_start = domain::now() - domain::now() % 86400;
+    let day_start = now - now % 86400;
     let mut u = Usage {
         spent: Cents(0),
         purchases_today: 0,
@@ -284,24 +285,14 @@ impl Store {
                 .await?;
         decode(v.ok_or(Error::NotFound)?)
     }
-    /// Any session in the workspace may name an allowance when buying; the
-    /// policy check then says whether this actor may use it.
-    pub(crate) async fn allowance_in_workspace(
-        &self,
-        id: &str,
-        p: &Principal,
-    ) -> Result<Allowance, Error> {
-        let a = self.allowance_record(id).await?;
-        if a.workspace != p.workspace {
-            return Err(Error::NotFound);
-        }
-        Ok(a)
-    }
+    /// Buyers see their own, agents see Active ones they may spend from, and
+    /// merchants never see a buyer's budget. Quote and purchase resolve the
+    /// allowance through this too, so nobody can probe caps they cannot see.
     fn visible(a: &Allowance, p: &Principal) -> bool {
         a.workspace == p.workspace
             && match p.role {
                 Role::Buyer => a.buyer == p.id,
-                Role::Merchant => true,
+                Role::Merchant => false,
                 Role::Agent => a.status == "Active" && a.agent.as_deref().is_none_or(|g| g == p.id),
             }
     }
@@ -324,12 +315,17 @@ impl Store {
         }
         Ok(out)
     }
-    pub async fn usage(&self, allowance_id: &str, exclude_task: &str) -> Result<Usage, Error> {
+    pub async fn usage(
+        &self,
+        allowance_id: &str,
+        exclude_task: &str,
+        now: u64,
+    ) -> Result<Usage, Error> {
         let mut conn = self.pool().acquire().await?;
-        usage(&mut conn, allowance_id, exclude_task).await
+        usage(&mut conn, allowance_id, exclude_task, now).await
     }
     pub async fn allowance_view(&self, a: &Allowance, p: &Principal) -> Result<Value, Error> {
-        let u = self.usage(&a.id, "").await?;
+        let u = self.usage(&a.id, "", domain::now()).await?;
         let mut view = json!({"id":a.id,"name":a.name,"status":a.status,"mode":a.mode,"agent":a.agent,"merchants":a.merchants,
             "total_cap_cents":a.total_cap_cents,"per_purchase_cap_cents":a.per_purchase_cap_cents,
             "spent_cents":u.spent,"remaining_cents":Cents(a.total_cap_cents.0.saturating_sub(u.spent.0)),
@@ -396,15 +392,16 @@ impl Store {
                 .fetch_optional(&mut *tx)
                 .await?;
         let a = decode(v.ok_or(Error::NotFound)?)?;
-        let u = usage(&mut tx, &a.id, &task.id).await?;
-        let policy = check(&a, p, &purchase.merchant, task.amount, &u, domain::now());
+        let now = domain::now();
+        let u = usage(&mut tx, &a.id, &task.id, now).await?;
+        let policy = check(&a, p, &purchase.merchant, task.amount, &u, now);
         if policy.allowed {
             spend(&mut tx, "reserve", &a.id, &task.id, task.amount).await?;
         }
         let c = task.purchase.as_mut().unwrap();
         if policy.allowed && a.mode == "ask_first" {
             c.approval = Some("requested".into());
-            c.approval_requested_at = Some(domain::now());
+            c.approval_requested_at = Some(now);
         }
         c.policy = policy;
         let inserted = sqlx::query("INSERT INTO paypal_tasks(id,workspace,principal,request_id,fingerprint,record,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(workspace,principal,request_id) DO NOTHING")
@@ -424,13 +421,33 @@ impl Store {
         serde_json::from_value(row.get("record"))
             .map_err(|_| Error::Invalid("Stored task is invalid"))
     }
-    /// Re-runs the rules at approval time; the earlier reserve stays in place.
-    pub async fn approve_purchase(&self, id: &str, p: &Principal) -> Result<Task, Error> {
-        let mut tx = self.pool().begin().await?;
+    /// Locks the allowance first, then the task, in the same order purchase()
+    /// uses. The task's allowance id never changes, so an unlocked peek is enough.
+    async fn lock_purchase_task(
+        tx: &mut sqlx::PgConnection,
+        id: &str,
+        p: &Principal,
+    ) -> Result<(Task, Allowance), Error> {
+        let allowance_id: Option<String> = sqlx::query_scalar("SELECT record->'purchase'->>'allowance_id' FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND record->'purchase'->>'buyer'=$3")
+            .bind(id).bind(&p.workspace).bind(&p.id).fetch_optional(&mut *tx).await?;
+        let v: Option<Value> =
+            sqlx::query_scalar("SELECT record FROM paypal_allowances WHERE id=$1 FOR UPDATE")
+                .bind(allowance_id.ok_or(Error::NotFound)?)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let a = decode(v.ok_or(Error::NotFound)?)?;
         let v: Option<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND record->'purchase'->>'buyer'=$3 FOR UPDATE")
             .bind(id).bind(&p.workspace).bind(&p.id).fetch_optional(&mut *tx).await?;
-        let mut task: Task = serde_json::from_value(v.ok_or(Error::NotFound)?)
+        let task: Task = serde_json::from_value(v.ok_or(Error::NotFound)?)
             .map_err(|_| Error::Invalid("Stored task is invalid"))?;
+        Ok((task, a))
+    }
+    /// Re-runs the rules at approval time; the earlier reserve stays in place.
+    /// A failed re-check denies the purchase and releases the reserve, so the
+    /// request does not sit in the inbox forever.
+    pub async fn approve_purchase(&self, id: &str, p: &Principal) -> Result<Task, Error> {
+        let mut tx = self.pool().begin().await?;
+        let (mut task, a) = Store::lock_purchase_task(&mut tx, id, p).await?;
         let purchase = task.purchase.clone().ok_or(Error::NotFound)?;
         if p.role != Role::Buyer || purchase.mode != "ask_first" {
             return Err(Error::Forbidden);
@@ -440,20 +457,19 @@ impl Store {
             Some("requested") => {}
             _ => return Err(Error::Conflict),
         }
-        let v: Option<Value> =
-            sqlx::query_scalar("SELECT record FROM paypal_allowances WHERE id=$1 FOR UPDATE")
-                .bind(&purchase.allowance_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-        let a = decode(v.ok_or(Error::NotFound)?)?;
-        let u = usage(&mut tx, &a.id, &task.id).await?;
-        let policy = check(&a, p, &purchase.merchant, task.amount, &u, domain::now());
+        let now = domain::now();
+        let u = usage(&mut tx, &a.id, &task.id, now).await?;
+        let policy = check(&a, p, &purchase.merchant, task.amount, &u, now);
         let c = task.purchase.as_mut().unwrap();
+        c.approval_decided_at = Some(now);
         if policy.allowed {
             spend(&mut tx, "reserve", &a.id, &task.id, task.amount).await?;
             c.approval = Some("approved".into());
-            c.approval_decided_at = Some(domain::now());
             c.approved_by = Some(p.id.clone());
+        } else {
+            spend(&mut tx, "release", &a.id, &task.id, task.amount).await?;
+            c.approval = Some("denied".into());
+            c.approved_by = Some("rules".into());
         }
         c.policy = policy;
         sqlx::query("UPDATE paypal_tasks SET record=$1 WHERE id=$2")
@@ -471,10 +487,7 @@ impl Store {
         reason: &str,
     ) -> Result<Task, Error> {
         let mut tx = self.pool().begin().await?;
-        let v: Option<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND record->'purchase'->>'buyer'=$3 FOR UPDATE")
-            .bind(id).bind(&p.workspace).bind(&p.id).fetch_optional(&mut *tx).await?;
-        let mut task: Task = serde_json::from_value(v.ok_or(Error::NotFound)?)
-            .map_err(|_| Error::Invalid("Stored task is invalid"))?;
+        let (mut task, _) = Store::lock_purchase_task(&mut tx, id, p).await?;
         let c = task.purchase.as_mut().ok_or(Error::NotFound)?;
         if p.role != Role::Buyer {
             return Err(Error::Forbidden);
@@ -525,6 +538,10 @@ impl App {
         let task = self.store.get(id, p).await?;
         let purchase = task.purchase.as_ref().ok_or(Error::Conflict)?;
         let a = self.store.allowance_record(&purchase.allowance_id).await?;
+        // The rules passed earlier, but the buyer may have paused it since.
+        if a.status != "Active" || a.expires_at <= domain::now() {
+            return Err(Error::Conflict);
+        }
         let token = a.vault.payment_token_id.clone().ok_or(Error::Invalid(
             "Vault not ready; finish the PayPal approval first",
         ))?;

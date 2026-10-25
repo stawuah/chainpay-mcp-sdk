@@ -157,12 +157,15 @@ impl Store {
         Ok(tasks)
     }
 
-    /// Purchases waiting on the buyer, limited to allowances this buyer owns.
+    /// Purchases waiting on the buyer. A buyer sees the ones against their
+    /// allowances; an agent sees the ones it asked for.
     pub async fn approvals(&self, p: &Principal) -> Result<Vec<Task>, Error> {
-        if p.role != Role::Buyer {
-            return Err(Error::Forbidden);
-        }
-        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE workspace=$1 AND record->'purchase'->>'buyer'=$2 AND record->'purchase'->>'approval'='requested' ORDER BY created_at DESC,id LIMIT 100")
+        let owner = match p.role {
+            Role::Buyer => "record->'purchase'->>'buyer'",
+            Role::Agent => "principal",
+            Role::Merchant => return Err(Error::Forbidden),
+        };
+        let rows: Vec<Value> = sqlx::query_scalar(&format!("SELECT record FROM paypal_tasks WHERE workspace=$1 AND {owner}=$2 AND record->'purchase'->>'approval'='requested' ORDER BY created_at DESC,id LIMIT 100"))
             .bind(&p.workspace).bind(&p.id).fetch_all(&self.pool).await?;
         rows.into_iter().map(decode).collect()
     }

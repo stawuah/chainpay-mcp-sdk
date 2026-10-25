@@ -105,9 +105,12 @@ export class PayPalAgentClient {
   async quotePurchase(input: { merchant: string; items: PayPalPurchaseItem[]; allowance_id?: string }) {
     return this.#request("/purchases/quote", "POST", { merchant: catalogId(input.merchant), items: purchaseItems(input.items), ...(input.allowance_id === undefined ? {} : { allowance_id: catalogId(input.allowance_id) }) });
   }
-  async purchase(requestId: string, allowanceId: string, merchant: string, items: PayPalPurchaseItem[]) {
+  // mode is what the caller expects; the server refuses when the allowance disagrees,
+  // so an approval request can never turn into a charge.
+  async purchase(requestId: string, allowanceId: string, merchant: string, items: PayPalPurchaseItem[], mode: "agent_pays" | "ask_first") {
     if (!/^[a-zA-Z0-9-]{16,64}$/.test(requestId)) throw new Error("request_id of 16–64 chars is required; reuse it when retrying");
-    const body = { request_id: requestId, allowance_id: catalogId(allowanceId), merchant: catalogId(merchant), items: purchaseItems(items) };
+    if (mode !== "agent_pays" && mode !== "ask_first") throw new Error("mode is agent_pays or ask_first");
+    const body = { request_id: requestId, allowance_id: catalogId(allowanceId), merchant: catalogId(merchant), items: purchaseItems(items), mode };
     const receipt = agentView(await this.#request("/purchases", "POST", body));
     const purchase = (receipt.purchase ?? {}) as Record<string, unknown>;
     const policy = (purchase.policy ?? {}) as Record<string, unknown>;

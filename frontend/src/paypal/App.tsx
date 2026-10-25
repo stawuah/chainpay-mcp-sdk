@@ -499,7 +499,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
       {purchase.mode === "ask_first" && <p className="paypal-note" style={{ margin: "8px 0 0" }}>
         {purchase.approval === "requested" ? `Approval requested ${purchase.approval_requested_at ? new Date(purchase.approval_requested_at * 1000).toLocaleString() : ""}. The buyer decides from the Allowances inbox.`
           : purchase.approval === "approved" ? `Approved by ${purchase.approved_by ?? "buyer"} ${purchase.approval_decided_at ? new Date(purchase.approval_decided_at * 1000).toLocaleString() : ""}.`
-          : purchase.approval === "denied" ? "Denied by the buyer. Nothing was charged." : "Ask me first: the buyer approves each purchase."}
+          : purchase.approval === "denied" ? `Denied by ${purchase.approved_by === "rules" ? "the allowance rules at approval time" : "the buyer"}. Nothing was charged.` : "Ask me first: the buyer approves each purchase."}
       </p>}
       {purchase.refund_request && <p className="paypal-notice">Refund requested: {shownMoney(purchase.refund_request.amount)} for unit{purchase.refund_request.failed_units.length === 1 ? "" : "s"} {purchase.refund_request.failed_units.map(i => i + 1).join(", ")}. {purchase.refund_request.reason}. A merchant must approve it.</p>}
       {!publicToken && principal?.role === "merchant" && purchase.refund_request && !selected.refund_state && <div className="paypal-actions">

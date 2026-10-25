@@ -76,9 +76,11 @@ export function dollars(cents: number | string | bigint | null | undefined): str
   const whole = BigInt(cents);
   return `${whole / 100n}.${(whole % 100n).toString().padStart(2, "0")}`;
 }
-// JSON.stringify writes this as a bare integer, so cents never pass through Number.
+// JSON.stringify writes this as a bare integer. Older browsers have no JSON.rawJSON;
+// Number is exact there because centsFromDollars allows at most 7 integer digits, far below 2^53.
 export function jsonInt(cents: string): unknown {
-  return (JSON as unknown as { rawJSON: (s: string) => unknown }).rawJSON(cents);
+  const raw = (JSON as unknown as { rawJSON?: (s: string) => unknown }).rawJSON;
+  return typeof raw === "function" ? raw(cents) : Number(cents);
 }
 
 export type OutputBinding = { unit: number; revision: number; output_hash: string | null };

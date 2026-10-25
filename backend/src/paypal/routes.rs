@@ -598,7 +598,7 @@ async fn checkout(
         .store
         .update(&id, &p, |t| {
             t.buyer(&p)?;
-            if t.purchase.is_none() && !t.captured && t.order.is_none() && !super::services::preflight(&t.offer_version, &t.documents, t.requirements.as_deref())?.ready {
+            if !t.captured && t.order.is_none() && !super::services::preflight(&t.offer_version, &t.documents, t.requirements.as_deref())?.ready {
                 return Err(Error::Invalid("Input preflight failed: every source needs at least 30 alphanumeric characters; check inputs before checkout"));
             }
             t.start_checkout(&p, &body.digest)

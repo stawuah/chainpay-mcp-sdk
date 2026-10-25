@@ -52,7 +52,7 @@ try {
   assert.match(checks,/status\s+Active · allowed/);assert.match(checks,/cooldown\s+no purchases yet · allowed/);assert.match(checks,/per_purchase_cap\s+\$36\.00 of \$50\.00 · within/);
   await page.close();
  }
- // Approve when the rules no longer pass: the server answers 200 with the approval still requested and the policy refused.
+ // Approve when the rules no longer pass: the server answers 200 with the request denied by the rules and the policy refused.
  {
   const page=await browser.newPage({viewport:{width:1280,height:900}});
   await page.goto(base+'?role=buyer&recheck=fail');
@@ -62,6 +62,8 @@ try {
   const verdict=await page.locator('.paypal-verdict').innerText();
   assert.match(verdict,/This allowance is not Active/);assert.match(verdict,/allowance_not_active/);
   assert.match(await page.locator('.paypal-checks').innerText(),/status\s+Paused · not allowed/);
+  await page.getByText('Denied by the allowance rules at approval time').waitFor();
+  assert.equal(await page.getByLabel('Purchases waiting for approval').getByRole('button',{name:'Approve $36.00'}).count(),0);
   await page.close();
  }
  // Deny: the receipt shows the buyer's decision as the reason and the extra buyer_decision check.
@@ -126,7 +128,7 @@ try {
   await page.getByRole('button',{name:'Buy now · $3.90'}).click();
   await page.locator('.paypal-status',{hasText:'PayPal capture confirmed'}).waitFor();
   const buy=(await calls(page)).find(c=>c.method==='POST'&&c.path==='/purchases');
-  assert.equal(buy.body.allowance_id,'al-groceries');assert.deepEqual(buy.body.items,[{id:'oat-milk',qty:1}]);assert.ok(buy.body.request_id);
+  assert.equal(buy.body.allowance_id,'al-groceries');assert.equal(buy.body.mode,'agent_pays');assert.deepEqual(buy.body.items,[{id:'oat-milk',qty:1}]);assert.ok(buy.body.request_id);
   assert.equal(await page.getByText('Purchase at Corner Grocer').count(),1);
   assert.equal(await page.getByRole('button',{name:'Run or recover this paid task'}).count(),0);
   await page.close();

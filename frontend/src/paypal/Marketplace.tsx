@@ -131,7 +131,8 @@ export default function Marketplace({ api, principal, onPurchased }: { api: Retu
           <Button label={quote ? `Buy now · ${shownMoney(quote.amount)}` : "Buy now"} isDisabled={busy || !quote || !allowanceId || !allowed} onClick={() => void (async () => {
             setBusy(true); setError("");
             try {
-              const receipt = await api<Receipt>("/purchases", "POST", { request_id: requestId.current, allowance_id: allowanceId, merchant: merchantId, items });
+              const mode = allowances.find(a => a.id === allowanceId)?.mode;
+              const receipt = await api<Receipt>("/purchases", "POST", { request_id: requestId.current, allowance_id: allowanceId, mode, merchant: merchantId, items });
               requestId.current = crypto.randomUUID();
               if (live.current) { setBasket({}); onPurchased(receipt); }
             } catch (e) { if (live.current) setError(e instanceof Error ? e.message : "Unavailable; keep the original operation"); }

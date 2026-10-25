@@ -134,7 +134,7 @@ function handle(method: string, path: string, body: Record<string, unknown> | un
   if (path === "/catalog") return [200, { merchants: catalog }];
   if (path === "/allowances" && method === "GET") {
     if (query.get("empty") === "1") return [200, { allowances: [] }];
-    const visible = role === "agent" ? allowances.filter(a => a.status === "Active" && (!a.agent || a.agent === principal.id)) : allowances;
+    const visible = role === "merchant" ? [] : role === "agent" ? allowances.filter(a => a.status === "Active" && (!a.agent || a.agent === principal.id)) : allowances;
     return [200, { allowances: visible.map(view) }];
   }
   if (path === "/allowances" && method === "POST") {
@@ -181,6 +181,8 @@ function handle(method: string, path: string, body: Record<string, unknown> | un
     const items = b.items as { id: string; qty: number }[];
     const a = allowances.find(x => x.id === b.allowance_id);
     if (!a) return [404, { error: "Not found" }];
+    // Same rule as the server: the caller must say which mode it expects.
+    if (b.mode !== a.mode) return [422, { error: `Allowance mode is ${a.mode}, not ${String(b.mode)}` }];
     const amount = lineFor(String(b.merchant), items).reduce((sum, l) => sum + l.line_cents, 0);
     const policy = check(a, String(b.merchant), amount, principal);
     const askFirst = a.mode === "ask_first";
@@ -195,12 +197,13 @@ function handle(method: string, path: string, body: Record<string, unknown> | un
     const t = tasks.find(x => x.id === seg[1]);
     if (!t) return [404, { error: "No such purchase" }];
     if (b.digest !== t.quote_digest) return [409, { error: "Digest does not match the quote" }];
-    // Rules run again at approval time; a failing re-check leaves the approval requested.
+    // Rules run again at approval time; a failing re-check denies the request on the rules' behalf.
     const a = allowances.find(x => x.id === t.purchase.allowance_id)!;
     const policy = check({ ...a, status: query.get("recheck") === "fail" ? "Paused" : "Active", vault: { source: a.vault.source, status: "ready" } }, String(t.purchase.merchant), Number(t.gross.replace(".", "")), principal);
     t.purchase.policy = policy;
-    if (!policy.allowed) return [200, t];
-    t.purchase.approval = "approved"; t.purchase.approved_by = "buyer-one"; t.purchase.approval_decided_at = now;
+    t.purchase.approval_decided_at = now;
+    if (!policy.allowed) { t.purchase.approval = "denied"; t.purchase.approved_by = "rules"; return [200, t]; }
+    t.purchase.approval = "approved"; t.purchase.approved_by = "buyer-one";
     t.captured = true; t.funded = true; t.capture_id = "CAP-FIXTURE-2"; t.order_id = "ORD-FIXTURE-2"; t.net = t.gross;
     return [200, t];
   }

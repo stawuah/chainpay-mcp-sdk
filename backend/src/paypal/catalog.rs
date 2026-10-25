@@ -379,8 +379,8 @@ async fn quote(
     let (lines, amount) = lines(&body.merchant, &body.items, now)?;
     let mut view = json!({"merchant":body.merchant,"lines":lines_json(&lines),"amount_cents":amount,"amount":amount.decimal(),"currency":"USD","sandbox":true});
     if let Some(allowance_id) = body.allowance_id {
-        let a = app.store.allowance_in_workspace(&allowance_id, &p).await?;
-        let usage = app.store.usage(&a.id, "").await?;
+        let a = app.store.allowance(&allowance_id, &p).await?;
+        let usage = app.store.usage(&a.id, "", now).await?;
         view["policy"] = json!(allowance::check(
             &a,
             &p,
@@ -400,6 +400,9 @@ struct PurchaseInput {
     allowance_id: String,
     merchant: String,
     items: Vec<ItemInput>,
+    /// The caller says which mode it expects, so an approval request can
+    /// never turn into a charge because the allowance was agent_pays.
+    mode: String,
 }
 async fn purchase(
     State(app): State<App>,
@@ -411,10 +414,17 @@ async fn purchase(
     app.store
         .rate_limit(&format!("purchase:{}", p.workspace), 30)
         .await?;
-    let a = app
-        .store
-        .allowance_in_workspace(&body.allowance_id, &p)
-        .await?;
+    if !matches!(body.mode.as_str(), "agent_pays" | "ask_first") {
+        return Err(Error::Invalid("Purchase mode is agent_pays or ask_first"));
+    }
+    let a = app.store.allowance(&body.allowance_id, &p).await?;
+    if body.mode != a.mode {
+        return Err(Error::Invalid(if a.mode == "agent_pays" {
+            "Allowance mode is agent_pays, not ask_first; use the purchase call"
+        } else {
+            "Allowance mode is ask_first, not agent_pays; ask the buyer for approval instead"
+        }));
+    }
     let fingerprint = domain::hash(
         &serde_json::to_vec(&(&body.allowance_id, &body.merchant, &body.items)).unwrap(),
     );
@@ -713,8 +723,13 @@ mod tests {
         assert_eq!(task.documents[0].text, "catalog:grocer/oat-milk");
         assert_eq!(task.unit_price(2).unwrap(), Cents(1250));
         assert_eq!(task.offer_version, OFFER_VERSION);
-        // Not allowed until the allowance transaction says so.
+        // Not allowed until the allowance transaction says so, and never through PayPal checkout.
         assert!(task.start_vault_charge(&p).is_err());
+        let digest = task.quote_digest.clone();
+        assert!(matches!(
+            task.start_checkout(&p, &digest),
+            Err(Error::Conflict)
+        ));
         task.captured = true;
         task.capture_id = Some("capture".into());
         task.units[0].state = UnitState::Delivered;

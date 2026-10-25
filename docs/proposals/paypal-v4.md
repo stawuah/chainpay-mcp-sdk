@@ -26,7 +26,17 @@ their captures and submit one evidence pack built only from stored records.
 - The rules run inside the same database transaction that reserves the spend
   (`paypal_allowance_spend`, `reserve` rows) and writes the task, so two agents
   cannot both fit under the cap. A denied `ask_first` request writes a `release`
-  row. Refunds never release spend.
+  row, whether the buyer denied it or the rules failed at approval time (then
+  `approval` is `denied` and `approved_by` is `rules`). Refunds never release
+  spend. Approve, deny and purchase all lock the allowance row before the task
+  row. The charge itself refuses an allowance that is no longer Active or has
+  expired.
+- An allowance is resolved through the caller's own view everywhere, so an
+  agent it does not name, another buyer or a merchant gets a 404 from quote and
+  purchase rather than a refused task that would show them the caps.
+- `POST /purchases` carries the `mode` the caller expects. The server refuses
+  the call when the allowance's mode differs, so an approval request can never
+  turn into a charge.
 - The vault token is written once by the server and never leaves it. Agent
   and merchant views of an allowance have no `vault` block at all. Card data is
   forwarded to PayPal once and is not stored, fingerprinted or logged.
@@ -51,14 +61,14 @@ their captures and submit one evidence pack built only from stored records.
 | Route | Who | Notes |
 | --- | --- | --- |
 | `POST /allowances` | buyer | idempotent on `request_id`; `vault_source` `paypal` returns `vault.approval_url`, `card` vaults inline |
-| `GET /allowances`, `GET /allowances/{id}` | buyer, merchant, agent | agents see only Active ones they may use, never `vault` |
+| `GET /allowances`, `GET /allowances/{id}` | buyer, agent | agents see only Active ones they may use, never `vault`; merchants get an empty list and a 404 |
 | `POST /allowances/{id}/vault` | buyer | finishes a PayPal-wallet vault after the approve redirect; repeat-safe |
 | `POST /allowances/{id}/status` | buyer | `Active`, `Paused`, `Revoked`; Revoked is final |
 | `GET /catalog?q=` | any | fixed seed, four merchants |
-| `POST /purchases/quote` | buyer, agent | lines, cents and the verdict; no write, no PayPal |
-| `POST /purchases` | buyer, agent | creates the task, reserves spend, charges or asks; refusals are 200 with `purchase.policy.reason_code` |
-| `GET /purchases/approvals` | buyer | purchases waiting on this buyer |
-| `POST /purchases/{id}/approve` `{digest}` | buyer | re-runs the rules, then charges |
+| `POST /purchases/quote` | buyer, agent | lines, cents and the verdict; no write, no PayPal; 404 for an allowance the caller cannot see |
+| `POST /purchases` `{…, mode}` | buyer, agent | creates the task, reserves spend, charges or asks; refusals are 200 with `purchase.policy.reason_code`; 422 when `mode` differs from the allowance; 404 for an allowance the caller cannot see |
+| `GET /purchases/approvals` | buyer, agent | purchases waiting on this buyer, or the ones this agent asked for |
+| `POST /purchases/{id}/approve` `{digest}` | buyer | re-runs the rules, then charges; a failed re-check denies the request (`approved_by: "rules"`) and releases the reserve |
 | `POST /purchases/{id}/deny` `{reason}` | buyer | releases the reserve |
 | `POST /tasks/{id}/fulfil` | merchant | moves Pending units to delivered or failed |
 | `POST /tasks/{id}/refund-request` | buyer, agent | stores the request; the merchant approves through `POST /tasks/{id}/refund` |

@@ -874,7 +874,7 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     )
     .await;
     assert_eq!(fixture.tokens.load(Ordering::SeqCst), 2);
-    // Agents and merchants see the allowances but never the vault.
+    // Agents see the allowances but never the vault; merchants see nothing.
     let (_, agent_list) = call(
         &http,
         &reqwest::Method::GET,
@@ -901,8 +901,19 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
         None,
     )
     .await;
-    assert_eq!(merchant_list["allowances"].as_array().unwrap().len(), 2);
-    assert!(!merchant_list.to_string().contains("vault"));
+    assert_eq!(merchant_list["allowances"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        call(
+            &http,
+            &reqwest::Method::GET,
+            api(&format!("/allowances/{card_id}")),
+            &merchant,
+            None
+        )
+        .await
+        .0,
+        404
+    );
     let (_, catalog) = call(
         &http,
         &reqwest::Method::GET,
@@ -932,8 +943,7 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     assert_eq!(fixture.creates.load(Ordering::SeqCst), 0);
     // agent_pays with an auto-captured vault order.
     let r1 = random_id().unwrap();
-    let purchase_body =
-        json!({"request_id":r1,"allowance_id":card_id,"merchant":"grocer","items":items});
+    let purchase_body = json!({"request_id":r1,"allowance_id":card_id,"mode":"agent_pays","merchant":"grocer","items":items});
     let (status, first) = call(
         &http,
         &reqwest::Method::POST,
@@ -965,7 +975,7 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     .await;
     assert_eq!(retry["id"], first_id);
     assert_eq!(fixture.creates.load(Ordering::SeqCst), 1);
-    assert_eq!(call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":r1,"allowance_id":card_id,"merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await.0, 409);
+    assert_eq!(call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":r1,"allowance_id":card_id,"mode":"agent_pays","merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await.0, 409);
     // The buyer can read it; a stranger cannot.
     assert_eq!(
         call(
@@ -1002,15 +1012,52 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
         .0,
         404
     );
+    // Another buyer cannot quote or buy against an allowance they cannot see.
+    assert_eq!(
+        call(
+            &http,
+            &reqwest::Method::POST,
+            api("/purchases/quote"),
+            &stranger,
+            Some(json!({"merchant":"grocer","items":items,"allowance_id":card_id}))
+        )
+        .await
+        .0,
+        404
+    );
+    assert_eq!(call(&http, &reqwest::Method::POST, api("/purchases"), &stranger, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"mode":"agent_pays","merchant":"grocer","items":items}))).await.0, 404);
+    // Asking for approval on an agent_pays allowance must not turn into a charge.
+    let (status, wrong_mode) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"mode":"ask_first","merchant":"grocer","items":items}))).await;
+    assert_eq!(status, 422, "{wrong_mode}");
+    assert!(
+        wrong_mode["error"]
+            .as_str()
+            .unwrap()
+            .contains("agent_pays, not ask_first")
+    );
+    assert_eq!(fixture.creates.load(Ordering::SeqCst), 1);
+    // A purchase task is paid through the allowance only; PayPal checkout refuses it.
+    assert_eq!(
+        call(
+            &http,
+            &reqwest::Method::POST,
+            api(&format!("/tasks/{first_id}/checkout")),
+            &buyer,
+            Some(json!({"digest":first["quote_digest"]}))
+        )
+        .await
+        .0,
+        409
+    );
     // Vault order that only reaches APPROVED is captured in the same call.
     fixture.auto_capture.store(false, Ordering::SeqCst);
-    let (status, second) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"merchant":"grocer","items":[{"id":"coffee-beans","qty":1}]}))).await;
+    let (status, second) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"mode":"agent_pays","merchant":"grocer","items":[{"id":"coffee-beans","qty":1}]}))).await;
     assert_eq!(status, 200, "{second}");
     assert_eq!(second["captured"], true);
     assert_eq!(fixture.creates.load(Ordering::SeqCst), 2);
     assert_eq!(fixture.captures.load(Ordering::SeqCst), 1);
     // Refusals are 200 with a reason and never reach PayPal.
-    let (status, refused) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"merchant":"tours","items":[{"id":"audio-guide","qty":1}]}))).await;
+    let (status, refused) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"mode":"agent_pays","merchant":"tours","items":[{"id":"audio-guide","qty":1}]}))).await;
     assert_eq!(status, 200, "{refused}");
     assert_eq!(refused["purchase"]["policy"]["allowed"], false);
     assert_eq!(
@@ -1018,7 +1065,7 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
         "merchant_not_allowed"
     );
     assert_eq!(refused["captured"], false);
-    let (_, over) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"merchant":"grocer","items":[{"id":"coffee-beans","qty":2}]}))).await;
+    let (_, over) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"mode":"agent_pays","merchant":"grocer","items":[{"id":"coffee-beans","qty":2}]}))).await;
     assert_eq!(
         over["purchase"]["policy"]["reason_code"],
         "per_purchase_cap"
@@ -1054,11 +1101,9 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     )
     .await;
     assert_eq!(agent_list["allowances"].as_array().unwrap().len(), 1);
-    let (_, blocked) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await;
-    assert_eq!(
-        blocked["purchase"]["policy"]["reason_code"],
-        "allowance_not_active"
-    );
+    // A paused allowance is gone from the agent's view, so buying against it is a 404, not a refused task.
+    let (status, blocked) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":card_id,"mode":"agent_pays","merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await;
+    assert_eq!(status, 404, "{blocked}");
     assert_eq!(
         call(
             &http,
@@ -1098,7 +1143,7 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
         "vault_source":"card","card":{"number":"4111111111111111","expiry":"2030-01","name":"Test Buyer"}}))).await;
     let ask_id = ask["id"].as_str().unwrap().to_string();
     let creates_before = fixture.creates.load(Ordering::SeqCst);
-    let (status, requested) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":ask_id,"merchant":"grocer","items":[{"id":"sourdough","qty":1}]}))).await;
+    let (status, requested) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":ask_id,"mode":"ask_first","merchant":"grocer","items":[{"id":"sourdough","qty":1}]}))).await;
     assert_eq!(status, 200, "{requested}");
     assert_eq!(requested["purchase"]["approval"], "requested");
     assert_eq!(requested["purchase"]["policy"]["allowed"], true);
@@ -1115,6 +1160,28 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     .await;
     assert_eq!(inbox["approvals"].as_array().unwrap().len(), 1);
     assert_eq!(inbox["approvals"][0]["id"], requested_id);
+    // The agent sees its own open request too; the merchant sees none.
+    let (_, agent_inbox) = call(
+        &http,
+        &reqwest::Method::GET,
+        api("/purchases/approvals"),
+        &agent,
+        None,
+    )
+    .await;
+    assert_eq!(agent_inbox["approvals"][0]["id"], requested_id);
+    assert_eq!(
+        call(
+            &http,
+            &reqwest::Method::GET,
+            api("/purchases/approvals"),
+            &merchant,
+            None
+        )
+        .await
+        .0,
+        403
+    );
     let digest = inbox["approvals"][0]["quote_digest"]
         .as_str()
         .unwrap()
@@ -1164,7 +1231,7 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     )
     .await;
     assert_eq!(fixture.creates.load(Ordering::SeqCst), creates_before + 1);
-    let (_, second_request) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":ask_id,"merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await;
+    let (_, second_request) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":ask_id,"mode":"ask_first","merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await;
     let second_id = second_request["id"].as_str().unwrap().to_string();
     let (_, before_deny) = call(
         &http,
@@ -1207,6 +1274,44 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     )
     .await;
     assert_eq!(after_deny["spent_cents"], 650);
+    // Rules that fail at approval time deny the request and give the reserve back.
+    let (_, third_request) = call(&http, &reqwest::Method::POST, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":ask_id,"mode":"ask_first","merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await;
+    let third_id = third_request["id"].as_str().unwrap().to_string();
+    call(
+        &http,
+        &reqwest::Method::POST,
+        api(&format!("/allowances/{ask_id}/status")),
+        &buyer,
+        Some(json!({"status":"Paused"})),
+    )
+    .await;
+    let (status, rechecked) = call(
+        &http,
+        &reqwest::Method::POST,
+        api(&format!("/purchases/{third_id}/approve")),
+        &buyer,
+        Some(json!({"digest":third_request["quote_digest"]})),
+    )
+    .await;
+    assert_eq!(status, 200, "{rechecked}");
+    assert_eq!(rechecked["purchase"]["approval"], "denied");
+    assert_eq!(rechecked["purchase"]["approved_by"], "rules");
+    assert_eq!(rechecked["purchase"]["policy"]["allowed"], false);
+    assert_eq!(
+        rechecked["purchase"]["policy"]["reason_code"],
+        "allowance_not_active"
+    );
+    assert_eq!(rechecked["captured"], false);
+    assert_eq!(fixture.creates.load(Ordering::SeqCst), creates_before + 1);
+    let (_, after_recheck) = call(
+        &http,
+        &reqwest::Method::GET,
+        api(&format!("/allowances/{ask_id}")),
+        &buyer,
+        None,
+    )
+    .await;
+    assert_eq!(after_recheck["spent_cents"], 650);
     assert_eq!(
         call(
             &http,

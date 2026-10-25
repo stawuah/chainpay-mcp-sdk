@@ -287,7 +287,8 @@ impl Task {
     }
     pub fn start_checkout(&mut self, p: &Principal, digest: &str) -> Result<Option<String>, Error> {
         self.buyer(p)?;
-        if self.subscription_funding.is_some() {
+        // Catalog purchases are paid through the allowance only, never PayPal checkout.
+        if self.subscription_funding.is_some() || self.purchase.is_some() {
             return Err(Error::Conflict);
         }
         if digest != self.quote_digest {
