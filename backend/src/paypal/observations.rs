@@ -69,13 +69,22 @@ pub fn order(task: &mut Task, value: Value) -> Result<(), Error> {
             return Err(Error::Conflict);
         }
         task.capture_id = Some(capture_id);
+        // A refund we approved ourselves shows up here too (PayPal reports the
+        // capture as PARTIALLY_REFUNDED after every webhook-driven reconcile), so
+        // only flag review when the provider's status goes beyond what this task
+        // has reserved: any refund with none reserved, or a full refund when the
+        // reserved refunds do not cover the whole capture.
+        let reserved = task.reserved_refunds();
+        let unexplained_refund = match capture["status"].as_str() {
+            Some("PARTIALLY_REFUNDED") => reserved == 0,
+            Some("REFUNDED") => reserved < task.amount.0,
+            _ => false,
+        };
         if matches!(
             capture["status"].as_str(),
             Some("DECLINED" | "FAILED" | "DENIED" | "REVERSED")
-        ) || (matches!(
-            capture["status"].as_str(),
-            Some("REFUNDED" | "PARTIALLY_REFUNDED")
-        )) {
+        ) || unexplained_refund
+        {
             task.payment_review = Some("Provider reports a payment change outside this task's approved operations; merchant review required".into());
         }
         if text(capture, "status")? == "COMPLETED" {

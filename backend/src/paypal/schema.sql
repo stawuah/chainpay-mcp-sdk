@@ -50,3 +50,12 @@ CREATE TABLE IF NOT EXISTS paypal_allowance_ledger (
  entry_key TEXT PRIMARY KEY, subscription_id TEXT NOT NULL, period_start BIGINT NOT NULL,
  task_id TEXT, delegation_id TEXT, kind TEXT NOT NULL, units INTEGER NOT NULL, created_at BIGINT NOT NULL
 );
+
+-- Hot lookups on JSONB fields: the public receipt by share token, webhook
+-- matching by provider ids, the pending-event scan, and allowance checks.
+CREATE INDEX IF NOT EXISTS paypal_tasks_share_token ON paypal_tasks((record->>'share_token'));
+CREATE INDEX IF NOT EXISTS paypal_tasks_order_id ON paypal_tasks((record->>'order_id'));
+CREATE INDEX IF NOT EXISTS paypal_tasks_capture_id ON paypal_tasks((record->>'capture_id'));
+CREATE INDEX IF NOT EXISTS paypal_tasks_refund_id ON paypal_tasks((record->>'refund_id'));
+CREATE INDEX IF NOT EXISTS paypal_webhook_inbox_pending ON paypal_webhook_inbox(received_at) WHERE processed_at IS NULL;
+CREATE INDEX IF NOT EXISTS paypal_allowance_ledger_delegation ON paypal_allowance_ledger(delegation_id, period_start, kind);

@@ -1004,15 +1004,19 @@ mod tests {
         let mut changed = restored.clone();
         changed.order = Some(Operation::begin().unwrap());
         let observation = json!({"id":"order","purchase_units":[{"custom_id":changed.id,"amount":{"currency_code":"USD","value":"8.00"},"payments":{"captures":[{"id":changed.capture_id,"amount":{"currency_code":"USD","value":"8.00"},"status":"PARTIALLY_REFUNDED"}]}}]});
-        observations::order(&mut changed, observation).unwrap();
-        assert!(changed.payment_review.is_some());
-        assert!(changed.net().is_none());
-        observations::ledger_refund(
-            &mut changed,
-            0,
-            json!({"id":id,"amount":{"currency_code":"USD","value":"4.00"},"status":"COMPLETED"}),
-        )
-        .unwrap();
+        // Our own 4.00 refund explains PARTIALLY_REFUNDED: no review, net stays known.
+        observations::order(&mut changed, observation.clone()).unwrap();
+        assert!(changed.payment_review.is_none());
+        assert_eq!(changed.net(), Some(Cents(400)));
+        // The same report on a task that reserved nothing is a change we did not make.
+        let mut unexplained = changed.clone();
+        unexplained.refunds.clear();
+        observations::order(&mut unexplained, observation).unwrap();
+        assert!(unexplained.payment_review.is_some());
+        assert!(unexplained.net().is_none());
+        // A full refund the provider reports is also unexplained when we only reserved part of it.
+        let full = json!({"id":"order","purchase_units":[{"custom_id":changed.id,"amount":{"currency_code":"USD","value":"8.00"},"payments":{"captures":[{"id":changed.capture_id,"amount":{"currency_code":"USD","value":"8.00"},"status":"REFUNDED"}]}}]});
+        observations::order(&mut changed, full).unwrap();
         assert!(changed.payment_review.is_some());
         server.abort();
         provider_server.abort();
@@ -1100,5 +1104,122 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
+    async fn lost_legacy_refund_recovers_from_webhook_by_invoice_id() {
+        use crate::paypal::{
+            ai::Ai,
+            config::Config,
+            provider::Provider,
+            routes::{self, App},
+            store::Store,
+        };
+        use axum::{
+            Json, Router,
+            http::StatusCode,
+            routing::{get, post},
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let store = Store::connect(&std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        let (mut task, p, m) = fixture();
+        task.capture_id = Some(domain::random_id().unwrap());
+        // One failed unit makes the legacy proposal worth 4.00.
+        task.units[0].state = UnitState::Failed;
+        let (amount, digest) = task.refund_proposal().unwrap();
+        assert_eq!(amount, Cents(400));
+        store
+            .create(&task, &domain::random_id().unwrap(), "lost-legacy")
+            .await
+            .unwrap();
+        let posted = Arc::new(tokio::sync::Mutex::new(None::<Value>));
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let id = domain::random_id().unwrap();
+        let saved = posted.clone();
+        let sends = dispatches.clone();
+        let observed = posted.clone();
+        let refund_id = id.clone();
+        let fixture=Router::new()
+            .route("/v1/oauth2/token",post(||async{Json(json!({"access_token":"fixture","token_type":"Bearer","expires_in":300}))}))
+            .route(&format!("/v2/payments/captures/{}/refund",task.capture_id.as_ref().unwrap()),post(move |Json(body):Json<Value>| {let saved=saved.clone();let sends=sends.clone();async move {
+                sends.fetch_add(1,Ordering::SeqCst);
+                assert_eq!(body["amount"],json!({"currency_code":"USD","value":"4.00"}));
+                // The request key travels as invoice_id, so the webhook can name it.
+                assert!(body["invoice_id"].as_str().is_some_and(|s|!s.is_empty()));
+                *saved.lock().await=Some(body);
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                Json(json!({"status":"COMPLETED"}))
+            }}))
+            .route(&format!("/v2/payments/refunds/{id}"),get(move || {let observed=observed.clone();let id=refund_id.clone();async move {
+                let body=observed.lock().await.clone().unwrap();
+                (StatusCode::OK,Json(json!({"id":id,"invoice_id":body["invoice_id"],"amount":body["amount"],"status":"COMPLETED"})))
+            }}));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider_base = format!("http://{}", listener.local_addr().unwrap());
+        let provider_server =
+            tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
+        let config = Config {
+            database_url: "unused".into(),
+            client_id: "fixture".into(),
+            client_secret: "fixture".into(),
+            webhook_id: "fixture".into(),
+            public_origin: "http://127.0.0.1:5197".into(),
+            new_purchases: false,
+            subscriptions: false,
+            subscription_plan: None,
+        };
+        let app = App {
+            ai: Ai::fixture("http://127.0.0.1:1/unused".into()),
+            store: store.clone(),
+            provider: Provider::fixture(provider_base, &config),
+            config: Arc::new(config),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!(
+            "http://{}/v1/paypal/tasks/{}",
+            listener.local_addr().unwrap(),
+            task.id
+        );
+        let router = routes::router(app.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let token = store.issue_access(&m, 600).await.unwrap();
+        let client = reqwest::Client::new();
+        assert_eq!(
+            client
+                .post(format!("{base}/refund"))
+                .bearer_auth(&token)
+                .json(&json!({"digest":digest}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+        let pending = store.get(&task.id, &p).await.unwrap();
+        assert_eq!(
+            pending.refund.as_ref().unwrap().state,
+            domain::OperationState::Unknown
+        );
+        assert!(pending.refund_id.is_none());
+        assert!(!pending.refund_confirmed);
+        let body = posted.lock().await.clone().unwrap();
+        let event_id = domain::random_id().unwrap();
+        store.insert_event(&json!({"id":event_id,"event_type":"PAYMENT.CAPTURE.REFUNDED","resource":{"id":id,"invoice_id":body["invoice_id"]}})).await.unwrap();
+        app.process_events().await.unwrap();
+        let restored = store.get(&task.id, &p).await.unwrap();
+        assert_eq!(restored.refund_id.as_deref(), Some(id.as_str()));
+        assert!(restored.refund_confirmed);
+        assert!(restored.payment_review.is_none());
+        assert_eq!(restored.net(), Some(Cents(400)));
+        assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+        server.abort();
+        provider_server.abort();
     }
 }

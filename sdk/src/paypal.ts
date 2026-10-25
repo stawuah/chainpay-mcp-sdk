@@ -28,8 +28,20 @@ export class PayPalAgentClient {
     this.#token = config.token;
   }
   async #request(path: string, method = "GET", body?: unknown): Promise<Record<string, unknown>> {
-    const response = await fetch(`${this.#api}/v1/paypal${path}`, {method, redirect: "error", credentials: "omit", signal: AbortSignal.timeout(35_000), headers: { Authorization: `Bearer ${this.#token}`, ...(body === undefined ? {} : {"Content-Type":"application/json"}) }, body: body === undefined ? undefined : JSON.stringify(body)});
-    if (!response.ok) throw new Error(`PayPal workspace request unavailable (${response.status}); retain the original task`);
+    let response: Response;
+    try {
+      response = await fetch(`${this.#api}/v1/paypal${path}`, {method, redirect: "error", credentials: "omit", signal: AbortSignal.timeout(35_000), headers: { Authorization: `Bearer ${this.#token}`, ...(body === undefined ? {} : {"Content-Type":"application/json"}) }, body: body === undefined ? undefined : JSON.stringify(body)});
+    } catch (cause) {
+      // No answer is not a failure: the request may have landed. Never open a new task over it.
+      if (cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError")) throw new Error("No response from the PayPal workspace yet; keep the original task and check it again, do not create another");
+      throw cause;
+    }
+    if (!response.ok) {
+      // The server always sends {"error": "..."}; pass that reason on so the agent can act on it.
+      let reason = "";
+      try { const text = await response.text(); const parsed = JSON.parse(text.slice(0, 2_000)); if (typeof parsed?.error === "string") reason = parsed.error; } catch { /* body was not JSON */ }
+      throw new Error(`${reason || "PayPal workspace request unavailable"} (${response.status}); retain the original task`);
+    }
     if (response.status === 202) return { status: "processing_requested", payment_dispatched: false };
     const reader=response.body?.getReader();
     if(!reader) throw new Error("PayPal workspace response missing");

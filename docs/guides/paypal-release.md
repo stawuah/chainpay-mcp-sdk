@@ -1,6 +1,6 @@
 # PayPal v3 implementation and release ledger
 
-Implementation branch: `paypal/10-release-hardening`. Review the stacked PRs in
+Implementation branch: `master` (the PayPal stack `paypal/01`–`paypal/16` landed there). Review the stacked PRs in
 order; no PR is intended for direct merge to `master`. No existing deployment was
 updated. The baseline commit is `4bf3d9fc49c57745662b2cad732e0f49c0beca51`;
 this is the code baseline, **not proof of the Colosseum deployed SHA**.

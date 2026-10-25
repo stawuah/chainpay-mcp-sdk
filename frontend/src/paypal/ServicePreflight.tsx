@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, Sparkles, TriangleAlert } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
-import { client, money, type Service } from "./client";
+import { client, shownMoney, type Service } from "./client";
 
 export type Preflight = { ready: boolean; outputs: number; amount: string; issues: { document_index: number; message: string }[] };
 type Props = { api: ReturnType<typeof client>; services: Service[]; input: { service_id: string; documents: { name: string; text: string }[]; requirements?: string }; onSelect: (id: string) => void };
@@ -38,7 +38,7 @@ export default function ServicePreflight({ api, services, input, onSelect }: Pro
     {result && <div className={result.ready ? "paypal-service-terms" : "paypal-notice"} role="status">
       <p style={{ margin: 0, fontWeight: 600 }}>
         {result.ready ? <CheckCircle2 size={15} style={{ verticalAlign: "text-bottom", marginRight: 6 }} aria-hidden="true" /> : <TriangleAlert size={15} style={{ verticalAlign: "text-bottom", marginRight: 6 }} aria-hidden="true" />}
-        {result.ready ? "Inputs ready" : "Inputs need attention"}: {result.outputs} output{result.outputs === 1 ? "" : "s"} · {money(result.amount)} USD. This check does not create a task or approve payment.
+        {result.ready ? "Inputs ready" : "Inputs need attention"}: {result.outputs} output{result.outputs === 1 ? "" : "s"} · {shownMoney(result.amount)} USD. This check does not create a task or approve payment.
       </p>
       {result.issues.map(issue => <p key={issue.document_index} style={{ marginTop: 6, marginBottom: 0 }}>Document {issue.document_index + 1} ({input.documents[issue.document_index]?.name}): {issue.message}</p>)}
     </div>}

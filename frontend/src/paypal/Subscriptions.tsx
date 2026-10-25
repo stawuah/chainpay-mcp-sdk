@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Bot, Repeat, ShieldCheck } from "lucide-react";
 import { UsageRing } from "../dashboard/overview/UsageRing";
 import { usageRing } from "../dashboard/overview/spending";
-import { checkoutUrl, type client, type Principal, type Receipt, type Service } from "./client";
+import { checkoutUrl, shownMoney, type client, type Principal, type Receipt, type Service } from "./client";
 
-type Terms = { terms: string; plan_id: string; enabled: boolean; policy: string };
+type Terms = { terms: string; plan_id: string; enabled: boolean; policy: string; price: string; units: number };
 type Delegation = { id: string; agent: string; services: string[]; task_limit: number; period_limit: number; expires_at: number; revoked: boolean; lifetime_reserved_units?: number; remaining_period_capacity?: number; available_units?: number };
 type View = { subscription: { id: string; status: string; approval_url?: string; payment_review?: string; create: { state: string }; cancel?: { state: string } }; periods: { start_at: number; end_at: number; available: number; payment_id?: string; blocked: boolean }[]; delegations: Delegation[] };
 
@@ -65,14 +65,14 @@ export default function Subscriptions({ api, principal, services, selected, onAl
           }
           const v = await api<View>("/subscriptions", "POST", { request_id: request.current, terms: terms.terms, plan_id: terms.plan_id });
           if (live.current) setViews(old => [v, ...old.filter(x => x.subscription.id !== v.subscription.id)]);
-        })}>Approve $40.00 monthly subscription terms</button>}
+        })}>Approve {terms ? shownMoney(terms.price) : "the"} monthly subscription terms</button>}
       </div>
     </div>
 
     <div className="paypal-allowance-hero">
       <UsageRing state={ringState} label={activePeriod ? `${usedUnits.toString()} of 10 service units used` : "No active verified service period"} />
       <div>
-        <p style={{ margin: "0 0 4px", fontWeight: 600 }}>$40.00 USD / month · 10 service units. Prepaid service access, no rollover or overage.</p>
+        <p style={{ margin: "0 0 4px", fontWeight: 600 }}>{terms ? `${shownMoney(terms.price)} USD / month · ${terms.units} service units.` : "Subscription terms loading."} Prepaid service access, no rollover or overage.</p>
         {terms?.policy && <p style={{ margin: "0 0 4px" }}>{terms.policy}</p>}
         <p className="paypal-note" style={{ margin: 0 }}>These are ChainPay service-policy periods, not PayPal historical coverage. Cancellation stops renewal. Existing reservations may finish after expiry or revocation. Billing review blocks work.</p>
       </div>

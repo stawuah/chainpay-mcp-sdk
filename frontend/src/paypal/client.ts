@@ -32,7 +32,14 @@ export function exportReceipt(receipt: Receipt): string {
 export function client(origin: string, token: string) {
   return async function request<T>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
     if (!path.startsWith("/") || path.startsWith("//")) throw new Error("Invalid API path");
-    const response = await fetch(`${origin}/v1/paypal${path}`, { method, redirect: "error", credentials: "omit", cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(100_000)]) : AbortSignal.timeout(100_000), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) });
+    let response: Response;
+    try {
+      response = await fetch(`${origin}/v1/paypal${path}`, { method, redirect: "error", credentials: "omit", cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(100_000)]) : AbortSignal.timeout(100_000), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) });
+    } catch (cause) {
+      // A timeout is not a failure: the payment may have gone through. Say so instead of "signal timed out".
+      if (cause instanceof Error && cause.name === "TimeoutError") throw new Error("No response yet. Keep this task and use Check original payment; do not create another.");
+      throw cause;
+    }
     if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.error || `Request unavailable (${response.status}). Keep the original task.`); }
     if (response.status === 204 || response.status === 202) return undefined as T;
     return await response.json() as T;

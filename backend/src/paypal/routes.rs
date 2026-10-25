@@ -188,6 +188,9 @@ impl App {
                             .refund_id
                             .as_deref()
                             .is_some_and(|id| value["id"].as_str() == Some(id))
+                            || task.refund.as_ref().is_some_and(|op| {
+                                value["invoice_id"].as_str() == Some(op.key.as_str())
+                            })
                         {
                             known = self
                                 .store
@@ -248,42 +251,88 @@ impl App {
     }
 }
 
+/// Ready means the configuration passed and the database answers. It never
+/// claims the provider accepted anything.
+async fn healthz(State(app): State<App>) -> impl IntoResponse {
+    let db = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        sqlx::query("SELECT 1").execute(app.store.pool()),
+    )
+    .await;
+    match db {
+        Ok(Ok(_)) => (
+            StatusCode::OK,
+            Json(
+                json!({"status":"ready","service":"chainpay-paypal","sandbox":true,"provider_acceptance":"unverified"}),
+            ),
+        ),
+        _ => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status":"unavailable","service":"chainpay-paypal","reason":"database"})),
+        ),
+    }
+}
+
 pub fn router(app: App) -> Router {
     let origin: axum::http::HeaderValue =
         app.config.public_origin.parse().expect("validated origin");
     Router::new()
         .merge(super::subscriptions::router())
-        .route("/healthz",get(|| async { Json(json!({"status":"ready","service":"chainpay-paypal","sandbox":true,"provider_acceptance":"unverified"})) }))
-        .route("/v1/paypal/session",get(session).delete(logout))
-        .route("/v1/paypal/offers",get(offers))
-        .route("/v1/paypal/preflight",post(preflight))
-        .route("/v1/paypal/recommend-service",post(recommend_service))
-        .route("/v1/paypal/analytics",get(analytics))
-        .route("/v1/paypal/analytics/ask",post(analytics_ask))
-        .route("/v1/paypal/tasks/{id}/reporting",post(reporting))
-        .route("/v1/paypal/tasks",get(list).post(quote))
-        .route("/v1/paypal/tasks/{id}",get(read))
-        .route("/v1/paypal/tasks/{id}/checkout",post(checkout))
-        .route("/v1/paypal/tasks/{id}/capture",post(capture))
-        .route("/v1/paypal/tasks/{id}/reconcile",post(reconcile))
-        .route("/v1/paypal/tasks/{id}/process",post(process))
-        .route("/v1/paypal/tasks/{id}/explain",post(explain))
-        .route("/v1/paypal/tasks/{id}/refund-proposal",get(refund_proposal))
-        .route("/v1/paypal/tasks/{id}/refund",post(refund))
-        .route("/v1/paypal/tasks/{id}/resolution",post(decision))
-        .route("/v1/paypal/tasks/{id}/rework",post(rework))
-        .route("/v1/paypal/tasks/{id}/resolution-refunds",post(resolution_proposal))
-        .route("/v1/paypal/tasks/{id}/resolution-refunds/approve",post(resolution_refund))
-        .route("/v1/paypal/tasks/{id}/share",post(share).delete(unshare))
-        .route("/v1/paypal/receipts/{token}",get(public_receipt))
-        .route("/v1/paypal/webhooks",post(webhook))
+        .route("/healthz", get(healthz))
+        .route("/v1/paypal/session", get(session).delete(logout))
+        .route("/v1/paypal/offers", get(offers))
+        .route("/v1/paypal/preflight", post(preflight))
+        .route("/v1/paypal/recommend-service", post(recommend_service))
+        .route("/v1/paypal/analytics", get(analytics))
+        .route("/v1/paypal/analytics/ask", post(analytics_ask))
+        .route("/v1/paypal/tasks/{id}/reporting", post(reporting))
+        .route("/v1/paypal/tasks", get(list).post(quote))
+        .route("/v1/paypal/tasks/{id}", get(read))
+        .route("/v1/paypal/tasks/{id}/checkout", post(checkout))
+        .route("/v1/paypal/tasks/{id}/capture", post(capture))
+        .route("/v1/paypal/tasks/{id}/reconcile", post(reconcile))
+        .route("/v1/paypal/tasks/{id}/process", post(process))
+        .route("/v1/paypal/tasks/{id}/explain", post(explain))
+        .route(
+            "/v1/paypal/tasks/{id}/refund-proposal",
+            get(refund_proposal),
+        )
+        .route("/v1/paypal/tasks/{id}/refund", post(refund))
+        .route("/v1/paypal/tasks/{id}/resolution", post(decision))
+        .route("/v1/paypal/tasks/{id}/rework", post(rework))
+        .route(
+            "/v1/paypal/tasks/{id}/resolution-refunds",
+            post(resolution_proposal),
+        )
+        .route(
+            "/v1/paypal/tasks/{id}/resolution-refunds/approve",
+            post(resolution_refund),
+        )
+        .route("/v1/paypal/tasks/{id}/share", post(share).delete(unshare))
+        .route("/v1/paypal/receipts/{token}", get(public_receipt))
+        .route("/v1/paypal/webhooks", post(webhook))
         .layer(DefaultBodyLimit::max(200_000))
-        .layer(CorsLayer::new().allow_origin(origin).allow_methods([axum::http::Method::GET,axum::http::Method::POST,axum::http::Method::DELETE]).allow_headers([header::AUTHORIZATION,header::CONTENT_TYPE]))
-        .layer(axum::middleware::map_response(|mut response: Response| async move {
-            response.headers_mut().insert(header::CACHE_CONTROL,"no-store".parse().unwrap());
-            response.headers_mut().insert(header::REFERRER_POLICY,"no-referrer".parse().unwrap());
-            response
-        }))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(origin)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::DELETE,
+                ])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+        )
+        .layer(axum::middleware::map_response(
+            |mut response: Response| async move {
+                response
+                    .headers_mut()
+                    .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+                response
+                    .headers_mut()
+                    .insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
+                response
+            },
+        ))
         .with_state(app)
 }
 

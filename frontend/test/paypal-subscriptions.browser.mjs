@@ -8,7 +8,7 @@ try {
  await page.route('http://127.0.0.1:8081/v1/paypal/**',async route=>{const req=route.request(),path=new URL(req.url()).pathname,body=req.postDataJSON();calls.push({path,body});let result={};
  if(path.endsWith('/session'))result={id:owner,workspace:'fixture',role:'buyer'};
  else if(path.endsWith('/offers'))result={offers:[{id:'document-extract-v1',name:'Summary',unit_price:'4.00',min_documents:1,max_documents:10}]};
- else if(path.endsWith('/subscriptions/terms'))result={terms:'terms-fixture',plan_id:'P-FIXTURE',enabled:true,policy:'ChainPay service periods; no rollover or overage.'};
+ else if(path.endsWith('/subscriptions/terms'))result={terms:'terms-fixture',plan_id:'P-FIXTURE',enabled:true,price:'40.00',units:10,policy:'ChainPay service periods; no rollover or overage.'};
  else if(path.endsWith('/subscriptions'))result={subscriptions:owner==='buyer-one'?[{subscription:{id:sid,status:'ACTIVE',create:{state:'observed'}},periods:[{start_at:1770000000,end_at:1999999999,available:allocated?9:10,payment_id:'SALE-fixture'}],delegations:delegated?[{id:did,agent:'distinct-agent',services:['document-extract-v1'],task_limit:1,period_limit:3,expires_at:1999999999,revoked:false}]:[]}]:[]};
  else if(path.endsWith('/delegations')){delegated=true;result={id:did};}
  else if(path.endsWith('/allowance')){allocated=true;result=task();}
@@ -37,7 +37,7 @@ try {
   await p.route('http://127.0.0.1:8081/v1/paypal/**',async route=>{const path=new URL(route.request().url()).pathname;let result={};
    if(path.endsWith('/session'))result={id:role,workspace:'fixture',role};
    else if(path.endsWith('/offers'))result={offers:[]};
-   else if(path.endsWith('/subscriptions/terms'))result={terms:'terms',plan_id:'P',enabled:true,policy:'ChainPay policy'};
+   else if(path.endsWith('/subscriptions/terms'))result={terms:'terms',plan_id:'P',enabled:true,price:'40.00',units:10,policy:'ChainPay policy'};
    else if(path.endsWith('/subscriptions'))result={subscriptions:[{subscription:{id:sid,status:'ACTIVE',create:{state:'observed'}},periods:[{start_at:1770000000,end_at:1999999999,available:0,payment_id:'SALE-unallocated',blocked:true}],delegations:[]}]};
    else if(path.endsWith('/tasks'))result={tasks:[receipt]};
    await route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
@@ -57,7 +57,7 @@ try {
    const view=()=>({subscription:{id:sid,status,create:{state:status==='CREATE_PENDING'?'unknown':'observed'}},periods:[],delegations:[]});
    if(path.endsWith('/session'))result={id:'retry-buyer',workspace:'fixture',role:'buyer'};
    else if(path.endsWith('/offers'))result={offers:[]};else if(path.endsWith('/tasks'))result={tasks:[]};
-   else if(path.endsWith('/subscriptions/terms'))result={terms:'terms',plan_id:'P',enabled:true,policy:'policy'};
+   else if(path.endsWith('/subscriptions/terms'))result={terms:'terms',plan_id:'P',enabled:true,price:'40.00',units:10,policy:'policy'};
    else if(path.endsWith('/subscriptions')&&req.method()==='POST'){ids.push(req.postDataJSON().request_id);if(reject){await route.abort();return;}status='CREATE_PENDING';result=view();}
    else if(path.endsWith('/subscriptions'))result={subscriptions:status?[view()]:[]};
    await route.fulfill({contentType:'application/json',body:JSON.stringify(result)});

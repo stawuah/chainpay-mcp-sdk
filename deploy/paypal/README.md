@@ -56,7 +56,11 @@ are off; PR publication does not deploy this stack. See the current
 [Blueprint specification](https://render.com/docs/blueprint-spec).
 
 Both feature flags ship off. Disabled backend health deliberately returns 503;
-it is not a healthy public demo until configuration is complete. Set explicit
+it is not a healthy public demo until configuration is complete. For that reason
+the Blueprint sets no `healthCheckPath`; add `/healthz` in the Render dashboard
+once the service is enabled, otherwise the first deploy is marked failed.
+When enabled, `/healthz` also runs `SELECT 1` and answers 503 if the database
+does not. Set explicit
 HTTPS origins, dedicated sandbox credentials and webhook ID, and a dedicated AI
 key with a provider spending cap. Set `CHAINPAY_PAYPAL_ENABLED=true`, redeploy,
 and confirm health. Then enable the frontend build flag and rebuild. Enable new

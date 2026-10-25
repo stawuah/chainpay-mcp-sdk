@@ -1,7 +1,17 @@
 name: PayPal extension checks
 on:
   pull_request:
-    branches: ['paypal/**']
+    branches: ['master', 'paypal/**']
+    paths:
+      - 'backend/**'
+      - 'sdk/**'
+      - 'mcp-server/**'
+      - 'frontend/src/paypal/**'
+      - 'frontend/paypal.html'
+      - 'frontend/vite.paypal.config.ts'
+      - 'frontend/test/paypal*'
+      - 'deploy/paypal/**'
+      - '.github/workflows/paypal-checks.yml'
 permissions:
   contents: read
 concurrency:

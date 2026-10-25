@@ -278,7 +278,10 @@ impl Provider {
             Method::POST,
             &format!("/v2/payments/captures/{capture}/refund"),
             Some(key),
+            // The key doubles as invoice_id so a webhook can still find this refund
+            // when the response was lost and no refund id was stored.
             Some(json!({
+                "invoice_id":key,
                 "amount":{"currency_code":"USD","value":amount.decimal()}
             })),
             &[],

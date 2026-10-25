@@ -6,11 +6,13 @@ services:
     runtime: rust
     plan: 0.5c-512mb
     region: oregon
-    branch: paypal/10-release-hardening
+    branch: master
     autoDeployTrigger: "off"
     buildCommand: cargo build --release --locked -p chainpay-backend --features paypal --bin chainpay-paypal
     startCommand: ./target/release/chainpay-paypal
-    healthCheckPath: /healthz
+    # No healthCheckPath while the flags ship off: disabled health is a
+    # deliberate 503, and Render fails a deploy whose health path is not 2xx.
+    # Add /healthz in the dashboard after CHAINPAY_PAYPAL_ENABLED=true.
     envVars:
       - key: RUSTUP_TOOLCHAIN
         value: stable
@@ -37,7 +39,7 @@ services:
   - type: web
     name: chainpay-paypal-v3-web
     runtime: static
-    branch: paypal/10-release-hardening
+    branch: master
     autoDeployTrigger: "off"
     buildCommand: npm ci --ignore-scripts && npm --prefix sdk run build && npm --prefix frontend ci --ignore-scripts && npm --prefix frontend run build:paypal
     staticPublishPath: frontend/dist-paypal

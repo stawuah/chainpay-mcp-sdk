@@ -323,9 +323,9 @@ export default function App({ origin }: { origin: string }) {
             </div>}
             <label htmlFor="paypal-service">Service</label>
             <select id="paypal-service" value={serviceId} disabled={busy} onChange={e => { setServiceId(e.target.value); requestId.current = crypto.randomUUID(); }}>
-              {services.length ? services.map(s => <option key={s.id} value={s.id}>{s.name} · {shownMoney(s.unit_price)}</option>) : <option value="document-extract-v1">Evidence-linked document summary · $4.00</option>}
+              {services.length ? services.map(s => <option key={s.id} value={s.id}>{s.name} · {shownMoney(s.unit_price)}</option>) : <option value="document-extract-v1">Evidence-linked document summary</option>}
             </select>
-            <p>{service?.delivery ?? "Summary and factual claims linked to source excerpts."} {serviceId === "document-compare-v1" ? "Exactly two documents, $8.00 per pair." : "USD 4.00 per document. Text and Markdown, up to 10 documents."}</p>
+            <p>{service?.delivery ?? "Summary and factual claims linked to source excerpts."} {service ? `${shownMoney(service.unit_price)} per ${serviceId === "document-compare-v1" ? "pair, exactly two documents" : "document"}. Text and Markdown, up to 10 documents.` : "Text and Markdown, up to 10 documents."}</p>
             {serviceId === "requirements-check-v1" && <>
               <label htmlFor="paypal-requirements">Requirements to check</label>
               <textarea id="paypal-requirements" rows={3} aria-describedby="requirements-limit" value={requirements} onChange={e => { setRequirements(e.target.value); requestId.current = crypto.randomUUID(); }} />

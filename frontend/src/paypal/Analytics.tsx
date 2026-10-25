@@ -22,7 +22,7 @@ const theme = studioTheme.withParams({ accentColor: "#0052ff", studioMinWidth: 0
 function captureLabel(task: Receipt): string {
   if (task.payment_review) return "Needs review";
   if (task.subscription_funding) return "Prepaid units";
-  if (task.captured) return "Confirmed";
+  if (task.captured) return "Captured";
   return "Not established";
 }
 

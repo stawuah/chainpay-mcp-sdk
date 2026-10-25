@@ -129,7 +129,7 @@ async fn exact_capture_refund_contract_and_original_provider_fields_are_preserve
     assert_eq!(requests[2].0["paypal-request-id"], "refund-123");
     assert_eq!(
         requests[2].1,
-        json!({"amount":{"currency_code":"USD","value":"4.00"}})
+        json!({"invoice_id":"refund-123","amount":{"currency_code":"USD","value":"4.00"}})
     );
     assert_eq!(f.tokens.load(Ordering::SeqCst), 1);
     task.abort();
