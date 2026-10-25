@@ -14,6 +14,12 @@ name = "relay"
 path = "api/relay.rs"
 required-features = ["vercel"]
 
+[[bin]]
+# The PayPal service as a Vercel function. Vercel matches the bin name to api/paypal.rs.
+name = "paypal"
+path = "api/paypal.rs"
+required-features = ["vercel", "paypal"]
+
 [features]
 paypal = ["dep:chrono"]
 vercel = ["dep:vercel_runtime", "dep:tower"]

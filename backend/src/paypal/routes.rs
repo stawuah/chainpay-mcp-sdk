@@ -311,6 +311,7 @@ pub fn router(app: App) -> Router {
         .route("/v1/paypal/tasks/{id}/share", post(share).delete(unshare))
         .route("/v1/paypal/receipts/{token}", get(public_receipt))
         .route("/v1/paypal/webhooks", post(webhook))
+        .route("/internal/cron/paypal/events", post(cron_events))
         .layer(DefaultBodyLimit::max(200_000))
         .layer(
             CorsLayer::new()
@@ -348,8 +349,18 @@ async fn process(
             "A verified capture is required before processing",
         ));
     }
+    // On Vercel the function is frozen as soon as it answers, so a spawned job
+    // would never finish. Run it inside the request there; an interrupted unit
+    // is picked up again by "Run or recover this paid task" after its lease.
+    #[cfg(feature = "vercel")]
+    if let Err(error) = app.ai.run(&app.store, &id, &p).await {
+        eprintln!("PayPal task {id} processing stopped: {error:?}");
+    }
+    #[cfg(not(feature = "vercel"))]
     tokio::spawn(async move {
-        let _ = app.ai.run(&app.store, &id, &p).await;
+        if let Err(error) = app.ai.run(&app.store, &id, &p).await {
+            eprintln!("PayPal task {id} processing stopped: {error:?}");
+        }
     });
     Ok(StatusCode::ACCEPTED)
 }
@@ -790,7 +801,34 @@ async fn webhook(
         return Err(Error::Forbidden);
     }
     app.store.insert_event(&event).await?;
+    // No background loop on Vercel: apply the event now. Anything that cannot
+    // be resolved yet stays in the inbox for the cron pass.
+    #[cfg(feature = "vercel")]
+    if app.process_events().await.is_err() {
+        eprintln!("PayPal inbox reconciliation incomplete; events retained");
+    }
     Ok(StatusCode::OK)
+}
+
+/// One inbox pass for a scheduler, the Vercel stand-in for the 15-second loop
+/// in the standalone binary. Off (404) unless CHAINPAY_PAYPAL_CRON_SECRET is set.
+async fn cron_events(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>, Error> {
+    use sha2_010::{Digest, Sha256};
+    let secret = std::env::var("CHAINPAY_PAYPAL_CRON_SECRET").unwrap_or_default();
+    if secret.len() < 16 {
+        return Err(Error::NotFound);
+    }
+    let given = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    // Hash both sides so the comparison takes the same time whatever was sent.
+    if Sha256::digest(given.as_bytes()) != Sha256::digest(secret.as_bytes()) {
+        return Err(Error::Forbidden);
+    }
+    let complete = app.process_events().await.is_ok();
+    Ok(Json(json!({"inbox_pass":"done","complete":complete})))
 }
 
 #[cfg(test)]
