@@ -42,3 +42,7 @@ test('service choice and requirements survive quote retries without payment auth
     assert.equal(result.quote_digest,undefined);
   } finally {globalThis.fetch=previous;}
 });
+
+test('excluded production hosts reject trailing DNS dots',()=>{
+  for(const host of ['chainpayai.app','www.chainpayai.app','a.b.chainpayai.app','chainpay-relay.vercel.app']) for(const suffix of ['', '.']) assert.throws(()=>new PayPalAgentClient({...config,apiOrigin:`https://${host}${suffix}`}));
+});

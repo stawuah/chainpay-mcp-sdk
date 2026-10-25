@@ -144,16 +144,7 @@ impl Task {
         if !matches!(principal.role, Role::Buyer | Role::Agent) {
             return Err(Error::Forbidden);
         }
-        if documents.is_empty()
-            || documents.len() > 10
-            || documents
-                .iter()
-                .any(|d| d.name.trim().is_empty() || d.name.len() > 120 || d.text.len() > 16_000)
-        {
-            return Err(Error::Invalid(
-                "Use 1–10 named documents, at most 16,000 bytes each",
-            ));
-        }
+        super::services::validate_inputs(&documents)?;
         let id = random_id()?;
         let created_at = now();
         let amount = Cents(service.outputs(documents.len()) as u64 * service.unit_price.0);

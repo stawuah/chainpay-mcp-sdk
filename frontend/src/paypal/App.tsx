@@ -3,12 +3,14 @@ import { Button } from "@astryxdesign/core/Button";
 import { BrandLogo } from "../brand/Brand";
 import { checkoutUrl, client, exportReceipt, shownMoney, type Principal, type Proposal, type Receipt, type Service } from "./client";
 
+import ServicePreflight, { type Preflight } from "./ServicePreflight";
+
 const Analytics = lazy(() => import("./Analytics"));
 const SESSION_KEY = "chainpay.paypal.session.v1";
 const samples = [
   { name: "North supplier terms · sample", text: "North Workshop supplies recycled paper notebooks. Its minimum order is 200 units. Delivery takes three working days after artwork approval. Each notebook contains 80 sheets. Packaging uses recycled cardboard. Customers may cancel before artwork approval. Returns for manufacturing defects are accepted within 14 days of delivery." },
   { name: "South supplier terms · sample", text: "South Workshop supplies cotton tote bags. Its minimum order is 100 units. Delivery takes seven working days after the proof is approved. Each bag measures 38 by 42 centimetres. Customers receive a digital proof before manufacturing. A deposit is required before production. Manufacturing defects must be reported within 10 days of receipt." },
-  { name: "Unreadable document · intentional sample", text: "� � � ???" },
+  { name: "West supplier terms · sample", text: "West Workshop supplies recycled packaging. Delivery takes five working days after approval. Orders require at least 100 boxes and damaged boxes can be returned within fourteen days." },
 ];
 type Report = { note: string; truncated: boolean; transactions: { transaction_id: string; status: string; event_code: string; amount: { value: string; currency_code: string } }[] };
 const unitLabel: Record<Receipt["units"][number]["state"], string> = {
@@ -28,6 +30,7 @@ export default function App({ origin }: { origin: string }) {
   const [selected, setSelected] = useState<Receipt>();
   const [documents, setDocuments] = useState([{ name: "Document 1", text: "" }]);
   const [services, setServices] = useState<Service[]>([]);
+  const initialService = useRef(new URLSearchParams(location.search).get("service"));
   const [serviceId, setServiceId] = useState("document-extract-v1");
   const [requirements, setRequirements] = useState("");
   const service = services.find(s => s.id === serviceId);
@@ -42,19 +45,35 @@ export default function App({ origin }: { origin: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const requestId = useRef(crypto.randomUUID());
-  const api = useMemo(() => client(origin, token), [origin, token]);
   const activeId = useRef<string | undefined>(undefined);
   const sessionGeneration = useRef(0);
+  const api = useMemo(() => {
+    const generation = sessionGeneration.current;
+    const request = client(origin, token);
+    return async function guardedRequest<T>(...args: Parameters<typeof request>): Promise<T> {
+      const current = () => generation === sessionGeneration.current;
+      if (!current()) throw new Error("Workspace session changed");
+      try {
+        const result = await request<T>(...args);
+        if (!current()) throw new Error("Workspace session changed");
+        return result;
+      } catch (cause) {
+        if (!current()) throw new Error("Workspace session changed");
+        throw cause;
+      }
+    };
+  }, [origin, token]);
 
   async function perform(action: () => Promise<void>) {
+    const generation = sessionGeneration.current;
     setError("");
     setBusy(true);
     try {
       await action();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unavailable. Keep this task and check its status.");
+      if (generation === sessionGeneration.current) setError(cause instanceof Error ? cause.message : "Unavailable. Keep this task and check its status.");
     } finally {
-      setBusy(false);
+      if (generation === sessionGeneration.current) setBusy(false);
     }
   }
   function select(task: Receipt) {
@@ -93,7 +112,15 @@ export default function App({ origin }: { origin: string }) {
           setPrincipal(next);
           await refresh();
           const catalog = await api<{offers: Service[]}>("/offers");
-          if (!cancelled) setServices(catalog.offers);
+          if (!cancelled) {
+            setServices(catalog.offers);
+            if (initialService.current) {
+              const id = initialService.current;
+              initialService.current = null;
+              if (catalog.offers.some(service => service.id === id)) setServiceId(id);
+              else setError("Unknown service link. Choose a registered service below.");
+            }
+          }
         }
       }).catch(cause => {
         if (!cancelled) setError(String(cause.message));
@@ -118,8 +145,15 @@ export default function App({ origin }: { origin: string }) {
       <span className="paypal-badge">PayPal sandbox · no real money</span>
       {principal && <Button label="Sign out" variant="secondary" onClick={() => void perform(async () => {
         ++sessionGeneration.current;
+        setBusy(false);
+        setError("");
         sessionStorage.removeItem(SESSION_KEY);
         setToken("");
+        setDocuments([{ name: "Document 1", text: "" }]);
+        setRequirements("");
+        setServiceId("document-extract-v1");
+        initialService.current = null;
+        requestId.current = crypto.randomUUID();
         setPrincipal(undefined);
         setSelected(undefined);
         setTasks([]);
@@ -145,6 +179,7 @@ export default function App({ origin }: { origin: string }) {
             const entered = access.trim();
             const next = await client(origin, entered)<Principal>("/session");
             ++sessionGeneration.current;
+            setBusy(false);
             sessionStorage.setItem(SESSION_KEY, entered);
             setToken(entered);
             setPrincipal(next);
@@ -185,7 +220,7 @@ export default function App({ origin }: { origin: string }) {
           {dashboard && principal && <Suspense fallback={<p role="status">Loading outcome dashboard…</p>}>
             <Analytics origin={origin} token={token} onSelect={task => { void perform(async () => select(await api<Receipt>(`/tasks/${task.id}`))); }} />
           </Suspense>}
-          {!dashboard && !selected && editable && <section className="paypal-card"><p className="paypal-eyebrow">01 · DEFINE THE WORK</p><h2>What should your agent read?</h2><label htmlFor="paypal-service">Service</label><select id="paypal-service" value={serviceId} disabled={busy} onChange={e => { setServiceId(e.target.value); requestId.current = crypto.randomUUID(); }}>{services.length ? services.map(s => <option key={s.id} value={s.id}>{s.name} · {shownMoney(s.unit_price)}</option>) : <option value="document-extract-v1">Evidence-linked document summary · $4.00</option>}</select><p>{service?.delivery ?? "Summary and factual claims linked to source excerpts."} {serviceId === "document-compare-v1" ? "Exactly two documents, $8.00 per pair." : "USD 4.00 per document. Text and Markdown, up to 10 documents."}</p>{serviceId === "requirements-check-v1" && <><label htmlFor="paypal-requirements">Requirements to check</label><textarea id="paypal-requirements" rows={3} aria-describedby="requirements-limit" value={requirements} onChange={e => { setRequirements(e.target.value); requestId.current = crypto.randomUUID(); }} /><p id="requirements-limit" role={requirementsBytes > 4000 ? "alert" : undefined}>{requirementsBytes} / 4000 UTF-8 bytes. Non-ASCII characters may use multiple bytes.</p></>}<div className="paypal-actions"><Button label={serviceId === "document-compare-v1" ? "Use two sample documents" : "Use three sample documents"} variant="secondary" isDisabled={busy} onClick={() => { setDocuments(serviceId === "document-compare-v1" ? samples.slice(0, 2) : samples); requestId.current = crypto.randomUUID(); }} /><label className="paypal-file">Upload text files<input type="file" multiple accept=".txt,.md,text/plain,text/markdown" onChange={e => void perform(async () => { const files = [...(e.target.files ?? [])]; if (!files.length || files.length > 10 || files.some(f => f.size > 16000)) throw new Error("Choose 1–10 text files of at most 16 KB each."); setDocuments(await Promise.all(files.map(async file => ({ name: file.name, text: await file.text() })))); requestId.current = crypto.randomUUID(); })} /></label></div>{documents.map((document, index) => <div className="paypal-document" key={index}><label htmlFor={`document-name-${index}`}>Document {index + 1} name</label><input id={`document-name-${index}`} value={document.name} maxLength={120} onChange={e => { setDocuments(d => d.map((v,i) => i === index ? { ...v,name:e.target.value } : v)); requestId.current = crypto.randomUUID(); }} /><label htmlFor={`document-text-${index}`}>Source text</label><textarea id={`document-text-${index}`} rows={4} value={document.text} maxLength={16000} onChange={e => { setDocuments(d => d.map((v,i) => i === index ? { ...v,text:e.target.value } : v)); requestId.current = crypto.randomUUID(); }} /><Button label={`Remove document ${index + 1}`} variant="secondary" isDisabled={busy || documents.length <= 1} onClick={() => { setDocuments(d => d.filter((_, i) => i !== index)); requestId.current = crypto.randomUUID(); }} /></div>)}<Button label="Add document" variant="secondary" isDisabled={busy || documents.length >= (service?.max_documents ?? 10)} onClick={() => { setDocuments(d => [...d, { name: `Document ${d.length + 1}`, text: "" }]); requestId.current = crypto.randomUUID(); }} /><p>{documents.length} documents supplied. {serviceId === "document-compare-v1" ? "Exactly 2 documents required." : "Supply 1–10 documents."}</p><Button label="Prepare quote" isDisabled={busy || !quoteValid} onClick={() => void perform(async () => { const task = await api<Receipt>("/tasks","POST",{ request_id:requestId.current,documents,service_id:serviceId,requirements:serviceId === "requirements-check-v1" ? requirements : undefined }); select(task); await refresh(); })} /><p className="paypal-note">{serviceId === "document-compare-v1" ? "Compare both sample sources in one output." : "Sample inputs include one intentionally unreadable document."} Outputs are generated when you run the paid task.</p></section>}
+          {!dashboard && !selected && editable && <section className="paypal-card"><p className="paypal-eyebrow">01 · DEFINE THE WORK</p><h2>What should your agent read?</h2><label htmlFor="paypal-service">Service</label><select id="paypal-service" value={serviceId} disabled={busy} onChange={e => { setServiceId(e.target.value); requestId.current = crypto.randomUUID(); }}>{services.length ? services.map(s => <option key={s.id} value={s.id}>{s.name} · {shownMoney(s.unit_price)}</option>) : <option value="document-extract-v1">Evidence-linked document summary · $4.00</option>}</select><p>{service?.delivery ?? "Summary and factual claims linked to source excerpts."} {serviceId === "document-compare-v1" ? "Exactly two documents, $8.00 per pair." : "USD 4.00 per document. Text and Markdown, up to 10 documents."}</p>{serviceId === "requirements-check-v1" && <><label htmlFor="paypal-requirements">Requirements to check</label><textarea id="paypal-requirements" rows={3} aria-describedby="requirements-limit" value={requirements} onChange={e => { setRequirements(e.target.value); requestId.current = crypto.randomUUID(); }} /><p id="requirements-limit" role={requirementsBytes > 4000 ? "alert" : undefined}>{requirementsBytes} / 4000 UTF-8 bytes. Non-ASCII characters may use multiple bytes.</p></>}<div className="paypal-actions"><Button label={serviceId === "document-compare-v1" ? "Use two sample documents" : "Use three sample documents"} variant="secondary" isDisabled={busy} onClick={() => { setDocuments(serviceId === "document-compare-v1" ? samples.slice(0, 2) : samples); requestId.current = crypto.randomUUID(); }} /><label className="paypal-file">Upload text files<input type="file" multiple accept=".txt,.md,text/plain,text/markdown" onChange={e => void perform(async () => { const generation = sessionGeneration.current; const draftId = requestId.current; const files = [...(e.target.files ?? [])]; if (!files.length || files.length > 10 || files.some(f => f.size > 16000)) throw new Error("Choose 1–10 text files of at most 16 KB each."); const uploaded = await Promise.all(files.map(async file => ({ name: file.name, text: await file.text() }))); if (generation !== sessionGeneration.current || draftId !== requestId.current) return; setDocuments(uploaded); requestId.current = crypto.randomUUID(); })} /></label></div>{documents.map((document, index) => <div className="paypal-document" key={index}><label htmlFor={`document-name-${index}`}>Document {index + 1} name</label><input id={`document-name-${index}`} value={document.name} maxLength={120} onChange={e => { setDocuments(d => d.map((v,i) => i === index ? { ...v,name:e.target.value } : v)); requestId.current = crypto.randomUUID(); }} /><label htmlFor={`document-text-${index}`}>Source text</label><textarea id={`document-text-${index}`} rows={4} value={document.text} maxLength={16000} onChange={e => { setDocuments(d => d.map((v,i) => i === index ? { ...v,text:e.target.value } : v)); requestId.current = crypto.randomUUID(); }} /><Button label={`Remove document ${index + 1}`} variant="secondary" isDisabled={busy || documents.length <= 1} onClick={() => { setDocuments(d => d.filter((_, i) => i !== index)); requestId.current = crypto.randomUUID(); }} /></div>)}<Button label="Add document" variant="secondary" isDisabled={busy || documents.length >= (service?.max_documents ?? 10)} onClick={() => { setDocuments(d => [...d, { name: `Document ${d.length + 1}`, text: "" }]); requestId.current = crypto.randomUUID(); }} /><p>{documents.length} documents supplied. {serviceId === "document-compare-v1" ? "Exactly 2 documents required." : "Supply 1–10 documents."}</p><ServicePreflight api={api} services={services} input={{ service_id: serviceId, documents, requirements: serviceId === "requirements-check-v1" ? requirements : undefined }} onSelect={id => { setServiceId(id); requestId.current = crypto.randomUUID(); }} /><Button label="Prepare quote" isDisabled={busy || !quoteValid} onClick={() => void perform(async () => { const generation = sessionGeneration.current; const request = { request_id: requestId.current, documents: structuredClone(documents), service_id: serviceId, requirements: serviceId === "requirements-check-v1" ? requirements : undefined }; const { request_id, ...inputs } = request; const check = await api<Preflight>("/preflight", "POST", inputs); if (generation !== sessionGeneration.current || request_id !== requestId.current) return; if (!check.ready) throw new Error(check.issues.map(i => `Document ${i.document_index + 1} (${request.documents[i.document_index]?.name}): ${i.message}`).join("; ")); const task = await api<Receipt>("/tasks", "POST", request); if (generation !== sessionGeneration.current || request_id !== requestId.current) return; select(task); await refresh(); })} /><p className="paypal-note">{serviceId === "document-compare-v1" ? "Compare both sample sources in one output." : "Sample inputs contain readable supplier terms."} Outputs are generated when you run the paid task.</p></section>}
           {!dashboard && !selected && !editable && <section className="paypal-card">
             <h2>{publicToken ? "Loading shared receipt…" : "Select a task to review"}</h2>
             <p>Payment and delivery remain separate evidence.</p>

@@ -48,6 +48,10 @@
     "./paypal": {
       "types": "./dist/paypal.d.ts",
       "import": "./dist/paypal.js"
+    },
+    "./paypal-widget": {
+      "types": "./dist/paypal-widget.d.ts",
+      "import": "./dist/paypal-widget.js"
     }
   },
   "scripts": {

@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Merchant services · ChainPay PayPal</title>
+<style>body{font:18px system-ui;max-width:40rem;margin:4rem auto;padding:1rem;color:#14213d}label,select,a{display:block;margin:1rem 0}select,a{padding:1rem}a{background:#0052ff;color:white;border-radius:12px;text-align:center}select{max-width:100%}</style>
+<h1>Choose document work</h1><p>Continue to the separate ChainPay workspace to add private sources, check inputs and review the price. No payment is approved here.</p>
+<label for="service">Service</label><select id="service"><option value="document-extract-v1">Summarize documents</option><option value="document-compare-v1">Compare two documents</option><option value="requirements-check-v1">Check supplied requirements</option></select><div id="handoff"></div>
+<script type="module">
+import { createPayPalServiceLink } from '../sdk/dist/paypal-widget.js';
+// Merchant-owned configuration; never infer from a buyer URL parameter.
+const workspaceOrigin = 'http://localhost:5197';
+const chooser = document.querySelector('#service');
+function render() { document.querySelector('#handoff').replaceChildren(createPayPalServiceLink(workspaceOrigin, chooser.value)); }
+chooser.addEventListener('change', render); render();
+</script></html>

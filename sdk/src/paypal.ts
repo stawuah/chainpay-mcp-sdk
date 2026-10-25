@@ -5,7 +5,7 @@ export type PayPalAgentConfig = { enabled: boolean; apiOrigin: string; workspace
 function origin(value: string): string {
   const url = new URL(value);
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-  if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) || url.username || url.password || url.pathname !== "/" || url.search || url.hash || url.hostname === "chainpay-relay.vercel.app" || url.hostname === "chainpayai.app" || url.hostname.endsWith(".chainpayai.app")) throw new Error("PayPal requires separate explicit service origins");
+  if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) || url.hostname.endsWith(".") || url.username || url.password || url.pathname !== "/" || url.search || url.hash || url.hostname === "chainpay-relay.vercel.app" || url.hostname === "chainpayai.app" || url.hostname.endsWith(".chainpayai.app")) throw new Error("PayPal requires separate explicit service origins");
   return url.origin;
 }
 function taskId(value: string): string {
@@ -40,6 +40,14 @@ export class PayPalAgentClient {
   async requireAgent(): Promise<void> {
     const session = await this.#request("/session");
     if (session.role !== "agent") throw new Error("MCP requires an agent-role grant, never a buyer or merchant approval grant");
+  }
+  preflight(documents: PayPalDocument[], serviceId = "document-extract-v1", requirements?: string) {
+    if (!["document-extract-v1", "document-compare-v1", "requirements-check-v1"].includes(serviceId) || (requirements !== undefined && (typeof requirements !== "string" || new TextEncoder().encode(requirements).length > 4000)) || !Array.isArray(documents) || documents.length < 1 || documents.length > 10 || documents.some(d => !d || typeof d !== "object" || Array.isArray(d) || Object.keys(d).some(k => !["name", "text"].includes(k)) || typeof d.name !== "string" || !d.name.trim() || new TextEncoder().encode(d.name).length > 120 || typeof d.text !== "string" || new TextEncoder().encode(d.text).length > 16000)) throw new Error("Invalid preflight inputs");
+    return this.#request("/preflight", "POST", {service_id: serviceId, documents, requirements});
+  }
+  recommendService(objective: string) {
+    if (typeof objective !== "string" || !objective.trim() || new TextEncoder().encode(objective).length > 2000) throw new Error("Supply an objective of 1–2000 bytes");
+    return this.#request("/recommend-service", "POST", {objective});
   }
   offers() { return this.#request("/offers"); }
   async quote(requestId: string, documents: PayPalDocument[], service?: { id: string; requirements?: string }) {

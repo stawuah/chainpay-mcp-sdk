@@ -5,7 +5,7 @@ import {CURRENT_PROTOCOL_VERSION} from '../dist/protocol.js';
 const message=(method,params={})=>({jsonrpc:'2.0',id:1,method,params});
 test('isolated MCP discovery contains only non-approving PayPal tools',async()=>{
   const response=await handlePayPalMessage(message('tools/list'),{});
-  assert.equal(response.result.tools.length,7);
+  assert.equal(response.result.tools.length,9);
   assert.ok(PAYPAL_TOOLS.every(t=>t.name.startsWith('paypal_')));
   assert.ok(PAYPAL_TOOLS.every(t=>!['paypal_capture','paypal_refund','execute_payment'].includes(t.name)));
   const modern=await handlePayPalMessage(message('server/discover',{_meta:{'io.modelcontextprotocol/protocolVersion':CURRENT_PROTOCOL_VERSION,'io.modelcontextprotocol/clientCapabilities':{}}}),{});
@@ -52,5 +52,31 @@ test('MCP forwards selected service and exact requirements through the real SDK'
     assert.deepEqual(requests[1].body,args);
     assert.equal(requests[1].authorization,`Bearer ${'b'.repeat(64)}`);
     assert.ok(!JSON.stringify(response).includes('quote_digest'));
+    const {request_id, ...input} = args;
+    await handlePayPalMessage(message('tools/call',{name:'paypal_preflight',arguments:input}),client);
+    assert.equal(requests.at(-1).path,'/v1/paypal/preflight');
+    assert.deepEqual(requests.at(-1).body,input);
+    const objective={objective:'Compare delivery times without approving a payment'};
+    await handlePayPalMessage(message('tools/call',{name:'paypal_recommend_service',arguments:objective}),client);
+    assert.equal(requests.at(-1).path,'/v1/paypal/recommend-service');
+    assert.deepEqual(requests.at(-1).body,objective);
   } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('assistance runtime shapes reject malformed inputs before forwarding',async()=>{
+  let forwarded=0;
+  const client={requireAgent:async()=>{},preflight:async()=>{forwarded++;},recommendService:async()=>{forwarded++;}};
+  for(const [name,args] of [
+    ['paypal_recommend_service',{objective:42}],
+    ['paypal_recommend_service',{objective:'é'.repeat(1001)}],
+    ['paypal_recommend_service',{objective:' '}],
+    ['paypal_preflight',{service_id:'custom',documents:[{name:'A',text:'source'}]}],
+    ['paypal_preflight',{service_id:'document-extract-v1',documents:[null]}],
+    ['paypal_preflight',{service_id:'document-extract-v1',documents:[{name:'A',text:'é'.repeat(8001)}]}],
+    ['paypal_preflight',{service_id:'document-extract-v1',documents:[{name:'A',text:'source',price:'0.01'}]}],
+  ]) {
+    const response=await handlePayPalMessage(message('tools/call',{name,arguments:args}),client);
+    assert.equal(response.result.isError,true);
+  }
+  assert.equal(forwarded,0);
 });
