@@ -77,7 +77,7 @@ impl Ai {
                 "Merchant review is required before more work or refunds",
             ));
         }
-        if !task.captured {
+        if !task.verified_funded() {
             return Err(Error::Invalid(
                 "A verified PayPal capture is required before processing",
             ));
@@ -92,7 +92,7 @@ impl Ai {
             let started = domain::now();
             let (current, claimed) = store
                 .update(id, p, |t| {
-                    if !t.captured || t.payment_review.is_some() || t.refund.is_some() {
+                    if !t.verified_funded() || t.refund.is_some() {
                         return Ok(false);
                     }
                     let unit = &mut t.units[index];

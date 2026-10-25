@@ -225,3 +225,67 @@ async fn webhook_verification_uses_registered_id_not_an_event_supplied_id() {
     assert_eq!(f.writes.load(Ordering::SeqCst), 1);
     task.abort();
 }
+
+#[tokio::test]
+async fn subscription_payload_and_cancel_empty_204_are_bounded() {
+    let state = Fixture::default();
+    let routes = Router::new()
+        .route("/v1/oauth2/token", post(token))
+        .route("/v1/billing/subscriptions", post(record))
+        .route(
+            "/v1/billing/subscriptions/I-FIXTURE/cancel",
+            post(
+                |State(f): State<Fixture>, headers: HeaderMap, Json(body): Json<Value>| async move {
+                    f.requests.lock().await.push((headers, body));
+                    StatusCode::NO_CONTENT
+                },
+            ),
+        )
+        .route(
+            "/v1/billing/subscriptions/I-FIXTURE",
+            get(|| async { StatusCode::NO_CONTENT }),
+        )
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    let config = Config {
+        database_url: "unused".into(),
+        client_id: "fixture".into(),
+        client_secret: "fixture".into(),
+        webhook_id: "fixture".into(),
+        public_origin: "https://paypal.example.test".into(),
+        new_purchases: true,
+        subscriptions: true,
+        subscription_plan: Some("P-FIXTURE".into()),
+    };
+    let provider = Provider::fixture(base, &config);
+    provider
+        .create_subscription("local123", "P-FIXTURE", "operation123")
+        .await
+        .unwrap();
+    assert!(
+        provider
+            .cancel_subscription("I-FIXTURE", "buyer cancellation", "operation456")
+            .await
+            .unwrap()
+            .is_null()
+    );
+    assert!(
+        provider.subscription("I-FIXTURE").await.is_err(),
+        "empty 204 must not satisfy a details read"
+    );
+    assert!(
+        provider
+            .cancel_subscription("I-FIXTURE", "", "operation789")
+            .await
+            .is_err()
+    );
+    let reqs = state.requests.lock().await;
+    assert_eq!(reqs[0].1["plan_id"], "P-FIXTURE");
+    assert_eq!(reqs[0].1["custom_id"], "local123");
+    assert!(reqs[0].1.get("plan").is_none());
+    assert_eq!(reqs[1].1, json!({"reason":"buyer cancellation"}));
+    assert_eq!(reqs[1].0["paypal-request-id"], "operation456");
+    server.abort();
+}

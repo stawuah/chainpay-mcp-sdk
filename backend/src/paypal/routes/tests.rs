@@ -65,6 +65,8 @@ async fn fixture_checkout_capture_approved_refund_and_private_sharing_end_to_end
         webhook_id: "fixture".into(),
         public_origin: "https://paypal.example.com".into(),
         new_purchases: true,
+        subscriptions: false,
+        subscription_plan: None,
     };
     let provider = Provider::fixture(provider_origin, &config);
     let app = App {
@@ -343,6 +345,8 @@ async fn service_quote_retries_preserve_identity_and_reject_mutated_terms() {
         webhook_id: "fixture".into(),
         public_origin: "https://paypal.example.com".into(),
         new_purchases: true,
+        subscriptions: false,
+        subscription_plan: None,
     };
     let app = App {
         ai: crate::paypal::ai::Ai::fixture("http://127.0.0.1:1/unused".into()),
@@ -511,6 +515,8 @@ async fn recommendation_route_projection_rejection_and_paid_capacity() {
         webhook_id: "fixture".into(),
         public_origin: "https://paypal.example.com".into(),
         new_purchases: true,
+        subscriptions: false,
+        subscription_plan: None,
     };
     let ai = crate::paypal::ai::Ai::fixture(format!("{model_origin}/model"));
     let app = App {

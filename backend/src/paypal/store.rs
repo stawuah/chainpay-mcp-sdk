@@ -9,6 +9,9 @@ pub struct Store {
 }
 
 impl Store {
+    pub(crate) fn pool(&self) -> &PgPool {
+        &self.pool
+    }
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let parsed =
             url::Url::parse(url).map_err(|_| Error::Invalid("Invalid PayPal database URL"))?;
@@ -131,21 +134,38 @@ impl Store {
 
     pub async fn get(&self, id: &str, p: &Principal) -> Result<Task, Error> {
         let value: Option<Value> = sqlx::query_scalar(
-            "SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND (principal=$3 OR $4)",
+            "SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND (principal=$3 OR $4 OR (record->'subscription_funding'->>'buyer'=$3 AND $5))",
         )
         .bind(id)
         .bind(&p.workspace)
         .bind(&p.id)
         .bind(p.role == Role::Merchant)
+        .bind(p.role == Role::Buyer)
         .fetch_optional(&self.pool)
         .await?;
-        decode(value.ok_or(Error::NotFound)?)
+        self.refresh_funding(decode(value.ok_or(Error::NotFound)?)?)
+            .await
     }
 
     pub async fn list(&self, p: &Principal) -> Result<Vec<Task>, Error> {
-        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE workspace=$1 AND (principal=$2 OR $3) ORDER BY created_at DESC,id LIMIT 100")
-            .bind(&p.workspace).bind(&p.id).bind(p.role == Role::Merchant).fetch_all(&self.pool).await?;
-        rows.into_iter().map(decode).collect()
+        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE workspace=$1 AND (principal=$2 OR $3 OR (record->'subscription_funding'->>'buyer'=$2 AND $4)) ORDER BY created_at DESC,id LIMIT 100")
+            .bind(&p.workspace).bind(&p.id).bind(p.role == Role::Merchant).bind(p.role == Role::Buyer).fetch_all(&self.pool).await?;
+        let mut tasks = Vec::new();
+        for row in rows {
+            tasks.push(self.refresh_funding(decode(row)?).await?);
+        }
+        Ok(tasks)
+    }
+
+    async fn refresh_funding(&self, mut task: Task) -> Result<Task, Error> {
+        if let Some(f) = &task.subscription_funding {
+            let blocked: Option<bool> = sqlx::query_scalar("SELECT blocked FROM paypal_subscription_periods WHERE subscription_id=$1 AND start_at=$2").bind(&f.subscription_id).bind(f.period_start).fetch_optional(&self.pool).await?;
+            if blocked != Some(false) {
+                task.payment_review =
+                    Some("Subscription funding requires merchant billing review".into());
+            }
+        }
+        Ok(task)
     }
 
     /// The short transaction claims work before provider I/O. No network calls
@@ -157,10 +177,12 @@ impl Store {
         change: impl FnOnce(&mut Task) -> Result<R, Error>,
     ) -> Result<(Task, R), Error> {
         let mut tx = self.pool.begin().await?;
-        let value: Option<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND (principal=$3 OR $4) FOR UPDATE")
-            .bind(id).bind(&p.workspace).bind(&p.id).bind(p.role == Role::Merchant).fetch_optional(&mut *tx).await?;
+        let value: Option<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND (principal=$3 OR $4 OR (record->'subscription_funding'->>'buyer'=$3 AND $5)) FOR UPDATE")
+            .bind(id).bind(&p.workspace).bind(&p.id).bind(p.role == Role::Merchant).bind(p.role == Role::Buyer).fetch_optional(&mut *tx).await?;
         let mut task = decode(value.ok_or(Error::NotFound)?)?;
+        Store::account_allowance(&mut tx, &mut task).await?;
         let result = change(&mut task)?;
+        Store::account_allowance(&mut tx, &mut task).await?;
         sqlx::query("UPDATE paypal_tasks SET record=$1 WHERE id=$2")
             .bind(serde_json::to_value(&task).map_err(|_| Error::Invalid("Invalid task"))?)
             .bind(id)
@@ -212,7 +234,8 @@ impl Store {
                 .bind(token)
                 .fetch_optional(&self.pool)
                 .await?;
-        decode(value.ok_or(Error::NotFound)?)
+        self.refresh_funding(decode(value.ok_or(Error::NotFound)?)?)
+            .await
     }
 
     pub(crate) async fn related(&self, ids: &[String]) -> Result<Vec<Task>, Error> {

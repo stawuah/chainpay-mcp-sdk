@@ -19,6 +19,7 @@ paypal = []
 vercel = ["dep:vercel_runtime", "dep:tower"]
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 hmac = "0.12"
 sha2_010 = { package = "sha2", version = "0.10" }
 vercel_runtime = { version = "2.4", features = ["axum"], optional = true }

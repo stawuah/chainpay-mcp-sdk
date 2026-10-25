@@ -45,7 +45,7 @@ impl IntoResponse for Error {
 }
 
 impl App {
-    async fn principal(&self, headers: &HeaderMap) -> Result<Principal, Error> {
+    pub(crate) async fn principal(&self, headers: &HeaderMap) -> Result<Principal, Error> {
         let token = bearer(headers)?;
         let p = self.store.authenticate(token).await?;
         self.store
@@ -53,7 +53,7 @@ impl App {
             .await?;
         Ok(p)
     }
-    fn purchases(&self) -> Result<(), Error> {
+    pub(crate) fn purchases(&self) -> Result<(), Error> {
         if !self.config.new_purchases {
             Err(Error::Invalid(
                 "New purchases are paused; existing records remain available",
@@ -87,6 +87,12 @@ impl App {
     /// Inbox workers only perform reads; they can never dispatch a charge/refund.
     pub async fn process_events(&self) -> Result<(), Error> {
         for event in self.store.pending_events().await? {
+            if self.subscription_event(&event).await.unwrap_or(false) {
+                self.store
+                    .mark_event(event["id"].as_str().unwrap_or(""))
+                    .await?;
+                continue;
+            }
             let resource = &event["resource"];
             let mut ids = Vec::new();
             for value in [
@@ -209,6 +215,7 @@ pub fn router(app: App) -> Router {
     let origin: axum::http::HeaderValue =
         app.config.public_origin.parse().expect("validated origin");
     Router::new()
+        .merge(super::subscriptions::router())
         .route("/healthz",get(|| async { Json(json!({"status":"ready","service":"chainpay-paypal","sandbox":true,"provider_acceptance":"unverified"})) }))
         .route("/v1/paypal/session",get(session).delete(logout))
         .route("/v1/paypal/offers",get(offers))
@@ -245,8 +252,8 @@ async fn process(
     Path(id): Path<String>,
 ) -> Result<StatusCode, Error> {
     let p = app.principal(&headers).await?;
-    let task = app.store.get(&id, &p).await?;
-    if !task.captured {
+    let (task, _) = app.store.update(&id, &p, |_| Ok(())).await?;
+    if !task.verified_funded() {
         return Err(Error::Invalid(
             "A verified capture is required before processing",
         ));

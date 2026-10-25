@@ -123,6 +123,9 @@ impl Provider {
                 ));
             }
         }
+        let permits_empty = method == Method::POST
+            && path.starts_with("/v1/billing/subscriptions/")
+            && path.ends_with("/cancel");
         let token = self.access_token().await?;
         let mut request = self
             .client
@@ -141,8 +144,89 @@ impl Provider {
         if response.status() == 401 {
             *self.token.lock().await = None;
         }
+        if permits_empty && response.status().as_u16() == 204 {
+            return Ok(Value::Null);
+        }
         // Never automatically replay a mutation, including on 401 or 5xx.
         bounded_json(response).await
+    }
+
+    pub async fn subscription_plan(&self, plan: &str) -> Result<Value, ProviderError> {
+        id(plan)?;
+        self.request(
+            Method::GET,
+            &format!("/v1/billing/plans/{plan}"),
+            None,
+            None,
+            &[],
+        )
+        .await
+    }
+    pub async fn create_subscription(
+        &self,
+        local: &str,
+        plan: &str,
+        key: &str,
+    ) -> Result<Value, ProviderError> {
+        id(local)?;
+        id(plan)?;
+        self.request(Method::POST, "/v1/billing/subscriptions", Some(key), Some(json!({
+            "plan_id":plan,"custom_id":local,"quantity":"1",
+            "application_context":{"shipping_preference":"NO_SHIPPING","user_action":"SUBSCRIBE_NOW",
+            "return_url":format!("{}/paypal/?subscription={local}",self.origin),
+            "cancel_url":format!("{}/paypal/?subscription={local}&cancelled=true",self.origin)}
+        })), &[]).await
+    }
+    pub async fn subscription(&self, subscription: &str) -> Result<Value, ProviderError> {
+        id(subscription)?;
+        self.request(
+            Method::GET,
+            &format!("/v1/billing/subscriptions/{subscription}"),
+            None,
+            None,
+            &[],
+        )
+        .await
+    }
+    pub async fn subscription_transactions(
+        &self,
+        subscription: &str,
+        start: &str,
+        end: &str,
+    ) -> Result<Value, ProviderError> {
+        id(subscription)?;
+        if start.len() > 40 || end.len() > 40 {
+            return Err(ProviderError::Invalid("Invalid subscription date range"));
+        }
+        self.request(
+            Method::GET,
+            &format!("/v1/billing/subscriptions/{subscription}/transactions"),
+            None,
+            None,
+            &[("start_time", start.into()), ("end_time", end.into())],
+        )
+        .await
+    }
+    pub async fn cancel_subscription(
+        &self,
+        subscription: &str,
+        reason: &str,
+        key: &str,
+    ) -> Result<Value, ProviderError> {
+        id(subscription)?;
+        if reason.is_empty() || reason.chars().count() > 128 {
+            return Err(ProviderError::Invalid(
+                "Cancellation reason must be 1–128 characters",
+            ));
+        }
+        self.request(
+            Method::POST,
+            &format!("/v1/billing/subscriptions/{subscription}/cancel"),
+            Some(key),
+            Some(json!({"reason":reason})),
+            &[],
+        )
+        .await
     }
 
     pub async fn create_order(

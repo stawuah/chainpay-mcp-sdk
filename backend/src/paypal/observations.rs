@@ -21,6 +21,9 @@ fn amount(value: &Value, expected: Cents) -> Result<(), Error> {
 }
 
 pub fn order(task: &mut Task, value: Value) -> Result<(), Error> {
+    if task.subscription_funding.is_some() {
+        return Err(Error::Conflict);
+    }
     let order_id = text(&value, "id")?.to_string();
     if task.order.is_none() || task.order_id.as_ref().is_some_and(|old| *old != order_id) {
         return Err(Error::Conflict);
@@ -118,6 +121,8 @@ pub fn receipt(task: &Task, public: bool) -> Value {
         "allowance_units":task.allowance_units().ok(),
         "gross":task.amount.decimal(),"captured":task.captured,"payment_review":task.payment_review,
         "refund":task.refund_amount.decimal(),"refund_confirmed":task.refund_confirmed,
+        "funding_method":if task.subscription_funding.is_some(){"subscription_allowance"}else{"paypal_order"},
+        "subscription_funding":task.subscription_funding.as_ref().map(|f|json!({"subscription_id":f.subscription_id,"payment_id":f.payment_id,"units":f.units,"period_start":f.period_start,"period_end":f.period_end})),"funded":task.verified_funded(),
         "net":task.net().map(Cents::decimal),"units":units,
         "order_id":task.order_id,"capture_id":task.capture_id,"refund_id":task.refund_id,
         "payment_source":"PayPal sandbox API observation",
