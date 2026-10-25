@@ -44,7 +44,7 @@ impl Store {
             || principal.id.is_empty()
             || principal.id.len() > 80
             || ttl == 0
-            || ttl > 7 * 86400
+            || ttl > 60 * 86400
         {
             return Err(Error::Invalid("Invalid access grant"));
         }
@@ -192,7 +192,7 @@ impl Store {
     }
 
     pub async fn pending_events(&self) -> Result<Vec<Value>, Error> {
-        Ok(sqlx::query_scalar("SELECT event FROM paypal_webhook_inbox WHERE processed_at IS NULL ORDER BY received_at LIMIT 100").fetch_all(&self.pool).await?)
+        Ok(sqlx::query_scalar("WITH candidates AS (SELECT id FROM paypal_webhook_inbox WHERE processed_at IS NULL ORDER BY attempted_at NULLS FIRST, received_at, id LIMIT 100 FOR UPDATE SKIP LOCKED) UPDATE paypal_webhook_inbox inbox SET attempted_at=EXTRACT(EPOCH FROM clock_timestamp())::BIGINT FROM candidates WHERE inbox.id=candidates.id RETURNING inbox.event").fetch_all(&self.pool).await?)
     }
     pub async fn mark_event(&self, id: &str) -> Result<(), Error> {
         sqlx::query("UPDATE paypal_webhook_inbox SET processed_at=$1 WHERE id=$2")
@@ -242,7 +242,8 @@ mod tests {
             workspace: random_id().unwrap(),
             role: Role::Buyer,
         };
-        let token = a.issue_access(&p, 3600).await.unwrap();
+        let token = a.issue_access(&p, 60 * 86400).await.unwrap();
+        assert!(a.issue_access(&p, 61 * 86400).await.is_err());
         assert_eq!(b.authenticate(&token).await.unwrap().id, p.id);
         let task = Task::quote(
             &p,
@@ -326,5 +327,39 @@ mod tests {
         a.mark_event(event["id"].as_str().unwrap()).await.unwrap();
         b.revoke(&token).await.unwrap();
         assert!(a.authenticate(&token).await.is_err());
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
+    async fn unmatched_events_do_not_starve_new_events() {
+        let store = Store::connect(&std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        let mut ids = Vec::new();
+        for _ in 0..105 {
+            let id = random_id().unwrap();
+            store
+                .insert_event(&serde_json::json!({"id":id,"event_type":"unmatched-fixture"}))
+                .await
+                .unwrap();
+            ids.push(id);
+        }
+        store.pending_events().await.unwrap();
+        let fresh = random_id().unwrap();
+        store
+            .insert_event(&serde_json::json!({"id":fresh,"event_type":"new-fixture"}))
+            .await
+            .unwrap();
+        assert!(
+            store
+                .pending_events()
+                .await
+                .unwrap()
+                .iter()
+                .any(|event| event["id"] == fresh)
+        );
+        ids.push(fresh);
+        for id in ids {
+            store.mark_event(&id).await.unwrap();
+        }
     }
 }

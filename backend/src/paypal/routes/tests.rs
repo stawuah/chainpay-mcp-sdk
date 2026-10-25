@@ -191,6 +191,55 @@ async fn fixture_checkout_capture_approved_refund_and_private_sharing_end_to_end
             .status(),
         422
     );
+    let view: Value = http
+        .get(format!("{origin}/v1/paypal/analytics"))
+        .bearer_auth(&buyer)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(view["captured"], "8.00");
+    assert_eq!(view["confirmed_refunds"], "4.00");
+    assert_eq!(view["known_net_cost"], "4.00");
+    assert!(!view.to_string().contains("quote_digest"));
+    assert!(!view.to_string().contains("private document"));
+    assert_eq!(
+        http.get(format!("{origin}/v1/paypal/analytics"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let other = Principal {
+        id: random_id().unwrap(),
+        workspace: random_id().unwrap(),
+        role: Role::Merchant,
+    };
+    let other_token = store.issue_access(&other, 3600).await.unwrap();
+    let other_view: Value = http
+        .get(format!("{origin}/v1/paypal/analytics"))
+        .bearer_auth(&other_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(other_view["task_count"], 0);
+    assert_eq!(
+        http.post(format!("{path}/reporting"))
+            .bearer_auth(&other_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
     server.abort();
     provider_task.abort();
 }
