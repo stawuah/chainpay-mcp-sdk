@@ -335,8 +335,11 @@ html[data-astryx-theme] .paypal-shell .paypal-checks dd { margin: 0; font-weight
 html[data-astryx-theme] .paypal-shell .paypal-purchase { margin-top: 14px; padding: 16px; border-radius: 16px; border: 1px solid var(--pp-line); background: var(--pp-surface-subtle); }
 html[data-astryx-theme] .paypal-shell .paypal-purchase h3 { margin: 0; font-size: 15px; }
 html[data-astryx-theme] .paypal-shell .paypal-fulfil { display: inline-flex; gap: 8px; flex-wrap: wrap; }
-/* Disputes: a table that scrolls sideways on a phone instead of breaking. */
-html[data-astryx-theme] .paypal-shell .paypal-table-wrap { overflow-x: auto; margin-top: 12px; border: 1px solid var(--pp-line); border-radius: 14px; }
+/* Disputes: a table that scrolls sideways on a phone instead of breaking. The
+   content column has to be pinned to the page width or the grid track grows to
+   fit the table and the whole page scrolls instead. */
+html[data-astryx-theme] .paypal-shell .paypal-content { grid-template-columns: minmax(0, 1fr); }
+html[data-astryx-theme] .paypal-shell .paypal-table-wrap { overflow-x: auto; min-width: 0; max-width: 100%; margin-top: 12px; border: 1px solid var(--pp-line); border-radius: 14px; }
 html[data-astryx-theme] .paypal-shell .paypal-dispute-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 720px; }
 html[data-astryx-theme] .paypal-shell .paypal-dispute-table th { text-align: left; padding: 10px 12px; color: var(--pp2-ink-2); font-weight: 600; background: var(--pp-surface-subtle); border-bottom: 1px solid var(--pp-line); }
 html[data-astryx-theme] .paypal-shell .paypal-dispute-table td { padding: 10px 12px; border-bottom: 1px solid var(--pp-line-soft); font-variant-numeric: tabular-nums; vertical-align: middle; }
@@ -351,11 +354,19 @@ html[data-astryx-theme] .paypal-shell .paypal-evidence dd { margin: 0; overflow-
 @media (max-width: 860px) {
   html[data-astryx-theme] .paypal-shell .paypal-allowance-builder, html[data-astryx-theme] .paypal-shell .paypal-market-body { grid-template-columns: 1fr; }
   html[data-astryx-theme] .paypal-shell .paypal-permission-card, html[data-astryx-theme] .paypal-shell .paypal-checkout-pane { position: static; }
+  /* On a phone the blue card comes before the form, so the buyer reads the sentence before the Create button. */
+  html[data-astryx-theme] .paypal-shell .paypal-allowance-builder .paypal-permission-card { order: -1; }
   html[data-astryx-theme] .paypal-shell .paypal-evidence > div { grid-template-columns: 1fr; gap: 2px; }
   /* The receipt rail scrolls sideways inside its column instead of widening the page. */
   html[data-astryx-theme] .paypal-shell .paypal-layout { grid-template-columns: minmax(0, 1fr); }
   html[data-astryx-theme] .paypal-shell .paypal-sidebar, html[data-astryx-theme] .paypal-shell .paypal-sidebar nav { min-width: 0; max-width: 100%; }
   html[data-astryx-theme] .paypal-shell .paypal-mode-pills { max-width: 100%; overflow-x: auto; }
+}
+/* Phone: the view pills stay on one row and scroll sideways instead of wrapping. */
+@media (max-width: 520px) {
+  html[data-astryx-theme] .paypal-shell .paypal-mode-pills { display: flex; flex-wrap: nowrap; white-space: nowrap; height: 44px; box-sizing: border-box; scrollbar-width: none; }
+  html[data-astryx-theme] .paypal-shell .paypal-mode-pills::-webkit-scrollbar { display: none; }
+  html[data-astryx-theme] .paypal-shell .paypal-mode-pill { flex: 0 0 auto; white-space: nowrap; }
 }
 
 html[data-astryx-theme] .paypal-shell .paypal-footer { color: var(--pp2-ink-3); font-size: 12px; border-top: 1px solid var(--pp-line); margin-top: 40px; padding-top: 18px; }

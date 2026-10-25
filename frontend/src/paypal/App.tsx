@@ -301,7 +301,7 @@ export default function App({ origin }: { origin: string }) {
           <p className="paypal-sidebar-kicker">TASK RECEIPTS ({tasks.length})</p>
           <nav aria-label="Task receipts">
             {tasks.length ? tasks.map(task => <button key={task.id} className={!dashboard && task.id === selected?.id ? "selected" : ""} disabled={busy} onClick={() => select(task)}>
-              <strong>{task.units.length} output{task.units.length === 1 ? "" : "s"}</strong>
+              <strong>{task.units.length} {task.purchase ? "item" : "output"}{task.units.length === 1 ? "" : "s"}</strong>
               <span>{shownMoney(task.gross)} · {listStatus(task)}</span>
               {task.purchase && <small>{task.service_name ?? task.purchase.merchant}</small>}
               <small>{task.id.slice(0, 8)}</small>
@@ -448,7 +448,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
     <div className="paypal-receipt-title">
       <div>
         <span className="paypal-eyebrow"><CheckCircle2 size={14} aria-hidden="true" />Verified task record</span>
-        <h2>{selected.units.length} outputs, one clear record.</h2>
+        <h2>{selected.units.length} {purchase ? "items" : "outputs"}, one clear record.</h2>
       </div>
       <div className="paypal-status-group">
         {selected.dispute && <span className="paypal-status is-warn">Dispute {selected.dispute.status}</span>}
@@ -501,7 +501,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
           : purchase.approval === "approved" ? `Approved by ${purchase.approved_by ?? "buyer"} ${purchase.approval_decided_at ? new Date(purchase.approval_decided_at * 1000).toLocaleString() : ""}.`
           : purchase.approval === "denied" ? `Denied by ${purchase.approved_by === "rules" ? "the allowance rules at approval time" : "the buyer"}. Nothing was charged.` : "Ask me first: the buyer approves each purchase."}
       </p>}
-      {purchase.refund_request && <p className="paypal-notice">Refund requested: {shownMoney(purchase.refund_request.amount)} for unit{purchase.refund_request.failed_units.length === 1 ? "" : "s"} {purchase.refund_request.failed_units.map(i => i + 1).join(", ")}. {purchase.refund_request.reason}. A merchant must approve it.</p>}
+      {purchase.refund_request && !selected.refund_confirmed && <p className="paypal-notice">Refund requested: {shownMoney(purchase.refund_request.amount)} for unit{purchase.refund_request.failed_units.length === 1 ? "" : "s"} {purchase.refund_request.failed_units.map(i => i + 1).join(", ")}. {purchase.refund_request.reason}. A merchant must approve it.</p>}
       {!publicToken && principal?.role === "merchant" && purchase.refund_request && !selected.refund_state && <div className="paypal-actions">
         <Button label={`Approve ${shownMoney(purchase.refund_request.amount)} refund`} isDisabled={busy} onClick={() => void perform(async () => {
           setSelected(await api<Receipt>(`${taskPath}/refund`, "POST", { digest: purchase.refund_request!.digest }));
@@ -576,7 +576,9 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
           <h3>{unit.name ?? `Document ${unit.index + 1}`}</h3>
           <div className="paypal-unit-meta">
             <span className={`paypal-unit-state ${unit.state}`}>{unitLabel[unit.state]}</span>
-            <span>Revision {unit.revision ?? 0} · {unit.buyer_review === "accept" ? "Accepted by buyer" : unit.buyer_review === "challenge" ? "Challenged by buyer" : "Buyer acceptance not recorded"}</span>
+            {purchase
+              ? <span>{shownMoney(unit.price)}</span>
+              : <span>Revision {unit.revision ?? 0} · {unit.buyer_review === "accept" ? "Accepted by buyer" : unit.buyer_review === "challenge" ? "Challenged by buyer" : "Buyer acceptance not recorded"}</span>}
           </div>
         </div>
         {unit.reason && <p className="paypal-notice">{unit.reason}</p>}
@@ -592,11 +594,11 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
           {selected.offer_version === "requirements-check-v1" && unit.result.output.assessment && typeof unit.result.output.assessment.conclusion === "string" && typeof unit.result.output.assessment.requirements === "string" && Array.isArray(unit.result.output.assessment.missing_evidence) && <div className="paypal-assessment-box"><strong>Requirements assessment</strong><p>{unit.result.output.assessment.conclusion}</p><p>Requirements: {unit.result.output.assessment.requirements}</p><strong>Requirements findings</strong><ul>{unit.result.output.assessment.missing_evidence.filter((item) => typeof item === "string").map((item, i) => <li key={i}>{item}</li>)}</ul></div>}
           <small>Processed by {unit.result.model}. Review the output against its source.</small>
         </>}
-        <details>
+        {!purchase && <details>
           <summary>Evidence hashes</summary>
           <p>Input: <code>{unit.input_hash}</code></p>
           <p>Output: <code>{unit.output_hash ?? "No delivered output"}</code></p>
-        </details>
+        </details>}
       </article>)}
     </div>
     {!publicToken && <Resolution key={selected.id} receipt={selected} principal={principal} api={api} update={setSelected} busy={busy} perform={perform} />}

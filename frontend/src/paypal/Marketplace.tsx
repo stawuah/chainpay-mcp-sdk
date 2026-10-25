@@ -156,6 +156,8 @@ export function availabilityWords(availability: string): string {
 }
 export function checkWords(c: PolicyCheck): string {
   if (c.limit_cents !== undefined) return `${shownMoney(dollars(c.observed_cents ?? 0))} of ${shownMoney(dollars(c.limit_cents))} · ${c.allowed ? "within" : "over"}`;
+  // The expiry check reports a unix timestamp; show it as a date.
+  if (c.rule === "expiry" && c.observed && /^\d+$/.test(c.observed)) return `${new Date(Number(c.observed) * 1000).toLocaleDateString()} · ${c.allowed ? "allowed" : "not allowed"}`;
   if (c.observed) return `${c.observed} · ${c.allowed ? "allowed" : "not allowed"}`;
   return c.allowed ? "Allowed" : "Not allowed";
 }

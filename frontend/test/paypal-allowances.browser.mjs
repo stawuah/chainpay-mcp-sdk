@@ -50,6 +50,23 @@ try {
   // Every check row reads as "<observed> · allowed" or as money against a cap.
   const checks=await page.locator('.paypal-checks').innerText();
   assert.match(checks,/status\s+Active · allowed/);assert.match(checks,/cooldown\s+no purchases yet · allowed/);assert.match(checks,/per_purchase_cap\s+\$36\.00 of \$50\.00 · within/);
+  // The expiry row is a date, not the raw epoch.
+  assert.match(checks,/expiry\s+\S*\d\S* · allowed/);assert.doesNotMatch(checks,/expiry\s+\d{9,}/);
+  await page.close();
+ }
+ // Buyer on a phone: the blue card sits above the form so the sentence is read before Create, and the pills stay on one row.
+ {
+  const page=await browser.newPage({viewport:{width:390,height:844}});
+  await page.goto(base+'?role=buyer');
+  await page.getByRole('button',{name:'Allowances',exact:true}).click();
+  const card=await page.getByLabel('Allowance preview').boundingBox();
+  const create=await page.getByRole('button',{name:'Create allowance'}).boundingBox();
+  assert.ok(card.y<create.y,`card at ${card.y} should be above Create at ${create.y}`);
+  const pills=page.getByRole('group',{name:'Workspace view switcher'});
+  const pillBox=await pills.boundingBox();
+  assert.ok(pillBox.height<=48,`pills are ${pillBox.height}px tall`);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=390),'no horizontal scroll at 390px');
+  await page.screenshot({path:(process.env.PAYPAL_SHOTS||'/tmp/chainpay-paypal')+'-allowances-390.png',fullPage:true});
   await page.close();
  }
  // Approve when the rules no longer pass: the server answers 200 with the request denied by the rules and the policy refused.
