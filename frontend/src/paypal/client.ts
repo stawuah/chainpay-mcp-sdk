@@ -21,6 +21,10 @@ export function money(value: string | null): string {
   if (!/^\d+\.\d{2}$/.test(value)) throw new Error("Invalid USD amount");
   return `$${value}`;
 }
+export function shownMoney(value: string | null | undefined): string {
+  if (value == null || value === "") return "Not established";
+  try { return money(value); } catch { return "Not established"; }
+}
 export function exportReceipt(receipt: Receipt): string {
   const cell = (s: string) => `"${s.replaceAll('"', '""')}"`;
   return ["task_id,currency,gross,captured,confirmed_refund,net_buyer_cost", [receipt.id, receipt.currency, receipt.gross, String(receipt.captured), receipt.refund_confirmed ? receipt.refund : "0.00", receipt.net ?? ""].map(cell).join(",")].join("\r\n");
