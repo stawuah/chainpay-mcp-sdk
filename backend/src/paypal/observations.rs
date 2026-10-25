@@ -66,6 +66,16 @@ pub fn order(task: &mut Task, value: Value) -> Result<(), Error> {
             return Err(Error::Conflict);
         }
         task.capture_id = Some(capture_id);
+        if matches!(
+            capture["status"].as_str(),
+            Some("DECLINED" | "FAILED" | "DENIED" | "REVERSED")
+        ) || (matches!(
+            capture["status"].as_str(),
+            Some("REFUNDED" | "PARTIALLY_REFUNDED")
+        ) && task.refund.is_none())
+        {
+            task.payment_review = Some("Provider reports a payment change outside this task's approved operations; merchant review required".into());
+        }
         if text(capture, "status")? == "COMPLETED" {
             task.captured = true;
             if let Some(op) = &mut task.capture {
@@ -104,7 +114,7 @@ pub fn receipt(task: &Task, public: bool) -> Value {
     let mut view = json!({
         "id":task.id,"sandbox":true,"currency":"USD","offer_version":task.offer_version,
         "created_at":task.created_at,"approved_at":task.approved_at,
-        "gross":task.amount.decimal(),"captured":task.captured,
+        "gross":task.amount.decimal(),"captured":task.captured,"payment_review":task.payment_review,
         "refund":task.refund_amount.decimal(),"refund_confirmed":task.refund_confirmed,
         "net":task.net().map(Cents::decimal),"units":units,
         "order_id":task.order_id,"capture_id":task.capture_id,"refund_id":task.refund_id,
@@ -169,6 +179,27 @@ mod tests {
         late["status"] = "APPROVED".into();
         order(&mut t, late).unwrap();
         assert!(t.captured);
+    }
+    #[test]
+    fn external_refund_preserves_history_but_blocks_cost_and_further_refunds() {
+        let mut t = task();
+        let good = observation(&t);
+        order(&mut t, good.clone()).unwrap();
+        assert!(t.net().is_some());
+        let mut changed = good.clone();
+        changed["purchase_units"][0]["payments"]["captures"][0]["status"] =
+            "PARTIALLY_REFUNDED".into();
+        order(&mut t, changed).unwrap();
+        assert!(t.captured);
+        assert!(t.payment_review.is_some());
+        assert!(t.net().is_none());
+        assert!(t.refund_proposal().is_err());
+        order(&mut t, good).unwrap();
+        assert!(
+            t.net().is_none(),
+            "Late completion must not erase exception"
+        );
+        assert!(crate::paypal::analytics::projection(&[t])["known_net_cost"].is_null());
     }
     #[test]
     fn public_projection_never_includes_inputs_outputs_or_approval_capabilities() {

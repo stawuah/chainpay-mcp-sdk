@@ -29,3 +29,5 @@ CREATE TABLE IF NOT EXISTS paypal_rate_windows (
     count INTEGER NOT NULL,
     PRIMARY KEY (identity, window_id)
 );
+
+ALTER TABLE paypal_webhook_inbox ADD COLUMN IF NOT EXISTS attempted_at BIGINT;

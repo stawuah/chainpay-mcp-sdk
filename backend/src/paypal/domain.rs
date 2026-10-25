@@ -118,6 +118,8 @@ pub struct Task {
     pub capture: Option<Operation>,
     pub capture_id: Option<String>,
     pub captured: bool,
+    #[serde(default)]
+    pub payment_review: Option<String>,
     pub refund: Option<Operation>,
     pub refund_id: Option<String>,
     pub refund_amount: Cents,
@@ -183,6 +185,7 @@ impl Task {
             capture: None,
             capture_id: None,
             captured: false,
+            payment_review: None,
             refund: None,
             refund_id: None,
             refund_amount: Cents(0),
@@ -226,7 +229,8 @@ impl Task {
         Ok(Some(key))
     }
     pub fn refund_proposal(&self) -> Result<(Cents, String), Error> {
-        if !self.captured
+        if self.payment_review.is_some()
+            || !self.captured
             || self.capture_id.is_none()
             || self.units.iter().any(|u| {
                 matches!(
@@ -270,7 +274,7 @@ impl Task {
         Ok(Some(key))
     }
     pub fn net(&self) -> Option<Cents> {
-        if !self.captured {
+        if self.payment_review.is_some() || !self.captured {
             return None;
         }
         Some(Cents(

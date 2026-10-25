@@ -1,6 +1,11 @@
 // Rendering/authorization affordance fixtures, not provider or model acceptance.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import { mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+const artifacts=join(tmpdir(),'chainpay-paypal-browser');
+await mkdir(artifacts,{recursive:true});
 const base=process.env.PAYPAL_BROWSER_BASE || 'http://127.0.0.1:5197';
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try {
@@ -46,7 +51,7 @@ try {
     await page.getByRole('button',{name:'Share redacted receipt'}).click();
     await page.getByLabel('Public receipt URL').waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-    await page.screenshot({path:`/private/tmp/chainpay-paypal-${width}.png`,fullPage:true});
+    await page.screenshot({path:join(artifacts,`receipt-${width}.png`),fullPage:true});
     await page.getByRole('button',{name:'Sign out',exact:true}).click();
     await page.getByLabel('Workspace access code').fill('merchant-fixture');
     await page.getByRole('button',{name:'Open workspace',exact:true}).click();
@@ -59,13 +64,13 @@ try {
     await page.keyboard.press('Tab');
     assert.ok(await page.evaluate(()=>document.activeElement!==document.body));
     await page.getByRole('button',{name:'Outcome dashboard',exact:true}).click();
-    await page.getByRole('heading',{name:'Confirmed buyer cost',exact:true}).waitFor().catch(async e=>{await page.screenshot({path:'/private/tmp/paypal-analytics-error.png',fullPage:true});console.error(await page.locator('body').innerText());throw e;});
+    await page.getByRole('heading',{name:'Confirmed buyer cost',exact:true}).waitFor().catch(async e=>{await page.screenshot({path:join(artifacts,'analytics-error.png'),fullPage:true});console.error(await page.locator('body').innerText());throw e;});
     await page.getByRole('heading',{name:'Work outcomes',exact:true}).waitFor();
     await page.getByRole('heading',{name:'Receipt evidence',exact:true}).waitFor();
     await page.getByRole('button',{name:'Refresh snapshot',exact:true}).click();
     await page.getByRole('heading',{name:'Confirmed buyer cost',exact:true}).waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-    await page.screenshot({path:`/private/tmp/chainpay-paypal-analytics-${width}.png`,fullPage:true});
+    await page.screenshot({path:join(artifacts,`analytics-${width}.png`),fullPage:true});
     if(width===1440){
       await page.getByText('AI Assistant',{exact:true}).click();
       await page.getByText('Explain my costs',{exact:true}).click();

@@ -1,5 +1,5 @@
 export type Unit = { index: number; state: "pending" | "processing" | "delivered" | "failed" | "unknown"; name?: string; input_hash: string; output_hash?: string; reason?: string; result?: { model: string; output: { summary: string; facts: { claim: string; evidence: string }[] } } };
-export type Receipt = { id: string; sandbox: true; currency: "USD"; gross: string; refund: string; net: string | null; captured: boolean; refund_confirmed: boolean; units: Unit[]; quote_digest?: string; quote_expires_at?: number; approval_url?: string; order_id?: string; capture_id?: string; refund_id?: string; share_token?: string; order_state?: string; capture_state?: string; refund_state?: string; created_at: number };
+export type Receipt = { id: string; sandbox: true; currency: "USD"; gross: string; refund: string; net: string | null; captured: boolean; payment_review?: string; refund_confirmed: boolean; units: Unit[]; quote_digest?: string; quote_expires_at?: number; approval_url?: string; order_id?: string; capture_id?: string; refund_id?: string; share_token?: string; order_state?: string; capture_state?: string; refund_state?: string; created_at: number };
 export type Principal = { id: string; workspace: string; role: "buyer" | "merchant" | "agent" };
 export type Proposal = { amount: string; digest: string; reason: string };
 
@@ -19,6 +19,10 @@ export function money(value: string | null): string {
   if (value === null) return "Not established";
   if (!/^\d+\.\d{2}$/.test(value)) throw new Error("Invalid USD amount");
   return `$${value}`;
+}
+export function shownMoney(value: string | null | undefined): string {
+  if (value == null || value === "") return "Not established";
+  try { return money(value); } catch { return "Not established"; }
 }
 export function exportReceipt(receipt: Receipt): string {
   const cell = (s: string) => `"${s.replaceAll('"', '""')}"`;

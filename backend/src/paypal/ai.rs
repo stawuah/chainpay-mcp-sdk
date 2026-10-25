@@ -70,6 +70,11 @@ impl Ai {
 
     pub async fn run(&self, store: &Store, id: &str, p: &Principal) -> Result<(), Error> {
         let task = store.get(id, p).await?;
+        if task.payment_review.is_some() {
+            return Err(Error::Invalid(
+                "Merchant review is required before more work or refunds",
+            ));
+        }
         if !task.captured {
             return Err(Error::Invalid(
                 "A verified PayPal capture is required before processing",
@@ -85,7 +90,7 @@ impl Ai {
             let started = domain::now();
             let (current, claimed) = store
                 .update(id, p, |t| {
-                    if !t.captured || t.refund.is_some() {
+                    if !t.captured || t.payment_review.is_some() || t.refund.is_some() {
                         return Ok(false);
                     }
                     let unit = &mut t.units[index];
