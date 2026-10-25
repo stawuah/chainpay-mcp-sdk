@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { BarChart3, RefreshCw } from "lucide-react";
 import { AgStudio, AgStudioProvider, createWidgets, type AgRegistry, type AgWidgetDefinition } from "ag-studio-react";
 import { AgStudioAiModule, AgStudioLicenseManager, createAiHarness, studioTheme, type AgAiHarnessSetup, type AgReportState, type AgWidgetData, type AgWidgetDataFormat } from "ag-studio";
 import { client, shownMoney, type Receipt } from "./client";
@@ -77,10 +78,15 @@ export default function Analytics({ origin, token, onSelect }: { origin: string;
       if (!context.signal?.aborted) yield { type: "RUN_ERROR", message: cause instanceof Error ? cause.message : "Analysis unavailable" };
     }
   } }] })), [api]);
-  return <section className="paypal-analytics" aria-busy={loading}>
-    <div className="paypal-actions">
-      <h2>Outcome dashboard</h2>
-      <button onClick={() => void refresh()} disabled={loading}>{loading ? "Refreshing…" : "Refresh snapshot"}</button>
+  return <section className="paypal-card paypal-analytics" aria-busy={loading}>
+    <div className="paypal-card-header" style={{ marginBottom: 8 }}>
+      <div>
+        <span className="paypal-eyebrow"><BarChart3 size={14} aria-hidden="true" />Settled ledger</span>
+        <h2>Outcome dashboard</h2>
+      </div>
+      <div className="paypal-actions" style={{ margin: 0 }}>
+        <button onClick={() => void refresh()} disabled={loading}><RefreshCw size={14} aria-hidden="true" />{loading ? "Refreshing…" : "Refresh snapshot"}</button>
+      </div>
     </div>
     <p>{snapshot?.scope ?? "Loading authorized receipts…"}. Cards show the full snapshot; filters do not change these totals. Refresh restarts the in-memory analyst conversation.</p>
     {error && <p className="paypal-error" role="alert">{error}</p>}

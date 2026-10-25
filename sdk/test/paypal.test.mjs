@@ -55,3 +55,11 @@ test('allowance uses only the original server quote and an approved delegation',
  for(const method of ['subscribe','cancelSubscription','increaseLimits','refundSubscription'])assert.equal(client[method],undefined);
  }finally{globalThis.fetch=old;}
 });
+
+test('resolution reads private revision history without merchant approval digests',async()=>{
+ const previous=globalThis.fetch;try{
+ globalThis.fetch=async()=>Response.json({units:[{index:0,revision:2,output_hash:"current-hash",buyer_review:"challenge",result:"private result"}],resolution:[{intent:{action:'challenge'}}],revisions:[[{revision:0}]],refunds:[{digest:'merchant-approval',amount:'4.00'}]});
+ const result=await new PayPalAgentClient(config).resolution('a'.repeat(32));
+ assert.deepEqual(result.units,[{index:0,revision:2,output_hash:"current-hash",buyer_review:"challenge"}]);assert.equal(result.resolution[0].intent.action,'challenge');assert.equal(result.refunds[0].digest,undefined);assert.match(result.approval,/never waives/);
+ }finally{globalThis.fetch=previous;}
+});
