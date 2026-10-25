@@ -52,6 +52,12 @@ Add new rules to `take-two.css` under the matching section rather than to the
 older sheets, and keep the `html[data-astryx-theme]` prefix so they outrank
 the legacy cascade.
 
+The PayPal workspace (`src/paypal/`) has its own layer, `paypal-two.css`, with
+the same rules: it loads after `paypal.css`, wins by specificity, and changes
+nothing but surfaces, scale and motion. Its headline number is the net buyer
+cost on a blue slab; the four lifecycle stages render as a ladder of bars; the
+sign-in page pairs the form with a blue slab that names the three roles.
+
 ## Component system
 
 The runnable app is Vite and React with Astryx 0.6.1, its neutral theme, and
