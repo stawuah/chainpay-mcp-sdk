@@ -156,7 +156,7 @@ export function OwnerOverview({ mandates, connections, connectionState, attentio
       {/* Spending and the counts share a row on wide screens, so a single token's card has no empty right half. */}
       <div className={`cp-overview-summary${selected && ring ? " has-spending" : ""}`}>
       {selected && ring && (
-        <section className="cp-surface cp-overview-spending" aria-labelledby="overview-spending-title">
+        <section className="cp-surface cp-overview-spending cp-hero" aria-labelledby="overview-spending-title">
           <SectionHeader id="overview-spending-title" title="Spending by token" description="Across loaded permissions. Each token is totalled on its own." action={<SectionLink label="Manage permissions" onClick={onPermissions} />} />
           {totals.length > 1 && (
             <SegmentedControl className="cp-segmented" label="Token" value={selected.mint} onChange={setSelectedMint}>
@@ -164,33 +164,40 @@ export function OwnerOverview({ mandates, connections, connectionState, attentio
             </SegmentedControl>
           )}
           <div className="cp-overview-spending-body">
+            {/* The headline is what agents may still spend. It is the one number an owner opens this page for. */}
+            <div className="cp-hero-lead">
+              <span className="cp-hero-lead-label"><TokenIcon mint={selected.mint} size={18} /> Left to spend · {symbol(selected.mint)}</span>
+              {selectedState?.status === "unavailable"
+                ? <strong className="cp-hero-lead-value" aria-label="Not available">—</strong>
+                : <strong className="cp-hero-lead-value"><Amount baseUnits={selected.active.remaining} mint={selected.mint} symbol={symbol(selected.mint)} size="lead" showRetry={false} /></strong>}
+            </div>
             <UsageRing state={ring} label={ringLabel} />
-            {selectedState?.status === "unavailable" ? (
-              // Three figures of one mint without decimals: one message, one retry
-              // and one raw-units disclosure, as the permissions ledger does.
-              <div className="cp-figures is-unavailable">
-                <dl className="cp-figures-labels">
-                  {["Spent", "Remaining allowance", "Limit"].map((name) => <div className="cp-figure" key={name}><dt>{name}</dt><dd aria-label="Not available">—</dd></div>)}
-                </dl>
-                <AmountsUnavailable values={[["spent", selected.active.spent], ["remaining", selected.active.remaining], ["limit", selected.active.limit]]} onRetry={metadata.retryAll} />
-              </div>
-            ) : (
-              <dl className="cp-figures">
-                <div className="cp-figure is-lead">
-                  <dt><TokenIcon mint={selected.mint} size={18} /> Spent</dt>
-                  <dd><Amount baseUnits={selected.active.spent} mint={selected.mint} symbol={symbol(selected.mint)} size="lead" /></dd>
-                </div>
-                <div className="cp-figure">
-                  <dt>Remaining allowance</dt>
-                  <dd><Amount baseUnits={selected.active.remaining} mint={selected.mint} symbol={symbol(selected.mint)} showRetry={false} /></dd>
-                </div>
-                <div className="cp-figure">
-                  <dt>Limit</dt>
-                  <dd><Amount baseUnits={selected.active.limit} mint={selected.mint} symbol={symbol(selected.mint)} showRetry={false} /></dd>
-                </div>
-              </dl>
-            )}
           </div>
+          {selectedState?.status === "unavailable" ? (
+            // Three figures of one mint without decimals: one message, one retry
+            // and one raw-units disclosure, as the permissions ledger does.
+            <div className="cp-figures is-unavailable cp-hero-figures">
+              <dl className="cp-figures-labels">
+                {["Spent", "Remaining allowance", "Limit"].map((name) => <div className="cp-figure" key={name}><dt>{name}</dt><dd aria-label="Not available">—</dd></div>)}
+              </dl>
+              <AmountsUnavailable values={[["spent", selected.active.spent], ["remaining", selected.active.remaining], ["limit", selected.active.limit]]} onRetry={metadata.retryAll} />
+            </div>
+          ) : (
+            <dl className="cp-figures cp-hero-figures">
+              <div className="cp-figure">
+                <dt>Spent</dt>
+                <dd><Amount baseUnits={selected.active.spent} mint={selected.mint} symbol={symbol(selected.mint)} showRetry={false} /></dd>
+              </div>
+              <div className="cp-figure">
+                <dt>Remaining allowance</dt>
+                <dd><Amount baseUnits={selected.active.remaining} mint={selected.mint} symbol={symbol(selected.mint)} showRetry={false} /></dd>
+              </div>
+              <div className="cp-figure">
+                <dt>Limit</dt>
+                <dd><Amount baseUnits={selected.active.limit} mint={selected.mint} symbol={symbol(selected.mint)} showRetry={false} /></dd>
+              </div>
+            </dl>
+          )}
           <p className="cp-caption">
             {selected.active.count} of {selected.permissionCount} {symbol(selected.mint)} {selected.permissionCount === 1 ? "permission is" : "permissions are"} active and counted here; paused, expired and revoked ones are left out. Remaining allowance is what agents may still spend, not a wallet balance or a card budget.
           </p>
@@ -219,7 +226,7 @@ export function OwnerOverview({ mandates, connections, connectionState, attentio
         <section className="cp-surface" aria-labelledby="overview-activity-title">
           <SectionHeader id="overview-activity-title" title="Recent activity" description="Requests and payments from this browser." action={<SectionLink label="View payments" onClick={onPayments} />} />
           <CollectionState state={activity.length ? "loaded" : "empty"} noun="activity" title="No activity yet" description="Requests and payments will appear here as your agents work." compact>
-            <ul className="cp-row-list">
+            <ul className="cp-row-list cp-timeline">
               {activity.slice(0, 6).map((row) => (
                 <li key={`${row.source}:${row.id}`} className="cp-row is-static">
                   <span className="cp-row-main"><strong>{row.label}</strong></span>

@@ -14,6 +14,7 @@ import "../../src/polyfills";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
+import "../../src/theme/take-two.css";
 import { chainpayClient, publicReceiptClient } from "../../src/config/client";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import { ensureSessionReady, setSessionWallet } from "../../src/session";

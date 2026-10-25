@@ -2029,11 +2029,45 @@ function PaymentPanel({ wallet, walletSigner, mandates, mandate, stablecoinOptio
           <LoadedReceiptCard receiptPda={prepared.receiptAddress} shareMode="dashboard" />
         </>}
       </div>
-      <div className="payment-review-stack"><div className="dashboard-card review-card"><div className="dashboard-card-heading"><div><span className="section-kicker">PAYMENT REVIEW</span><h2>{prepared ? "Payment review" : "Waiting for a request"}</h2></div><span className={`state-pill ${prepared?.preflight.valid ? "ok" : prepared ? "failed" : ""}`}><i /> {prepared ? (prepared.preflight.valid ? "Ready to approve" : "Needs attention") : "Waiting"}</span></div>{prepared ? <><div className="review-list payment-review-list"><div><span>Settlement amount</span><strong>{formatTokenAmount(prepared.request.amount, mintDecimals)} </strong></div><div><span>Stablecoin</span><strong>{stablecoinOptions.find((option) => option.mint === prepared.request.mint)?.label ?? shortAddress(prepared.request.mint)}</strong></div><div><span>Destination</span><strong className="mono">{shortAddress(prepared.request.recipient)}</strong></div><div><span>Signing wallet</span><strong className="mono">{shortAddress(wallet)}</strong></div></div><details className="technical-details" open={!prepared.preflight.valid}><summary>{prepared.preflight.valid ? "Policy checks passed" : "Policy issues to resolve"}</summary><div className="check-list">{prepared.preflight.checks.map((check) => <div key={check.name} className={check.ok ? "check-row ok" : "check-row failed"}><span>{check.ok ? "✓" : "×"}</span><b>{check.name}</b><small>{check.message}</small></div>)}</div></details><div className="state-box payment-readiness-message"><span className="soft-label">{prepared.preflight.valid ? "PAYMENT READY" : "PAYMENT NEEDS ATTENTION"}</span><p>{prepared.preflight.valid ? "Review the payment details, then approve in your wallet." : "The live policy checks rejected this payment. Review the issue before trying again."}</p></div><details className="technical-details"><summary>View policy details</summary><div className="state-box"><span className="soft-label">Live policy response</span><pre>{mcpPreflight || "No policy response returned."}</pre></div></details><div className="review-gate"><Shield /><span>Signing will request approval from <b>{wallet}</b>. The payment is complete only after its receipt is confirmed on-chain.</span></div><Button type="button" variant="primary" className="full-button" label={status === "signing" ? "Waiting for wallet…" : "Approve payment"} isDisabled={!prepared.preflight.valid || status === "signing" || status === "pending" || status === "success"} onClick={() => void signPayment()} /></> : <div className="review-empty"><div className="empty-icon">↗</div><p>Enter the payment details to review before approving.</p></div>}</div></div>
+      <div className="payment-review-stack"><div className="dashboard-card review-card"><div className="dashboard-card-heading"><div><span className="section-kicker">PAYMENT REVIEW</span><h2>{prepared ? "Payment review" : "Waiting for a request"}</h2></div><span className={`state-pill ${prepared?.preflight.valid ? "ok" : prepared ? "failed" : ""}`}><i /> {prepared ? (prepared.preflight.valid ? "Ready to approve" : "Needs attention") : "Waiting"}</span></div>{prepared ? <><PaySheet prepared={prepared} status={status} decimals={mintDecimals} tokenLabel={stablecoinOptions.find((option) => option.mint === prepared.request.mint)?.label ?? shortAddress(prepared.request.mint)} mandate={mandate} mandateName={mandate ? mandateDisplayName(mandate, mandates, stablecoinOptions) : ""} /><div className="review-list payment-review-list"><div><span>Settlement amount</span><strong>{formatTokenAmount(prepared.request.amount, mintDecimals)} </strong></div><div><span>Stablecoin</span><strong>{stablecoinOptions.find((option) => option.mint === prepared.request.mint)?.label ?? shortAddress(prepared.request.mint)}</strong></div><div><span>Destination</span><strong className="mono">{shortAddress(prepared.request.recipient)}</strong></div><div><span>Signing wallet</span><strong className="mono">{shortAddress(wallet)}</strong></div></div><details className="technical-details" open={!prepared.preflight.valid}><summary>{prepared.preflight.valid ? "Policy checks passed" : "Policy issues to resolve"}</summary><div className="check-list">{prepared.preflight.checks.map((check) => <div key={check.name} className={check.ok ? "check-row ok" : "check-row failed"}><span>{check.ok ? "✓" : "×"}</span><b>{check.name}</b><small>{check.message}</small></div>)}</div></details><div className="state-box payment-readiness-message"><span className="soft-label">{prepared.preflight.valid ? "PAYMENT READY" : "PAYMENT NEEDS ATTENTION"}</span><p>{prepared.preflight.valid ? "Review the payment details, then approve in your wallet." : "The live policy checks rejected this payment. Review the issue before trying again."}</p></div><details className="technical-details"><summary>View policy details</summary><div className="state-box"><span className="soft-label">Live policy response</span><pre>{mcpPreflight || "No policy response returned."}</pre></div></details><div className="review-gate"><Shield /><span>Signing will request approval from <b>{wallet}</b>. The payment is complete only after its receipt is confirmed on-chain.</span></div><Button type="button" variant="primary" className="full-button" label={status === "signing" ? "Waiting for wallet…" : "Approve payment"} isDisabled={!prepared.preflight.valid || status === "signing" || status === "pending" || status === "success"} onClick={() => void signPayment()} /></> : <div className="review-empty"><div className="empty-icon">↗</div><p>Enter the payment details to review before approving.</p></div>}</div></div>
     </section>
     <details className="owner-batch-disclosure"><summary>Pay multiple recipients · CSV upload</summary><BatchPaymentsPanel wallet={wallet} walletSigner={walletSigner} mandates={mandates} stablecoinOptions={stablecoinOptions} onAskAgent={onAskAgent} onRefresh={onRefresh} /></details>
     </>
   );
+}
+
+/*
+  The pay sheet: amount first, who gets it, which permission it runs under,
+  then the ladder. The three rungs use the fixed payment words (Prepared,
+  Submitted, Confirmed); a failed step turns red and keeps its word.
+*/
+function PaySheet({ prepared, status, decimals, tokenLabel, mandate, mandateName }: { prepared: PreparedPayment; status: "idle" | "preparing" | "ready" | "signing" | "pending" | "success" | "error"; decimals: number | null; tokenLabel: string; mandate: Mandate | null; mandateName: string }) {
+  const valid = prepared.preflight.valid;
+  const rungs: Array<{ label: string; state: "todo" | "live" | "done" | "failed" }> = [
+    { label: "Prepared", state: valid ? "done" : "failed" },
+    { label: "Submitted", state: status === "signing" ? "live" : status === "pending" || status === "success" ? "done" : status === "error" && valid ? "failed" : "todo" },
+    { label: "Confirmed", state: status === "pending" ? "live" : status === "success" ? "done" : "todo" },
+  ];
+  const remaining = mandate ? mandate.totalLimit - mandate.amountSpent - prepared.request.amount : null;
+  return <>
+    <div className="cp-pay-amount">
+      <strong>{formatTokenAmount(prepared.request.amount, decimals)}<span>{tokenLabel}</span></strong>
+      <small>to <b className="mono">{shortAddress(prepared.request.recipient)}</b></small>
+    </div>
+    {mandate && (
+      <div className="cp-fence">
+        <span className="cp-fence-icon" aria-hidden="true"><ShieldCheck size={18} /></span>
+        <div>
+          <b>Inside {mandateName}</b>
+          {formatTokenAmount(mandate.maxPerPayment, decimals)} {tokenLabel} per payment · {remaining !== null && remaining >= 0n ? `${formatTokenAmount(remaining, decimals)} ${tokenLabel} left after this` : "allowance would be exceeded"} · <code>{shortAddress(mandate.address)}</code>
+        </div>
+      </div>
+    )}
+    <div className="cp-ladder" role="status" aria-label={`Payment status: ${rungs.filter((rung) => rung.state === "done").map((rung) => rung.label).join(", ") || "not yet prepared"}`}>
+      <div className="cp-ladder-bars" aria-hidden="true">{rungs.map((rung) => <span key={rung.label} data-state={rung.state} />)}</div>
+      <div className="cp-ladder-labels">{rungs.map((rung) => <span key={rung.label} data-state={rung.state}>{rung.label}</span>)}</div>
+    </div>
+  </>;
 }
 
 const MAX_ATOMIC_BATCH_PAYMENTS = 4;
@@ -4023,7 +4057,21 @@ function MandateBuilder({ wallet, walletSigner, walletMessageSigner, stablecoinO
         </> : <div className="review-empty"><div className="empty-icon">◇</div><p>Review the mandate before signing.</p></div>}
       </div></>}
     {error && <div className="builder-error" role="alert"><b>Needs attention</b><span>{error}</span></div>}
-    </div><aside className="owner-wizard-aside"><ShieldCheck size={32} /><h2>A permission,<br />on your terms.</h2><p>Your funds stay in your wallet. You choose the limits and can revoke the permission at any time.</p><ul><li>A receipt for every payment</li><li>Spending limited by your rules</li><li>Revoke access when you need to</li></ul></aside></div>
+    </div><aside className="owner-wizard-aside" aria-label="Permission preview">
+      {/* The card rewrites itself as the limits change: this is what the wallet will be asked to sign. */}
+      <div className="cp-permission-card" data-testid="permission-preview">
+        <div className="cp-permission-card-head"><BrandLogo size="compact" /><span className="cp-permission-card-kind">{prefill ? (prefill.role === "vendor" ? "Purchase order" : "Budget request") : "Spending permission"}</span></div>
+        <div className="cp-permission-card-amount"><small>Total allowance</small><strong>{form.totalLimit || "0"}<span>{selectedStablecoin.label}</span></strong></div>
+        <dl className="cp-permission-card-rows">
+          <div><dt>Max per payment</dt><dd>{form.maxPerPayment || "0"} {selectedStablecoin.label}</dd></div>
+          <div><dt>Approval</dt><dd>{signingMode === "human" ? "You sign each payment" : signingMode === "requester" ? "Requester’s agent signs" : "Delegated signer, inside limits"}</dd></div>
+          <div><dt>Expires</dt><dd>{slotEdited && slotEstimate ? expiryText(form.expiresAtSlot) : `About ${form.expiresInDays} ${form.expiresInDays === "1" ? "day" : "days"}`}</dd></div>
+          {form.maxPaymentCount !== "0" && form.maxPaymentCount && <div><dt>Payment count</dt><dd>{form.maxPaymentCount}</dd></div>}
+        </dl>
+        <div className="cp-permission-card-sig">Signed by you · <code>{shortAddress(wallet)}</code></div>
+      </div>
+      <p>Your funds stay in your wallet. Every payment gets a receipt, and you can pause or revoke this permission at any time.</p>
+    </aside></div>
   </section>;
 }
 

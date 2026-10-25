@@ -10,11 +10,12 @@ const STORAGE_KEY = "chainpay.sidebar.collapsed";
   Below 900px the sidebar is not rendered at all — navigation is the drawer — so
   this value is only consulted on desktop.
 */
+// The rail is the default. Only a remembered "0" (the user expanded it) opens it.
 function readStored(): boolean {
   try {
-    return window.localStorage.getItem(STORAGE_KEY) === "1";
+    return window.localStorage.getItem(STORAGE_KEY) !== "0";
   } catch {
-    return false;
+    return true;
   }
 }
 

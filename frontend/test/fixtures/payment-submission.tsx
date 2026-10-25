@@ -4,6 +4,7 @@ import "../../src/polyfills";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
+import "../../src/theme/take-two.css";
 import { createRoot } from "react-dom/client";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 import type { Mandate } from "@chainpayhq/sdk";

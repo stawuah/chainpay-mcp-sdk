@@ -196,7 +196,7 @@ section("matrix", async () => {
         await open(`tab=${tab}&${query}`);
         const label = `${tab} ${state} ${width}`;
         const h1 = page.locator("h1").first();
-        assert.equal(await h1.evaluate((el) => getComputedStyle(el).fontSize), "28px", `${label}: page title 28px`);
+        assert.equal(await h1.evaluate((el) => getComputedStyle(el).fontSize), "30px", `${label}: page title 30px`);
         // The page title starts at the content edge on every tab and width, and sits at one height.
         const heading = await page.locator(".dashboard-page .dashboard-heading").first().evaluate((el) => {
           const title = el.querySelector("h1").getBoundingClientRect();

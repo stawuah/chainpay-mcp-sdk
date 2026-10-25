@@ -35,20 +35,25 @@ function NavButton({
 }) {
   const Icon = ({ overview: House, agents: Bot, mandates: ShieldCheck, cards: CreditCard, assistant: Inbox, payments: ArrowUpRight, settings: Settings2 } as Partial<Record<DashboardTab, typeof House>>)[item.id] ?? Settings2;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      // isIconOnly keeps `label` as the accessible name while removing it from
-      // the visual flow. The label span's class is StyleX-generated, so hiding
-      // it from CSS is not an option.
-      isIconOnly={collapsed}
-      className={`${muted ? "side-link muted" : "side-link"}${current ? " active" : ""}`}
-      label={item.label}
-      icon={<span className="sidebar-glyph" aria-hidden="true" title={collapsed ? item.label : undefined}><Icon size={20} strokeWidth={1.75} /></span>}
-      endContent={endLabel ? <b className="tool-count">{endLabel}</b> : undefined}
-      onClick={() => onSelect(item.id)}
-      aria-current={current ? "page" : undefined}
-    />
+    // The wrapper carries the label as a hover tooltip when the rail is collapsed.
+    <div className="rail-item" data-tip={endLabel ? `${item.label} · ${endLabel}` : item.label}>
+      <Button
+        type="button"
+        variant="ghost"
+        // isIconOnly keeps `label` as the accessible name while removing it from
+        // the visual flow. The label span's class is StyleX-generated, so hiding
+        // it from CSS is not an option.
+        isIconOnly={collapsed}
+        className={`${muted ? "side-link muted" : "side-link"}${current ? " active" : ""}`}
+        label={item.label}
+        icon={<span className="sidebar-glyph" aria-hidden="true"><Icon size={20} strokeWidth={1.75} /></span>}
+        endContent={endLabel ? <b className="tool-count">{endLabel}</b> : undefined}
+        onClick={() => onSelect(item.id)}
+        aria-current={current ? "page" : undefined}
+      />
+      {/* Icon-only buttons drop endContent, so the rail draws the count itself. */}
+      {collapsed && endLabel ? <b className="tool-count rail-badge" aria-hidden="true">{endLabel}</b> : null}
+    </div>
   );
 }
 

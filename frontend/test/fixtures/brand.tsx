@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
+import "../../src/theme/take-two.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
 import { BrandLogo } from "../../src/brand/Brand";
 import { Button } from "@astryxdesign/core/Button";

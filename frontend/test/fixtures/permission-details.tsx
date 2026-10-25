@@ -6,6 +6,7 @@ import type { Mandate } from "@chainpayhq/sdk";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
+import "../../src/theme/take-two.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
 import { Router } from "../../src/routing/Router";
 import { MandatesPanel } from "../../src/dashboard/Dashboard";

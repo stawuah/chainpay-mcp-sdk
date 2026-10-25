@@ -11,7 +11,7 @@ try {
       await page.goto(`${BASE_URL}/test/fixtures/dashboard-harness.html?tab=${tab}`);
       await page.locator('h1').waitFor();
       await page.waitForTimeout(150);
-      assert.equal(await page.locator('h1').evaluate(el=>getComputedStyle(el).fontSize),'28px',`${tab}: consistent page heading`);
+      assert.equal(await page.locator('h1').evaluate(el=>getComputedStyle(el).fontSize),'30px',`${tab}: consistent page heading`);
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${tab}: overflow at ${width}`);
       await page.screenshot({path:`/tmp/chainpay-owner-${tab}-${width}.png`,fullPage:true});
     }
@@ -98,9 +98,10 @@ try {
   await page.getByRole('alertdialog').waitFor();await page.keyboard.press('Escape');
   await page.getByRole('button',{name:'Revoke all',exact:true}).click();
   await page.getByRole('alertdialog').waitFor();await page.keyboard.press('Escape');
-  const toggle=page.getByRole('button',{name:'Collapse navigation'});
+  // The rail is the default; the handle expands it and collapses it again.
+  const toggle=page.getByRole('button',{name:'Expand navigation'});
   const box=await toggle.boundingBox();assert.ok(Math.abs(box.y+box.height/2-500)<10,'toggle centered vertically');
-  await toggle.click();await page.getByRole('button',{name:'Expand navigation'}).click();
+  await toggle.click();await page.getByRole('button',{name:'Collapse navigation'}).click();
   assert.deepEqual(errors,[]);
   console.log('PASS: owner pages, consistent typography, mobile widths, payment history entry, request drafts, connection dialog, permission steps. No financial approval requested.');
 } finally {await browser.close();}

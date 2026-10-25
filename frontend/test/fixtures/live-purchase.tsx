@@ -7,6 +7,7 @@ import type { AgentInboxItem } from "../../src/owner/runtime";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
+import "../../src/theme/take-two.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
 import { setMintMetadataFetcherOverride } from "../../src/ui/amount/useMintMetadata";
 import blocked from "./inbox-blocked.json";
