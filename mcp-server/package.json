@@ -17,7 +17,8 @@
     "dev": "npm run build && npm start",
     "dev:http": "npm run build && node dist/http.js",
     "test": "npm run build && node --test test/*.test.mjs",
-    "test:sdk": "npm --prefix ../sdk run test"
+    "test:sdk": "npm --prefix ../sdk run test",
+    "start:paypal": "node dist/paypal.js"
   },
   "dependencies": {
     "@chainpayhq/sdk": "0.1.0",
