@@ -27,6 +27,22 @@ Tools: `paypal_list_services`, `paypal_prepare_task`, `paypal_get_receipt`,
 `paypal_run_paid_task`, `paypal_check_payment`, `paypal_propose_refund`,
 `paypal_explain_receipt`. There is no capture or refund-approval tool.
 
+Allowance and marketplace tools (need `CHAINPAY_PAYPAL_ALLOWANCES=true` on the
+API): `paypal_find_allowance`, `paypal_search_catalog`, `paypal_quote_purchase`,
+`paypal_purchase`, `paypal_request_approval`, `paypal_list_approvals`,
+`paypal_request_refund`. A buyer creates an allowance in the workspace (caps,
+merchants, `agent_pays` or `ask_first`) and vaults a PayPal method there. The
+agent only reads the allowance view; the `vault` block and token ids never leave
+the server. `paypal_purchase` posts `{request_id, allowance_id, merchant,
+items}` and the server decides: the result `kind` is `receipt` (charged),
+`approval_requested` (ask_first, buyer decides at `review_url`) or `refused`
+(with `reason_code`, for example `per_purchase_cap`). `paypal_request_approval`
+is the same call for an `ask_first` allowance; no tool can approve on the
+buyer's behalf. A timed-out purchase is retried with the same `request_id`;
+the server returns the same task instead of placing a second order.
+`paypal_request_refund` records a reason against the failed units and the
+merchant approves the refund in the workspace.
+
 Prepare with a stable request ID and document text. Return the `review_url` to
 the buyer; they approve checkout and capture in the workspace. Then run the
 existing paid task and inspect its receipt. A proposal identifies the exact
