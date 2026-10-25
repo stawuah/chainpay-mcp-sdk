@@ -247,6 +247,117 @@ html[data-astryx-theme] .paypal-shell .paypal-delegation-card { border-radius: 1
 html[data-astryx-theme] .paypal-shell .paypal-delegation-meter { border-radius: 99px; }
 html[data-astryx-theme] .paypal-shell .paypal-delegation-meter-fill { border-radius: 99px; background: var(--pp-blue); }
 
+/* --------------------------------------------------------------------------
+   Allowances, marketplace, disputes. The permission slab is the same blue
+   object as the Colosseum builder: it rewrites as the form changes.
+   -------------------------------------------------------------------------- */
+html[data-astryx-theme] .paypal-shell .paypal-allowance-builder { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; margin: 16px 0 22px; }
+html[data-astryx-theme] .paypal-shell .paypal-allowance-builder .paypal-form-grid { margin-top: 0; }
+html[data-astryx-theme] .paypal-shell .paypal-choice { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+html[data-astryx-theme] .paypal-shell .paypal-choice legend { font-weight: 600; font-size: 13px; padding: 0; margin: 0 0 6px; width: 100%; }
+html[data-astryx-theme] .paypal-shell .paypal-choice label { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; margin: 0; padding: 0 14px; border: 1px solid var(--pp-line); border-radius: 12px; background: #fff; cursor: pointer; font-weight: 500; transition: border-color .18s var(--pp2-ease), background-color .18s var(--pp2-ease); }
+html[data-astryx-theme] .paypal-shell .paypal-choice label.is-active { border-color: var(--pp-blue); background: var(--pp-blue-soft); font-weight: 600; }
+html[data-astryx-theme] .paypal-shell .paypal-choice label:focus-within { box-shadow: 0 0 0 4px var(--pp2-blue-tint); }
+html[data-astryx-theme] .paypal-shell .paypal-choice input { margin: 0; width: 18px; height: 18px; accent-color: var(--pp-blue); }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card {
+  position: sticky; top: 92px; display: grid; gap: 16px; padding: 22px; border-radius: 18px; color: #fff; overflow: hidden;
+  background: linear-gradient(135deg, #0b1a4a 0%, var(--pp2-blue-deep) 55%, var(--pp-blue) 100%); box-shadow: var(--pp2-glow);
+}
+html[data-astryx-theme] .paypal-shell .paypal-permission-card::after { content: ""; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 35%, rgba(255, 255, 255, .14) 48%, transparent 60%); transform: translateX(-100%); transition: transform 1.1s var(--pp2-ease); pointer-events: none; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card:hover::after { transform: translateX(100%); }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card > * { position: relative; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-head .cp-brand, html[data-astryx-theme] .paypal-shell .paypal-permission-card-head .cp-brand-wordmark, html[data-astryx-theme] .paypal-shell .paypal-permission-card-head .cp-brand-symbol { color: #fff; font-size: 15px; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-kind { font: 700 10px/1 Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase; padding: 5px 9px; border-radius: 999px; background: rgba(255, 255, 255, .18); }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-amount { display: grid; gap: 4px; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-amount small { font: 600 10px/1.2 Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase; opacity: .78; overflow-wrap: anywhere; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-amount strong { font: 600 34px/1 Inter, sans-serif; letter-spacing: -.04em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-amount strong span { font-size: 14px; letter-spacing: 0; opacity: .8; margin-left: 6px; font-weight: 500; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-sentence { margin: 0; font-size: 14px; line-height: 1.55; color: rgba(255, 255, 255, .92); }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-rows { display: grid; gap: 8px; margin: 0; padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, .22); }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-rows > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-rows dt { opacity: .75; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-rows dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-sig { padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .22); font-size: 11.5px; opacity: .85; overflow-wrap: anywhere; }
+html[data-astryx-theme] .paypal-shell .paypal-permission-card-sig code { background: rgba(255, 255, 255, .14); color: #fff; font-size: 11px; }
+/* Status pills use the fixed words Active, Paused, Revoked. */
+html[data-astryx-theme] .paypal-shell .paypal-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--pp-line-soft); color: var(--pp2-ink-2); white-space: nowrap; }
+html[data-astryx-theme] .paypal-shell .paypal-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+html[data-astryx-theme] .paypal-shell .paypal-pill.is-active { background: var(--pp2-ok-soft); color: var(--pp2-ok); }
+html[data-astryx-theme] .paypal-shell .paypal-pill.is-paused { background: var(--pp2-warn-soft); color: var(--pp2-warn); }
+html[data-astryx-theme] .paypal-shell .paypal-pill.is-revoked { background: #fde8e8; color: #b42332; }
+html[data-astryx-theme] .paypal-shell .paypal-status-group { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+html[data-astryx-theme] .paypal-shell .paypal-allowance-list { display: grid; gap: 12px; }
+html[data-astryx-theme] .paypal-shell .paypal-allowance-row { border-radius: 16px; border: 1px solid var(--pp-line); background: #fff; padding: 18px; box-shadow: var(--pp2-shadow); animation: pp2-rise .5s var(--pp2-ease) both; }
+html[data-astryx-theme] .paypal-shell .paypal-allowance-row.is-revoked { opacity: .7; }
+html[data-astryx-theme] .paypal-shell .paypal-allowance-row-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+html[data-astryx-theme] .paypal-shell .paypal-allowance-row h3 { margin: 0 0 4px; font-size: 16px; }
+html[data-astryx-theme] .paypal-shell .paypal-spend-meter { height: 8px; border-radius: 99px; background: var(--pp-line); overflow: hidden; margin: 12px 0 10px; }
+html[data-astryx-theme] .paypal-shell .paypal-spend-meter > span { display: block; height: 100%; border-radius: 99px; background: var(--pp-blue); }
+html[data-astryx-theme] .paypal-shell .paypal-allowance-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px 14px; margin: 0; }
+html[data-astryx-theme] .paypal-shell .paypal-allowance-facts dt { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pp2-ink-3); }
+html[data-astryx-theme] .paypal-shell .paypal-allowance-facts dd { margin: 2px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Approvals inbox: one row per purchase waiting for the buyer, approve on the right. */
+html[data-astryx-theme] .paypal-shell .paypal-inbox { border-radius: 16px; border: 1px solid var(--pp2-blue-tint); background: var(--pp-blue-soft); padding: 16px; margin-bottom: 16px; }
+html[data-astryx-theme] .paypal-shell .paypal-inbox h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 15px; }
+html[data-astryx-theme] .paypal-shell .paypal-inbox-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border-radius: 12px; background: #fff; border: 1px solid var(--pp-line); }
+html[data-astryx-theme] .paypal-shell .paypal-inbox-row + .paypal-inbox-row { margin-top: 8px; }
+html[data-astryx-theme] .paypal-shell .paypal-inbox-row > div:first-child { display: grid; gap: 2px; min-width: 0; }
+html[data-astryx-theme] .paypal-shell .paypal-inbox-row span { color: var(--pp2-ink-2); font-size: 13px; }
+html[data-astryx-theme] .paypal-shell .paypal-inbox-row small { color: var(--pp2-ink-3); font-size: 12px; }
+/* Marketplace: merchant tiles, item rows with a 44px stepper, quote pane. */
+html[data-astryx-theme] .paypal-shell .paypal-merchant-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+html[data-astryx-theme] .paypal-shell .paypal-card button.paypal-merchant-tile { display: grid; gap: 4px; justify-items: start; text-align: left; min-height: 64px; padding: 14px 16px; border-radius: 16px; transition: transform .2s var(--pp2-ease), box-shadow .2s var(--pp2-ease), border-color .2s var(--pp2-ease), background-color .2s var(--pp2-ease); }
+html[data-astryx-theme] .paypal-shell .paypal-card button.paypal-merchant-tile:hover { transform: translateY(-2px); box-shadow: var(--pp2-shadow); }
+html[data-astryx-theme] .paypal-shell .paypal-card button.paypal-merchant-tile.is-active { border-color: var(--pp-blue); background: var(--pp-blue-soft); box-shadow: 0 0 0 3px var(--pp2-blue-tint); }
+html[data-astryx-theme] .paypal-shell .paypal-merchant-tile small { color: var(--pp2-ink-2); font-weight: 500; text-transform: capitalize; }
+html[data-astryx-theme] .paypal-shell .paypal-market-body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; margin-top: 18px; align-items: start; }
+html[data-astryx-theme] .paypal-shell .paypal-item-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--pp-line-soft); }
+html[data-astryx-theme] .paypal-shell .paypal-item-row > div:first-child { display: grid; gap: 2px; min-width: 0; }
+html[data-astryx-theme] .paypal-shell .paypal-item-row span { color: var(--pp2-ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+html[data-astryx-theme] .paypal-shell .paypal-stepper { display: inline-flex; align-items: center; border: 1px solid var(--pp-line); border-radius: 12px; overflow: hidden; background: #fff; }
+html[data-astryx-theme] .paypal-shell .paypal-card .paypal-stepper button { min-width: 44px; min-height: 44px; border: 0; border-radius: 0; font-size: 18px; padding: 0; }
+html[data-astryx-theme] .paypal-shell .paypal-stepper output { min-width: 36px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+html[data-astryx-theme] .paypal-shell .paypal-checkout-pane { position: sticky; top: 92px; border-radius: 16px; border: 1px solid var(--pp-line); background: var(--pp-surface-subtle); padding: 16px; }
+html[data-astryx-theme] .paypal-shell .paypal-checkout-pane label:first-child { margin-top: 0; }
+html[data-astryx-theme] .paypal-shell .paypal-quote ul, html[data-astryx-theme] .paypal-shell .paypal-purchase-lines { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
+html[data-astryx-theme] .paypal-shell .paypal-quote li, html[data-astryx-theme] .paypal-shell .paypal-purchase-lines li { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; font-variant-numeric: tabular-nums; }
+html[data-astryx-theme] .paypal-shell .paypal-quote-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--pp-line); }
+html[data-astryx-theme] .paypal-shell .paypal-quote-total strong { font-size: 26px; letter-spacing: -.03em; color: var(--pp-blue); font-variant-numeric: tabular-nums; }
+html[data-astryx-theme] .paypal-shell .paypal-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; font-weight: 600; font-size: 13px; }
+html[data-astryx-theme] .paypal-shell .paypal-verdict.is-ok { background: var(--pp2-ok-soft); color: var(--pp2-ok); }
+html[data-astryx-theme] .paypal-shell .paypal-verdict.is-refused { background: #fde8e8; color: #b42332; }
+html[data-astryx-theme] .paypal-shell .paypal-verdict code { background: rgba(255, 255, 255, .7); color: inherit; font-size: 11px; }
+html[data-astryx-theme] .paypal-shell .paypal-checks { display: grid; gap: 6px; margin: 10px 0 0; }
+html[data-astryx-theme] .paypal-shell .paypal-checks > div { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+html[data-astryx-theme] .paypal-shell .paypal-checks dt { font-family: var(--pp-mono); font-size: 12px; color: var(--pp2-ink-2); }
+html[data-astryx-theme] .paypal-shell .paypal-checks dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+html[data-astryx-theme] .paypal-shell .paypal-purchase { margin-top: 14px; padding: 16px; border-radius: 16px; border: 1px solid var(--pp-line); background: var(--pp-surface-subtle); }
+html[data-astryx-theme] .paypal-shell .paypal-purchase h3 { margin: 0; font-size: 15px; }
+html[data-astryx-theme] .paypal-shell .paypal-fulfil { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+/* Disputes: a table that scrolls sideways on a phone instead of breaking. */
+html[data-astryx-theme] .paypal-shell .paypal-table-wrap { overflow-x: auto; margin-top: 12px; border: 1px solid var(--pp-line); border-radius: 14px; }
+html[data-astryx-theme] .paypal-shell .paypal-dispute-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 720px; }
+html[data-astryx-theme] .paypal-shell .paypal-dispute-table th { text-align: left; padding: 10px 12px; color: var(--pp2-ink-2); font-weight: 600; background: var(--pp-surface-subtle); border-bottom: 1px solid var(--pp-line); }
+html[data-astryx-theme] .paypal-shell .paypal-dispute-table td { padding: 10px 12px; border-bottom: 1px solid var(--pp-line-soft); font-variant-numeric: tabular-nums; vertical-align: middle; }
+html[data-astryx-theme] .paypal-shell .paypal-pill.is-none { background: var(--pp-line-soft); color: var(--pp2-ink-2); }
+html[data-astryx-theme] .paypal-shell .paypal-card button.paypal-link-button { min-height: 44px; border: 0; background: transparent; color: var(--pp-blue); padding: 0 4px; font-family: var(--pp-mono); font-size: 12px; }
+html[data-astryx-theme] .paypal-shell .paypal-dispute-detail { margin-top: 14px; padding: 16px; border-radius: 16px; border: 1px solid var(--pp-line); background: #fff; box-shadow: var(--pp2-shadow); }
+html[data-astryx-theme] .paypal-shell .paypal-dispute-detail h3 { margin: 0; font-size: 15px; }
+html[data-astryx-theme] .paypal-shell .paypal-evidence { display: grid; gap: 8px; margin: 12px 0 0; }
+html[data-astryx-theme] .paypal-shell .paypal-evidence > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; font-size: 13px; padding-bottom: 8px; border-bottom: 1px solid var(--pp-line-soft); }
+html[data-astryx-theme] .paypal-shell .paypal-evidence dt { color: var(--pp2-ink-2); font-weight: 600; }
+html[data-astryx-theme] .paypal-shell .paypal-evidence dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 860px) {
+  html[data-astryx-theme] .paypal-shell .paypal-allowance-builder, html[data-astryx-theme] .paypal-shell .paypal-market-body { grid-template-columns: 1fr; }
+  html[data-astryx-theme] .paypal-shell .paypal-permission-card, html[data-astryx-theme] .paypal-shell .paypal-checkout-pane { position: static; }
+  html[data-astryx-theme] .paypal-shell .paypal-evidence > div { grid-template-columns: 1fr; gap: 2px; }
+  /* The receipt rail scrolls sideways inside its column instead of widening the page. */
+  html[data-astryx-theme] .paypal-shell .paypal-layout { grid-template-columns: minmax(0, 1fr); }
+  html[data-astryx-theme] .paypal-shell .paypal-sidebar, html[data-astryx-theme] .paypal-shell .paypal-sidebar nav { min-width: 0; max-width: 100%; }
+  html[data-astryx-theme] .paypal-shell .paypal-mode-pills { max-width: 100%; overflow-x: auto; }
+}
+
 html[data-astryx-theme] .paypal-shell .paypal-footer { color: var(--pp2-ink-3); font-size: 12px; border-top: 1px solid var(--pp-line); margin-top: 40px; padding-top: 18px; }
 
 @media (prefers-reduced-motion: reduce) {

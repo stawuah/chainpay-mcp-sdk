@@ -3,10 +3,13 @@ import { Bot, CheckCircle2, Clock3, FileText, LayoutGrid, ShieldCheck, Sparkles,
 import { Button } from "@astryxdesign/core/Button";
 import { BrandLogo } from "../brand/Brand";
 import { RobotStill } from "../pet/RobotStill";
-import { checkoutUrl, client, exportReceipt, shownMoney, type Principal, type Proposal, type Receipt, type Service } from "./client";
+import { checkoutUrl, client, dollars, exportReceipt, shownMoney, type Principal, type Proposal, type Receipt, type Service } from "./client";
 
 import { Resolution } from "./Resolution";
 import Subscriptions from "./Subscriptions";
+import Allowances from "./Allowances";
+import Marketplace, { checkWords, reasonWords } from "./Marketplace";
+import Disputes from "./Disputes";
 import ServicePreflight, { type Preflight } from "./ServicePreflight";
 
 const Analytics = lazy(() => import("./Analytics"));
@@ -45,6 +48,8 @@ export default function App({ origin }: { origin: string }) {
   const [explanation, setExplanation] = useState("");
   const [reporting, setReporting] = useState<Report>();
   const [dashboard, setDashboard] = useState(false);
+  // Coming back from PayPal with ?allowance= lands on the allowances panel so the return handler runs.
+  const [panel, setPanel] = useState<"" | "allowances" | "market" | "disputes">(() => new URLSearchParams(location.search).has("allowance") ? "allowances" : "");
   const [share, setShare] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -82,6 +87,7 @@ export default function App({ origin }: { origin: string }) {
   }
   function select(task: Receipt) {
     setDashboard(false);
+    setPanel("");
     activeId.current = task.id;
     setSelected(task);
     setReporting(undefined);
@@ -141,7 +147,17 @@ export default function App({ origin }: { origin: string }) {
   const editable = principal?.role === "buyer" || principal?.role === "agent";
   const restoring = Boolean(token) && !principal && !error && !publicToken;
   const taskPath = selected ? `/tasks/${encodeURIComponent(selected.id)}` : "";
-  const heading = pageHeading({ dashboard, selected, publicToken, principal, restoring });
+  const heading = pageHeading({ dashboard, panel, selected, publicToken, principal, restoring });
+  const showStudio = !dashboard && !selected && !panel;
+  function openPanel(next: typeof panel) {
+    setDashboard(false);
+    activeId.current = undefined;
+    setSelected(undefined);
+    setProposal(undefined);
+    setShare("");
+    setPanel(next);
+    if (!publicToken) history.replaceState(null, "", location.pathname);
+  }
 
   return <div className="paypal-shell cp-app">
     <header className="paypal-header">
@@ -169,6 +185,7 @@ export default function App({ origin }: { origin: string }) {
           setShare("");
           activeId.current = undefined;
           setDashboard(false);
+          setPanel("");
         })} />}
       </div>
     </header>
@@ -178,21 +195,19 @@ export default function App({ origin }: { origin: string }) {
           <div className="paypal-breadcrumb" aria-hidden="true">
             <span>Workspace</span>
             <span>/</span>
-            <span>{dashboard ? "Outcomes" : selected ? "Receipt" : publicToken ? "Shared receipt" : "Agent work"}</span>
+            <span>{dashboard ? "Outcomes" : selected ? "Receipt" : publicToken ? "Shared receipt" : panel === "allowances" ? "Allowances" : panel === "market" ? "Marketplace" : panel === "disputes" ? "Disputes" : "Agent work"}</span>
           </div>
           <h1>{heading.title}</h1>
           <p>{heading.lede}</p>
         </div>
         {principal && !publicToken && <div className="paypal-mode-pills" role="group" aria-label="Workspace view switcher">
-          {editable && <button type="button" className={`paypal-mode-pill${!dashboard && !selected ? " is-active" : ""}`} disabled={busy} onClick={() => {
-            setDashboard(false);
-            activeId.current = undefined;
-            setSelected(undefined);
-            setProposal(undefined);
-            setShare("");
+          {editable && <button type="button" className={`paypal-mode-pill${showStudio ? " is-active" : ""}`} disabled={busy} onClick={() => {
+            openPanel("");
             requestId.current = crypto.randomUUID();
-            history.replaceState(null, "", "/paypal/");
           }}>Work studio</button>}
+          {editable && <button type="button" className={`paypal-mode-pill${!dashboard && !selected && panel === "allowances" ? " is-active" : ""}`} disabled={busy} onClick={() => openPanel("allowances")}>Allowances</button>}
+          {editable && <button type="button" className={`paypal-mode-pill${!dashboard && !selected && panel === "market" ? " is-active" : ""}`} disabled={busy} onClick={() => openPanel("market")}>Marketplace</button>}
+          {principal.role === "merchant" && <button type="button" className={`paypal-mode-pill${!dashboard && !selected && panel === "disputes" ? " is-active" : ""}`} disabled={busy} onClick={() => openPanel("disputes")}>Disputes</button>}
           {selected && <button type="button" className={`paypal-mode-pill${!dashboard && selected ? " is-active" : ""}`} disabled={busy} onClick={() => setDashboard(false)}>Active receipt ({selected.id.slice(0, 6)})</button>}
           <button type="button" className={`paypal-mode-pill${dashboard ? " is-active" : ""}`} disabled={busy} onClick={() => setDashboard(true)}>Outcome analytics</button>
         </div>}
@@ -279,13 +294,8 @@ export default function App({ origin }: { origin: string }) {
           <div className="paypal-actions">
             <Button label="Outcome dashboard" variant="secondary" isDisabled={busy} onClick={() => setDashboard(true)} />
             {editable && <Button label="New task" variant="secondary" isDisabled={busy} onClick={() => {
-              setDashboard(false);
-              activeId.current = undefined;
-              setSelected(undefined);
-              setProposal(undefined);
-              setShare("");
+              openPanel("");
               requestId.current = crypto.randomUUID();
-              history.replaceState(null, "", "/paypal/");
             }} />}
           </div>
           <p className="paypal-sidebar-kicker">TASK RECEIPTS ({tasks.length})</p>
@@ -293,6 +303,7 @@ export default function App({ origin }: { origin: string }) {
             {tasks.length ? tasks.map(task => <button key={task.id} className={!dashboard && task.id === selected?.id ? "selected" : ""} disabled={busy} onClick={() => select(task)}>
               <strong>{task.units.length} output{task.units.length === 1 ? "" : "s"}</strong>
               <span>{shownMoney(task.gross)} · {listStatus(task)}</span>
+              {task.purchase && <small>{task.purchase.merchant}</small>}
               <small>{task.id.slice(0, 8)}</small>
             </button>) : <p className="paypal-note">No tasks yet. Your first quote will appear here.</p>}
           </nav>
@@ -301,7 +312,10 @@ export default function App({ origin }: { origin: string }) {
           {dashboard && principal && <Suspense fallback={<p role="status">Loading outcome dashboard…</p>}>
             <Analytics key={`analytics:${principal.workspace}:${principal.id}:${token}`} origin={origin} token={token} onSelect={task => { void perform(async () => select(await api<Receipt>(`/tasks/${task.id}`))); }} />
           </Suspense>}
-          {!dashboard && !selected && editable && <section className="paypal-card">
+          {!dashboard && !selected && panel === "allowances" && principal && <Allowances key={`allowances:${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} onReceipt={task => { select(task); void refresh(); }} />}
+          {!dashboard && !selected && panel === "market" && principal && <Marketplace key={`market:${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} onPurchased={task => { select(task); void refresh(); }} />}
+          {!dashboard && !selected && panel === "disputes" && principal && <Disputes key={`disputes:${principal.workspace}:${principal.id}:${token}`} api={api} onOpenTask={id => { void perform(async () => select(await api<Receipt>(`/tasks/${encodeURIComponent(id)}`))); }} />}
+          {showStudio && editable && <section className="paypal-card">
             <span className="paypal-eyebrow"><Sparkles size={14} aria-hidden="true" />Define the work</span>
             <h2>What should your agent read?</h2>
             {services.length > 0 && <div className="paypal-service-grid" role="group" aria-label="Registered service cards">
@@ -363,7 +377,7 @@ export default function App({ origin }: { origin: string }) {
             </div>
             <p className="paypal-note">{serviceId === "document-compare-v1" ? "Compare both sample sources in one output." : "Sample inputs contain readable supplier terms."} Outputs are generated when you run the paid task.</p>
           </section>}
-          {!dashboard && !selected && !editable && <section className="paypal-card">
+          {showStudio && !editable && <section className="paypal-card">
             <h2>{publicToken ? "Loading shared receipt…" : "Select a task to review"}</h2>
             <p>Payment and delivery remain separate evidence.</p>
           </section>}
@@ -386,7 +400,7 @@ export default function App({ origin }: { origin: string }) {
             setReporting={setReporting}
             setShare={setShare}
           />}
-          {principal && <Subscriptions key={`subscriptions:${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} services={services} selected={selected} onAllocated={task => { select(task); void refresh(); }} />}
+          {principal && !panel && <Subscriptions key={`subscriptions:${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} services={services} selected={selected} onAllocated={task => { select(task); void refresh(); }} />}
         </div>
       </div>}
     </main>
@@ -419,8 +433,11 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
   const unresolved = unresolvedPayment(selected);
   const quoteReady = quoteStillOpen(selected);
   const nextCapture = principal?.role === "buyer" && selected.order_id && !selected.captured && !selected.capture_state;
-  const nextCheckout = principal?.role === "buyer" && !selected.subscription_funding && !selected.captured && !selected.funded && !selected.order_state && quoteReady;
-  const nextWork = (selected.funded || selected.captured) && !selected.payment_review && selected.units.some(unit => ["pending", "unknown", "processing"].includes(unit.state));
+  const purchase = selected.purchase ?? undefined;
+  const nextCheckout = !purchase && principal?.role === "buyer" && !selected.subscription_funding && !selected.captured && !selected.funded && !selected.order_state && quoteReady;
+  const nextWork = !purchase && (selected.funded || selected.captured) && !selected.payment_review && selected.units.some(unit => ["pending", "unknown", "processing"].includes(unit.state));
+  const pendingUnits = selected.units.filter(unit => unit.state === "pending");
+  const [refundReason, setRefundReason] = useState("Failed units were not delivered");
   const fundedOrCaptured = Boolean(selected.captured || selected.funded || selected.subscription_funding);
   const deliveredCount = selected.units.filter(u => u.state === "delivered").length;
   const failedCount = selected.units.filter(u => u.state === "failed").length;
@@ -433,7 +450,10 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
         <span className="paypal-eyebrow"><CheckCircle2 size={14} aria-hidden="true" />Verified task record</span>
         <h2>{selected.units.length} outputs, one clear record.</h2>
       </div>
-      <span className={`paypal-status${selected.captured || selected.refund_confirmed ? " is-ok" : selected.payment_review || unresolved ? " is-warn" : ""}`}>{statusText}</span>
+      <div className="paypal-status-group">
+        {selected.dispute && <span className="paypal-status is-warn">Dispute {selected.dispute.status}</span>}
+        <span className={`paypal-status${selected.captured || selected.refund_confirmed ? " is-ok" : selected.payment_review || unresolved || purchase?.policy?.allowed === false || purchase?.approval === "denied" ? " is-warn" : ""}`}>{statusText}</span>
+      </div>
     </div>
 
     {/* Live 4-stage Payment & AI Work Timeline (PR 72 inspired) */}
@@ -449,13 +469,13 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
         <span className="paypal-live-step-mark" aria-hidden="true">{fundedOrCaptured ? "✓" : "2"}</span>
         <span className="paypal-live-step-body">
           <strong>2. Funding</strong>
-          <small>{selected.subscription_funding ? "Prepaid allowance" : selected.captured ? "PayPal captured" : "Awaiting approval"}</small>
+          <small>{selected.subscription_funding ? "Prepaid allowance" : selected.captured ? "PayPal captured" : purchase?.approval === "requested" ? "Waiting for the buyer" : purchase?.policy?.allowed === false ? "Refused by the rules" : "Awaiting approval"}</small>
         </span>
       </li>
       <li className={`paypal-live-step ${allProcessed ? (failedCount > 0 ? "is-warn" : "is-done") : fundedOrCaptured ? "is-current" : ""}`}>
         <span className="paypal-live-step-mark" aria-hidden="true">{allProcessed ? (failedCount > 0 ? "!" : "✓") : "3"}</span>
         <span className="paypal-live-step-body">
-          <strong>3. AI processing</strong>
+          <strong>{purchase ? "3. Fulfilment" : "3. AI processing"}</strong>
           <small>{deliveredCount} delivered · {failedCount} failed</small>
         </span>
       </li>
@@ -468,8 +488,49 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
       </li>
     </ol>
 
+    {purchase && <div className="paypal-purchase" aria-label="Purchase details">
+      <h3>Purchase at {purchase.merchant}</h3>
+      {purchase.lines && <ul className="paypal-purchase-lines">{purchase.lines.map(l => <li key={l.id}><span>{l.qty} × {l.name}</span><span>{shownMoney(dollars(BigInt(l.unit_cents) * BigInt(l.qty)))}</span></li>)}</ul>}
+      {purchase.policy && <p className={`paypal-verdict ${purchase.policy.allowed ? "is-ok" : "is-refused"}`}>
+        {purchase.policy.allowed ? "Allowed by the allowance rules." : `Refused: ${purchase.policy.reason_code ? reasonWords[purchase.policy.reason_code] ?? purchase.policy.reason_code : "the rules did not pass"}.`}
+        {purchase.policy.reason_code && <code>{purchase.policy.reason_code}</code>}
+      </p>}
+      {purchase.policy?.checks && purchase.policy.checks.length > 0 && <dl className="paypal-checks">{purchase.policy.checks.map(c => <div key={c.rule}><dt>{c.rule}</dt><dd>{checkWords(c)}</dd></div>)}</dl>}
+      {purchase.mode === "ask_first" && <p className="paypal-note" style={{ margin: "8px 0 0" }}>
+        {purchase.approval === "requested" ? `Approval requested ${purchase.approval_requested_at ? new Date(purchase.approval_requested_at * 1000).toLocaleString() : ""}. The buyer decides from the Allowances inbox.`
+          : purchase.approval === "approved" ? `Approved by ${purchase.approved_by ?? "buyer"} ${purchase.approval_decided_at ? new Date(purchase.approval_decided_at * 1000).toLocaleString() : ""}.`
+          : purchase.approval === "denied" ? "Denied by the buyer. Nothing was charged." : "Ask me first: the buyer approves each purchase."}
+      </p>}
+      {purchase.refund_request && <p className="paypal-notice">Refund requested: {shownMoney(purchase.refund_request.amount)} for unit{purchase.refund_request.failed_units.length === 1 ? "" : "s"} {purchase.refund_request.failed_units.map(i => i + 1).join(", ")}. {purchase.refund_request.reason}. A merchant must approve it.</p>}
+      {!publicToken && principal?.role === "merchant" && purchase.refund_request && !selected.refund_state && <div className="paypal-actions">
+        <Button label={`Approve ${shownMoney(purchase.refund_request.amount)} refund`} isDisabled={busy} onClick={() => void perform(async () => {
+          setSelected(await api<Receipt>(`${taskPath}/refund`, "POST", { digest: purchase.refund_request!.digest }));
+          await refresh();
+        })} />
+      </div>}
+      {!publicToken && principal?.role !== "merchant" && selected.captured && !purchase.refund_request && selected.units.some(u => u.state === "failed") && <div className="paypal-actions">
+        <label htmlFor="refund-reason" style={{ margin: 0 }}>Refund reason</label>
+        <input id="refund-reason" value={refundReason} maxLength={200} onChange={e => setRefundReason(e.target.value)} style={{ maxWidth: 320 }} />
+        <Button label="Request refund for failed units" variant="secondary" isDisabled={busy || !refundReason.trim()} onClick={() => void perform(async () => {
+          await api(`${taskPath}/refund-request`, "POST", { reason: refundReason.trim() });
+          await refresh();
+        })} />
+      </div>}
+      {!publicToken && principal?.role === "merchant" && selected.captured && pendingUnits.length > 0 && <div className="paypal-actions">
+        {pendingUnits.map(unit => <span key={unit.index} className="paypal-fulfil">
+          <Button label={`Fulfil unit ${unit.index + 1}`} isDisabled={busy} onClick={() => void perform(async () => {
+            setSelected(await api<Receipt>(`${taskPath}/fulfil`, "POST", { outcomes: [{ unit: unit.index, state: "delivered" }] }));
+            await refresh();
+          })} />
+          <Button label={`Mark unit ${unit.index + 1} failed`} variant="secondary" isDisabled={busy} onClick={() => void perform(async () => {
+            setSelected(await api<Receipt>(`${taskPath}/fulfil`, "POST", { outcomes: [{ unit: unit.index, state: "failed", reason: "Could not be fulfilled" }] }));
+            await refresh();
+          })} />
+        </span>)}
+      </div>}
+    </div>}
     <div className="paypal-service-terms">
-      <h3>{selected.service_name ?? "Evidence-linked document summary"}</h3>
+      <h3>{selected.service_name ?? (purchase ? "Catalog purchase" : "Evidence-linked document summary")}</h3>
       <p>Service version: <code>{selected.offer_version ?? "document-extract-v1"}</code></p>
       {!publicToken && typeof selected.requirements === "string" && <>
         <h3>Purchased requirements</h3>
@@ -547,7 +608,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
           const answer = await api<{ explanation: string }>(`${taskPath}/explain`, "POST");
           setExplanation(answer.explanation);
         })} />
-        {!selected.subscription_funding && !selected.payment_review && !selected.refunds?.length && <Button label="Review failed-unit refund" variant="secondary" isDisabled={busy} onClick={() => void perform(async () => setProposal(await api<Proposal>(`${taskPath}/refund-proposal`)))} />}
+        {!purchase && !selected.subscription_funding && !selected.payment_review && !selected.refunds?.length && <Button label="Review failed-unit refund" variant="secondary" isDisabled={busy} onClick={() => void perform(async () => setProposal(await api<Proposal>(`${taskPath}/refund-proposal`)))} />}
       </div>
       {explanation && <aside className="paypal-explanation"><strong>AI explanation · not payment authority</strong><p>{explanation}</p></aside>}
       {proposal && !selected.refunds?.length && <div className="paypal-refund">
@@ -600,10 +661,13 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
   </section>;
 }
 
-function pageHeading({ dashboard, selected, publicToken, principal, restoring }: { dashboard: boolean; selected?: Receipt; publicToken?: string; principal?: Principal; restoring: boolean }) {
+function pageHeading({ dashboard, panel, selected, publicToken, principal, restoring }: { dashboard: boolean; panel: string; selected?: Receipt; publicToken?: string; principal?: Principal; restoring: boolean }) {
   if (restoring) return { title: "Opening your workspace", lede: "Checking the access code stored in this tab." };
   if (!principal && !publicToken) return { title: "Open your workspace", lede: "Use your dedicated buyer or merchant access code. Signing in does not approve a payment." };
   if (dashboard) return { title: "Settled outcomes", lede: "Quotes and unconfirmed refunds stay out of the net. This view is the latest 100 tasks, not a lifetime total." };
+  if (!selected && panel === "allowances") return { title: principal?.role === "agent" ? "Your allowances" : "Agent allowances", lede: principal?.role === "agent" ? "The rules you may spend under. Payment details stay with the buyer." : "Set the caps once. Your agent pays inside them, or asks first, and never sees how you pay." };
+  if (!selected && panel === "market") return { title: "Marketplace", lede: "Sandbox merchants. Every basket is checked against the allowance before anything is charged." };
+  if (!selected && panel === "disputes") return { title: "Disputes", lede: "PayPal cases on captured purchases. The evidence pack is the task record, nothing more." };
   if (publicToken) return { title: "Shared receipt", lede: selected ? "Redacted record. Names, document text, and approval actions stay off this page." : "Loading the redacted record. Payment and delivery remain separate evidence." };
   if (selected) return { title: "Task receipt", lede: "Payment and delivery remain separate evidence. Net cost appears only when the server has established it." };
   if (principal?.role === "merchant") return { title: "Select a task", lede: "Review a quote, a capture, or a failed unit. Opening a task does not approve a refund." };
@@ -621,6 +685,9 @@ function unresolvedPayment(task: Receipt): boolean {
 }
 
 function receiptStatus(task: Receipt): string {
+  if (task.purchase?.policy && !task.purchase.policy.allowed) return "Refused by allowance rules";
+  if (task.purchase?.approval === "requested") return "Approval requested";
+  if (task.purchase?.approval === "denied") return "Denied by buyer";
   if (task.payment_review) return "Merchant review required";
   if (unresolvedPayment(task)) return "Payment unresolved";
   if (task.refund_confirmed) return "Refund confirmed";
@@ -630,6 +697,9 @@ function receiptStatus(task: Receipt): string {
 }
 
 function listStatus(task: Receipt): string {
+  if (task.purchase?.policy && !task.purchase.policy.allowed) return "Refused";
+  if (task.purchase?.approval === "requested") return "Approval requested";
+  if (task.purchase?.approval === "denied") return "Denied";
   if (task.payment_review) return "Needs review";
   if (unresolvedPayment(task)) return "Payment unresolved";
   if (task.subscription_funding) return "Allowance reserved";
