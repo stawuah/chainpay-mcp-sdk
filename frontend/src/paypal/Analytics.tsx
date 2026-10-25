@@ -3,7 +3,7 @@ import { AgStudio, AgStudioProvider, createWidgets, type AgRegistry, type AgWidg
 import { AgStudioAiModule, AgStudioLicenseManager, createAiHarness, studioTheme, type AgAiHarnessSetup, type AgReportState, type AgWidgetData, type AgWidgetDataFormat } from "ag-studio";
 import { client, shownMoney, type Receipt } from "./client";
 
-type Snapshot = { captured: string; confirmed_refunds: string; known_net_cost: string | null; delivered_units: number; failed_units: number; unresolved_tasks: number; task_count: number; scope: string; tasks: Receipt[] };
+type Snapshot = { cash_scope?: string; prepaid_units_allocated?: number; captured: string; confirmed_refunds: string; known_net_cost: string | null; delivered_units: number; failed_units: number; unresolved_tasks: number; task_count: number; scope: string; tasks: Receipt[] };
 type WidgetState = AgWidgetData<Record<string, never>, AgWidgetDataFormat<Record<string, never>>> & { type: "costs" | "outcomes" | "receipts" };
 interface Registry extends AgRegistry { widgets: readonly AgWidgetDefinition<"costs" | "outcomes" | "receipts", WidgetState>[] }
 
@@ -20,15 +20,16 @@ const theme = studioTheme.withParams({ accentColor: "#0052ff", studioMinWidth: 0
 
 function captureLabel(task: Receipt): string {
   if (task.payment_review) return "Needs review";
+  if (task.subscription_funding) return "Prepaid units";
   if (task.captured) return "Confirmed";
   return "Not established";
 }
 
 function CostPanel({ snapshot }: { snapshot?: Snapshot }) {
-  return <div className="paypal-studio-widget"><h3>Confirmed buyer cost</h3><div className="paypal-cost"><div><span>Known net cost</span><strong>{shownMoney(snapshot?.known_net_cost)}</strong></div><dl><div><dt>Captured</dt><dd>{shownMoney(snapshot?.captured)}</dd></div><div><dt>Refunded</dt><dd>{shownMoney(snapshot?.confirmed_refunds)}</dd></div></dl></div><small>Exact USD amounts. Quotes and unconfirmed refunds are excluded.</small></div>;
+  return <div className="paypal-studio-widget"><h3>Orders cash cost</h3><div className="paypal-cost"><div><span>Known Orders net</span><strong>{shownMoney(snapshot?.known_net_cost)}</strong></div><dl><div><dt>Captured</dt><dd>{shownMoney(snapshot?.captured)}</dd></div><div><dt>Refunded</dt><dd>{shownMoney(snapshot?.confirmed_refunds)}</dd></div></dl></div><small>Exact USD amounts for Orders only. Subscription cash is separate; see subscription payment references. Quotes and unconfirmed refunds are excluded.</small></div>;
 }
 function OutcomePanel({ snapshot }: { snapshot?: Snapshot }) {
-  return <div className="paypal-studio-widget"><h3>Work outcomes</h3><dl className="paypal-outcomes"><div><dt>Delivered units</dt><dd>{snapshot?.delivered_units ?? "—"}</dd></div><div><dt>Failed units</dt><dd>{snapshot?.failed_units ?? "—"}</dd></div><div><dt>Unresolved payments</dt><dd>{snapshot?.unresolved_tasks ?? "—"}</dd></div></dl><small>Delivery is a merchant record, not buyer acceptance.</small></div>;
+  return <div className="paypal-studio-widget"><h3>Work outcomes</h3><p>Cumulative prepaid units allocated (including consumed/restored): {snapshot?.prepaid_units_allocated ?? 0}</p><dl className="paypal-outcomes"><div><dt>Delivered units</dt><dd>{snapshot?.delivered_units ?? "—"}</dd></div><div><dt>Failed units</dt><dd>{snapshot?.failed_units ?? "—"}</dd></div><div><dt>Unresolved payments</dt><dd>{snapshot?.unresolved_tasks ?? "—"}</dd></div></dl><small>Delivery is a merchant record, not buyer acceptance.</small></div>;
 }
 function ReceiptPanel({ snapshot, onSelect }: { snapshot?: Snapshot; onSelect: (receipt: Receipt) => void }) {
   return <div className="paypal-studio-widget"><h3>Receipt evidence</h3>{snapshot?.tasks.length ? <table><thead><tr><th>Task</th><th>Capture</th><th>Net buyer cost</th></tr></thead><tbody>{snapshot.tasks.map(task => <tr key={task.id}><td><button onClick={() => onSelect(task)}>{task.id.slice(0, 8)}</button></td><td>{captureLabel(task)}</td><td>{shownMoney(task.net)}</td></tr>)}</tbody></table> : <p>No tasks in this workspace.</p>}</div>;
@@ -56,7 +57,7 @@ export default function Analytics({ origin, token, onSelect }: { origin: string;
   }
   useEffect(() => { void refresh(); }, [api]);
   const widgets = useMemo(() => createWidgets<Registry>({ additionalTypes: [
-    { id: "costs", label: "Confirmed buyer cost", defaultSize: { width: 500, height: 240 }, minSize: { width: 220, height: 160 }, dataMapping: {}, form: params => params.createDefaults({ dataMappingItems: [] }), comp: () => <CostPanel snapshot={snapshot} /> },
+    { id: "costs", label: "Orders cash cost", defaultSize: { width: 500, height: 240 }, minSize: { width: 220, height: 160 }, dataMapping: {}, form: params => params.createDefaults({ dataMappingItems: [] }), comp: () => <CostPanel snapshot={snapshot} /> },
     { id: "outcomes", label: "Work outcomes", defaultSize: { width: 500, height: 240 }, minSize: { width: 220, height: 160 }, dataMapping: {}, form: params => params.createDefaults({ dataMappingItems: [] }), comp: () => <OutcomePanel snapshot={snapshot} /> },
     { id: "receipts", label: "Receipt evidence", defaultSize: { width: 500, height: 240 }, minSize: { width: 220, height: 160 }, dataMapping: {}, form: params => params.createDefaults({ dataMappingItems: [] }), comp: () => <ReceiptPanel snapshot={snapshot} onSelect={onSelect} /> },
   ], menu: [{ label: "ChainPay outcomes", widgetIds: ["costs", "outcomes", "receipts"] }] }), [snapshot, onSelect]);

@@ -11,12 +11,14 @@ function preflightArgs(a: Record<string, unknown>): PayPalDocument[] {
   return a.documents as PayPalDocument[];
 }
 export const PAYPAL_TOOLS=[
+  {name:"paypal_get_allowance",description:"Read verified prepaid service periods and buyer-approved bounded delegations. ACTIVE alone grants no allowance.",inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
+  {name:"paypal_consume_allowance",description:"Reserve service units for this original quote using an existing buyer-approved delegation. Never subscribes, charges, cancels, refunds, or increases limits. Reuse the same task on retry.",inputSchema:{type:"object",properties:{task_id:{type:"string",pattern:"^[a-f0-9]{32}$"},subscription_id:{type:"string",pattern:"^[a-f0-9]{32}$"},delegation_id:{type:"string",pattern:"^[a-f0-9]{32}$"}},required:["task_id","subscription_id","delegation_id"],additionalProperties:false}},
   {name:"paypal_preflight",description:"Check private source inputs and deterministic quote terms without creating a task or payment.",inputSchema:{type:"object",properties:{service_id:{type:"string",enum:serviceIds},documents:documentsSchema,requirements:{type:"string",maxLength:4000}},required:["service_id","documents"],additionalProperties:false},annotations:{readOnlyHint:true}},
   {name:"paypal_recommend_service",description:"Suggest a registered service for an objective. Buyer must choose the service, prepare a quote and approve checkout separately.",inputSchema:{type:"object",properties:{objective:{type:"string",minLength:1,maxLength:2000}},required:["objective"],additionalProperties:false},annotations:{readOnlyHint:true}},
   {name:"paypal_list_services",description:"Read the versioned paid document service; no payment.",inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
   {name:"paypal_prepare_task",description:"Prepare a document quote and buyer review link. Reuse request_id on retries. Never pays.",inputSchema:{type:"object",properties:{service_id:{type:"string",enum:["document-extract-v1","document-compare-v1","requirements-check-v1"]},requirements:{type:"string",maxLength:4000},request_id:{type:"string",minLength:16,maxLength:64},documents:{type:"array",minItems:1,maxItems:10,items:{type:"object",properties:{name:{type:"string",maxLength:120},text:{type:"string",maxLength:16000}},required:["name","text"],additionalProperties:false}}},required:["request_id","documents"],additionalProperties:false}},
   {name:"paypal_get_receipt",description:"Read task, work evidence and provider observations. Unknown is not failure.",inputSchema:idSchema,annotations:{readOnlyHint:true}},
-  {name:"paypal_run_paid_task",description:"Run or recover existing paid document work. Requires a verified capture; never creates a payment.",inputSchema:idSchema},
+  {name:"paypal_run_paid_task",description:"Run or recover existing paid document work. Requires a verified capture or reserved subscription allowance; never creates a payment.",inputSchema:idSchema},
   {name:"paypal_check_payment",description:"Reconcile the original provider resources by reading them, never resubmitting money.",inputSchema:idSchema},
   {name:"paypal_propose_refund",description:"Read the exact failed-unit refund proposal. Merchant must approve separately; cannot refund.",inputSchema:idSchema,annotations:{readOnlyHint:true}},
   {name:"paypal_explain_receipt",description:"Explain authoritative work/payment evidence using AI; explanation cannot authorize money.",inputSchema:idSchema},
@@ -44,12 +46,14 @@ export async function handlePayPalMessage(value:unknown,client:PayPalAgentClient
   const args=message.params.arguments;
   if(typeof name!=="string" || !args || typeof args!=="object" || Array.isArray(args)) return jsonRpcFailure(id,-32602,"Invalid tool arguments");
   const a=args as Record<string,unknown>;
-  const allowed=name==="paypal_preflight" ? ["documents","service_id","requirements"] : name==="paypal_recommend_service" ? ["objective"] : name==="paypal_prepare_task" ? ["request_id","documents","service_id","requirements"] : name==="paypal_list_services" ? [] : ["task_id"];
+  const allowed=name==="paypal_get_allowance" ? [] : name==="paypal_consume_allowance" ? ["task_id","subscription_id","delegation_id"] : name==="paypal_preflight" ? ["documents","service_id","requirements"] : name==="paypal_recommend_service" ? ["objective"] : name==="paypal_prepare_task" ? ["request_id","documents","service_id","requirements"] : name==="paypal_list_services" ? [] : ["task_id"];
   if(Object.keys(a).some(key=>!allowed.includes(key))) return jsonRpcFailure(id,-32602,"Unexpected tool arguments");
   try {
     await client.requireAgent();
     let result:Record<string,unknown>;
     switch(name) {
+      case "paypal_get_allowance": result=await client.allowance();break;
+      case "paypal_consume_allowance": result=await client.consumeAllowance(String(a.task_id),String(a.subscription_id),String(a.delegation_id));break;
       case "paypal_preflight": {
         const documents = preflightArgs(a);
         result = await client.preflight(documents, a.service_id as string, a.requirements as string | undefined); break;

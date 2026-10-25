@@ -188,11 +188,11 @@ try {
     await page.keyboard.press('Tab');
     assert.ok(await page.evaluate(()=>document.activeElement!==document.body));
     await page.getByRole('button',{name:'Outcome dashboard',exact:true}).click();
-    await page.getByRole('heading',{name:'Confirmed buyer cost',exact:true}).waitFor().catch(async e=>{await page.screenshot({path:join(artifacts,'analytics-error.png'),fullPage:true});console.error(await page.locator('body').innerText());throw e;});
+    await page.getByRole('heading',{name:'Orders cash cost',exact:true}).waitFor().catch(async e=>{await page.screenshot({path:join(artifacts,'analytics-error.png'),fullPage:true});console.error(await page.locator('body').innerText());throw e;});
     await page.getByRole('heading',{name:'Work outcomes',exact:true}).waitFor();
     await page.getByRole('heading',{name:'Receipt evidence',exact:true}).waitFor();
     await page.getByRole('button',{name:'Refresh snapshot',exact:true}).click();
-    await page.getByRole('heading',{name:'Confirmed buyer cost',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Orders cash cost',exact:true}).waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.screenshot({path:join(artifacts,`analytics-${width}.png`),fullPage:true});
     if(width===1440){

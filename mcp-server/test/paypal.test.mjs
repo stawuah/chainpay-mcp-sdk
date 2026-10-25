@@ -5,7 +5,7 @@ import {CURRENT_PROTOCOL_VERSION} from '../dist/protocol.js';
 const message=(method,params={})=>({jsonrpc:'2.0',id:1,method,params});
 test('isolated MCP discovery contains only non-approving PayPal tools',async()=>{
   const response=await handlePayPalMessage(message('tools/list'),{});
-  assert.equal(response.result.tools.length,9);
+  assert.equal(response.result.tools.length,11);
   assert.ok(PAYPAL_TOOLS.every(t=>t.name.startsWith('paypal_')));
   assert.ok(PAYPAL_TOOLS.every(t=>!['paypal_capture','paypal_refund','execute_payment'].includes(t.name)));
   const modern=await handlePayPalMessage(message('server/discover',{_meta:{'io.modelcontextprotocol/protocolVersion':CURRENT_PROTOCOL_VERSION,'io.modelcontextprotocol/clientCapabilities':{}}}),{});
@@ -79,4 +79,12 @@ test('assistance runtime shapes reject malformed inputs before forwarding',async
     assert.equal(response.result.isError,true);
   }
   assert.equal(forwarded,0);
+});
+
+test('delegated allowance tool rejects money and limit override arguments',async()=>{
+ const client={requireAgent:async()=>{},consumeAllowance:async(...args)=>({args})};
+ const args={task_id:'a'.repeat(32),subscription_id:'b'.repeat(32),delegation_id:'c'.repeat(32)};
+ const result=await handlePayPalMessage(message('tools/call',{name:'paypal_consume_allowance',arguments:args}),client);
+ assert.equal(result.result.isError,false);
+ for(const key of ['buyer','amount','period_limit']){const result=await handlePayPalMessage(message('tools/call',{name:'paypal_consume_allowance',arguments:{...args,[key]:'override'}}),client);assert.equal(result.error.code,-32602);}
 });
