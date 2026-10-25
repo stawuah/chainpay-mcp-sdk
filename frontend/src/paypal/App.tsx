@@ -3,6 +3,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { BrandLogo } from "../brand/Brand";
 import { checkoutUrl, client, exportReceipt, shownMoney, type Principal, type Proposal, type Receipt, type Service } from "./client";
 
+import Subscriptions from "./Subscriptions";
 import ServicePreflight, { type Preflight } from "./ServicePreflight";
 
 const Analytics = lazy(() => import("./Analytics"));
@@ -217,8 +218,9 @@ export default function App({ origin }: { origin: string }) {
           </nav>
         </aside>}
         <div className="paypal-content">
+          {principal && <Subscriptions key={`${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} services={services} selected={selected} onAllocated={task => { select(task); void refresh(); }} />}
           {dashboard && principal && <Suspense fallback={<p role="status">Loading outcome dashboard…</p>}>
-            <Analytics origin={origin} token={token} onSelect={task => { void perform(async () => select(await api<Receipt>(`/tasks/${task.id}`))); }} />
+            <Analytics key={`${principal.workspace}:${principal.id}:${token}`} origin={origin} token={token} onSelect={task => { void perform(async () => select(await api<Receipt>(`/tasks/${task.id}`))); }} />
           </Suspense>}
           {!dashboard && !selected && editable && <section className="paypal-card"><p className="paypal-eyebrow">01 · DEFINE THE WORK</p><h2>What should your agent read?</h2><label htmlFor="paypal-service">Service</label><select id="paypal-service" value={serviceId} disabled={busy} onChange={e => { setServiceId(e.target.value); requestId.current = crypto.randomUUID(); }}>{services.length ? services.map(s => <option key={s.id} value={s.id}>{s.name} · {shownMoney(s.unit_price)}</option>) : <option value="document-extract-v1">Evidence-linked document summary · $4.00</option>}</select><p>{service?.delivery ?? "Summary and factual claims linked to source excerpts."} {serviceId === "document-compare-v1" ? "Exactly two documents, $8.00 per pair." : "USD 4.00 per document. Text and Markdown, up to 10 documents."}</p>{serviceId === "requirements-check-v1" && <><label htmlFor="paypal-requirements">Requirements to check</label><textarea id="paypal-requirements" rows={3} aria-describedby="requirements-limit" value={requirements} onChange={e => { setRequirements(e.target.value); requestId.current = crypto.randomUUID(); }} /><p id="requirements-limit" role={requirementsBytes > 4000 ? "alert" : undefined}>{requirementsBytes} / 4000 UTF-8 bytes. Non-ASCII characters may use multiple bytes.</p></>}<div className="paypal-actions"><Button label={serviceId === "document-compare-v1" ? "Use two sample documents" : "Use three sample documents"} variant="secondary" isDisabled={busy} onClick={() => { setDocuments(serviceId === "document-compare-v1" ? samples.slice(0, 2) : samples); requestId.current = crypto.randomUUID(); }} /><label className="paypal-file">Upload text files<input type="file" multiple accept=".txt,.md,text/plain,text/markdown" onChange={e => void perform(async () => { const generation = sessionGeneration.current; const draftId = requestId.current; const files = [...(e.target.files ?? [])]; if (!files.length || files.length > 10 || files.some(f => f.size > 16000)) throw new Error("Choose 1–10 text files of at most 16 KB each."); const uploaded = await Promise.all(files.map(async file => ({ name: file.name, text: await file.text() }))); if (generation !== sessionGeneration.current || draftId !== requestId.current) return; setDocuments(uploaded); requestId.current = crypto.randomUUID(); })} /></label></div>{documents.map((document, index) => <div className="paypal-document" key={index}><label htmlFor={`document-name-${index}`}>Document {index + 1} name</label><input id={`document-name-${index}`} value={document.name} maxLength={120} onChange={e => { setDocuments(d => d.map((v,i) => i === index ? { ...v,name:e.target.value } : v)); requestId.current = crypto.randomUUID(); }} /><label htmlFor={`document-text-${index}`}>Source text</label><textarea id={`document-text-${index}`} rows={4} value={document.text} maxLength={16000} onChange={e => { setDocuments(d => d.map((v,i) => i === index ? { ...v,text:e.target.value } : v)); requestId.current = crypto.randomUUID(); }} /><Button label={`Remove document ${index + 1}`} variant="secondary" isDisabled={busy || documents.length <= 1} onClick={() => { setDocuments(d => d.filter((_, i) => i !== index)); requestId.current = crypto.randomUUID(); }} /></div>)}<Button label="Add document" variant="secondary" isDisabled={busy || documents.length >= (service?.max_documents ?? 10)} onClick={() => { setDocuments(d => [...d, { name: `Document ${d.length + 1}`, text: "" }]); requestId.current = crypto.randomUUID(); }} /><p>{documents.length} documents supplied. {serviceId === "document-compare-v1" ? "Exactly 2 documents required." : "Supply 1–10 documents."}</p><ServicePreflight api={api} services={services} input={{ service_id: serviceId, documents, requirements: serviceId === "requirements-check-v1" ? requirements : undefined }} onSelect={id => { setServiceId(id); requestId.current = crypto.randomUUID(); }} /><Button label="Prepare quote" isDisabled={busy || !quoteValid} onClick={() => void perform(async () => { const generation = sessionGeneration.current; const request = { request_id: requestId.current, documents: structuredClone(documents), service_id: serviceId, requirements: serviceId === "requirements-check-v1" ? requirements : undefined }; const { request_id, ...inputs } = request; const check = await api<Preflight>("/preflight", "POST", inputs); if (generation !== sessionGeneration.current || request_id !== requestId.current) return; if (!check.ready) throw new Error(check.issues.map(i => `Document ${i.document_index + 1} (${request.documents[i.document_index]?.name}): ${i.message}`).join("; ")); const task = await api<Receipt>("/tasks", "POST", request); if (generation !== sessionGeneration.current || request_id !== requestId.current) return; select(task); await refresh(); })} /><p className="paypal-note">{serviceId === "document-compare-v1" ? "Compare both sample sources in one output." : "Sample inputs contain readable supplier terms."} Outputs are generated when you run the paid task.</p></section>}
           {!dashboard && !selected && !editable && <section className="paypal-card">
@@ -273,8 +275,8 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
   const unresolved = [selected.order_state, selected.capture_state, selected.refund_state].some(state => state === "unknown" || state === "dispatching");
   const quoteReady = quoteStillOpen(selected);
   const nextCapture = principal?.role === "buyer" && selected.order_id && !selected.captured && !selected.capture_state;
-  const nextCheckout = principal?.role === "buyer" && !selected.captured && !selected.order_state && quoteReady;
-  const nextWork = selected.captured && !selected.payment_review && selected.units.some(unit => ["pending", "unknown", "processing"].includes(unit.state));
+  const nextCheckout = principal?.role === "buyer" && !selected.subscription_funding && !selected.captured && !selected.funded && !selected.order_state && quoteReady;
+  const nextWork = (selected.funded || selected.captured) && !selected.payment_review && selected.units.some(unit => ["pending", "unknown", "processing"].includes(unit.state));
 
   return <section className="paypal-card" aria-label="Task receipt">
     <div className="paypal-receipt-title">
@@ -282,6 +284,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
       <span className="paypal-status">{receiptStatus(selected)}</span>
     </div>
             <div className="paypal-service-terms"><h3>{selected.service_name ?? "Evidence-linked document summary"}</h3><p>Service version: <code>{selected.offer_version ?? "document-extract-v1"}</code></p>{!publicToken && typeof selected.requirements === "string" && <><h3>Purchased requirements</h3><p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{selected.requirements}</p></>}</div>
+    {selected.subscription_funding && <p>Prepaid service allocation: {selected.subscription_funding.units} units. No per-task PayPal capture. Payment reference: <code>{selected.subscription_funding.payment_id}</code>. Failed output units restore allowance once, not cash.</p>}
     {selected.payment_review && <p className="paypal-notice" role="alert">{selected.payment_review}. Net cost is not established.</p>}
     {!quoteReady && <p className="paypal-notice">This quote expired. Prepare a new quote. No payment was submitted.</p>}
     <div className="paypal-cost">
@@ -346,7 +349,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
           const answer = await api<{ explanation: string }>(`${taskPath}/explain`, "POST");
           setExplanation(answer.explanation);
         })} />
-        {!selected.payment_review && <Button label="Review failed-unit refund" variant="secondary" isDisabled={busy} onClick={() => void perform(async () => setProposal(await api<Proposal>(`${taskPath}/refund-proposal`)))} />}
+        {!selected.subscription_funding && !selected.payment_review && <Button label="Review failed-unit refund" variant="secondary" isDisabled={busy} onClick={() => void perform(async () => setProposal(await api<Proposal>(`${taskPath}/refund-proposal`)))} />}
       </div>
       {explanation && <aside className="paypal-explanation"><strong>AI explanation · not payment authority</strong><p>{explanation}</p></aside>}
       {proposal && <div className="paypal-refund">
@@ -410,7 +413,7 @@ function pageHeading({ dashboard, selected, publicToken, principal, restoring }:
 }
 
 function quoteStillOpen(task: Receipt): boolean {
-  if (task.captured || task.order_id || task.order_state) return true;
+  if (task.subscription_funding || task.funded || task.captured || task.order_id || task.order_state) return true;
   if (task.quote_expires_at == null) return true;
   return task.quote_expires_at * 1000 > Date.now();
 }
@@ -418,6 +421,7 @@ function quoteStillOpen(task: Receipt): boolean {
 function receiptStatus(task: Receipt): string {
   if (task.payment_review) return "Merchant review required";
   if (task.refund_confirmed) return "Refund confirmed";
+  if (task.subscription_funding) return "Prepaid allowance reserved";
   if (task.captured) return "PayPal capture confirmed";
   if ([task.order_state, task.capture_state, task.refund_state].some(state => state === "unknown" || state === "dispatching")) return "Payment unresolved";
   return "Awaiting payment";
@@ -425,6 +429,7 @@ function receiptStatus(task: Receipt): string {
 
 function listStatus(task: Receipt): string {
   if (task.payment_review) return "Needs review";
+  if (task.subscription_funding) return "Allowance reserved";
   if (task.captured) return "Captured";
   return "Awaiting payment";
 }

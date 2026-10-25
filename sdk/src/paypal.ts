@@ -49,6 +49,13 @@ export class PayPalAgentClient {
     if (typeof objective !== "string" || !objective.trim() || new TextEncoder().encode(objective).length > 2000) throw new Error("Supply an objective of 1–2000 bytes");
     return this.#request("/recommend-service", "POST", {objective});
   }
+  allowance() { return this.#request("/subscriptions"); }
+  async consumeAllowance(id: string, subscriptionId: string, delegationId: string) {
+    await this.requireAgent();
+    const task = await this.#request(`/tasks/${taskId(id)}`);
+    if (typeof task.quote_digest !== "string") throw new Error("Original quote digest unavailable");
+    return agentView(await this.#request(`/tasks/${taskId(id)}/allowance`, "POST", {subscription_id: taskId(subscriptionId), delegation_id: taskId(delegationId), digest: task.quote_digest}));
+  }
   offers() { return this.#request("/offers"); }
   async quote(requestId: string, documents: PayPalDocument[], service?: { id: string; requirements?: string }) {
     if (!/^[a-zA-Z0-9-]{16,64}$/.test(requestId) || !Array.isArray(documents) || documents.length < 1 || documents.length > 10 || documents.some(d => !d || typeof d.name !== "string" || !d.name.trim() || new TextEncoder().encode(d.name).length > 120 || typeof d.text !== "string" || new TextEncoder().encode(d.text).length > 16000)) throw new Error("Invalid document quote; use the same request ID when retrying");

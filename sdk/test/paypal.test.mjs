@@ -46,3 +46,12 @@ test('service choice and requirements survive quote retries without payment auth
 test('excluded production hosts reject trailing DNS dots',()=>{
   for(const host of ['chainpayai.app','www.chainpayai.app','a.b.chainpayai.app','chainpay-relay.vercel.app']) for(const suffix of ['', '.']) assert.throws(()=>new PayPalAgentClient({...config,apiOrigin:`https://${host}${suffix}`}));
 });
+
+test('allowance uses only the original server quote and an approved delegation',async()=>{
+ const old=globalThis.fetch;const calls=[];
+ try{globalThis.fetch=async(url,init)=>{calls.push({url,body:init.body&&JSON.parse(init.body)});return Response.json(url.endsWith('/session')?{role:'agent'}:init.method==='POST'?{id:'a'.repeat(32),funded:true,captured:false}:{quote_digest:'original-digest'});};
+ const client=new PayPalAgentClient(config);const result=await client.consumeAllowance('a'.repeat(32),'b'.repeat(32),'c'.repeat(32));
+ assert.equal(result.captured,false);assert.equal(result.funded,true);assert.deepEqual(calls.at(-1).body,{subscription_id:'b'.repeat(32),delegation_id:'c'.repeat(32),digest:'original-digest'});
+ for(const method of ['subscribe','cancelSubscription','increaseLimits','refundSubscription'])assert.equal(client[method],undefined);
+ }finally{globalThis.fetch=old;}
+});
