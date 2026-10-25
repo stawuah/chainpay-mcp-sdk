@@ -19,6 +19,7 @@ use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 pub struct App {
+    pub ai: super::ai::Ai,
     pub store: Store,
     pub provider: Provider,
     pub config: Arc<Config>,
@@ -190,6 +191,8 @@ pub fn router(app: App) -> Router {
         .route("/v1/paypal/tasks/{id}/checkout",post(checkout))
         .route("/v1/paypal/tasks/{id}/capture",post(capture))
         .route("/v1/paypal/tasks/{id}/reconcile",post(reconcile))
+        .route("/v1/paypal/tasks/{id}/process",post(process))
+        .route("/v1/paypal/tasks/{id}/explain",post(explain))
         .route("/v1/paypal/tasks/{id}/refund-proposal",get(refund_proposal))
         .route("/v1/paypal/tasks/{id}/refund",post(refund))
         .route("/v1/paypal/tasks/{id}/share",post(share).delete(unshare))
@@ -203,6 +206,32 @@ pub fn router(app: App) -> Router {
             response
         }))
         .with_state(app)
+}
+
+async fn process(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, Error> {
+    let p = app.principal(&headers).await?;
+    let task = app.store.get(&id, &p).await?;
+    if !task.captured {
+        return Err(Error::Invalid(
+            "A verified capture is required before processing",
+        ));
+    }
+    tokio::spawn(async move {
+        let _ = app.ai.run(&app.store, &id, &p).await;
+    });
+    Ok(StatusCode::ACCEPTED)
+}
+async fn explain(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Error> {
+    let p = app.principal(&headers).await?;
+    Ok(Json(app.ai.explain(&app.store, &id, &p).await?))
 }
 
 fn bearer(headers: &HeaderMap) -> Result<&str, Error> {

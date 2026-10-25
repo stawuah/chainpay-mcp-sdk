@@ -68,6 +68,7 @@ async fn fixture_checkout_capture_approved_refund_and_private_sharing_end_to_end
     };
     let provider = Provider::fixture(provider_origin, &config);
     let app = App {
+        ai: crate::paypal::ai::Ai::fixture("http://127.0.0.1:1/unused".into()),
         store: store.clone(),
         provider,
         config: Arc::new(config),
