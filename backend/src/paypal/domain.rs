@@ -106,6 +106,8 @@ pub struct Task {
     pub principal: String,
     pub created_at: u64,
     pub offer_version: String,
+    #[serde(default)]
+    pub requirements: Option<String>,
     pub documents: Vec<Document>,
     pub units: Vec<Unit>,
     pub amount: Cents,
@@ -129,6 +131,16 @@ pub struct Task {
 
 impl Task {
     pub fn quote(principal: &Principal, documents: Vec<Document>) -> Result<Self, Error> {
+        Self::quote_service(principal, documents, OFFER_VERSION, None)
+    }
+    pub fn quote_service(
+        principal: &Principal,
+        documents: Vec<Document>,
+        service_id: &str,
+        requirements: Option<String>,
+    ) -> Result<Self, Error> {
+        let service = super::services::get(service_id)?;
+        service.validate(&documents, requirements.as_deref())?;
         if !matches!(principal.role, Role::Buyer | Role::Agent) {
             return Err(Error::Forbidden);
         }
@@ -144,7 +156,7 @@ impl Task {
         }
         let id = random_id()?;
         let created_at = now();
-        let amount = Cents(documents.len() as u64 * UNIT_CENTS);
+        let amount = Cents(service.outputs(documents.len()) as u64 * service.unit_price.0);
         let units: Vec<Unit> = documents
             .iter()
             .map(|d| Unit {
@@ -156,9 +168,17 @@ impl Task {
                 reason: None,
             })
             .collect();
+        let units = if service_id == super::services::COMPARE {
+            let mut unit = units[0].clone();
+            unit.input_hash = hash(&serde_json::to_vec(&documents).unwrap());
+            vec![unit]
+        } else {
+            units
+        };
         let quote_digest = hash(
             serde_json::to_vec(&(
-                OFFER_VERSION,
+                service.id,
+                &requirements,
                 &id,
                 &units.iter().map(|u| &u.input_hash).collect::<Vec<_>>(),
                 amount,
@@ -172,7 +192,8 @@ impl Task {
             workspace: principal.workspace.clone(),
             principal: principal.id.clone(),
             created_at,
-            offer_version: OFFER_VERSION.into(),
+            offer_version: service.id.into(),
+            requirements,
             documents,
             units,
             amount,
@@ -194,6 +215,13 @@ impl Task {
         })
     }
 
+    pub fn output_price(&self) -> Result<Cents, Error> {
+        Ok(super::services::get(&self.offer_version)?.unit_price)
+    }
+    pub fn allowance_units(&self) -> Result<u32, Error> {
+        Ok(self.units.len() as u32
+            * super::services::get(&self.offer_version)?.allowance_units_per_output)
+    }
     pub fn can_read(&self, p: &Principal) -> bool {
         self.workspace == p.workspace && (p.role == Role::Merchant || self.principal == p.id)
     }
@@ -250,7 +278,7 @@ impl Task {
             .filter(|(_, u)| u.state == UnitState::Failed)
             .map(|(i, u)| (i, &u.input_hash))
             .collect();
-        let amount = Cents(failed.len() as u64 * UNIT_CENTS);
+        let amount = Cents(failed.len() as u64 * self.output_price()?.0);
         if amount.0 == 0 {
             return Err(Error::Invalid("No failed units to refund"));
         }

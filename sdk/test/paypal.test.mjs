@@ -26,3 +26,19 @@ test('buyer/merchant credentials cannot be used as an agent grant',async()=>{
   const previous=globalThis.fetch;
   try {globalThis.fetch=async()=>Response.json({role:'buyer'});await assert.rejects(new PayPalAgentClient(config).requireAgent(),/agent-role/);} finally {globalThis.fetch=previous;}
 });
+
+test('service choice and requirements survive quote retries without payment authority',async()=>{
+  const previous=globalThis.fetch;
+  try {
+    globalThis.fetch=async(url,init)=>{
+      const body=JSON.parse(init.body);
+      assert.equal(body.service_id,'requirements-check-v1');
+      assert.equal(body.requirements,'Delivery in five days');
+      assert.equal(body.request_id,'service-request-stable');
+      assert.equal(body.amount,undefined);
+      return Response.json({id:'b'.repeat(32),gross:'4.00',quote_digest:'private'});
+    };
+    const result=await new PayPalAgentClient(config).quote('service-request-stable',[{name:'doc',text:'source'}],{id:'requirements-check-v1',requirements:'Delivery in five days'});
+    assert.equal(result.quote_digest,undefined);
+  } finally {globalThis.fetch=previous;}
+});
