@@ -1,0 +1,55 @@
+name: PayPal extension checks
+on:
+  pull_request:
+    branches: ['paypal/**']
+permissions:
+  contents: read
+concurrency:
+  group: paypal-checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm --prefix frontend ci --ignore-scripts
+      - run: npm --prefix sdk run build
+      - run: npm --prefix frontend test
+      - run: npm --prefix frontend run build:paypal
+      - run: npx --prefix frontend playwright install --with-deps chrome
+      - name: PayPal browser fixtures
+        run: |
+          VITE_CHAINPAY_PAYPAL=true VITE_CHAINPAY_PAYPAL_API_ORIGIN=http://127.0.0.1:8081 npm --prefix frontend run dev:paypal > /tmp/paypal-vite.log 2>&1 &
+          for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:5197/ > /dev/null && break; sleep 1; done
+          npm --prefix frontend run test:paypal-browser
+  sandbox-extension:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: chainpay_paypal_test
+          POSTGRES_DB: chainpay_paypal_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['55479:5432']
+        options: >-
+          --health-cmd "pg_isready -U chainpay_paypal_test" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      PAYPAL_TEST_DATABASE_URL: postgresql://chainpay_paypal_test@127.0.0.1:55479/chainpay_paypal_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace --locked
+      - run: cargo test -p chainpay-backend --features paypal --locked
+      - run: |
+          cargo test -p chainpay-backend --features paypal --locked paypal:: -- --include-ignored
