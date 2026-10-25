@@ -14,9 +14,9 @@ and publish `frontend/dist-paypal`; rewrite `/paypal` and `/paypal/*` to
 `/paypal.html`. Never replace the Colosseum frontend's build or deployment.
 
 1. Enter a dedicated buyer grant. Its token is kept in this tab's sessionStorage
-   so PayPal checkout can return; sign out revokes the grant and clears it.
+   so PayPal checkout can return; sign out clears this tab’s session and private drafts. It does not revoke the grant; an operator can revoke it through the access-management endpoint.
 2. Paste or upload 1–10 text/Markdown documents, or use the labeled sample inputs.
-   The third sample is intentionally unreadable. Nothing precomputes its outputs.
+   Samples contain readable supplier terms. Use **Check inputs** before preparing a quote; unreadable sources are rejected before checkout.
 3. Prepare a quote. Explicitly approve its exact USD total and open sandbox
    checkout. Approve with a separate PayPal sandbox buyer account.
 4. Return to this same task and explicitly confirm capture. A forged return URL

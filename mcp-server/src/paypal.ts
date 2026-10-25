@@ -3,7 +3,16 @@ import { pathToFileURL } from "node:url";
 import { parseJsonRpcMessage, jsonRpcFailure, jsonRpcSuccess, negotiateLegacyProtocolVersion, classifyProtocol, responseId, decorateModernResult, SUPPORTED_PROTOCOL_VERSIONS, type JsonRpcResponse } from "./protocol.js";
 
 const idSchema={type:"object",properties:{task_id:{type:"string",pattern:"^[a-f0-9]{32}$"}},required:["task_id"],additionalProperties:false};
+const serviceIds = ["document-extract-v1", "document-compare-v1", "requirements-check-v1"];
+const documentsSchema = {type:"array",minItems:1,maxItems:10,items:{type:"object",properties:{name:{type:"string",maxLength:120},text:{type:"string",maxLength:16000}},required:["name","text"],additionalProperties:false}};
+function preflightArgs(a: Record<string, unknown>): PayPalDocument[] {
+  const bytes = (s: string) => new TextEncoder().encode(s).length;
+  if (typeof a.service_id !== "string" || !serviceIds.includes(a.service_id) || (a.requirements !== undefined && (typeof a.requirements !== "string" || bytes(a.requirements) > 4000)) || !Array.isArray(a.documents) || a.documents.length < 1 || a.documents.length > 10 || a.documents.some(d => !d || typeof d !== "object" || Array.isArray(d) || Object.keys(d).some(k => !["name", "text"].includes(k)) || typeof d.name !== "string" || !d.name.trim() || bytes(d.name) > 120 || typeof d.text !== "string" || bytes(d.text) > 16000)) throw new Error("Invalid preflight service or document inputs");
+  return a.documents as PayPalDocument[];
+}
 export const PAYPAL_TOOLS=[
+  {name:"paypal_preflight",description:"Check private source inputs and deterministic quote terms without creating a task or payment.",inputSchema:{type:"object",properties:{service_id:{type:"string",enum:serviceIds},documents:documentsSchema,requirements:{type:"string",maxLength:4000}},required:["service_id","documents"],additionalProperties:false},annotations:{readOnlyHint:true}},
+  {name:"paypal_recommend_service",description:"Suggest a registered service for an objective. Buyer must choose the service, prepare a quote and approve checkout separately.",inputSchema:{type:"object",properties:{objective:{type:"string",minLength:1,maxLength:2000}},required:["objective"],additionalProperties:false},annotations:{readOnlyHint:true}},
   {name:"paypal_list_services",description:"Read the versioned paid document service; no payment.",inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
   {name:"paypal_prepare_task",description:"Prepare a document quote and buyer review link. Reuse request_id on retries. Never pays.",inputSchema:{type:"object",properties:{service_id:{type:"string",enum:["document-extract-v1","document-compare-v1","requirements-check-v1"]},requirements:{type:"string",maxLength:4000},request_id:{type:"string",minLength:16,maxLength:64},documents:{type:"array",minItems:1,maxItems:10,items:{type:"object",properties:{name:{type:"string",maxLength:120},text:{type:"string",maxLength:16000}},required:["name","text"],additionalProperties:false}}},required:["request_id","documents"],additionalProperties:false}},
   {name:"paypal_get_receipt",description:"Read task, work evidence and provider observations. Unknown is not failure.",inputSchema:idSchema,annotations:{readOnlyHint:true}},
@@ -35,12 +44,19 @@ export async function handlePayPalMessage(value:unknown,client:PayPalAgentClient
   const args=message.params.arguments;
   if(typeof name!=="string" || !args || typeof args!=="object" || Array.isArray(args)) return jsonRpcFailure(id,-32602,"Invalid tool arguments");
   const a=args as Record<string,unknown>;
-  const allowed=name==="paypal_prepare_task" ? ["request_id","documents","service_id","requirements"] : name==="paypal_list_services" ? [] : ["task_id"];
+  const allowed=name==="paypal_preflight" ? ["documents","service_id","requirements"] : name==="paypal_recommend_service" ? ["objective"] : name==="paypal_prepare_task" ? ["request_id","documents","service_id","requirements"] : name==="paypal_list_services" ? [] : ["task_id"];
   if(Object.keys(a).some(key=>!allowed.includes(key))) return jsonRpcFailure(id,-32602,"Unexpected tool arguments");
   try {
     await client.requireAgent();
     let result:Record<string,unknown>;
     switch(name) {
+      case "paypal_preflight": {
+        const documents = preflightArgs(a);
+        result = await client.preflight(documents, a.service_id as string, a.requirements as string | undefined); break;
+      }
+      case "paypal_recommend_service":
+        if (typeof a.objective !== "string" || !a.objective.trim() || new TextEncoder().encode(a.objective).length > 2000) throw new Error("Supply an objective of 1–2000 bytes");
+        result = await client.recommendService(a.objective); break;
       case "paypal_list_services": result=await client.offers();break;
       case "paypal_prepare_task":
         if(typeof a.request_id!=="string" || !Array.isArray(a.documents)) throw new Error("request_id and documents required");

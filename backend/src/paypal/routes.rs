@@ -212,6 +212,8 @@ pub fn router(app: App) -> Router {
         .route("/healthz",get(|| async { Json(json!({"status":"ready","service":"chainpay-paypal","sandbox":true,"provider_acceptance":"unverified"})) }))
         .route("/v1/paypal/session",get(session).delete(logout))
         .route("/v1/paypal/offers",get(offers))
+        .route("/v1/paypal/preflight",post(preflight))
+        .route("/v1/paypal/recommend-service",post(recommend_service))
         .route("/v1/paypal/analytics",get(analytics))
         .route("/v1/paypal/analytics/ask",post(analytics_ask))
         .route("/v1/paypal/tasks/{id}/reporting",post(reporting))
@@ -355,6 +357,46 @@ async fn offers() -> Json<Value> {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct PreflightInput {
+    service_id: String,
+    documents: Vec<Document>,
+    requirements: Option<String>,
+}
+async fn preflight(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Json(body): Json<PreflightInput>,
+) -> Result<Json<super::services::Preflight>, Error> {
+    let p = app.principal(&headers).await?;
+    if !matches!(p.role, Role::Buyer | Role::Agent) {
+        return Err(Error::Forbidden);
+    }
+    Ok(Json(super::services::preflight(
+        &body.service_id,
+        &body.documents,
+        body.requirements.as_deref(),
+    )?))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Objective {
+    objective: String,
+}
+async fn recommend_service(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Json(body): Json<Objective>,
+) -> Result<Json<Value>, Error> {
+    let p = app.principal(&headers).await?;
+    if !matches!(p.role, Role::Buyer | Role::Agent) {
+        return Err(Error::Forbidden);
+    }
+    Ok(Json(
+        app.ai.recommend(&app.store, &p, &body.objective).await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Quote {
     request_id: String,
     #[serde(default)]
@@ -435,7 +477,13 @@ async fn checkout(
     app.purchases()?;
     let (task, key) = app
         .store
-        .update(&id, &p, |t| t.start_checkout(&p, &body.digest))
+        .update(&id, &p, |t| {
+            t.buyer(&p)?;
+            if !t.captured && t.order.is_none() && !super::services::preflight(&t.offer_version, &t.documents, t.requirements.as_deref())?.ready {
+                return Err(Error::Invalid("Input preflight failed: every source needs at least 30 alphanumeric characters; check inputs before checkout"));
+            }
+            t.start_checkout(&p, &body.digest)
+        })
         .await?;
     if let Some(key) = key {
         match app.provider.create_order(&id, task.amount, &key).await {

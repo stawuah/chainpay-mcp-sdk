@@ -8,12 +8,12 @@ export function apiOrigin(value: string | undefined): string {
   if (!value) throw new Error("The separate PayPal API origin has not been configured.");
   const url = new URL(value);
   const local = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
-  if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) || url.username || url.password || url.pathname !== "/" || url.search || url.hash || url.hostname === "chainpay-relay.vercel.app" || url.hostname === "chainpayai.app" || url.hostname.endsWith(".chainpayai.app")) throw new Error("PayPal requires its own API origin.");
+  if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) || url.hostname.endsWith(".") || url.username || url.password || url.pathname !== "/" || url.search || url.hash || url.hostname === "chainpay-relay.vercel.app" || url.hostname === "chainpayai.app" || url.hostname.endsWith(".chainpayai.app")) throw new Error("PayPal requires its own API origin.");
   return url.origin;
 }
 export function checkoutUrl(value: string): string {
   const url = new URL(value);
-  if (url.protocol !== "https:" || url.hostname !== "www.sandbox.paypal.com" || url.username || url.password || url.port) throw new Error("Unexpected PayPal checkout address.");
+  if (url.protocol !== "https:" || url.hostname !== "www.sandbox.paypal.com" || url.hostname.endsWith(".") || url.username || url.password || url.port) throw new Error("Unexpected PayPal checkout address.");
   return url.href;
 }
 export function money(value: string | null): string {

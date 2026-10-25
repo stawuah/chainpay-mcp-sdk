@@ -86,6 +86,71 @@ impl Service {
     }
 }
 
+/// Shared byte/count constraints for raw quotes and preflight.
+pub fn validate_inputs(documents: &[Document]) -> Result<(), Error> {
+    if documents.is_empty()
+        || documents.len() > 10
+        || documents
+            .iter()
+            .any(|d| d.name.trim().is_empty() || d.name.len() > 120 || d.text.len() > 16_000)
+    {
+        return Err(Error::Invalid(
+            "Use 1–10 named documents, names up to 120 bytes and text up to 16,000 bytes each",
+        ));
+    }
+    Ok(())
+}
+pub fn readable(text: &str) -> bool {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(30)
+        .count()
+        >= 30
+}
+#[derive(Serialize)]
+pub struct InputIssue {
+    pub document_index: usize,
+    pub message: &'static str,
+}
+#[derive(Serialize)]
+pub struct Preflight {
+    pub ready: bool,
+    pub service_id: &'static str,
+    pub outputs: usize,
+    pub unit_price: String,
+    pub amount: String,
+    pub currency: &'static str,
+    pub issues: Vec<InputIssue>,
+}
+pub fn preflight(
+    id: &str,
+    documents: &[Document],
+    requirements: Option<&str>,
+) -> Result<Preflight, Error> {
+    let service = get(id)?;
+    service.validate(documents, requirements)?;
+    validate_inputs(documents)?;
+    let issues: Vec<_> = documents
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| !readable(&d.text))
+        .map(|(document_index, _)| InputIssue {
+            document_index,
+            message: "Supply at least 30 alphanumeric characters of readable source text",
+        })
+        .collect();
+    let outputs = service.outputs(documents.len());
+    Ok(Preflight {
+        ready: issues.is_empty(),
+        service_id: service.id,
+        outputs,
+        unit_price: service.unit_price.decimal(),
+        amount: Cents(outputs as u64 * service.unit_price.0).decimal(),
+        currency: "USD",
+        issues,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +173,25 @@ mod tests {
                 text: "Second source describes delivery in seven working days.".into(),
             },
         ]
+    }
+    #[test]
+    fn preflight_terms_and_readability_are_deterministic() {
+        let result = preflight(COMPARE, &docs(), None).unwrap();
+        assert!(result.ready);
+        assert_eq!(result.amount, "8.00");
+        assert_eq!(result.outputs, 1);
+        let mut inputs = docs();
+        inputs[1].text = "a".repeat(29);
+        let result = preflight(COMPARE, &inputs, None).unwrap();
+        assert!(!result.ready);
+        assert_eq!(result.issues[0].document_index, 1);
+        inputs[1].text = "é".repeat(30);
+        assert!(preflight(COMPARE, &inputs, None).unwrap().ready);
+        inputs[1].text = "é".repeat(8001);
+        assert!(preflight(COMPARE, &inputs, None).is_err());
+        assert!(Task::quote_service(&buyer(), inputs, COMPARE, None).is_err());
+        assert!(preflight(CHECK, &docs(), None).is_err());
+        assert!(preflight("unknown", &docs(), None).is_err());
     }
     #[test]
     fn comparison_is_one_eight_dollar_output_and_refund() {

@@ -24,3 +24,7 @@ test('client refuses redirects and never sends existing site cookies',async()=>{
     assert.deepEqual(await client('https://isolated.example','scoped-grant')('/tasks'),{tasks:[]});
   } finally {globalThis.fetch=original;}
 });
+
+test('excluded production hosts reject trailing DNS dots',()=>{
+  for(const host of ['chainpayai.app','www.chainpayai.app','a.b.chainpayai.app','chainpay-relay.vercel.app']) for(const suffix of ['', '.']) assert.throws(()=>apiOrigin(`https://${host}${suffix}`));
+});
