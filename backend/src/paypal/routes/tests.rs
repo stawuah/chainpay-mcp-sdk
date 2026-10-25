@@ -243,3 +243,138 @@ async fn fixture_checkout_capture_approved_refund_and_private_sharing_end_to_end
     server.abort();
     provider_task.abort();
 }
+
+#[tokio::test]
+#[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
+async fn service_quote_retries_preserve_identity_and_reject_mutated_terms() {
+    let database = std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap();
+    let store = Store::connect(&database).await.unwrap();
+    let p = Principal {
+        id: random_id().unwrap(),
+        workspace: random_id().unwrap(),
+        role: Role::Agent,
+    };
+    let token = store.issue_access(&p, 3600).await.unwrap();
+    let config = Config {
+        database_url: database,
+        client_id: "fixture".into(),
+        client_secret: "fixture".into(),
+        webhook_id: "fixture".into(),
+        public_origin: "https://paypal.example.com".into(),
+        new_purchases: true,
+    };
+    let app = App {
+        ai: crate::paypal::ai::Ai::fixture("http://127.0.0.1:1/unused".into()),
+        provider: Provider::fixture("http://127.0.0.1:1".into(), &config),
+        store: store.clone(),
+        config: Arc::new(config),
+    };
+    let (origin, server) = serve(router(app)).await;
+    let http = reqwest::Client::new();
+    let url = format!("{origin}/v1/paypal/tasks");
+    let docs = vec![
+        Document {
+            name: "A".into(),
+            text: "Delivery within three working days.".into(),
+        },
+        Document {
+            name: "B".into(),
+            text: "Delivery within seven working days.".into(),
+        },
+    ];
+    // Seed the pre-catalog fingerprint, then retry both implicit and explicit summary.
+    let legacy = Task::quote(&p, docs.clone()).unwrap();
+    let request_id = random_id().unwrap();
+    store
+        .create(
+            &legacy,
+            &request_id,
+            &domain::hash(&serde_json::to_vec(&docs).unwrap()),
+        )
+        .await
+        .unwrap();
+    let mut body = json!({"request_id":request_id,"documents":docs});
+    for explicit in [false, true] {
+        if explicit {
+            body["service_id"] = json!(domain::OFFER_VERSION);
+        }
+        let response: Value = http
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(response["id"], legacy.id);
+    }
+    body["service_id"] = json!(super::super::services::COMPARE);
+    assert_eq!(
+        http.post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        409
+    );
+    body["request_id"] = json!(random_id().unwrap());
+    body["service_id"] = json!(super::super::services::CHECK);
+    body["requirements"] = json!("PRIVATE exact terms");
+    let first: Value = http
+        .post(&url)
+        .bearer_auth(&token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let retried: Value = http
+        .post(&url)
+        .bearer_auth(&token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(first["id"], retried["id"]);
+    assert_eq!(retried["requirements"], "PRIVATE exact terms");
+    body["requirements"] = json!("substituted terms");
+    assert_eq!(
+        http.post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        409
+    );
+    let path = format!("{url}/{}", first["id"].as_str().unwrap());
+    for action in ["checkout", "capture", "refund"] {
+        assert_eq!(
+            http.post(format!("{path}/{action}"))
+                .bearer_auth(&token)
+                .json(&json!({"digest":first["quote_digest"]}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+    }
+    server.abort();
+}

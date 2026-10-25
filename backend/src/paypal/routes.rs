@@ -350,13 +350,17 @@ async fn logout(State(app): State<App>, headers: HeaderMap) -> Result<StatusCode
 }
 async fn offers() -> Json<Value> {
     Json(
-        json!({"offers":[{"id":domain::OFFER_VERSION,"name":"Evidence-linked document summary","unit_price":"4.00","currency":"USD","max_documents":10,"delivery":"Summary and claims with exact source excerpts per readable document","sandbox":true}]}),
+        json!({"offers":super::services::catalog().into_iter().map(|s| json!({"id":s.id,"name":s.name,"unit_price":s.unit_price.decimal(),"currency":"USD","min_documents":s.min_documents,"max_documents":s.max_documents,"allowance_units_per_output":s.allowance_units_per_output,"delivery":s.delivery,"requires_requirements":s.requires_requirements,"sandbox":true})).collect::<Vec<_>>()}),
     )
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Quote {
     request_id: String,
+    #[serde(default)]
+    service_id: Option<String>,
+    #[serde(default)]
+    requirements: Option<String>,
     documents: Vec<Document>,
 }
 async fn quote(
@@ -369,10 +373,29 @@ async fn quote(
     app.store
         .rate_limit(&format!("quote:{}", p.workspace), 10)
         .await?;
-    let fingerprint = domain::hash(
-        &serde_json::to_vec(&body.documents).map_err(|_| Error::Invalid("Invalid inputs"))?,
-    );
-    let task = Task::quote(&p, body.documents)?;
+    let fingerprint = if body.service_id.as_deref().unwrap_or(domain::OFFER_VERSION)
+        == domain::OFFER_VERSION
+        && body.requirements.is_none()
+    {
+        domain::hash(
+            &serde_json::to_vec(&body.documents).map_err(|_| Error::Invalid("Invalid inputs"))?,
+        )
+    } else {
+        domain::hash(
+            &serde_json::to_vec(&(
+                body.service_id.as_deref().unwrap_or(domain::OFFER_VERSION),
+                &body.requirements,
+                &body.documents,
+            ))
+            .map_err(|_| Error::Invalid("Invalid inputs"))?,
+        )
+    };
+    let task = Task::quote_service(
+        &p,
+        body.documents,
+        body.service_id.as_deref().unwrap_or(domain::OFFER_VERSION),
+        body.requirements,
+    )?;
     Ok(Json(observations::receipt(
         &app.store
             .create(&task, &body.request_id, &fingerprint)

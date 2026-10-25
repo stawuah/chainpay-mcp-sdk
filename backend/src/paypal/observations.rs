@@ -108,12 +108,14 @@ pub fn refund(task: &mut Task, value: Value) -> Result<(), Error> {
 pub fn receipt(task: &Task, public: bool) -> Value {
     let units: Vec<Value> = task.units.iter().enumerate().map(|(i,u)| {
         let mut view = json!({"index":i,"state":u.state,"input_hash":u.input_hash,"output_hash":u.output_hash,"source":"merchant work record"});
-        if !public { view["name"] = task.documents[i].name.clone().into(); view["result"] = json!(u.result); view["reason"] = json!(u.reason); }
+        if !public { view["name"] = if task.offer_version == super::services::COMPARE { task.documents.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(" ↔ ") } else { task.documents[i].name.clone() }.into(); view["result"] = json!(u.result); view["reason"] = json!(u.reason); }
         view
     }).collect();
     let mut view = json!({
         "id":task.id,"sandbox":true,"currency":"USD","offer_version":task.offer_version,
+        "service_name":super::services::get(&task.offer_version).ok().map(|s| s.name),
         "created_at":task.created_at,"approved_at":task.approved_at,
+        "allowance_units":task.allowance_units().ok(),
         "gross":task.amount.decimal(),"captured":task.captured,"payment_review":task.payment_review,
         "refund":task.refund_amount.decimal(),"refund_confirmed":task.refund_confirmed,
         "net":task.net().map(Cents::decimal),"units":units,
@@ -125,6 +127,7 @@ pub fn receipt(task: &Task, public: bool) -> Value {
         "refund_state":task.refund.as_ref().map(|o| &o.state),
     });
     if !public {
+        view["requirements"] = json!(task.requirements);
         view["quote_digest"] = task.quote_digest.clone().into();
         view["quote_expires_at"] = task.quote_expires_at.into();
         view["approval_url"] = json!(task.approval_url);
@@ -200,6 +203,32 @@ mod tests {
             "Late completion must not erase exception"
         );
         assert!(crate::paypal::analytics::projection(&[t])["known_net_cost"].is_null());
+    }
+    #[test]
+    fn requirements_are_private_and_visible_before_approval() {
+        let p = Principal {
+            id: "buyer".into(),
+            workspace: "workspace".into(),
+            role: Role::Buyer,
+        };
+        let task = Task::quote_service(
+            &p,
+            vec![Document {
+                name: "private name".into(),
+                text: "private document".into(),
+            }],
+            super::super::services::CHECK,
+            Some("SECRET exact buyer requirements".into()),
+        )
+        .unwrap();
+        let private = receipt(&task, false);
+        assert_eq!(private["requirements"], "SECRET exact buyer requirements");
+        assert_eq!(private["offer_version"], super::super::services::CHECK);
+        assert_eq!(private["service_name"], "Check supplied requirements");
+        assert_eq!(private["captured"], false);
+        let public = receipt(&task, true);
+        assert!(public.get("requirements").is_none());
+        assert!(!public.to_string().contains("SECRET"));
     }
     #[test]
     fn public_projection_never_includes_inputs_outputs_or_approval_capabilities() {

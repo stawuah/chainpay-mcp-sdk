@@ -42,9 +42,9 @@ export class PayPalAgentClient {
     if (session.role !== "agent") throw new Error("MCP requires an agent-role grant, never a buyer or merchant approval grant");
   }
   offers() { return this.#request("/offers"); }
-  async quote(requestId: string, documents: PayPalDocument[]) {
+  async quote(requestId: string, documents: PayPalDocument[], service?: { id: string; requirements?: string }) {
     if (!/^[a-zA-Z0-9-]{16,64}$/.test(requestId) || !Array.isArray(documents) || documents.length < 1 || documents.length > 10 || documents.some(d => !d || typeof d.name !== "string" || !d.name.trim() || new TextEncoder().encode(d.name).length > 120 || typeof d.text !== "string" || new TextEncoder().encode(d.text).length > 16000)) throw new Error("Invalid document quote; use the same request ID when retrying");
-    const result = agentView(await this.#request("/tasks", "POST", {request_id:requestId,documents}));
+    const result = agentView(await this.#request("/tasks", "POST", {request_id:requestId,documents,...(service ? {service_id:service.id,requirements:service.requirements} : {})}));
     return {...result, review_url:`${this.#workspace}/paypal/?task=${taskId(String(result.id))}`, approval:"Buyer must review the quote and approve PayPal checkout; this tool does not pay."};
   }
   async receipt(id: string) { return agentView(await this.#request(`/tasks/${taskId(id)}`)); }

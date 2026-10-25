@@ -5,7 +5,7 @@ import { parseJsonRpcMessage, jsonRpcFailure, jsonRpcSuccess, negotiateLegacyPro
 const idSchema={type:"object",properties:{task_id:{type:"string",pattern:"^[a-f0-9]{32}$"}},required:["task_id"],additionalProperties:false};
 export const PAYPAL_TOOLS=[
   {name:"paypal_list_services",description:"Read the versioned paid document service; no payment.",inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
-  {name:"paypal_prepare_task",description:"Prepare a document quote and buyer review link. Reuse request_id on retries. Never pays.",inputSchema:{type:"object",properties:{request_id:{type:"string",minLength:16,maxLength:64},documents:{type:"array",minItems:1,maxItems:10,items:{type:"object",properties:{name:{type:"string",maxLength:120},text:{type:"string",maxLength:16000}},required:["name","text"],additionalProperties:false}}},required:["request_id","documents"],additionalProperties:false}},
+  {name:"paypal_prepare_task",description:"Prepare a document quote and buyer review link. Reuse request_id on retries. Never pays.",inputSchema:{type:"object",properties:{service_id:{type:"string",enum:["document-extract-v1","document-compare-v1","requirements-check-v1"]},requirements:{type:"string",maxLength:4000},request_id:{type:"string",minLength:16,maxLength:64},documents:{type:"array",minItems:1,maxItems:10,items:{type:"object",properties:{name:{type:"string",maxLength:120},text:{type:"string",maxLength:16000}},required:["name","text"],additionalProperties:false}}},required:["request_id","documents"],additionalProperties:false}},
   {name:"paypal_get_receipt",description:"Read task, work evidence and provider observations. Unknown is not failure.",inputSchema:idSchema,annotations:{readOnlyHint:true}},
   {name:"paypal_run_paid_task",description:"Run or recover existing paid document work. Requires a verified capture; never creates a payment.",inputSchema:idSchema},
   {name:"paypal_check_payment",description:"Reconcile the original provider resources by reading them, never resubmitting money.",inputSchema:idSchema},
@@ -35,7 +35,7 @@ export async function handlePayPalMessage(value:unknown,client:PayPalAgentClient
   const args=message.params.arguments;
   if(typeof name!=="string" || !args || typeof args!=="object" || Array.isArray(args)) return jsonRpcFailure(id,-32602,"Invalid tool arguments");
   const a=args as Record<string,unknown>;
-  const allowed=name==="paypal_prepare_task" ? ["request_id","documents"] : name==="paypal_list_services" ? [] : ["task_id"];
+  const allowed=name==="paypal_prepare_task" ? ["request_id","documents","service_id","requirements"] : name==="paypal_list_services" ? [] : ["task_id"];
   if(Object.keys(a).some(key=>!allowed.includes(key))) return jsonRpcFailure(id,-32602,"Unexpected tool arguments");
   try {
     await client.requireAgent();
@@ -44,7 +44,9 @@ export async function handlePayPalMessage(value:unknown,client:PayPalAgentClient
       case "paypal_list_services": result=await client.offers();break;
       case "paypal_prepare_task":
         if(typeof a.request_id!=="string" || !Array.isArray(a.documents)) throw new Error("request_id and documents required");
-        result=await client.quote(a.request_id,a.documents as PayPalDocument[]);break;
+        if (a.service_id !== undefined && typeof a.service_id !== "string" || a.requirements !== undefined && typeof a.requirements !== "string") throw new Error("Invalid service selection");
+        if (a.requirements !== undefined && a.service_id === undefined) throw new Error("requirements requires service_id");
+        result=await client.quote(a.request_id,a.documents as PayPalDocument[],typeof a.service_id === "string" ? {id:a.service_id,requirements:a.requirements as string | undefined} : undefined);break;
       case "paypal_get_receipt": result=await client.receipt(String(a.task_id));break;
       case "paypal_run_paid_task": result=await client.process(String(a.task_id));break;
       case "paypal_check_payment": result=await client.reconcile(String(a.task_id));break;
