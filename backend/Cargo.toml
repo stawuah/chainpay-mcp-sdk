@@ -2,6 +2,12 @@
 name = "chainpay-backend"
 version = "0.1.0"
 edition = "2024"
+default-run = "chainpay-backend"
+
+[[bin]]
+name = "chainpay-paypal"
+path = "src/bin/paypal.rs"
+required-features = ["paypal"]
 
 [[bin]]
 name = "relay"
@@ -9,6 +15,7 @@ path = "api/relay.rs"
 required-features = ["vercel"]
 
 [features]
+paypal = []
 vercel = ["dep:vercel_runtime", "dep:tower"]
 
 [dependencies]
