@@ -3,6 +3,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { BrandLogo } from "../brand/Brand";
 import { checkoutUrl, client, exportReceipt, shownMoney, type Principal, type Proposal, type Receipt, type Service } from "./client";
 
+import { Resolution } from "./Resolution";
 import Subscriptions from "./Subscriptions";
 import ServicePreflight, { type Preflight } from "./ServicePreflight";
 
@@ -240,7 +241,7 @@ export default function App({ origin }: { origin: string }) {
             perform={perform}
             api={api}
             refresh={refresh}
-            setSelected={setSelected}
+            setSelected={receipt => { setSelected(receipt); setTasks(tasks => tasks.map(task => task.id === receipt.id ? receipt : task)); }}
             setProposal={setProposal}
             setExplanation={setExplanation}
             setReporting={setReporting}
@@ -272,7 +273,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
   setReporting: (value: Report | undefined) => void;
   setShare: (value: string) => void;
 }) {
-  const unresolved = [selected.order_state, selected.capture_state, selected.refund_state].some(state => state === "unknown" || state === "dispatching");
+  const unresolved = unresolvedPayment(selected);
   const quoteReady = quoteStillOpen(selected);
   const nextCapture = principal?.role === "buyer" && selected.order_id && !selected.captured && !selected.capture_state;
   const nextCheckout = principal?.role === "buyer" && !selected.subscription_funding && !selected.captured && !selected.funded && !selected.order_state && quoteReady;
@@ -322,6 +323,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
         <div className="paypal-unit-title">
           <h3>{unit.name ?? `Document ${unit.index + 1}`}</h3>
           <span className={`paypal-unit-state ${unit.state}`}>{unitLabel[unit.state]}</span>
+          <span>Revision {unit.revision ?? 0} · {unit.buyer_review === "accept" ? "Accepted by buyer" : unit.buyer_review === "challenge" ? "Challenged by buyer" : "Buyer acceptance not recorded"}</span>
         </div>
         {unit.reason && <p>{unit.reason}</p>}
         {unit.result && <>
@@ -341,6 +343,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
         </details>
       </article>)}
     </div>
+    {!publicToken && <Resolution key={selected.id} receipt={selected} principal={principal} api={api} update={setSelected} busy={busy} perform={perform} />}
     <p className="paypal-note">Payment: PayPal sandbox API observation. Delivery: merchant processing record, not buyer acceptance. This is not an on-chain receipt.</p>
     {!publicToken && <div className="paypal-review">
       <h3>Review the outcome</h3>
@@ -349,10 +352,10 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
           const answer = await api<{ explanation: string }>(`${taskPath}/explain`, "POST");
           setExplanation(answer.explanation);
         })} />
-        {!selected.subscription_funding && !selected.payment_review && <Button label="Review failed-unit refund" variant="secondary" isDisabled={busy} onClick={() => void perform(async () => setProposal(await api<Proposal>(`${taskPath}/refund-proposal`)))} />}
+        {!selected.subscription_funding && !selected.payment_review && !selected.refunds?.length && <Button label="Review failed-unit refund" variant="secondary" isDisabled={busy} onClick={() => void perform(async () => setProposal(await api<Proposal>(`${taskPath}/refund-proposal`)))} />}
       </div>
       {explanation && <aside className="paypal-explanation"><strong>AI explanation · not payment authority</strong><p>{explanation}</p></aside>}
-      {proposal && <div className="paypal-refund">
+      {proposal && !selected.refunds?.length && <div className="paypal-refund">
         <h3>Proposed refund: {shownMoney(proposal.amount)}</h3>
         <p>{proposal.reason}</p>
         {principal?.role === "merchant"
@@ -418,17 +421,22 @@ function quoteStillOpen(task: Receipt): boolean {
   return task.quote_expires_at * 1000 > Date.now();
 }
 
+function unresolvedPayment(task: Receipt): boolean {
+  return !!task.refund_pending || [task.order_state, task.capture_state, task.refund_state, ...(task.refunds ?? []).map(r => r.state)].some(state => state === "unknown" || state === "dispatching");
+}
+
 function receiptStatus(task: Receipt): string {
   if (task.payment_review) return "Merchant review required";
+  if (unresolvedPayment(task)) return "Payment unresolved";
   if (task.refund_confirmed) return "Refund confirmed";
   if (task.subscription_funding) return "Prepaid allowance reserved";
   if (task.captured) return "PayPal capture confirmed";
-  if ([task.order_state, task.capture_state, task.refund_state].some(state => state === "unknown" || state === "dispatching")) return "Payment unresolved";
   return "Awaiting payment";
 }
 
 function listStatus(task: Receipt): string {
   if (task.payment_review) return "Needs review";
+  if (unresolvedPayment(task)) return "Payment unresolved";
   if (task.subscription_funding) return "Allowance reserved";
   if (task.captured) return "Captured";
   return "Awaiting payment";

@@ -5,7 +5,7 @@ import {CURRENT_PROTOCOL_VERSION} from '../dist/protocol.js';
 const message=(method,params={})=>({jsonrpc:'2.0',id:1,method,params});
 test('isolated MCP discovery contains only non-approving PayPal tools',async()=>{
   const response=await handlePayPalMessage(message('tools/list'),{});
-  assert.equal(response.result.tools.length,11);
+  assert.equal(response.result.tools.length,12);
   assert.ok(PAYPAL_TOOLS.every(t=>t.name.startsWith('paypal_')));
   assert.ok(PAYPAL_TOOLS.every(t=>!['paypal_capture','paypal_refund','execute_payment'].includes(t.name)));
   const modern=await handlePayPalMessage(message('server/discover',{_meta:{'io.modelcontextprotocol/protocolVersion':CURRENT_PROTOCOL_VERSION,'io.modelcontextprotocol/clientCapabilities':{}}}),{});

@@ -17,6 +17,7 @@ export const PAYPAL_TOOLS=[
   {name:"paypal_recommend_service",description:"Suggest a registered service for an objective. Buyer must choose the service, prepare a quote and approve checkout separately.",inputSchema:{type:"object",properties:{objective:{type:"string",minLength:1,maxLength:2000}},required:["objective"],additionalProperties:false},annotations:{readOnlyHint:true}},
   {name:"paypal_list_services",description:"Read the versioned paid document service; no payment.",inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
   {name:"paypal_prepare_task",description:"Prepare a document quote and buyer review link. Reuse request_id on retries. Never pays.",inputSchema:{type:"object",properties:{service_id:{type:"string",enum:["document-extract-v1","document-compare-v1","requirements-check-v1"]},requirements:{type:"string",maxLength:4000},request_id:{type:"string",minLength:16,maxLength:64},documents:{type:"array",minItems:1,maxItems:10,items:{type:"object",properties:{name:{type:"string",maxLength:120},text:{type:"string",maxLength:16000}},required:["name","text"],additionalProperties:false}}},required:["request_id","documents"],additionalProperties:false}},
+  {name:"paypal_get_resolution",description:"Read scoped output revisions and human decision history. Cannot accept, challenge, approve rework or authorize refunds.",inputSchema:idSchema,annotations:{readOnlyHint:true}},
   {name:"paypal_get_receipt",description:"Read task, work evidence and provider observations. Unknown is not failure.",inputSchema:idSchema,annotations:{readOnlyHint:true}},
   {name:"paypal_run_paid_task",description:"Run or recover existing paid document work. Requires a verified capture or reserved subscription allowance; never creates a payment.",inputSchema:idSchema},
   {name:"paypal_check_payment",description:"Reconcile the original provider resources by reading them, never resubmitting money.",inputSchema:idSchema},
@@ -67,6 +68,7 @@ export async function handlePayPalMessage(value:unknown,client:PayPalAgentClient
         if (a.service_id !== undefined && typeof a.service_id !== "string" || a.requirements !== undefined && typeof a.requirements !== "string") throw new Error("Invalid service selection");
         if (a.requirements !== undefined && a.service_id === undefined) throw new Error("requirements requires service_id");
         result=await client.quote(a.request_id,a.documents as PayPalDocument[],typeof a.service_id === "string" ? {id:a.service_id,requirements:a.requirements as string | undefined} : undefined);break;
+      case "paypal_get_resolution": result=await client.resolution(String(a.task_id));break;
       case "paypal_get_receipt": result=await client.receipt(String(a.task_id));break;
       case "paypal_run_paid_task": result=await client.process(String(a.task_id));break;
       case "paypal_check_payment": result=await client.reconcile(String(a.task_id));break;

@@ -14,6 +14,7 @@ function taskId(value: string): string {
 }
 function agentView(value: Record<string, unknown>): Record<string, unknown> {
   const { quote_digest: _quote, share_token: _share, ...view } = value;
+  if (Array.isArray(view.refunds)) view.refunds = view.refunds.map((refund: Record<string, unknown>) => { const {digest: _digest, ...readOnly} = refund; return readOnly; });
   return view;
 }
 export class PayPalAgentClient {
@@ -63,6 +64,7 @@ export class PayPalAgentClient {
     return {...result, review_url:`${this.#workspace}/paypal/?task=${taskId(String(result.id))}`, approval:"Buyer must review the quote and approve PayPal checkout; this tool does not pay."};
   }
   async receipt(id: string) { return agentView(await this.#request(`/tasks/${taskId(id)}`)); }
+  async resolution(id: string) { const receipt = await this.receipt(id); return { units: Array.isArray(receipt.units) ? receipt.units.map((u: Record<string, unknown>) => ({index:u.index, revision:u.revision ?? 0, output_hash:u.output_hash ?? null, buyer_review:u.buyer_review ?? null})) : [], resolution: receipt.resolution ?? [], revisions: receipt.revisions ?? [], refunds: receipt.refunds ?? [], approval: "Buyer decisions and merchant approvals require the human workspace. Acceptance never waives PayPal dispute rights." }; }
   process(id: string) { return this.#request(`/tasks/${taskId(id)}/process`,"POST"); }
   async reconcile(id: string) { return agentView(await this.#request(`/tasks/${taskId(id)}/reconcile`,"POST")); }
   async refundProposal(id: string) {

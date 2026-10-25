@@ -57,3 +57,8 @@ AG Studio's trial watermark is preserved. Set the optional public
 `VITE_CHAINPAY_PAYPAL_STUDIO_LICENSE` build variable only to a legitimately issued
 license. Confirm coverage through December 16 before hosting for judges; this code
 does not grant a commercial license or prove sponsor eligibility.
+
+## Buyer resolution
+
+See [buyer acceptance, free rework and selected-output refunds](paypal-resolution.md)
+for revision-bound human decisions and preserved private evidence.
