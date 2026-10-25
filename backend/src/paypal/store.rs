@@ -239,7 +239,7 @@ impl Store {
     }
 
     pub(crate) async fn related(&self, ids: &[String]) -> Result<Vec<Task>, Error> {
-        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=ANY($1) OR record->>'order_id'=ANY($1) OR record->>'capture_id'=ANY($1) OR record->>'refund_id'=ANY($1) LIMIT 100")
+        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=ANY($1) OR record->>'order_id'=ANY($1) OR record->>'capture_id'=ANY($1) OR record->>'refund_id'=ANY($1) OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(record->'refunds','[]'::jsonb)) r WHERE r->>'provider_id'=ANY($1) OR r->'operation'->>'key'=ANY($1)) LIMIT 100")
             .bind(ids).fetch_all(&self.pool).await?;
         rows.into_iter().map(decode).collect()
     }

@@ -731,3 +731,69 @@ async fn whole_history_precedes_grants_and_cutoff_is_explicit() {
     );
     server.abort();
 }
+
+#[tokio::test]
+#[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
+async fn rework_of_restored_failure_never_reconsumes_or_restores_quota() {
+    use super::super::{
+        ai::Ai,
+        resolution::{Action, Binding, Intent},
+    };
+    let (store, p, s, start) = fixture().await;
+    store
+        .grant_payments(&s, history(&domain::random_id().unwrap(), start))
+        .await
+        .unwrap();
+    let t = task(&store, &p).await;
+    store
+        .allocate(&t.id, &p, &s.id, &t.quote_digest, None)
+        .await
+        .unwrap();
+    store
+        .update(&t.id, &p, |t| {
+            t.units[0].state = UnitState::Failed;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let before = store.subscription_view(&s.id, &p).await.unwrap();
+    let m = Principal {
+        role: Role::Merchant,
+        ..p.clone()
+    };
+    store
+        .update(&t.id, &m, |t| {
+            t.rework(
+                &m,
+                Intent {
+                    request_id: domain::random_id()?,
+                    binding: Binding {
+                        unit: 0,
+                        revision: 0,
+                        output_hash: None,
+                    },
+                    action: Action::Rework,
+                    reason: "Retry free without changing purchased source".into(),
+                },
+            )
+        })
+        .await
+        .unwrap();
+    let model=Router::new().route("/model",post(||async {let output=json!({"summary":"Source review","facts":[{"claim":"Source has readable text","evidence":"more than thirty readable characters"}]});Json(json!({"choices":[{"finish_reason":"stop","message":{"content":output.to_string()}}]}))}));
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ai = Ai::fixture(format!("http://{}/model", l.local_addr().unwrap()));
+    let server = tokio::spawn(async move { axum::serve(l, model).await.unwrap() });
+    ai.run(&store, &t.id, &p).await.unwrap();
+    assert_eq!(
+        store.get(&t.id, &p).await.unwrap().units[0].state,
+        UnitState::Delivered
+    );
+    let after = store.subscription_view(&s.id, &p).await.unwrap();
+    assert_eq!(
+        before["periods"][0]["available"],
+        after["periods"][0]["available"]
+    );
+    let outcomes:Vec<String>=sqlx::query_scalar("SELECT kind FROM paypal_allowance_ledger WHERE task_id=$1 AND kind IN ('consume','restore')").bind(&t.id).fetch_all(store.pool()).await.unwrap();
+    assert_eq!(outcomes, vec!["restore"]);
+    server.abort();
+}

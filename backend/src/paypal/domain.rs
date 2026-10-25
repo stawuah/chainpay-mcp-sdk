@@ -91,6 +91,12 @@ pub enum UnitState {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Unit {
+    #[serde(default)]
+    pub revision: u32,
+    #[serde(default)]
+    pub attempt: Option<String>,
+    #[serde(default)]
+    pub history: Vec<super::resolution::Revision>,
     pub input_hash: String,
     pub state: UnitState,
     pub started_at: Option<u64>,
@@ -101,6 +107,12 @@ pub struct Unit {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Task {
+    #[serde(default)]
+    pub resolution: Vec<super::resolution::Event>,
+    #[serde(default)]
+    pub refunds: Vec<super::resolution::Refund>,
+    #[serde(default)]
+    pub legacy_refund_units: Option<Vec<usize>>,
     pub id: String,
     pub workspace: String,
     pub principal: String,
@@ -153,6 +165,9 @@ impl Task {
         let units: Vec<Unit> = documents
             .iter()
             .map(|d| Unit {
+                revision: 0,
+                attempt: None,
+                history: vec![],
                 input_hash: hash(d.text.as_bytes()),
                 state: UnitState::Pending,
                 started_at: None,
@@ -181,6 +196,9 @@ impl Task {
             .as_slice(),
         );
         Ok(Self {
+            resolution: vec![],
+            refunds: vec![],
+            legacy_refund_units: None,
             id,
             workspace: principal.workspace.clone(),
             principal: principal.id.clone(),
@@ -210,7 +228,13 @@ impl Task {
     }
 
     pub fn output_price(&self) -> Result<Cents, Error> {
-        Ok(super::services::get(&self.offer_version)?.unit_price)
+        let count = self.units.len() as u64;
+        if count == 0 || self.amount.0 == 0 || self.amount.0 % count != 0 {
+            return Err(Error::Invalid(
+                "Historical output allocation requires review",
+            ));
+        }
+        Ok(Cents(self.amount.0 / count))
     }
     pub fn allowance_units(&self) -> Result<u32, Error> {
         Ok(self.units.len() as u32
@@ -264,7 +288,9 @@ impl Task {
         Ok(Some(key))
     }
     pub fn refund_proposal(&self) -> Result<(Cents, String), Error> {
-        if self.payment_review.is_some()
+        if self.subscription_funding.is_some()
+            || !self.refunds.is_empty()
+            || self.payment_review.is_some()
             || !self.captured
             || self.capture_id.is_none()
             || self.units.iter().any(|u| {
@@ -304,6 +330,14 @@ impl Task {
         }
         let op = Operation::begin()?;
         let key = op.key.clone();
+        self.legacy_refund_units = Some(
+            self.units
+                .iter()
+                .enumerate()
+                .filter(|(_, u)| u.state == UnitState::Failed)
+                .map(|(i, _)| i)
+                .collect(),
+        );
         self.refund_amount = amount;
         self.refund = Some(op);
         Ok(Some(key))
@@ -312,14 +346,10 @@ impl Task {
         if self.payment_review.is_some() || !self.captured {
             return None;
         }
-        Some(Cents(
-            self.amount.0
-                - if self.refund_confirmed {
-                    self.refund_amount.0
-                } else {
-                    0
-                },
-        ))
+        self.amount
+            .0
+            .checked_sub(self.confirmed_refunds())
+            .map(Cents)
     }
 }
 
