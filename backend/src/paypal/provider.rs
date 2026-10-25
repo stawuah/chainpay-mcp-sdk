@@ -313,6 +313,164 @@ impl Provider {
         .await
     }
 
+    /// Vault setup token: a PayPal wallet needs the buyer's approval first; a
+    /// card is passed straight through and never stored here.
+    pub async fn create_setup_token(
+        &self,
+        allowance_id: &str,
+        card: Option<Value>,
+        key: &str,
+    ) -> Result<Value, ProviderError> {
+        id(allowance_id)?;
+        let source = match card {
+            Some(card) => card,
+            None => json!({"paypal":{"usage_type":"MERCHANT","experience_context":{
+                "return_url":format!("{}/paypal/?allowance={allowance_id}", self.origin),
+                "cancel_url":format!("{}/paypal/?allowance={allowance_id}&cancelled=true", self.origin)
+            }}}),
+        };
+        self.request(
+            Method::POST,
+            "/v3/vault/setup-tokens",
+            Some(key),
+            Some(json!({"payment_source":source})),
+            &[],
+        )
+        .await
+    }
+    pub async fn setup_token(&self, token: &str) -> Result<Value, ProviderError> {
+        id(token)?;
+        self.request(
+            Method::GET,
+            &format!("/v3/vault/setup-tokens/{token}"),
+            None,
+            None,
+            &[],
+        )
+        .await
+    }
+    pub async fn create_payment_token(
+        &self,
+        setup_token: &str,
+        key: &str,
+    ) -> Result<Value, ProviderError> {
+        id(setup_token)?;
+        self.request(
+            Method::POST,
+            "/v3/vault/payment-tokens",
+            Some(key),
+            Some(json!({"payment_source":{"token":{"id":setup_token,"type":"SETUP_TOKEN"}}})),
+            &[],
+        )
+        .await
+    }
+    /// Merchant-initiated charge against a vaulted source. Same purchase unit
+    /// shape as create_order so observations::order can check it.
+    pub async fn create_vault_order(
+        &self,
+        task_id: &str,
+        amount: Cents,
+        source: &str,
+        vault_id: &str,
+        key: &str,
+    ) -> Result<Value, ProviderError> {
+        id(task_id)?;
+        id(vault_id)?;
+        if amount.0 == 0 {
+            return Err(ProviderError::Invalid("zero purchase"));
+        }
+        if source != "paypal" && source != "card" {
+            return Err(ProviderError::Invalid("vault source is paypal or card"));
+        }
+        let stored = json!({"vault_id":vault_id,"stored_credential":{"payment_initiator":"MERCHANT","payment_type":"UNSCHEDULED","usage":"SUBSEQUENT"}});
+        self.request(
+            Method::POST,
+            "/v2/checkout/orders",
+            Some(key),
+            Some(json!({
+                "intent":"CAPTURE",
+                "purchase_units":[{"reference_id":task_id,"custom_id":task_id,"invoice_id":task_id,
+                    "description":"ChainPay catalog purchase",
+                    "amount":{"currency_code":"USD","value":amount.decimal()}}],
+                "payment_source":{source:stored}
+            })),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn disputes_for_capture(&self, capture: &str) -> Result<Value, ProviderError> {
+        id(capture)?;
+        self.request(
+            Method::GET,
+            "/v1/customer/disputes",
+            None,
+            None,
+            &[
+                ("disputed_transaction_id", capture.into()),
+                ("page_size", "10".into()),
+            ],
+        )
+        .await
+    }
+    pub async fn dispute(&self, dispute: &str) -> Result<Value, ProviderError> {
+        id(dispute)?;
+        self.request(
+            Method::GET,
+            &format!("/v1/customer/disputes/{dispute}"),
+            None,
+            None,
+            &[],
+        )
+        .await
+    }
+    /// Evidence goes up as multipart with one JSON part named `input`. PayPal
+    /// answers 200 or an empty 204; both mean accepted.
+    pub async fn provide_evidence(
+        &self,
+        dispute: &str,
+        notes: &str,
+        key: &str,
+    ) -> Result<Value, ProviderError> {
+        id(dispute)?;
+        id(key)?;
+        if notes.is_empty() || notes.chars().count() > 2000 {
+            return Err(ProviderError::Invalid(
+                "evidence notes must be 1–2000 characters",
+            ));
+        }
+        let input = json!({"evidences":[{"evidence_type":"PROOF_OF_FULFILLMENT","notes":notes}]});
+        let boundary = format!("chainpay-{key}");
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"input\"\r\nContent-Type: application/json\r\n\r\n{input}\r\n--{boundary}--\r\n"
+        );
+        let token = self.access_token().await?;
+        let response = self
+            .client
+            .post(format!(
+                "{}/v1/customer/disputes/{dispute}/provide-evidence",
+                self.base
+            ))
+            .bearer_auth(token)
+            .header("Accept", "application/json")
+            .header("PayPal-Request-Id", key)
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(body)
+            .send()
+            .await
+            .map_err(|_| ProviderError::Unknown)?;
+        if response.status() == 401 {
+            *self.token.lock().await = None;
+        }
+        if response.status().as_u16() == 204 {
+            return Ok(Value::Null);
+        }
+        bounded_json(response).await
+    }
+
     pub async fn order(&self, order: &str) -> Result<Value, ProviderError> {
         id(order)?;
         self.request(

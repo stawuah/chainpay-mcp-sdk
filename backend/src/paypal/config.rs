@@ -14,6 +14,7 @@ pub struct Config {
     pub new_purchases: bool,
     pub subscriptions: bool,
     pub subscription_plan: Option<String>,
+    pub allowances: bool,
 }
 
 impl Config {
@@ -79,6 +80,7 @@ impl Config {
             } else {
                 None
             },
+            allowances: flag(&get, "CHAINPAY_PAYPAL_ALLOWANCES", false)?,
         }))
     }
 }
@@ -152,6 +154,7 @@ mod tests {
         assert!(!c.new_purchases);
         assert!(!c.subscriptions);
         assert!(c.subscription_plan.is_none());
+        assert!(!c.allowances);
         assert_eq!(c.public_origin, "https://paypal.example.com");
     }
 
@@ -192,6 +195,7 @@ mod tests {
             ("CHAINPAY_PAYPAL_PUBLIC_ORIGIN", "http://example.com"),
             ("CHAINPAY_PAYPAL_ENABLED", "yes"),
             ("CHAINPAY_PAYPAL_NEW_PURCHASES", "yes"),
+            ("CHAINPAY_PAYPAL_ALLOWANCES", "on"),
         ] {
             let mut v = values();
             v.insert(key, bad);

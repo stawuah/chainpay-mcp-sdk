@@ -89,6 +89,7 @@ One-time setup:
    | `CHAINPAY_PAYPAL_AI_KEY` | dedicated OpenRouter key with a spend cap (Sensitive) |
    | `CHAINPAY_PAYPAL_CRON_SECRET` | 32+ random characters (Sensitive) |
    | `CHAINPAY_PAYPAL_SUBSCRIPTIONS`, `CHAINPAY_PAYPAL_SUBSCRIPTION_PLAN` | `false`, or `true` and the `P-…` plan |
+   | `CHAINPAY_PAYPAL_ALLOWANCES` | `false` until the allowance acceptance run; gates `POST /allowances` and `POST /purchases` |
    | `VITE_CHAINPAY_PAYPAL` | `true` |
    | `VITE_CHAINPAY_PAYPAL_API_ORIGIN` | same as `CHAINPAY_PAYPAL_PUBLIC_ORIGIN` |
 
@@ -99,8 +100,8 @@ One-time setup:
    existing `VERCEL_TOKEN` secret is reused. Then run Actions → Deploy to Vercel.
 5. **Webhook.** In the PayPal sandbox app add
    `https://chainpay-paypal.vercel.app/v1/paypal/webhooks` with the order,
-   capture, subscription and sale events, copy its ID into `PAYPAL_WEBHOOK_ID`
-   and redeploy.
+   capture, subscription, sale, vault and dispute events (list below), copy its
+   ID into `PAYPAL_WEBHOOK_ID` and redeploy.
 6. **Check.** `GET /healthz` answers `{"status":"ready"}` once enabled and the
    database answers. Issue test access from a machine with the same env loaded:
    `cargo run -p chainpay-backend --features paypal --bin chainpay-paypal --
@@ -136,9 +137,36 @@ Register actual app webhook events `CHECKOUT.ORDER.APPROVED`,
 `CHECKOUT.ORDER.COMPLETED`, `PAYMENT.CAPTURE.COMPLETED`,
 `PAYMENT.CAPTURE.DENIED`, `PAYMENT.CAPTURE.REVERSED`,
 `PAYMENT.CAPTURE.REFUNDED`, and `PAYMENT.REFUND.PENDING` /
-`PAYMENT.REFUND.COMPLETED` where the sandbox app exposes them. Use the new API's
+`PAYMENT.REFUND.COMPLETED` where the sandbox app exposes them. For allowances
+and disputes also register `VAULT.PAYMENT-TOKEN.CREATED`,
+`VAULT.PAYMENT-TOKEN.DELETED`, `VAULT.PAYMENT-TOKEN.DELETION-INITIATED`,
+`CUSTOMER.DISPUTE.CREATED`, `CUSTOMER.DISPUTE.UPDATED` and
+`CUSTOMER.DISPUTE.RESOLVED`. Use the new API's
 `/v1/paypal/webhooks` URL, never a Colosseum URL. Simulator callbacks are not
 accepted as financial evidence. Verify exact available event names in the app.
+
+### Allowances, vault and disputes
+
+`CHAINPAY_PAYPAL_ALLOWANCES=true` (with new purchases on) enables buyer
+allowances and catalog purchases; reads, approvals, fulfilment and dispute
+routes stay available when it is off. Vaulting a PayPal wallet needs the
+**Vault** feature enabled on the sandbox REST app (Apps & Credentials → the app
+→ Features → "Vault"); without it the wallet source fails at setup and the card
+source is the fallback. The sandbox test card `4111111111111111` with any future
+`YYYY-MM` expiry works for the card source. Check both with
+`PAYPAL_CLIENT_ID=… PAYPAL_CLIENT_SECRET=… node scripts/paypal-sandbox-check.mjs`:
+it prints the setup-token status or error name and whether the Disputes API
+answers, and never prints the secret.
+
+To raise a sandbox dispute against a captured purchase: sign in to
+<https://www.sandbox.paypal.com> as the sandbox *personal* account that paid
+(Developer Dashboard → Sandbox → Accounts → the buyer's email and password),
+open Activity, pick the payment, choose "Report a problem" and file "Item not
+received". Then on the merchant side run `POST /v1/paypal/disputes/sync` (or
+wait for the `CUSTOMER.DISPUTE.CREATED` webhook), preview the evidence pack,
+and submit it while the status is `WAITING_FOR_SELLER_RESPONSE`. The pack is
+built only from stored records and is submitted once per dispute; PayPal, not
+ChainPay, decides the outcome.
 
 ### Judge access and financial exceptions
 

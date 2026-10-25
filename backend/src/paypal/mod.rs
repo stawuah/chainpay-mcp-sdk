@@ -1,7 +1,10 @@
 //! Isolated PayPal sandbox extension. Never initializes the existing relay store.
 pub mod ai;
+pub mod allowance;
 pub mod analytics;
+pub mod catalog;
 pub mod config;
+pub mod disputes;
 pub mod domain;
 pub mod money;
 pub mod observations;
