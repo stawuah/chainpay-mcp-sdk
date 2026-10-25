@@ -8,6 +8,7 @@ import { createRoot } from "react-dom/client";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
+import "../../src/theme/take-two.css";
 import "../../src/dashboard/workspace.css";
 import "../../src/dashboard/cards/cards.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";

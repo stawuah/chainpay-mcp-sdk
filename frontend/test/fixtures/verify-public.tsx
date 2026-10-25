@@ -9,6 +9,7 @@ import { decodePurchaseFragment, verifyPurchaseForReceipt } from "../../src/rece
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
+import "../../src/theme/take-two.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
 import settled from "./verify-settled.json";
 import purchase from "./receipt-purchase.json";

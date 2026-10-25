@@ -24,6 +24,34 @@ React logo. Do not construct a substitute logo with text or CSS. The earlier
 page-by-page proposal is [historical](../../docs/archive/dashboard-proposal.md).
 It does not describe every current route or interaction.
 
+## Visual layer: "take two"
+
+`src/theme/take-two.css` is the current visual layer. It loads once from
+`main.tsx` (and from every browser fixture) and sits on top of
+`workspace.css`, `receipt-card.css` and the public page sheets. It wins by
+specificity (`html[data-astryx-theme] …`), never by load order. It changes
+scale, depth, rhythm and motion and nothing else: no route, status word,
+amount, logo or brand colour moves.
+
+- Blue is a surface, not only an accent: the Overview spending card is a
+  blue slab with the remaining allowance as its headline, and the permission
+  builder shows a live blue permission card that rewrites as the limits change.
+- The sidebar opens as an icon rail (labels on hover, attention counts as a
+  corner badge); the handle expands it and the choice is remembered.
+- The top bar is sticky and translucent.
+- A prepared payment shows a pay sheet: amount first, the permission it runs
+  under, then a three-rung ladder using the fixed words Prepared, Submitted,
+  Confirmed. A failed step turns red and keeps its word.
+- Receipts (dashboard preview, inbox and `/verify`) render as an ink statement
+  with a green Paid seal. Print output is unchanged (`receipts/print.ts`).
+- Motion: groups rise in on entry, rows lift on hover, buttons press to 98%.
+  Amounts and the usage ring never animate. Reduced motion lands everything
+  instantly.
+
+Add new rules to `take-two.css` under the matching section rather than to the
+older sheets, and keep the `html[data-astryx-theme]` prefix so they outrank
+the legacy cascade.
+
 ## Component system
 
 The runnable app is Vite and React with Astryx 0.6.1, its neutral theme, and

@@ -1,0 +1,461 @@
+/* ==========================================================================
+   Take two.
+
+   Blue as a material, not an accent. One stylesheet, loaded once from
+   main.tsx, that sits on top of workspace.css, receipt-card.css and the
+   public page sheets. It wins by specificity (the html[data-astryx-theme]
+   prefix), not by load order, so it never depends on which chunk arrived
+   first.
+
+   Nothing here changes a route, a status word, an amount, a logo or a brand
+   colour. It changes scale, depth, rhythm and motion.
+   ========================================================================== */
+
+html[data-astryx-theme] {
+  --t2-blue: #0052ff;
+  --t2-blue-deep: #0033a8;
+  --t2-blue-ink: #001e66;
+  --t2-blue-soft: #eaf0ff;
+  --t2-blue-tint: #cfdcff;
+  --t2-ink: #14213d;
+  --t2-ink-2: #56647d;
+  --t2-ink-3: #8a95a8;
+  --t2-bg: #f6f7fb;
+  --t2-surface: #fff;
+  --t2-line: #e6eaf3;
+  --t2-line-2: #cfd8ea;
+  --t2-ok: #12a150;
+  --t2-ok-soft: #e4f7eb;
+  --t2-warn: #c0620a;
+  --t2-warn-soft: #fff1df;
+  --t2-shadow: 0 1px 1px rgba(20, 33, 61, .04), 0 10px 30px -12px rgba(20, 33, 61, .16);
+  --t2-glow: 0 24px 60px -20px rgba(0, 82, 255, .45);
+  --t2-ease: cubic-bezier(.16, 1, .3, 1);
+  --t2-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Entrance: a short rise for groups of content. Amounts and the usage ring
+   never animate (workspace contract); only their containers do. */
+@keyframes t2-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes t2-slide { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+@keyframes t2-load { from { width: 20%; } to { width: 85%; } }
+
+/* --------------------------------------------------------------------------
+   Workspace shell
+   -------------------------------------------------------------------------- */
+html[data-astryx-theme] .dashboard-app.cp-app {
+  --ws-workspace: var(--t2-bg);
+  --ws-border: var(--t2-line);
+  --ws-border-soft: #edf0f6;
+  --ws-radius-surface: 18px;
+  --ws-radius-control: 12px;
+  --ws-shadow-surface: var(--t2-shadow);
+  --ws-ease: var(--t2-ease);
+  --ws-text-page: 600 30px/36px Inter, sans-serif;
+  background: var(--t2-bg);
+}
+html[data-astryx-theme] .dashboard-app.cp-app h1 { letter-spacing: -.03em; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-heading h1 { font: 600 30px/36px Inter, sans-serif; letter-spacing: -.03em; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-heading { margin-bottom: 24px; animation: t2-rise .5s var(--t2-ease) both; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-page > div > :is(section, div, .page-panel, .owner-overview, .owner-requests) { animation: t2-rise .55s var(--t2-ease) both; animation-delay: .05s; }
+
+/* Rail navigation: 76px of icons, labels on hover, a dot for attention. */
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout { --sidebar-width: 256px; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail { --sidebar-width: 76px; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-sidebar { padding: 18px 12px 16px; background: var(--t2-surface); border-color: var(--t2-line); }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .dashboard-sidebar { padding-inline: 14px; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-sidebar-brand { margin-bottom: 20px; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-sidebar-brand .cp-brand { font-size: 22px; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-sidebar-brand .cp-brand-symbol { width: 34px; height: 34px; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-nav { gap: 6px; }
+html[data-astryx-theme] .dashboard-app.cp-app .side-link { min-height: 46px; border-radius: 13px; padding: 10px 12px; font-size: 14px; font-weight: 500; color: var(--t2-ink-2); transition: background-color .2s var(--t2-ease), color .2s var(--t2-ease), box-shadow .2s var(--t2-ease), transform .2s var(--t2-ease); }
+html[data-astryx-theme] .dashboard-app.cp-app .side-link:hover { background: var(--t2-bg); color: var(--t2-ink); }
+html[data-astryx-theme] .dashboard-app.cp-app .side-link.active { background: var(--t2-blue); color: #fff; font-weight: 500; box-shadow: 0 8px 18px -8px rgba(0, 82, 255, .7); }
+html[data-astryx-theme] .dashboard-app.cp-app .side-link.active:hover { background: var(--t2-blue-deep); color: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .side-link:active { transform: scale(.98); }
+html[data-astryx-theme] .dashboard-app.cp-app .side-link .tool-count { color: inherit; font: 600 11px/1 Inter, sans-serif; padding: 4px 7px; border-radius: 999px; background: var(--t2-warn-soft); color: var(--t2-warn); }
+html[data-astryx-theme] .dashboard-app.cp-app .side-link.active .tool-count { background: rgba(255, 255, 255, .2); color: #fff; }
+/* Rail mode: the count becomes a corner badge so it stays readable and in the DOM. */
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .side-link { width: 48px; height: 48px; min-height: 48px; justify-content: center; padding: 0; margin-inline: auto; position: relative; }
+html[data-astryx-theme] .dashboard-app.cp-app .rail-badge { display: none; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .rail-badge { display: inline-flex; position: absolute; top: 0; right: 0; min-width: 18px; height: 18px; padding: 0 5px; align-items: center; justify-content: center; font: 600 10px/1 Inter, sans-serif; border-radius: 999px; border: 2px solid var(--t2-surface); background: var(--t2-warn); color: #fff; pointer-events: none; z-index: 1; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .rail-item { width: 48px; margin-inline: auto; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .sidebar-glyph svg { width: 21px; height: 21px; }
+html[data-astryx-theme] .dashboard-app.cp-app .rail-item { position: relative; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .rail-item::after {
+  content: attr(data-tip); position: absolute; left: calc(100% + 10px); top: 50%; transform: translate(-4px, -50%);
+  padding: 6px 10px; border-radius: 8px; background: var(--t2-ink); color: #fff; font: 500 12px/1.2 Inter, sans-serif; white-space: nowrap;
+  opacity: 0; pointer-events: none; transition: opacity .15s var(--t2-ease), transform .15s var(--t2-ease); z-index: 2;
+}
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .rail-item:is(:hover, :focus-within)::after { opacity: 1; transform: translate(0, -50%); }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-workspace-label { margin: 0 8px 20px; padding: 10px 10px; border-radius: 12px; background: var(--t2-bg); }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-workspace-label > svg { border: 0; background: var(--t2-surface); color: var(--t2-blue); }
+html[data-astryx-theme] .dashboard-app.cp-app .sidebar-collapse-toggle { right: -16px; border-radius: 10px; border-color: var(--t2-line); box-shadow: var(--t2-shadow); }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .dashboard-sidebar-brand { flex-direction: row; justify-content: center; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .dashboard-sidebar-brand .cp-brand { gap: 0; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-layout.is-rail .sidebar-collapse-toggle { position: absolute; }
+
+/* Glass top bar. */
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-topbar {
+  position: sticky; top: 0; min-height: 68px; padding: 0 32px;
+  background: rgba(246, 247, 251, .82); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  border-color: var(--t2-line);
+}
+html[data-astryx-theme] .dashboard-app.cp-app .owner-breadcrumb { font-size: 13px; color: var(--t2-ink-2); font-weight: 500; }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-breadcrumb strong { color: var(--t2-ink); font-weight: 600; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-network { display: inline-flex; align-items: center; gap: 8px; padding: 7px 11px; border: 1px solid var(--t2-line); border-radius: 999px; background: var(--t2-surface); color: var(--t2-ink-2); font-size: 12px; font-weight: 500; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-network i { width: 7px; height: 7px; background: var(--t2-ok); box-shadow: 0 0 0 3px var(--t2-ok-soft); }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-network.error i { background: var(--t2-warn); box-shadow: 0 0 0 3px var(--t2-warn-soft); }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-network.loading i { background: var(--t2-ink-3); box-shadow: none; }
+html[data-astryx-theme] .dashboard-app.cp-app .wallet-chip { min-height: 38px; border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 500; border-color: var(--t2-line); }
+html[data-astryx-theme] .dashboard-app.cp-app .topbar-signin { border-radius: 999px; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-page { padding: 28px 32px 48px; }
+html[data-astryx-theme] .dashboard-app.cp-app .dashboard-menu-button { border-radius: 12px; }
+
+/* Controls: 12px radius, primary with a soft glow, press to 98%. */
+html[data-astryx-theme] .dashboard-app.cp-app :is(.astryx-button, .astryx-icon-button, .button) { border-radius: 12px; font-weight: 600; transition: transform .18s var(--t2-ease), box-shadow .18s var(--t2-ease), background-color .18s var(--t2-ease), border-color .18s var(--t2-ease); }
+html[data-astryx-theme] .dashboard-app.cp-app .astryx-button[data-variant="primary"] { box-shadow: 0 8px 18px -8px rgba(0, 82, 255, .7); }
+html[data-astryx-theme] .dashboard-app.cp-app .astryx-button[data-variant="primary"]:hover { transform: translateY(-1px); box-shadow: 0 12px 22px -8px rgba(0, 82, 255, .75); }
+html[data-astryx-theme] .dashboard-app.cp-app :is(.astryx-button, .button):active { transform: scale(.98); }
+html[data-astryx-theme] .dashboard-app.cp-app .astryx-button[data-variant="secondary"] { background: var(--t2-surface); border-color: var(--t2-line); }
+html[data-astryx-theme] .dashboard-app.cp-app .astryx-button[data-variant="secondary"]:hover { border-color: var(--t2-line-2); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-status { font-weight: 600; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-status[data-tone="positive"] { border-color: transparent; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-status[data-tone="warning"] { border-color: transparent; background: var(--t2-warn-soft); color: var(--t2-warn); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-status[data-tone="warning"] > svg { color: var(--t2-warn); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-workspace-signin.is-compact { border-radius: 14px; border-color: var(--t2-blue-tint); background: var(--t2-blue-soft); }
+
+/* Surfaces: one restrained shadow, 18px radius, hover lift on clickable tiles. */
+html[data-astryx-theme] .dashboard-app.cp-app :is(.cp-surface, .dashboard-card) { border-radius: 18px; border-color: var(--t2-line); box-shadow: var(--t2-shadow); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-section-header h2 { font: 600 17px/24px Inter, sans-serif; letter-spacing: -.015em; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-count { border-radius: 18px; min-height: 118px; padding: 18px 20px; transition: transform .2s var(--t2-ease), box-shadow .2s var(--t2-ease), border-color .2s var(--t2-ease); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-count:hover { transform: translateY(-2px); box-shadow: var(--t2-shadow); border-color: var(--t2-line); background: var(--t2-surface); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-count-value { font: 600 32px/36px Inter, sans-serif; letter-spacing: -.035em; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-count-detail { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; margin-top: 2px; padding: 3px 9px; border-radius: 999px; background: var(--t2-bg); color: var(--t2-ink-2); font: 500 12px/16px Inter, sans-serif; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-count[data-known="false"] .cp-count-detail { background: var(--t2-warn-soft); color: var(--t2-warn); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-count-label { font-weight: 500; }
+
+/* Attention: a warm stripe on the left instead of a yellow badge soup. */
+html[data-astryx-theme] .dashboard-app.cp-app .cp-overview-attention { border-left: 4px solid var(--t2-warn); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-overview-attention:has(.cp-status[data-tone="critical"]) { border-left-color: var(--ws-critical-icon); }
+
+/* --------------------------------------------------------------------------
+   Overview hero: white on blue. The number that matters, first.
+   -------------------------------------------------------------------------- */
+html[data-astryx-theme] .dashboard-app.cp-app .cp-overview-spending.cp-hero {
+  position: relative; overflow: hidden; border: 0; color: #fff;
+  background: linear-gradient(135deg, var(--t2-blue) 0%, var(--t2-blue-deep) 100%);
+  box-shadow: var(--t2-glow);
+}
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero::after {
+  content: ""; position: absolute; right: -8%; bottom: -70%; width: 55%; aspect-ratio: 1; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(255, 255, 255, .18), transparent 70%);
+}
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero::before {
+  content: ""; position: absolute; right: -50px; bottom: -70px; width: 240px; height: 240px; pointer-events: none; opacity: .12;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180' fill='none' stroke='white' stroke-width='28' stroke-linecap='round' stroke-linejoin='round'><path d='M116 30H90C59 30 34 54 34 80C34 99 47 110 65 110'/><path d='M116 30H90C59 30 34 54 34 80C34 99 47 110 65 110' transform='rotate(180 90 90)'/></svg>") no-repeat center / contain;
+}
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero > * { position: relative; z-index: 1; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-section-header h2,
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-section-header p { color: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-section-header p { opacity: .8; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-row-link { color: #fff; opacity: .9; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-caption { color: rgba(255, 255, 255, .78); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-segmented { --color-background-muted: rgba(255, 255, 255, .14); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-overview-spending-body { gap: 32px; align-items: center; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-figure dt { color: rgba(255, 255, 255, .78); font: 600 11px/16px Inter, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-figure dd { color: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-figure.is-lead dd { font: 600 56px/1 Inter, sans-serif; letter-spacing: -.045em; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount.is-lead { font: inherit; color: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount.is-lead .cp-amount-symbol { font-size: 18px; color: rgba(255, 255, 255, .8); font-weight: 500; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount-symbol { color: rgba(255, 255, 255, .8); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount-unavailable,
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-figures-labels dd,
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount-raw,
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount-raw summary,
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount-raw code { color: rgba(255, 255, 255, .85); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount-retry { color: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount-retry.is-block { border-color: rgba(255, 255, 255, .4); background: rgba(255, 255, 255, .12); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-amount-skeleton { background: linear-gradient(90deg, rgba(255,255,255,.18) 0%, rgba(255,255,255,.32) 50%, rgba(255,255,255,.18) 100%); background-size: 200% 100%; }
+/* The ring sits on the slab in white. It still never animates. */
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring { width: 112px; height: 112px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring svg { width: 112px; height: 112px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring-track { stroke: rgba(255, 255, 255, .22); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring-fill { stroke: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring.is-warning .cp-usage-ring-fill { stroke: #ffd36a; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring.is-critical .cp-usage-ring-fill { stroke: #ff8a8a; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring-dashed { stroke: rgba(255, 255, 255, .5); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring-center { color: #fff; font: 600 22px/26px Inter, sans-serif; padding-top: 43px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring-center small { color: rgba(255, 255, 255, .8); }
+/* The headline: label in caps, the remaining allowance at poster size. */
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead { display: grid; gap: 10px; flex: 1 1 320px; min-width: 0; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead-label { display: inline-flex; align-items: center; gap: 8px; color: rgba(255, 255, 255, .82); font: 600 11px/16px Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead-label .owner-token-icon { color: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead-value { display: block; color: #fff; font: 600 56px/1 Inter, sans-serif; letter-spacing: -.045em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead-value .cp-amount.is-lead { font: inherit; color: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead-value .cp-amount.is-lead .cp-amount-symbol { font-size: 18px; letter-spacing: 0; color: rgba(255, 255, 255, .8); font-weight: 500; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead-value .cp-amount.is-lead .cp-amount-skeleton { height: 48px; width: 220px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead-value .cp-amount.is-lead .cp-amount-unavailable { font-size: 24px; color: #fff; }
+/* Secondary figures sit in a row under the lead. */
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-hero-figures { display: flex; flex-wrap: wrap; gap: 10px 36px; margin-top: 22px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, .22); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-hero-figures.is-unavailable { display: grid; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-hero-figures .cp-figures-labels { display: flex; flex-wrap: wrap; gap: 10px 36px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-hero-figures .cp-figure dd { font: 500 15px/22px Inter, sans-serif; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-hero-figures .cp-figure dt { margin-bottom: 2px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-figure.is-lead .cp-amount-raw { margin-top: 8px; }
+@media (max-width: 640px) {
+  html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-overview-spending-body { flex-direction: column-reverse; align-items: flex-start; gap: 20px; }
+  html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead { flex: 0 0 auto; width: 100%; }
+  html[data-astryx-theme] .dashboard-app.cp-app .cp-hero-lead-value { font-size: 44px; }
+  html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring, html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring svg { width: 96px; height: 96px; }
+  html[data-astryx-theme] .dashboard-app.cp-app .cp-hero .cp-usage-ring-center { padding-top: 36px; font-size: 19px; }
+}
+@media (max-width: 520px) {
+  html[data-astryx-theme] .dashboard-app.cp-app .dashboard-network { display: none; }
+  html[data-astryx-theme] .dashboard-app.cp-app .dashboard-page { padding: 24px 16px 40px; }
+  html[data-astryx-theme] .dashboard-app.cp-app .dashboard-topbar { padding-inline: 16px; }
+}
+
+/* Activity as a timeline: one rail, one dot per event. */
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline { position: relative; padding-left: 20px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline::before { content: ""; position: absolute; left: 5px; top: 14px; bottom: 14px; width: 2px; border-radius: 2px; background: var(--t2-line); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li { position: relative; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li::before { content: ""; position: absolute; left: -19px; top: 50%; width: 10px; height: 10px; margin-top: -5px; border-radius: 50%; background: var(--t2-ok); box-shadow: 0 0 0 3px var(--t2-surface); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li:has(.cp-status[data-tone="warning"])::before { background: var(--t2-warn); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li:has(.cp-status[data-tone="critical"])::before { background: var(--ws-critical-icon); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li:has(.cp-status[data-tone="info"])::before { background: var(--t2-blue); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li:has(.cp-status[data-tone="neutral"])::before { background: var(--t2-ink-3); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li { animation: t2-slide .5s var(--t2-ease) both; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li:nth-child(2) { animation-delay: .06s; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li:nth-child(3) { animation-delay: .12s; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li:nth-child(4) { animation-delay: .18s; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li:nth-child(5) { animation-delay: .24s; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-timeline > li:nth-child(6) { animation-delay: .3s; }
+
+/* --------------------------------------------------------------------------
+   Payments: the review card becomes a pay sheet.
+   -------------------------------------------------------------------------- */
+html[data-astryx-theme] .dashboard-app.cp-app .cp-pay-amount { display: grid; justify-items: center; gap: 6px; padding: 10px 0 18px; text-align: center; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-pay-amount strong { font: 600 56px/1 Inter, sans-serif; letter-spacing: -.045em; color: var(--t2-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-pay-amount strong span { font-size: 18px; letter-spacing: 0; color: var(--t2-ink-2); margin-left: 8px; font-weight: 500; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-pay-amount small { color: var(--t2-ink-2); font-size: 13px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-pay-amount small b { color: var(--t2-ink); font-weight: 600; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-fence { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: center; padding: 12px 14px; margin: 4px 0 16px; border: 1.5px solid var(--t2-blue-tint); border-radius: 14px; background: var(--t2-blue-soft); color: var(--t2-ink-2); font-size: 12.5px; line-height: 1.45; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-fence-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--t2-blue); color: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-fence b { display: block; color: var(--t2-ink); font-size: 13px; font-weight: 600; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-fence code { font: 500 11px var(--t2-mono); color: var(--t2-ink); }
+/* The ladder: Prepared → Submitted → Confirmed, the three fixed words. */
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder { display: grid; gap: 8px; margin: 0 0 18px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-bars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-bars > span { position: relative; height: 6px; border-radius: 99px; background: var(--t2-line); overflow: hidden; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-bars > span::after { content: ""; position: absolute; inset: 0; width: 0; border-radius: 99px; background: var(--t2-blue); transition: width .6s var(--t2-ease); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-bars > span[data-state="done"]::after { width: 100%; background: var(--t2-ok); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-bars > span[data-state="live"]::after { width: 60%; animation: t2-load 1s var(--t2-ease) infinite alternate; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-bars > span[data-state="failed"]::after { width: 100%; background: var(--ws-critical-icon); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-labels { display: grid; grid-template-columns: repeat(3, 1fr); font: 600 11px/16px Inter, sans-serif; color: var(--t2-ink-3); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-labels > span[data-state="done"],
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-labels > span[data-state="live"] { color: var(--t2-ink); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ladder-labels > span[data-state="failed"] { color: var(--ws-critical); }
+html[data-astryx-theme] .dashboard-app.cp-app .review-card .full-button { border-radius: 14px; min-height: 52px; font-size: 15px; }
+html[data-astryx-theme] .dashboard-app.cp-app .payment-review-stack .review-card { box-shadow: var(--t2-shadow), var(--t2-glow); }
+html[data-astryx-theme] .dashboard-app.cp-app .success-box { border-radius: 16px; background: var(--t2-ink); color: #fff; box-shadow: var(--t2-shadow); animation: t2-rise .5s var(--t2-ease) both; }
+html[data-astryx-theme] .dashboard-app.cp-app .success-box > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--t2-ok); color: #fff; font-size: 13px; font-weight: 700; }
+html[data-astryx-theme] .dashboard-app.cp-app .success-box b { color: #fff; font-size: 14px; }
+html[data-astryx-theme] .dashboard-app.cp-app .success-box a,
+html[data-astryx-theme] .dashboard-app.cp-app .success-box .receipt-public-url { color: rgba(255, 255, 255, .8); }
+html[data-astryx-theme] .dashboard-app.cp-app .success-box .receipt-public-url a { color: #fff; }
+
+/* Payment history rows: amount reads as money, settled reads as a seal. */
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-ledger-amount { font: 600 16px/22px Inter, sans-serif; letter-spacing: -.01em; }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-ledger-main strong { font-weight: 600; }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-ledger-payment small { font-family: var(--t2-mono); font-size: 11.5px; }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-ledger-table tbody tr { transition: background-color .15s var(--t2-ease); }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-ledger-table tbody tr:hover { background: #fafbff; }
+
+/* --------------------------------------------------------------------------
+   Permission builder: one card per step, a live permission card beside it.
+   -------------------------------------------------------------------------- */
+html[data-astryx-theme] .dashboard-app.cp-app .owner-stepper { gap: 8px; margin-bottom: 24px; }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-stepper li { padding: 8px 14px 8px 8px; border-radius: 999px; background: var(--t2-surface); border: 1px solid var(--t2-line); font-weight: 500; }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-stepper li.current { border-color: var(--t2-blue-tint); background: var(--t2-blue-soft); }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-stepper li > span { width: 24px; height: 24px; font-size: 11px; font-weight: 600; }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-wizard-grid { grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-wizard-grid .mandate-builder { padding: 28px !important; }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-form-heading h2 { font: 600 22px/28px Inter, sans-serif; letter-spacing: -.025em; }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-amount-field { border-radius: 16px; border-color: var(--t2-line); box-shadow: var(--t2-shadow); }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-amount-field input { font-size: 40px; font-weight: 600; letter-spacing: -.04em; }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-wizard-aside { padding: 0; position: sticky; top: 92px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card {
+  position: relative; overflow: hidden; display: grid; gap: 16px; padding: 22px; border-radius: 18px; color: #fff;
+  background: linear-gradient(135deg, #0b1a4a 0%, var(--t2-blue-deep) 55%, var(--t2-blue) 100%); box-shadow: var(--t2-glow);
+}
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card::after { content: ""; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 35%, rgba(255, 255, 255, .14) 48%, transparent 60%); transform: translateX(-100%); transition: transform 1.1s var(--t2-ease); pointer-events: none; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card:hover::after { transform: translateX(100%); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card > * { position: relative; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-head .cp-brand { color: #fff; font-size: 15px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-head .cp-brand-wordmark { color: #fff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-head .cp-brand-symbol { color: #fff; width: 22px; height: 22px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-kind { font: 700 10px/1 Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase; padding: 5px 9px; border-radius: 999px; background: rgba(255, 255, 255, .18); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-amount { display: grid; gap: 4px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-amount small { font: 600 10px/1.2 Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase; opacity: .78; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-amount strong { font: 600 34px/1 Inter, sans-serif; letter-spacing: -.04em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-amount strong span { font-size: 14px; letter-spacing: 0; opacity: .8; margin-left: 6px; font-weight: 500; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-rows { display: grid; gap: 8px; margin: 0; padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, .22); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-rows > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-rows dt { opacity: .75; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-rows dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-sig { padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .22); font-size: 11.5px; opacity: .85; overflow-wrap: anywhere; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-permission-card-sig code { font: 500 11px var(--t2-mono); }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-wizard-aside > p { margin-top: 14px; color: var(--t2-ink-2); font-size: 13px; line-height: 1.6; }
+@media (max-width: 1200px) {
+  html[data-astryx-theme] .dashboard-app.cp-app .owner-wizard-aside { display: block; position: static; order: -1; }
+  html[data-astryx-theme] .dashboard-app.cp-app .owner-wizard-aside > p { display: none; }
+}
+html[data-astryx-theme] .dashboard-app.cp-app .mandate-review-card { box-shadow: var(--t2-shadow), var(--t2-glow); }
+html[data-astryx-theme] .dashboard-app.cp-app .mandate-created-callout { border-radius: 16px; }
+
+/* --------------------------------------------------------------------------
+   Agents, requests, cards, settings: the same rhythm.
+   -------------------------------------------------------------------------- */
+html[data-astryx-theme] .dashboard-app.cp-app .cp-row-icon { border-radius: 12px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-agent-row { padding: 16px 0; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-request-row { border-radius: 12px; transition: background-color .15s var(--t2-ease); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-request-row:hover { background: #fafbff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-request-amount { font-weight: 600; font-size: 15px; }
+html[data-astryx-theme] .dashboard-app.cp-app .agent-approval-card { border-radius: 16px; border-color: var(--t2-blue-tint); background: #fbfcff; box-shadow: var(--t2-shadow); }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-account-identity { border-radius: 14px; border-color: var(--t2-line); background: var(--t2-bg); }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-row-icon { border-radius: 12px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ledger .mandate-table th { background: #fafbfe; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ledger .mandate-table tbody tr { transition: background-color .15s var(--t2-ease); }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ledger .mandate-table tbody tr[tabindex]:hover { background: #fafbff; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-ledger-spent { font-weight: 600; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-owner-scene { border-radius: 22px; box-shadow: var(--t2-shadow); }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-entry-card { border-radius: 22px; box-shadow: var(--t2-shadow); }
+html[data-astryx-theme] .dashboard-app.cp-app .owner-entry-icon { border-radius: 14px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-cards .dashboard-card { border-radius: 18px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-collection-state { border-radius: 14px; }
+html[data-astryx-theme] .dashboard-app.cp-app .cp-collection-icon { border-radius: 12px; }
+
+/* --------------------------------------------------------------------------
+   Receipt: an ink statement with a green seal. Shared by the dashboard
+   preview, the inbox and the public /verify page.
+   -------------------------------------------------------------------------- */
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) {
+  position: relative; overflow: hidden; padding: 30px 32px; border: 0; border-radius: 24px;
+  background: var(--t2-ink); color: #fff; box-shadow: var(--t2-glow);
+  --ink: #fff; --body: rgba(255, 255, 255, .72); --muted: rgba(255, 255, 255, .6); --line: rgba(255, 255, 255, .14); --line-soft: rgba(255, 255, 255, .12); --soft: rgba(255, 255, 255, .06); --strong: rgba(255, 255, 255, .12);
+}
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample)::before { content: ""; position: absolute; right: -30%; bottom: -70%; width: 80%; aspect-ratio: 1; border-radius: 50%; pointer-events: none; background: radial-gradient(closest-side, rgba(0, 82, 255, .5), transparent 70%); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) > * { position: relative; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 26px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .cp-brand { color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .cp-brand-symbol { color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .cp-brand-wordmark { color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-heading .section-kicker { display: block; color: rgba(255, 255, 255, .7); font: 700 11px/1.2 Inter, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-amount { margin-top: 6px; color: #fff; font: 600 52px/1 Inter, sans-serif; letter-spacing: -.045em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-amount small { color: rgba(255, 255, 255, .62); font: 400 12.5px/1.4 Inter, sans-serif; letter-spacing: 0; margin-top: 10px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-network { flex: none; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, .22); color: rgba(255, 255, 255, .85); font: 600 11px/1.2 Inter, sans-serif; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-prepared-note { background: rgba(255, 255, 255, .08); color: rgba(255, 255, 255, .85); border-radius: 10px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-summary { margin: 24px 0 0; padding-top: 18px; border-top: 1px solid rgba(255, 255, 255, .14); gap: 10px 16px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-summary dt { color: rgba(255, 255, 255, .62); font-size: 12px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-summary dd { color: #fff; font: 500 11.5px/1.5 var(--t2-mono); }
+/* Stamps: Paid is the seal; the others are quiet rows. The words never change. */
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamps { gap: 8px; margin-top: 22px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp { border: 1px solid rgba(255, 255, 255, .12); background: rgba(255, 255, 255, .06); border-radius: 12px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp b { color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp p { color: rgba(255, 255, 255, .7); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp-mark { background: rgba(255, 255, 255, .14); color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp-yes .receipt-stamp-mark { background: var(--t2-ok); color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp-no .receipt-stamp-mark { background: #e5484d; color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp[data-stamp="paid"][data-tone="yes"] { border-color: transparent; background: var(--t2-ok); box-shadow: 0 10px 24px -10px rgba(18, 161, 80, .8); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp[data-stamp="paid"][data-tone="yes"] .receipt-stamp-mark { background: #fff; color: var(--t2-ok); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp[data-stamp="paid"][data-tone="yes"] b { font-size: 14px; letter-spacing: .02em; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-stamp[data-stamp="paid"][data-tone="yes"] p { color: rgba(255, 255, 255, .9); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-section { border-top-color: rgba(255, 255, 255, .14); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) :is(.receipt-section h4, .receipt-policy-rows li, .receipt-match-rows li, .receipt-technical summary, .receipt-policy-today-limits dd, .receipt-match-details dd, .receipt-technical dd) { color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) :is(.receipt-section-caption, .receipt-policy-note, .receipt-policy-today, .receipt-technical dt, .receipt-policy-today-limits dt, .receipt-match-details dt, .receipt-identifier-note, .receipt-share-details-note, .receipt-share-status) { color: rgba(255, 255, 255, .68); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-technical dd { font-family: var(--t2-mono); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-pill { background: rgba(255, 255, 255, .1); border-color: rgba(255, 255, 255, .2); color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-pill[data-pill="Matched"] { background: var(--t2-ok); border-color: transparent; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-pill[data-pill="Invoice differs"],
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-pill[data-pill="Payee differs"] { background: #e5484d; border-color: transparent; color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-match-rows li[data-tone="yes"] .receipt-match-mark { background: var(--t2-ok); color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-match-rows li[data-tone="no"] .receipt-match-mark { background: #e5484d; color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-technical { border-top-color: rgba(255, 255, 255, .14); margin-top: 20px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-actions { gap: 8px; margin-top: 22px; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-actions .button { min-height: 44px; padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, .25); background: rgba(255, 255, 255, .1); color: #fff; font-size: 13px; font-weight: 600; transition: background-color .18s var(--t2-ease), transform .18s var(--t2-ease); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-actions .button:hover { background: rgba(255, 255, 255, .18); color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-actions .button:first-child { background: var(--t2-blue); border-color: var(--t2-blue); box-shadow: 0 8px 18px -8px rgba(0, 82, 255, .9); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-actions .button:first-child:hover { background: #1a63ff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-actions .button:active { transform: scale(.98); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-public-url { color: rgba(255, 255, 255, .62); }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-public-url a { color: #fff; }
+html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) a { color: #fff; }
+/* The dashboard preview card used to strip the receipt's own frame; now it is the frame. */
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-preview-card { padding: 24px; }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-preview-card .receipt-card:not(.is-sample) { padding: 28px; border-radius: 20px; }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-card:not(.is-sample) .receipt-card-amount { font-size: 44px; }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-card:not(.is-sample) :is(dt, dd) { font-size: 12px; }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-card:not(.is-sample) .receipt-summary dd { font-family: var(--t2-mono); }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-card:not(.is-sample) .receipt-stamp { background: rgba(255, 255, 255, .06); }
+html[data-astryx-theme] .dashboard-app.cp-app .receipt-card:not(.is-sample) .receipt-stamp[data-stamp="paid"][data-tone="yes"] { background: var(--t2-ok); }
+@media (max-width: 640px) {
+  html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) { padding: 22px 20px; border-radius: 20px; }
+  html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-amount { font-size: 38px; }
+  html[data-astryx-theme] .cp-app .receipt-card:not(.is-sample) .receipt-card-actions .button { flex: 1 1 100%; justify-content: center; }
+}
+
+/* --------------------------------------------------------------------------
+   Public shell: verify, status, use cases, support. Glass bar, bigger
+   headings, the same controls.
+   -------------------------------------------------------------------------- */
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) { background: var(--t2-bg); }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) > .topbar { position: sticky; top: 0; z-index: 20; min-height: 68px; width: 100%; padding: 0 max(24px, calc((100vw - 1200px) / 2)); background: rgba(246, 247, 251, .82); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border-bottom: 1px solid var(--t2-line); }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) .login-link { display: inline-flex; align-items: center; min-height: 38px; padding: 0 14px; border: 1px solid var(--t2-line); border-radius: 999px; background: var(--t2-surface); color: var(--t2-ink); font-size: 13px; font-weight: 600; }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) .login-link:hover { border-color: var(--t2-line-2); color: var(--t2-blue); }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) .section-kicker { color: var(--t2-blue); font: 700 11px/1.2 Inter, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) h1.t-xl,
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) h1 { font: 600 clamp(32px, 4.5vw, 44px)/1.08 Inter, sans-serif; letter-spacing: -.035em; color: var(--t2-ink); margin-top: 10px; }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) .button { border-radius: 12px; font-weight: 600; transition: transform .18s var(--t2-ease), box-shadow .18s var(--t2-ease), background-color .18s var(--t2-ease); }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) .button-primary { box-shadow: 0 8px 18px -8px rgba(0, 82, 255, .7); }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) .button-primary:hover { transform: translateY(-1px); }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) .button:active { transform: scale(.98); }
+html[data-astryx-theme] .site-shell.cp-app:is(.verify-page, .status-page, .use-cases, .support-page) .astryx-button[data-variant="primary"] { border-radius: 999px; box-shadow: 0 8px 18px -8px rgba(0, 82, 255, .7); }
+
+/* Verify: the statement on a soft blue field, centred. */
+html[data-astryx-theme] .site-shell.cp-app.verify-page > section.page-width { padding-top: 40px !important; }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .receipt-page-state { max-width: 640px; }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .receipt-page-state[data-verified] { animation: t2-rise .6s var(--t2-ease) both; }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .receipt-card { margin-top: 24px; }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .receipt-page-state[role="alert"] { margin-top: 20px; padding: 26px 28px; border: 1px solid var(--t2-line); border-radius: 18px; background: var(--t2-surface); box-shadow: var(--t2-shadow); }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .receipt-page-state[role="alert"] h2 { font: 600 22px/28px Inter, sans-serif; letter-spacing: -.02em; }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .receipt-page-state[role="alert"] p { margin-top: 8px; }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .receipt-page-state[role="alert"] .button { margin-top: 16px; }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .verify-entry { margin-top: 20px; padding: 26px 28px; border: 1px solid var(--t2-line); border-radius: 18px; background: var(--t2-surface); box-shadow: var(--t2-shadow); }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .verify-entry-input { min-height: 48px; border-radius: 12px; font-family: var(--t2-mono); font-size: 13px; }
+html[data-astryx-theme] .site-shell.cp-app.verify-page .verify-entry-form .button { align-self: start; }
+html[data-astryx-theme] .site-shell.cp-app.verify-page p.mono { margin-top: 10px; color: var(--t2-ink-2); font: 500 12px/1.5 var(--t2-mono); overflow-wrap: anywhere; }
+
+/* Status: cards with depth, the bars keep their colours. */
+html[data-astryx-theme] .site-shell.cp-app.status-page .status-card { border-radius: 18px; border-color: var(--t2-line); box-shadow: var(--t2-shadow); background: var(--t2-surface); }
+
+/* Use cases: cards lift, the kicker is blue, the CTA glows. */
+html[data-astryx-theme] .site-shell.cp-app.use-cases .uc-card,
+html[data-astryx-theme] .site-shell.cp-app.use-cases .landing-card { border-radius: 18px; transition: transform .2s var(--t2-ease), box-shadow .2s var(--t2-ease); }
+html[data-astryx-theme] .site-shell.cp-app.use-cases :is(.uc-card, .landing-card):hover { transform: translateY(-2px); box-shadow: var(--t2-shadow); }
+
+/* Support: tip card as an object. */
+html[data-astryx-theme] .site-shell.cp-app.support-page :is(.support-card, .tip-card) { border-radius: 18px; box-shadow: var(--t2-shadow); }
+
+/* Not-found pages share the verify shell. */
+html[data-astryx-theme] .site-shell.cp-app.verify-page .receipt-page-home { display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 12px; background: var(--t2-blue); color: #fff; font-weight: 600; box-shadow: 0 8px 18px -8px rgba(0, 82, 255, .7); }
+
+/* --------------------------------------------------------------------------
+   Reduced motion: everything lands instantly. (workspace.css already covers
+   the dashboard; this covers the receipt and public pages.)
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  html[data-astryx-theme] .cp-app *, html[data-astryx-theme] .cp-app *::before, html[data-astryx-theme] .cp-app *::after { animation: none !important; transition: none !important; }
+}

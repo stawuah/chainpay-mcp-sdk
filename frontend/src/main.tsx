@@ -5,6 +5,7 @@ import { Analytics } from "@vercel/analytics/react";
 import "../skill/assets/design-token.css";
 import "./theme/astryx.css";
 import "./styles.css";
+import "./theme/take-two.css";
 import "./polyfills";
 import { ChainPayTheme } from "./theme/ChainPayTheme";
 

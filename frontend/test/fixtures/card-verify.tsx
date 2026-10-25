@@ -6,6 +6,7 @@ import { encodeDisclosureFragment } from "@chainpayhq/sdk";
 import "../../skill/assets/design-token.css";
 import "../../src/theme/astryx.css";
 import "../../src/styles.css";
+import "../../src/theme/take-two.css";
 import { ChainPayTheme } from "../../src/theme/ChainPayTheme";
 import { CardVerifyPage, setCardCommitmentReader } from "../../src/verify/CardVerifyPage";
 import { createFixtureCardsSource, FIXTURE_CARD_IDS } from "../../src/dashboard/cards/fixtureSource";
