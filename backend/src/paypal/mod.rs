@@ -1,5 +1,7 @@
 //! Isolated PayPal sandbox extension. Never initializes the existing relay store.
 pub mod config;
+pub mod money;
+pub mod provider;
 
 use axum::{Json, Router, http::StatusCode, routing::get};
 use serde_json::json;
