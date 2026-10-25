@@ -75,9 +75,9 @@ export default function Disputes({ api, onOpenTask }: { api: ReturnType<typeof c
         {d.evidence === "unknown" && <p className="paypal-notice">The submission did not confirm. Do not resend; sync again to learn what PayPal recorded.</p>}
         {pack && <dl className="paypal-evidence">
           <div><dt>Capture</dt><dd><code>{pack.capture_id}</code></dd></div>
-          <div><dt>Allowance</dt><dd>{pack.allowance.name} · rule <code>{pack.allowance.rule}</code></dd></div>
-          <div><dt>Rule checks</dt><dd>{pack.allowance.checks.map(c => `${c.rule}: ${checkWords(c)}`).join("; ") || "None recorded"}</dd></div>
-          <div><dt>Approval</dt><dd>{pack.approval ? `Approved by ${pack.approval.approved_by ?? "buyer"} ${when(pack.approval.approval_decided_at)}` : "Agent paid within the allowance; no per-purchase approval"}</dd></div>
+          <div><dt>Allowance</dt><dd>{pack.allowance.name ?? "unknown"} · rule <code>{pack.allowance.rule ?? "none"}</code></dd></div>
+          <div><dt>Rule checks</dt><dd>{(pack.allowance.checks ?? []).map(c => `${c.rule}: ${checkWords(c)}`).join("; ") || "None recorded"}</dd></div>
+          <div><dt>Approval</dt><dd>{pack.approval ? `${pack.approval.approval} by ${pack.approval.approved_by ?? "buyer"} ${when(pack.approval.approval_decided_at)}` : "Agent paid within the allowance; no per-purchase approval"}</dd></div>
           <div><dt>Delivery</dt><dd>{pack.delivery.map(u => `unit ${u.unit + 1} ${u.state}${u.delivered_at ? ` ${when(u.delivered_at)}` : ""}`).join("; ") || "No delivery recorded"}</dd></div>
           <div><dt>Refunds</dt><dd>{pack.refunds.length ? pack.refunds.map(r => `${shownMoney(r.amount)} ${r.confirmed ? "confirmed" : "pending"}`).join("; ") : "None"}</dd></div>
           <div><dt>Receipt digest</dt><dd><code>{pack.receipt_digest}</code></dd></div>

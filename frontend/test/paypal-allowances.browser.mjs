@@ -12,14 +12,14 @@ try {
   await page.getByRole('button',{name:'Allowances',exact:true}).click();
   const card=page.getByLabel('Allowance preview');
   await card.waitFor();
-  assert.match(await card.innerText(),/\$8\.00 per purchase at Northside Grocer, up to \$20\.00 in total, at most 3 times a day/);
+  assert.match(await card.innerText(),/\$8\.00 per purchase at Corner Grocer, up to \$20\.00 in total, at most 3 times a day/);
   await page.getByLabel('Per purchase cap (USD)').fill('12.5');
   await page.getByLabel('Total cap (USD)').fill('45');
   await page.getByLabel('Max purchases per day').fill('1');
   await page.getByLabel('Old Town Tours').check();
   await page.getByLabel('Ask me first').check();
   const text=await card.innerText();
-  assert.match(text,/may ask to buy up to \$12\.50 per purchase at Northside Grocer and Old Town Tours, up to \$45\.00 in total, at most 1 time a day/);
+  assert.match(text,/may ask to buy up to \$12\.50 per purchase at Corner Grocer and Old Town Tours, up to \$45\.00 in total, at most 1 time a day/);
   assert.match(text,/You approve each one\./);
   await page.getByLabel('Name',{exact:true}).fill('Tours and treats');
   await page.getByRole('button',{name:'Create allowance'}).click();
@@ -41,12 +41,52 @@ try {
   assert.equal(await page.getByRole('link',{name:'Continue PayPal approval'}).count(),2);
   // One-tap approve sends only the digest; deny sends a reason.
   const inbox=page.getByLabel('Purchases waiting for approval');
-  await inbox.getByRole('button',{name:'Approve $48.00'}).click();
+  await inbox.getByRole('button',{name:'Approve $36.00'}).click();
   await page.getByText('Approved by buyer-one').waitFor();
   const approve=(await calls(page)).find(c=>c.path.endsWith('/approve'));
   assert.deepEqual(approve.body,{digest:'digest-t-waiting-tickets-0000000000000'});
   assert.equal(await page.locator('.paypal-status',{hasText:'PayPal capture confirmed'}).count(),1);
-  assert.equal(await page.getByText('Purchase at box-office').count(),1);
+  assert.equal(await page.getByText('Purchase at Riverside Box Office').count(),1);
+  // Every check row reads as "<observed> · allowed" or as money against a cap.
+  const checks=await page.locator('.paypal-checks').innerText();
+  assert.match(checks,/status\s+Active · allowed/);assert.match(checks,/cooldown\s+no purchases yet · allowed/);assert.match(checks,/per_purchase_cap\s+\$36\.00 of \$50\.00 · within/);
+  await page.close();
+ }
+ // Approve when the rules no longer pass: the server answers 200 with the approval still requested and the policy refused.
+ {
+  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  await page.goto(base+'?role=buyer&recheck=fail');
+  await page.getByRole('button',{name:'Allowances',exact:true}).click();
+  await page.getByLabel('Purchases waiting for approval').getByRole('button',{name:'Approve $36.00'}).click();
+  await page.locator('.paypal-status',{hasText:'Refused by allowance rules'}).waitFor();
+  const verdict=await page.locator('.paypal-verdict').innerText();
+  assert.match(verdict,/This allowance is not Active/);assert.match(verdict,/allowance_not_active/);
+  assert.match(await page.locator('.paypal-checks').innerText(),/status\s+Paused · not allowed/);
+  await page.close();
+ }
+ // Deny: the receipt shows the buyer's decision as the reason and the extra buyer_decision check.
+ {
+  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  await page.goto(base+'?role=buyer');
+  await page.getByRole('button',{name:'Allowances',exact:true}).click();
+  await page.getByLabel('Purchases waiting for approval').getByRole('button',{name:'Deny',exact:true}).click();
+  await page.waitForFunction(()=>window.__paypalCalls.some(c=>c.path.endsWith('/deny')));
+  assert.deepEqual((await calls(page)).find(c=>c.path.endsWith('/deny')).body,{reason:'Denied by buyer'});
+  await page.getByRole('navigation',{name:'Task receipts'}).getByRole('button',{name:/\$36\.00/}).click();
+  await page.locator('.paypal-status',{hasText:'Refused by allowance rules'}).waitFor();
+  const verdict=await page.locator('.paypal-verdict').innerText();
+  assert.match(verdict,/Denied by the buyer/);assert.match(verdict,/denied/);
+  assert.match(await page.locator('.paypal-checks').innerText(),/buyer_decision\s+Denied by buyer · not allowed/);
+  await page.close();
+ }
+ // Purchases paused on the server: the 422 message is shown as is.
+ {
+  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  await page.goto(base+'?role=buyer&paused=1');
+  await page.getByRole('button',{name:'Allowances',exact:true}).click();
+  await page.getByLabel('Allowance preview').waitFor();
+  await page.getByRole('button',{name:'Create allowance'}).click();
+  assert.equal(await page.getByRole('alert').innerText(),'Allowances and catalog purchases are paused');
   await page.close();
  }
  // Back from PayPal: ?allowance= finishes the payment method once and the query is dropped.
@@ -73,13 +113,13 @@ try {
   assert.doesNotMatch(fromServer,/vault|approval_url/);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=390),'no horizontal scroll at 390px');
   await page.getByRole('button',{name:'Marketplace',exact:true}).click();
-  await page.getByRole('button',{name:/Northside Grocer/}).click();
-  await page.getByRole('button',{name:'More Coffee beans 500g'}).click();
+  await page.locator('.paypal-merchant-tile',{hasText:'Corner Grocer'}).click();
+  await page.getByRole('button',{name:'More Coffee beans 250g'}).click();
   await page.getByRole('status').filter({hasText:'Refused'}).waitFor();
   const verdict=await page.getByRole('status').filter({hasText:'Refused'}).innerText();
   assert.match(verdict,/Over the per-purchase cap/);assert.match(verdict,/per_purchase_cap/);
   assert.equal(await page.getByRole('button',{name:/Buy now/}).isDisabled(),true);
-  await page.getByRole('button',{name:'Fewer Coffee beans 500g'}).click();
+  await page.getByRole('button',{name:'Fewer Coffee beans 250g'}).click();
   await page.getByRole('button',{name:'More Oat milk 1L'}).click();
   await page.getByRole('status').filter({hasText:'Allowed by the allowance rules.'}).waitFor();
   for(const name of ['More Oat milk 1L','Fewer Oat milk 1L']){const box=await page.getByRole('button',{name}).boundingBox();assert.ok(box.height>=44&&box.width>=44,`${name} is ${box.width}x${box.height}`);}
@@ -87,8 +127,22 @@ try {
   await page.locator('.paypal-status',{hasText:'PayPal capture confirmed'}).waitFor();
   const buy=(await calls(page)).find(c=>c.method==='POST'&&c.path==='/purchases');
   assert.equal(buy.body.allowance_id,'al-groceries');assert.deepEqual(buy.body.items,[{id:'oat-milk',qty:1}]);assert.ok(buy.body.request_id);
-  assert.equal(await page.getByText('Purchase at grocer').count(),1);
+  assert.equal(await page.getByText('Purchase at Corner Grocer').count(),1);
   assert.equal(await page.getByRole('button',{name:'Run or recover this paid task'}).count(),0);
+  await page.close();
+ }
+ // No allowance named: the quote comes back without a policy block and nothing can be bought.
+ {
+  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  await page.goto(base+'?role=agent&empty=1');
+  await page.getByRole('button',{name:'Marketplace',exact:true}).click();
+  await page.locator('.paypal-merchant-tile',{hasText:'Corner Grocer'}).click();
+  await page.getByRole('button',{name:'More Oat milk 1L'}).click();
+  await page.getByText('Pick an allowance to check the rules before buying.').waitFor();
+  const quote=(await calls(page)).find(c=>c.path==='/purchases/quote');
+  assert.equal(quote.body.allowance_id,undefined);
+  assert.equal(await page.locator('.paypal-verdict').count(),0);
+  assert.equal(await page.getByRole('button',{name:'Buy now · $3.90'}).isDisabled(),true);
   await page.close();
  }
  console.log('Allowance builder card, exact status words, agent isolation, one-tap approval and marketplace refusal fixtures passed.');

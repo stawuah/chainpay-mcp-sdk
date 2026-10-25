@@ -303,7 +303,7 @@ export default function App({ origin }: { origin: string }) {
             {tasks.length ? tasks.map(task => <button key={task.id} className={!dashboard && task.id === selected?.id ? "selected" : ""} disabled={busy} onClick={() => select(task)}>
               <strong>{task.units.length} output{task.units.length === 1 ? "" : "s"}</strong>
               <span>{shownMoney(task.gross)} · {listStatus(task)}</span>
-              {task.purchase && <small>{task.purchase.merchant}</small>}
+              {task.purchase && <small>{task.service_name ?? task.purchase.merchant}</small>}
               <small>{task.id.slice(0, 8)}</small>
             </button>) : <p className="paypal-note">No tasks yet. Your first quote will appear here.</p>}
           </nav>
@@ -489,7 +489,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
     </ol>
 
     {purchase && <div className="paypal-purchase" aria-label="Purchase details">
-      <h3>Purchase at {purchase.merchant}</h3>
+      <h3>Purchase at {selected.service_name ?? purchase.merchant}</h3>
       {purchase.lines && <ul className="paypal-purchase-lines">{purchase.lines.map(l => <li key={l.id}><span>{l.qty} × {l.name}</span><span>{shownMoney(dollars(BigInt(l.unit_cents) * BigInt(l.qty)))}</span></li>)}</ul>}
       {purchase.policy && <p className={`paypal-verdict ${purchase.policy.allowed ? "is-ok" : "is-refused"}`}>
         {purchase.policy.allowed ? "Allowed by the allowance rules." : `Refused: ${purchase.policy.reason_code ? reasonWords[purchase.policy.reason_code] ?? purchase.policy.reason_code : "the rules did not pass"}.`}
@@ -516,7 +516,7 @@ function ReceiptView({ selected, principal, publicToken, busy, taskPath, proposa
           await refresh();
         })} />
       </div>}
-      {!publicToken && principal?.role === "merchant" && selected.captured && pendingUnits.length > 0 && <div className="paypal-actions">
+      {!publicToken && principal?.role === "merchant" && selected.captured && !selected.payment_review && pendingUnits.length > 0 && <div className="paypal-actions">
         {pendingUnits.map(unit => <span key={unit.index} className="paypal-fulfil">
           <Button label={`Fulfil unit ${unit.index + 1}`} isDisabled={busy} onClick={() => void perform(async () => {
             setSelected(await api<Receipt>(`${taskPath}/fulfil`, "POST", { outcomes: [{ unit: unit.index, state: "delivered" }] }));

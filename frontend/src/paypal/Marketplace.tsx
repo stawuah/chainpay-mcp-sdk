@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ShoppingBag, Store } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
-import { dollars, shownMoney, type Allowance, type client, type Merchant, type Principal, type Quote, type Receipt } from "./client";
+import { dollars, shownMoney, type Allowance, type client, type Merchant, type PolicyCheck, type Principal, type Quote, type Receipt } from "./client";
 
 // Plain words for the policy reason codes the server returns. The code itself is shown too.
 export const reasonWords: Record<string, string> = {
@@ -14,6 +14,7 @@ export const reasonWords: Record<string, string> = {
   max_per_day: "Daily purchase count reached",
   cooldown: "Too soon after the last purchase",
   vault_not_ready: "The buyer has not finished setting up payment",
+  denied: "Denied by the buyer",
 };
 
 export default function Marketplace({ api, principal, onPurchased }: { api: ReturnType<typeof client>; principal: Principal; onPurchased: (r: Receipt) => void }) {
@@ -152,8 +153,8 @@ export function availabilityWords(availability: string): string {
   const m = /^max_per_order:(\d+)$/.exec(availability);
   return m ? `Up to ${m[1]} per order` : "";
 }
-export function checkWords(c: { limit_cents?: number; observed_cents?: number; allowed?: boolean; observed?: string | number | boolean }): string {
-  if (c.limit_cents !== undefined) return `${shownMoney(dollars(c.observed_cents ?? 0))} of ${shownMoney(dollars(c.limit_cents))} · ${c.allowed === false ? "over" : "within"}`;
-  if (c.observed !== undefined) return `${String(c.observed)} · ${c.allowed === false ? "not allowed" : "allowed"}`;
-  return c.allowed === false ? "Not allowed" : "Allowed";
+export function checkWords(c: PolicyCheck): string {
+  if (c.limit_cents !== undefined) return `${shownMoney(dollars(c.observed_cents ?? 0))} of ${shownMoney(dollars(c.limit_cents))} · ${c.allowed ? "within" : "over"}`;
+  if (c.observed) return `${c.observed} · ${c.allowed ? "allowed" : "not allowed"}`;
+  return c.allowed ? "Allowed" : "Not allowed";
 }

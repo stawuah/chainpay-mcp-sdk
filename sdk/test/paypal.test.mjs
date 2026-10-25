@@ -93,6 +93,8 @@ test('purchase keeps the request id, derives its kind from the receipt and strip
   {id:'b'.repeat(32),captured:true,quote_digest:'private',purchase:{approval:null,policy:{allowed:true,rule:'allowance-rules-v1'}}},
   {id:'c'.repeat(32),quote_digest:'private',purchase:{approval:'requested',policy:{allowed:true}}},
   {id:'d'.repeat(32),purchase:{approval:null,policy:{allowed:false,reason_code:'per_purchase_cap'}}},
+  // A retry after the buyer's approval re-check failed: approval still "requested" but the policy says no.
+  {id:'e'.repeat(32),purchase:{approval:'requested',policy:{allowed:false,reason_code:'allowance_not_active'}}},
  ];
  try{
  globalThis.fetch=async(url,init)=>{assert.equal(url,'https://paypal-api.example/v1/paypal/purchases');bodies.push(JSON.parse(init.body));return Response.json(answers[bodies.length-1]);};
@@ -105,9 +107,11 @@ test('purchase keeps the request id, derives its kind from the receipt and strip
  assert.equal(asked.kind,'approval_requested');assert.equal(bodies[1].request_id,'purchase-request-stays-same');
  const refused=await client.purchase('purchase-request-stays-same','a'.repeat(32),'grocer',[{id:'oat-milk',qty:2}]);
  assert.equal(refused.kind,'refused');assert.equal(refused.reason_code,'per_purchase_cap');
+ const rechecked=await client.purchase('purchase-request-stays-same','a'.repeat(32),'grocer',[{id:'oat-milk',qty:2}]);
+ assert.equal(rechecked.kind,'refused');assert.equal(rechecked.reason_code,'allowance_not_active');
  await assert.rejects(client.purchase('short','a'.repeat(32),'grocer',[{id:'oat-milk',qty:1}]));
  await assert.rejects(client.purchase('purchase-request-stays-same','','grocer',[{id:'oat-milk',qty:1}]));
- assert.equal(bodies.length,3);
+ assert.equal(bodies.length,4);
  for(const method of ['approvePurchase','denyPurchase','setAllowanceStatus','createAllowance','vault']) assert.equal(client[method],undefined);
  }finally{globalThis.fetch=previous;}
 });
