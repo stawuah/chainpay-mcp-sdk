@@ -15,10 +15,11 @@ path = "api/relay.rs"
 required-features = ["vercel"]
 
 [features]
-paypal = []
+paypal = ["dep:chrono"]
 vercel = ["dep:vercel_runtime", "dep:tower"]
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
 hmac = "0.12"
 sha2_010 = { package = "sha2", version = "0.10" }
 vercel_runtime = { version = "2.4", features = ["axum"], optional = true }

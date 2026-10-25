@@ -121,6 +121,8 @@ pub struct Task {
     pub capture_id: Option<String>,
     pub captured: bool,
     #[serde(default)]
+    pub subscription_funding: Option<super::subscriptions::Funding>,
+    #[serde(default)]
     pub payment_review: Option<String>,
     pub refund: Option<Operation>,
     pub refund_id: Option<String>,
@@ -197,6 +199,7 @@ impl Task {
             capture: None,
             capture_id: None,
             captured: false,
+            subscription_funding: None,
             payment_review: None,
             refund: None,
             refund_id: None,
@@ -213,8 +216,18 @@ impl Task {
         Ok(self.units.len() as u32
             * super::services::get(&self.offer_version)?.allowance_units_per_output)
     }
+    pub fn verified_funded(&self) -> bool {
+        self.payment_review.is_none() && (self.subscription_funding.is_some() || self.captured)
+    }
     pub fn can_read(&self, p: &Principal) -> bool {
-        self.workspace == p.workspace && (p.role == Role::Merchant || self.principal == p.id)
+        self.workspace == p.workspace
+            && (p.role == Role::Merchant
+                || self.principal == p.id
+                || (p.role == Role::Buyer
+                    && self
+                        .subscription_funding
+                        .as_ref()
+                        .is_some_and(|f| f.buyer == p.id)))
     }
     pub fn buyer(&self, p: &Principal) -> Result<(), Error> {
         if p.role != Role::Buyer || !self.can_read(p) {
@@ -232,6 +245,9 @@ impl Task {
     }
     pub fn start_checkout(&mut self, p: &Principal, digest: &str) -> Result<Option<String>, Error> {
         self.buyer(p)?;
+        if self.subscription_funding.is_some() {
+            return Err(Error::Conflict);
+        }
         if digest != self.quote_digest {
             return Err(Error::Conflict);
         }

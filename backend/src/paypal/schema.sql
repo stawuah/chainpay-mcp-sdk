@@ -31,3 +31,22 @@ CREATE TABLE IF NOT EXISTS paypal_rate_windows (
 );
 
 ALTER TABLE paypal_webhook_inbox ADD COLUMN IF NOT EXISTS attempted_at BIGINT;
+
+-- Isolated subscription access; cash payment evidence is not an Orders capture.
+CREATE TABLE IF NOT EXISTS paypal_subscriptions (
+ id TEXT PRIMARY KEY, workspace TEXT NOT NULL, buyer TEXT NOT NULL,
+ request_id TEXT NOT NULL, record JSONB NOT NULL, UNIQUE(workspace,buyer,request_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS paypal_subscription_provider ON paypal_subscriptions((record->>'provider_id'));
+CREATE TABLE IF NOT EXISTS paypal_subscription_periods (
+ subscription_id TEXT NOT NULL REFERENCES paypal_subscriptions(id), start_at BIGINT NOT NULL,
+ end_at BIGINT NOT NULL, payment_id TEXT UNIQUE, remaining INTEGER NOT NULL DEFAULT 0 CHECK(remaining BETWEEN 0 AND 10),
+ blocked BOOLEAN NOT NULL DEFAULT FALSE, PRIMARY KEY(subscription_id,start_at)
+);
+CREATE TABLE IF NOT EXISTS paypal_delegations (
+ id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES paypal_subscriptions(id), record JSONB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS paypal_allowance_ledger (
+ entry_key TEXT PRIMARY KEY, subscription_id TEXT NOT NULL, period_start BIGINT NOT NULL,
+ task_id TEXT, delegation_id TEXT, kind TEXT NOT NULL, units INTEGER NOT NULL, created_at BIGINT NOT NULL
+);

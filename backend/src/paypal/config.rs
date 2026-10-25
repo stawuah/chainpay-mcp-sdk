@@ -12,6 +12,8 @@ pub struct Config {
     pub webhook_id: String,
     pub public_origin: String,
     pub new_purchases: bool,
+    pub subscriptions: bool,
+    pub subscription_plan: Option<String>,
 }
 
 impl Config {
@@ -71,6 +73,12 @@ impl Config {
             webhook_id: required("PAYPAL_WEBHOOK_ID")?,
             public_origin: origin.origin().ascii_serialization(),
             new_purchases: flag(&get, "CHAINPAY_PAYPAL_NEW_PURCHASES", false)?,
+            subscriptions: flag(&get, "CHAINPAY_PAYPAL_SUBSCRIPTIONS", false)?,
+            subscription_plan: if flag(&get, "CHAINPAY_PAYPAL_SUBSCRIPTIONS", false)? {
+                Some(required("CHAINPAY_PAYPAL_SUBSCRIPTION_PLAN")?)
+            } else {
+                None
+            },
         }))
     }
 }
@@ -142,7 +150,22 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!c.new_purchases);
+        assert!(!c.subscriptions);
+        assert!(c.subscription_plan.is_none());
         assert_eq!(c.public_origin, "https://paypal.example.com");
+    }
+
+    #[test]
+    fn subscriptions_require_their_own_flag_and_explicit_plan() {
+        let mut v = values();
+        v.insert("CHAINPAY_PAYPAL_SUBSCRIPTIONS", "true");
+        assert!(Config::parse(|k| v.get(k).map(|s| s.to_string())).is_err());
+        v.insert("CHAINPAY_PAYPAL_SUBSCRIPTION_PLAN", "P-FIXTURE");
+        let c = Config::parse(|k| v.get(k).map(|s| s.to_string()))
+            .unwrap()
+            .unwrap();
+        assert!(c.subscriptions);
+        assert!(!c.new_purchases);
     }
 
     #[test]
