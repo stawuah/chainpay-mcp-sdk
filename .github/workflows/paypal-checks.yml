@@ -10,6 +10,19 @@ concurrency:
 jobs:
   sandbox-extension:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: chainpay_paypal_test
+          POSTGRES_DB: chainpay_paypal_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['55479:5432']
+        options: >-
+          --health-cmd "pg_isready -U chainpay_paypal_test" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      PAYPAL_TEST_DATABASE_URL: postgresql://chainpay_paypal_test@127.0.0.1:55479/chainpay_paypal_test
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -19,3 +32,4 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
       - run: cargo test -p chainpay-backend --features paypal --locked
+      - run: cargo test -p chainpay-backend --features paypal --locked paypal::store::tests -- --ignored
