@@ -585,6 +585,10 @@ impl Store {
         }
         let per = super::services::get(&t.offer_version)?.allowance_units_per_output as i32;
         for (i, u) in t.units.iter().enumerate() {
+            // Original outcome was accounted before rework was approved.
+            if !u.history.is_empty() {
+                continue;
+            }
             let kind = match u.state {
                 UnitState::Failed => "restore",
                 UnitState::Delivered => "consume",

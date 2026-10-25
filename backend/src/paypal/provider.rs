@@ -286,6 +286,30 @@ impl Provider {
         .await
     }
 
+    /// A local immutable reference lets a verified webhook recover a lost response.
+    pub async fn resolution_refund(
+        &self,
+        capture: &str,
+        amount: Cents,
+        key: &str,
+    ) -> Result<Value, ProviderError> {
+        id(capture)?;
+        id(key)?;
+        if amount.0 == 0 {
+            return Err(ProviderError::Invalid("zero refund"));
+        }
+        self.request(
+            Method::POST,
+            &format!("/v2/payments/captures/{capture}/refund"),
+            Some(key),
+            Some(
+                json!({"invoice_id":key,"amount":{"currency_code":"USD","value":amount.decimal()}}),
+            ),
+            &[],
+        )
+        .await
+    }
+
     pub async fn order(&self, order: &str) -> Result<Value, ProviderError> {
         id(order)?;
         self.request(

@@ -81,6 +81,17 @@ impl App {
                 .update(id, p, |t| observations::refund(t, value))
                 .await?;
         }
+        let task = self.store.get(id, p).await?;
+        for (index, refund) in task.refunds.iter().enumerate() {
+            if let Some(refund_id) = &refund.provider_id {
+                let value = self.provider.refund(refund_id).await.map_err(|_| {
+                    Error::Invalid("Original refund observation unavailable; do not replace")
+                })?;
+                self.store
+                    .update(id, p, |t| observations::ledger_refund(t, index, value))
+                    .await?;
+            }
+        }
         self.store.get(id, p).await
     }
 
@@ -98,6 +109,7 @@ impl App {
             for value in [
                 resource.get("id"),
                 resource.get("custom_id"),
+                resource.get("invoice_id"),
                 resource.pointer("/supplementary_data/related_ids/order_id"),
                 resource.pointer("/supplementary_data/related_ids/capture_id"),
             ] {
@@ -142,11 +154,57 @@ impl App {
                     workspace: task.workspace.clone(),
                     role: Role::Merchant,
                 };
+                if event["event_type"] == "PAYMENT.CAPTURE.REFUNDED" {
+                    let observation = if let Some(id) = resource["id"].as_str() {
+                        self.provider.refund(id).await.ok()
+                    } else {
+                        None
+                    };
+                    if observation.is_none() {
+                        // Transport failure is not evidence of an unmatched refund. Keep the
+                        // verified event pending and retry only the provider read later.
+                        resolved = false;
+                        continue;
+                    }
+                    let mut known = false;
+                    if let Some(value) = observation {
+                        let index = task.refunds.iter().position(|r| {
+                            r.operation.as_ref().is_some_and(|op| {
+                                value["invoice_id"].as_str() == Some(op.key.as_str())
+                            }) || r
+                                .provider_id
+                                .as_deref()
+                                .is_some_and(|id| value["id"].as_str() == Some(id))
+                        });
+                        if let Some(index) = index {
+                            known = self
+                                .store
+                                .update(&task.id, &p, |t| {
+                                    observations::ledger_refund(t, index, value.clone())
+                                })
+                                .await
+                                .is_ok();
+                        } else if task
+                            .refund_id
+                            .as_deref()
+                            .is_some_and(|id| value["id"].as_str() == Some(id))
+                        {
+                            known = self
+                                .store
+                                .update(&task.id, &p, |t| observations::refund(t, value))
+                                .await
+                                .is_ok();
+                        }
+                    }
+                    if !known {
+                        self.store.update(&task.id,&p,|t| { t.payment_review=Some("Verified webhook reports an unmatched refund; merchant review required".into()); Ok(()) }).await?;
+                        resolved = false;
+                    }
+                }
                 if matches!(
                     event["event_type"].as_str(),
                     Some("PAYMENT.CAPTURE.REVERSED" | "PAYMENT.CAPTURE.DENIED")
-                ) || (event["event_type"] == "PAYMENT.CAPTURE.REFUNDED" && task.refund.is_none())
-                {
+                ) {
                     self.store.update(&task.id, &p, |t| { t.payment_review = Some("Verified webhook reports an external payment change; merchant review required".into()); Ok(()) }).await?;
                 }
                 // Recover a lost create response via the verified event's order ID.
@@ -161,27 +219,6 @@ impl App {
                                 if self
                                     .store
                                     .update(&task.id, &p, |t| observations::order(t, value))
-                                    .await
-                                    .is_err()
-                                {
-                                    resolved = false;
-                                    continue;
-                                }
-                            }
-                            Err(_) => {
-                                resolved = false;
-                                continue;
-                            }
-                        }
-                    }
-                }
-                if event["event_type"] == "PAYMENT.CAPTURE.REFUNDED" && task.refund.is_some() {
-                    if let Some(refund_id) = resource["id"].as_str() {
-                        match self.provider.refund(refund_id).await {
-                            Ok(value) => {
-                                if self
-                                    .store
-                                    .update(&task.id, &p, |t| observations::refund(t, value))
                                     .await
                                     .is_err()
                                 {
@@ -233,6 +270,10 @@ pub fn router(app: App) -> Router {
         .route("/v1/paypal/tasks/{id}/explain",post(explain))
         .route("/v1/paypal/tasks/{id}/refund-proposal",get(refund_proposal))
         .route("/v1/paypal/tasks/{id}/refund",post(refund))
+        .route("/v1/paypal/tasks/{id}/resolution",post(decision))
+        .route("/v1/paypal/tasks/{id}/rework",post(rework))
+        .route("/v1/paypal/tasks/{id}/resolution-refunds",post(resolution_proposal))
+        .route("/v1/paypal/tasks/{id}/resolution-refunds/approve",post(resolution_refund))
         .route("/v1/paypal/tasks/{id}/share",post(share).delete(unshare))
         .route("/v1/paypal/receipts/{token}",get(public_receipt))
         .route("/v1/paypal/webhooks",post(webhook))
@@ -705,3 +746,96 @@ async fn webhook(
 
 #[cfg(test)]
 mod tests;
+
+async fn decision(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<super::resolution::Intent>,
+) -> Result<Json<Value>, Error> {
+    let p = app.principal(&headers).await?;
+    let (task, _) = app.store.update(&id, &p, |t| t.decide(&p, body)).await?;
+    Ok(Json(observations::receipt(&task, false)))
+}
+async fn rework(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<super::resolution::Intent>,
+) -> Result<Json<Value>, Error> {
+    let p = app.principal(&headers).await?;
+    let (task, _) = app.store.update(&id, &p, |t| t.rework(&p, body)).await?;
+    Ok(Json(observations::receipt(&task, false)))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolutionProposal {
+    request_id: String,
+    bindings: Vec<super::resolution::Binding>,
+    reason: String,
+}
+async fn resolution_proposal(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<ResolutionProposal>,
+) -> Result<Json<Value>, Error> {
+    let p = app.principal(&headers).await?;
+    let (task, _) = app
+        .store
+        .update(&id, &p, |t| {
+            t.propose_resolution_refund(&p, &body.request_id, body.bindings, body.reason)
+        })
+        .await?;
+    Ok(Json(observations::receipt(&task, false)))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolutionApproval {
+    request_id: String,
+    digest: String,
+}
+async fn resolution_refund(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<ResolutionApproval>,
+) -> Result<Json<Value>, Error> {
+    let p = app.principal(&headers).await?;
+    let (task, index) = app
+        .store
+        .update(&id, &p, |t| {
+            t.approve_resolution_refund(&p, &body.request_id, &body.digest)
+        })
+        .await?;
+    if let Some(index) = index {
+        let refund = &task.refunds[index];
+        match app
+            .provider
+            .resolution_refund(
+                task.capture_id.as_deref().ok_or(Error::Conflict)?,
+                refund.amount,
+                &refund.operation.as_ref().unwrap().key,
+            )
+            .await
+        {
+            Ok(value) => {
+                app.store
+                    .update(&id, &p, |t| observations::ledger_refund(t, index, value))
+                    .await?;
+            }
+            Err(_) => {
+                app.store
+                    .update(&id, &p, |t| {
+                        t.refunds[index].operation.as_mut().unwrap().unknown();
+                        Ok(())
+                    })
+                    .await?;
+            }
+        }
+    }
+    Ok(Json(observations::receipt(
+        &app.store.get(&id, &p).await?,
+        false,
+    )))
+}
