@@ -43,6 +43,17 @@ pub struct Provider {
 }
 
 impl Provider {
+    #[cfg(test)]
+    pub(crate) fn fixture(base: String, config: &Config) -> Self {
+        let mut provider = Self::new(config).unwrap();
+        provider.base = base;
+        provider.client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        provider
+    }
     pub fn new(config: &Config) -> Result<Self, reqwest::Error> {
         Ok(Self {
             client: http_client()?,
