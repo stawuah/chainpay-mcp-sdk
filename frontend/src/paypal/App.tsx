@@ -47,6 +47,8 @@ export default function App({ origin }: { origin: string }) {
   const [proposal, setProposal] = useState<Proposal>();
   const [explanation, setExplanation] = useState("");
   const [reporting, setReporting] = useState<Report>();
+  const [marketPending, setMarketPending] = useState(false);
+  const [allowancePending, setAllowancePending] = useState(false);
   const [dashboard, setDashboard] = useState(false);
   // Coming back from PayPal with ?allowance= lands on the allowances panel so the return handler runs.
   const [panel, setPanel] = useState<"" | "allowances" | "market" | "disputes">(() => new URLSearchParams(location.search).has("allowance") ? "allowances" : "");
@@ -166,6 +168,7 @@ export default function App({ origin }: { origin: string }) {
         <span className="paypal-badge"><i className="paypal-badge-dot" aria-hidden="true" />PayPal sandbox · no real money</span>
         {principal && <span className="paypal-role-chip"><LayoutGrid size={14} aria-hidden="true" />{principal.role} · {principal.workspace}</span>}
         {principal && <Button label="Sign out" variant="secondary" onClick={() => void perform(async () => {
+          if (marketPending || allowancePending) { setError("Resolve the original purchase or allowance before signing out."); return; }
           ++sessionGeneration.current;
           setBusy(false);
           setError("");
@@ -312,8 +315,8 @@ export default function App({ origin }: { origin: string }) {
           {dashboard && principal && <Suspense fallback={<p role="status">Loading outcome dashboard…</p>}>
             <Analytics key={`analytics:${principal.workspace}:${principal.id}:${token}`} origin={origin} token={token} onSelect={task => { void perform(async () => select(await api<Receipt>(`/tasks/${task.id}`))); }} />
           </Suspense>}
-          {!dashboard && !selected && panel === "allowances" && principal && <Allowances key={`allowances:${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} onReceipt={task => { select(task); void refresh(); }} />}
-          {!dashboard && !selected && panel === "market" && principal && <Marketplace key={`market:${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} onPurchased={task => { select(task); void refresh(); }} />}
+          {principal && (( !dashboard && !selected && panel === "allowances") || allowancePending) && <div hidden={dashboard || Boolean(selected) || panel !== "allowances"}><Allowances onPendingChange={setAllowancePending} key={`allowances:${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} onReceipt={task => { select(task); void refresh(); }} /></div>}
+          {principal && (( !dashboard && !selected && panel === "market") || marketPending) && <div hidden={dashboard || Boolean(selected) || panel !== "market"}><Marketplace onPendingChange={setMarketPending} key={`market:${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} onOpenAllowances={() => setPanel("allowances")} onPurchased={task => { select(task); void refresh(); }} /></div>}
           {!dashboard && !selected && panel === "disputes" && principal && <Disputes key={`disputes:${principal.workspace}:${principal.id}:${token}`} api={api} onOpenTask={id => { void perform(async () => select(await api<Receipt>(`/tasks/${encodeURIComponent(id)}`))); }} />}
           {showStudio && editable && <section className="paypal-card">
             <span className="paypal-eyebrow"><Sparkles size={14} aria-hidden="true" />Define the work</span>

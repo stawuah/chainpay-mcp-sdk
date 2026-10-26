@@ -29,6 +29,8 @@ export function exportReceipt(receipt: Receipt): string {
   const cell = (s: string) => `"${s.replaceAll('"', '""')}"`;
   return ["task_id,currency,gross,captured,confirmed_refund,net_buyer_cost", [receipt.id, receipt.currency, receipt.gross, String(receipt.captured), receipt.refund_confirmed ? receipt.refund : "0.00", receipt.net ?? ""].map(cell).join(",")].join("\r\n");
 }
+/** A mutation may have reached the service; retain its original request ID and inputs. */
+export class PayPalRequestUncertainError extends Error {}
 export function client(origin: string, token: string) {
   return async function request<T>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
     if (!path.startsWith("/") || path.startsWith("//")) throw new Error("Invalid API path");
@@ -37,12 +39,21 @@ export function client(origin: string, token: string) {
       response = await fetch(`${origin}/v1/paypal${path}`, { method, redirect: "error", credentials: "omit", cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(100_000)]) : AbortSignal.timeout(100_000), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) });
     } catch (cause) {
       // A timeout is not a failure: the payment may have gone through. Say so instead of "signal timed out".
-      if (cause instanceof Error && cause.name === "TimeoutError") throw new Error("No response yet. Keep this task and use Check original payment; do not create another.");
+      if (method !== "GET" || (cause instanceof Error && cause.name === "TimeoutError")) throw new PayPalRequestUncertainError("No response yet. Keep the original request and check it again; do not create another.");
       throw cause;
     }
-    if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.error || `Request unavailable (${response.status}). Keep the original task.`); }
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message = error.error || `Request unavailable (${response.status}). Keep the original task.`;
+      if (method !== "GET" && (response.status >= 500 || response.status === 409)) throw new PayPalRequestUncertainError(message);
+      throw new Error(message);
+    }
     if (response.status === 204 || response.status === 202) return undefined as T;
-    return await response.json() as T;
+    try { return await response.json() as T; }
+    catch (cause) {
+      if (method !== "GET") throw new PayPalRequestUncertainError("The response could not be read. Keep the original request and check it again; do not create another.");
+      throw cause;
+    }
   };
 }
 

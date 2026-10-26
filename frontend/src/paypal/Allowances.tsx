@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { Inbox, ShieldCheck, Wallet } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
 import { BrandLogo } from "../brand/Brand";
-import { centsFromDollars, checkoutUrl, dollars, jsonInt, shownMoney, type Allowance, type client, type Merchant, type Principal, type Receipt } from "./client";
+import { PayPalRequestUncertainError, centsFromDollars, checkoutUrl, dollars, jsonInt, shownMoney, type Allowance, type client, type Merchant, type Principal, type Receipt } from "./client";
 
 const modeWord = { agent_pays: "Agent pays", ask_first: "Ask me first" } as const;
 
-export default function Allowances({ api, principal, onReceipt }: { api: ReturnType<typeof client>; principal: Principal; onReceipt: (r: Receipt) => void }) {
+export default function Allowances({ api, principal, onReceipt, onPendingChange }: { api: ReturnType<typeof client>; principal: Principal; onReceipt: (r: Receipt) => void; onPendingChange?: (pending: boolean) => void }) {
   const buyer = principal.role === "buyer";
   const [allowances, setAllowances] = useState<Allowance[]>([]);
   const [merchants, setMerchants] = useState<Merchant[]>([]);
@@ -15,6 +15,16 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
   const [busy, setBusy] = useState(false);
   const live = useRef(true);
   const requestId = useRef(crypto.randomUUID());
+  const createIntent = useRef<Record<string, unknown> | null>(null);
+  const [createUncertain, setCreateUncertain] = useState(false);
+  useEffect(() => { onPendingChange?.(busy || createUncertain); }, [busy, createUncertain, onPendingChange]);
+  useEffect(() => {
+    if (!busy && !createUncertain) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy, createUncertain]);
+  const formRef = useRef<HTMLFormElement | null>(null);
 
   // Builder fields. Dollars stay text until they become a cents string.
   const [name, setName] = useState("Weekly groceries");
@@ -76,6 +86,7 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
         <h2>Allowances</h2>
       </div>
       <div className="paypal-actions" style={{ margin: 0 }}>
+        {buyer && <Button label="New allowance" variant="secondary" onClick={() => { formRef.current?.scrollIntoView({ block: "start" }); formRef.current?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true }); }} />}
         <Button label="Refresh" variant="secondary" isDisabled={busy} onClick={() => void act(async () => {})} />
       </div>
     </div>
@@ -101,60 +112,7 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
       </div>)}
     </div>}
 
-    {buyer && <div className="paypal-allowance-builder">
-      <form className="paypal-form-grid" aria-label="New allowance" onSubmit={e => {
-        e.preventDefault();
-        if (!formOk || !totalCents || !perCents) return;
-        void act(async () => {
-          const body = {
-            request_id: requestId.current, name: name.trim(), total_cap_cents: jsonInt(totalCents), per_purchase_cap_cents: jsonInt(perCents),
-            expires_at: expiresAt, cooldown_seconds: Number(cooldown), max_per_day: Number(maxPerDay), merchants: picked, mode,
-            agent: agent.trim() || undefined, vault_source: source, card: source === "card" ? { number: card.number.replace(/\s/g, ""), expiry: card.expiry, name: card.name.trim() } : undefined,
-          };
-          await api("/allowances", "POST", body);
-          requestId.current = crypto.randomUUID();
-          setCard({ number: "", expiry: "", name: "" });
-        });
-      }}>
-        <label>Name<input value={name} required maxLength={80} onChange={e => { setName(e.target.value); touch(); }} /></label>
-        <label>Total cap (USD)<input inputMode="decimal" value={total} required onChange={e => { setTotal(e.target.value); touch(); }} aria-invalid={!totalCents} /></label>
-        <label>Per purchase cap (USD)<input inputMode="decimal" value={perPurchase} required onChange={e => { setPerPurchase(e.target.value); touch(); }} aria-invalid={!perCents || (totalCents ? BigInt(perCents) > BigInt(totalCents) : false)} /></label>
-        <fieldset className="paypal-choice">
-          <legend>Mode</legend>
-          {(["agent_pays", "ask_first"] as const).map(m => <label key={m} className={mode === m ? "is-active" : ""}>
-            <input type="radio" name="allowance-mode" value={m} checked={mode === m} onChange={() => { setMode(m); touch(); }} />{modeWord[m]}
-          </label>)}
-        </fieldset>
-        <fieldset className="paypal-choice">
-          <legend>Merchants</legend>
-          {merchants.map(m => <label key={m.id} className={picked.includes(m.id) ? "is-active" : ""}>
-            <input type="checkbox" checked={picked.includes(m.id)} onChange={e => { setPicked(e.target.checked ? [...picked, m.id] : picked.filter(id => id !== m.id)); touch(); }} />{m.name}
-          </label>)}
-          {!merchants.length && <p className="paypal-note">Catalog loading.</p>}
-        </fieldset>
-        <label>Agent (optional)<input value={agent} maxLength={40} placeholder="Any agent" onChange={e => { setAgent(e.target.value); touch(); }} /></label>
-        <label>Expires<input type="datetime-local" required value={expiry} onChange={e => { setExpiry(e.target.value); touch(); }} /></label>
-        <label>Cooldown (seconds)<input inputMode="numeric" value={cooldown} required onChange={e => { setCooldown(e.target.value); touch(); }} /></label>
-        <label>Max purchases per day<input inputMode="numeric" value={maxPerDay} required onChange={e => { setMaxPerDay(e.target.value); touch(); }} /></label>
-        <fieldset className="paypal-choice">
-          <legend>Payment method</legend>
-          <label className={source === "paypal" ? "is-active" : ""}><input type="radio" name="allowance-source" checked={source === "paypal"} onChange={() => { setSource("paypal"); touch(); }} />PayPal sandbox</label>
-          <label className={source === "card" ? "is-active" : ""}><input type="radio" name="allowance-source" checked={source === "card"} onChange={() => { setSource("card"); touch(); }} />Sandbox card</label>
-        </fieldset>
-        {source === "card" && <>
-          <label>Card number<input inputMode="numeric" autoComplete="off" value={card.number} onChange={e => { setCard({ ...card, number: e.target.value }); touch(); }} /></label>
-          <label>Card expiry (YYYY-MM)<input autoComplete="off" placeholder="2030-01" value={card.expiry} onChange={e => { setCard({ ...card, expiry: e.target.value }); touch(); }} /></label>
-          <label>Name on card<input autoComplete="off" value={card.name} onChange={e => { setCard({ ...card, name: e.target.value }); touch(); }} /></label>
-          <p className="paypal-note">Card details go to PayPal once and are not kept by ChainPay.</p>
-        </>}
-        <p className="paypal-note"><ShieldCheck size={14} style={{ verticalAlign: "text-bottom", marginRight: 4 }} aria-hidden="true" />The agent sees these rules and nothing about how you pay. It cannot raise a cap, resume a paused allowance or approve its own purchase.</p>
-        <button className="paypal-btn-primary" disabled={busy || !formOk}>Create allowance</button>
-      </form>
-
-      <PermissionCard name={name} totalCents={totalCents} perCents={perCents} mode={mode} merchants={picked.map(merchantName)} agent={agent} expiresAt={expiresAt} cooldown={cooldown} maxPerDay={maxPerDay} />
-    </div>}
-
-    {allowances.length === 0 && <p className="paypal-note">{buyer ? "No allowances yet. The card on the right rewrites as you type." : "No Active allowance names this agent yet."}</p>}
+    {allowances.length === 0 && <p className="paypal-note">{buyer ? "No allowances yet. The preview updates as you set your limits." : "No Active allowance names this agent yet."}</p>}
     <div className="paypal-allowance-list">
       {allowances.map(a => {
         const spent = BigInt(a.spent_cents), total = BigInt(a.total_cap_cents);
@@ -190,6 +148,71 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
         </article>;
       })}
     </div>
+
+    {buyer && <div className="paypal-allowance-builder">
+      <form ref={formRef} className="paypal-form-grid" aria-label="New allowance" onSubmit={e => {
+        e.preventDefault();
+        if (busy || (!createIntent.current && (!formOk || !totalCents || !perCents))) return;
+        void act(async () => {
+          const body = createIntent.current ?? {
+            request_id: requestId.current, name: name.trim(), total_cap_cents: jsonInt(totalCents!), per_purchase_cap_cents: jsonInt(perCents!),
+            expires_at: expiresAt, cooldown_seconds: Number(cooldown), max_per_day: Number(maxPerDay), merchants: picked, mode,
+            agent: agent.trim() || undefined, vault_source: source, card: source === "card" ? { number: card.number.replace(/\s/g, ""), expiry: card.expiry, name: card.name.trim() } : undefined,
+          };
+          createIntent.current = body;
+          try {
+            await api("/allowances", "POST", body);
+          } catch (cause) {
+            if (cause instanceof PayPalRequestUncertainError) setCreateUncertain(true);
+            else if (!createUncertain) { createIntent.current = null; setCreateUncertain(false); }
+            throw cause;
+          }
+          createIntent.current = null;
+          setCreateUncertain(false);
+          requestId.current = crypto.randomUUID();
+          setCard({ number: "", expiry: "", name: "" });
+        });
+      }}>
+        <label>Name<input disabled={busy || createUncertain} value={name} required maxLength={80} onChange={e => { setName(e.target.value); touch(); }} /></label>
+        <label>Total cap (USD)<input disabled={busy || createUncertain} inputMode="decimal" value={total} required onChange={e => { setTotal(e.target.value); touch(); }} aria-invalid={!totalCents} /></label>
+        <label>Per purchase cap (USD)<input disabled={busy || createUncertain} inputMode="decimal" value={perPurchase} required onChange={e => { setPerPurchase(e.target.value); touch(); }} aria-invalid={!perCents || (totalCents ? BigInt(perCents) > BigInt(totalCents) : false)} /></label>
+        <fieldset className="paypal-choice">
+          <legend>Mode</legend>
+          {(["agent_pays", "ask_first"] as const).map(m => <label key={m} className={mode === m ? "is-active" : ""}>
+            <input disabled={busy || createUncertain} type="radio" name="allowance-mode" value={m} checked={mode === m} onChange={() => { setMode(m); touch(); }} />{modeWord[m]}
+          </label>)}
+        </fieldset>
+        <fieldset className="paypal-choice">
+          <legend>Merchants</legend>
+          {merchants.map(m => <label key={m.id} className={picked.includes(m.id) ? "is-active" : ""}>
+            <input disabled={busy || createUncertain} type="checkbox" checked={picked.includes(m.id)} onChange={e => { setPicked(e.target.checked ? [...picked, m.id] : picked.filter(id => id !== m.id)); touch(); }} />{m.name}
+          </label>)}
+          {!merchants.length && <p className="paypal-note">Catalog loading.</p>}
+        </fieldset>
+        <label>Agent (optional)<input disabled={busy || createUncertain} value={agent} maxLength={40} placeholder="Any agent" onChange={e => { setAgent(e.target.value); touch(); }} /></label>
+        <label>Expires<input disabled={busy || createUncertain} type="datetime-local" required value={expiry} onChange={e => { setExpiry(e.target.value); touch(); }} /></label>
+        <label>Cooldown (seconds)<input disabled={busy || createUncertain} inputMode="numeric" value={cooldown} required onChange={e => { setCooldown(e.target.value); touch(); }} /></label>
+        <label>Max purchases per day<input disabled={busy || createUncertain} inputMode="numeric" value={maxPerDay} required onChange={e => { setMaxPerDay(e.target.value); touch(); }} /></label>
+        <fieldset className="paypal-choice">
+          <legend>Payment method</legend>
+          <label className={source === "paypal" ? "is-active" : ""}><input disabled={busy || createUncertain} type="radio" name="allowance-source" checked={source === "paypal"} onChange={() => { setSource("paypal"); touch(); }} />PayPal sandbox</label>
+          <label className={source === "card" ? "is-active" : ""}><input disabled={busy || createUncertain} type="radio" name="allowance-source" checked={source === "card"} onChange={() => { setSource("card"); touch(); }} />Sandbox card</label>
+        </fieldset>
+        {source === "card" && <>
+          <label>Card number<input disabled={busy || createUncertain} inputMode="numeric" autoComplete="off" value={card.number} onChange={e => { setCard({ ...card, number: e.target.value }); touch(); }} /></label>
+          <label>Card expiry (YYYY-MM)<input disabled={busy || createUncertain} autoComplete="off" placeholder="2030-01" value={card.expiry} onChange={e => { setCard({ ...card, expiry: e.target.value }); touch(); }} /></label>
+          <label>Name on card<input disabled={busy || createUncertain} autoComplete="off" value={card.name} onChange={e => { setCard({ ...card, name: e.target.value }); touch(); }} /></label>
+          <p className="paypal-note">Card details go to PayPal once and are not kept by ChainPay.</p>
+        </>}
+        <p className="paypal-note"><ShieldCheck size={14} style={{ verticalAlign: "text-bottom", marginRight: 4 }} aria-hidden="true" />The agent sees these rules and nothing about how you pay. It cannot raise a cap, resume a paused allowance or approve its own purchase.</p>
+        {createUncertain && <p className="paypal-notice" role="status">The allowance creation outcome is unknown. These limits are locked; retry the original request before creating another allowance.</p>}
+        <button className="paypal-btn-primary" disabled={busy || (!createIntent.current && !formOk)}>{createUncertain ? "Retry original allowance" : "Create allowance"}</button>
+      </form>
+
+      <PermissionCard name={name} totalCents={totalCents} perCents={perCents} mode={mode} merchants={picked.map(merchantName)} agent={agent} expiresAt={expiresAt} cooldown={cooldown} maxPerDay={maxPerDay} />
+    </div>}
+
+
   </section>;
 }
 
