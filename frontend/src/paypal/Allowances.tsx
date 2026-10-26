@@ -1,12 +1,20 @@
-import { useEffect, useRef, useState } from "react";
-import { Inbox, ShieldCheck, Wallet } from "lucide-react";
+import { useEffect, useRef, useState, type Ref } from "react";
+import { ShieldCheck, Wallet } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
 import { BrandLogo } from "../brand/Brand";
-import { centsFromDollars, checkoutUrl, dollars, jsonInt, shownMoney, type Allowance, type client, type Merchant, type Principal, type Receipt } from "./client";
+import { centsFromDollars, checkoutUrl, dollars, jsonInt, shownMoney, type Allowance, type AllowanceMode, type client, type Merchant, type Principal, type Receipt } from "./client";
+import { ApprovalInbox } from "./Approvals";
 
-const modeWord = { agent_pays: "Agent pays", ask_first: "Ask me first" } as const;
+const modeWord: Record<AllowanceMode, string> = { agent_pays: "Agent pays", ask_first: "Ask me first", ask_above: "Ask me above a limit" };
+/** One line for an allowance's mode. ask_above names its threshold. */
+export function modeLabel(a: Pick<Allowance, "mode" | "ask_above_cents">): string {
+  return a.mode === "ask_above" ? `Ask me above ${shownMoney(dollars(a.ask_above_cents ?? null))}` : modeWord[a.mode];
+}
+/** Plain words for catalog merchant kinds. Unknown kinds show as sent. */
+export const kindWords: Record<string, string> = { grocery: "Groceries", events: "Tickets", booking: "Tours", print: "Print" };
+export const kindLabel = (kind: string) => kindWords[kind] ?? kind;
 
-export default function Allowances({ api, principal, onReceipt }: { api: ReturnType<typeof client>; principal: Principal; onReceipt: (r: Receipt) => void }) {
+export default function Allowances({ api, principal, onReceipt, showInbox = true, builderRef }: { api: ReturnType<typeof client>; principal: Principal; onReceipt: (r: Receipt) => void; /** The dashboard tab shows approvals above its sub-views, so it turns this one off. */ showInbox?: boolean; builderRef?: Ref<HTMLFormElement> }) {
   const buyer = principal.role === "buyer";
   const [allowances, setAllowances] = useState<Allowance[]>([]);
   const [merchants, setMerchants] = useState<Merchant[]>([]);
@@ -20,7 +28,9 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
   const [name, setName] = useState("Weekly groceries");
   const [total, setTotal] = useState("20.00");
   const [perPurchase, setPerPurchase] = useState("8.00");
-  const [mode, setMode] = useState<Allowance["mode"]>("agent_pays");
+  const [mode, setMode] = useState<AllowanceMode>("agent_pays");
+  const [askAbove, setAskAbove] = useState("5.00");
+  const [categories, setCategories] = useState<string[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [agent, setAgent] = useState("");
   const [expiry, setExpiry] = useState(() => localDateTime(Date.now() + 30 * 86400000));
@@ -65,9 +75,12 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
 
   const totalCents = centsFromDollars(total);
   const perCents = centsFromDollars(perPurchase);
+  const askCents = mode === "ask_above" ? centsFromDollars(askAbove) : null;
+  const askOk = mode !== "ask_above" || Boolean(askCents && perCents && BigInt(askCents) < BigInt(perCents));
+  const kinds = [...new Set(merchants.map(m => m.kind))];
   const merchantName = (id: string) => merchants.find(m => m.id === id)?.name ?? id;
   const expiresAt = expiry ? Math.floor(new Date(expiry).getTime() / 1000) : NaN;
-  const formOk = name.trim() && totalCents && perCents && BigInt(perCents) <= BigInt(totalCents) && picked.length > 0 && Number.isFinite(expiresAt) && expiresAt > Date.now() / 1000 && /^\d+$/.test(cooldown) && /^\d+$/.test(maxPerDay) && BigInt(maxPerDay) > 0n && (source === "paypal" || (card.number.replace(/\s/g, "").length >= 12 && /^\d{4}-\d{2}$/.test(card.expiry) && card.name.trim()));
+  const formOk = askOk && name.trim() && totalCents && perCents && BigInt(perCents) <= BigInt(totalCents) && picked.length > 0 && Number.isFinite(expiresAt) && expiresAt > Date.now() / 1000 && /^\d+$/.test(cooldown) && /^\d+$/.test(maxPerDay) && BigInt(maxPerDay) > 0n && (source === "paypal" || (card.number.replace(/\s/g, "").length >= 12 && /^\d{4}-\d{2}$/.test(card.expiry) && card.name.trim()));
 
   return <section className="paypal-card paypal-allowances" aria-label="Agent allowances">
     <div className="paypal-card-header">
@@ -81,34 +94,23 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
     </div>
     {error && <p role="alert" className="paypal-error">{error}</p>}
 
-    {buyer && approvals.length > 0 && <div className="paypal-inbox" aria-label="Purchases waiting for approval">
-      <h3><Inbox size={15} aria-hidden="true" />Waiting for you ({approvals.length})</h3>
-      {approvals.map(task => <div key={task.id} className="paypal-inbox-row">
-        <div>
-          <strong>{merchantName(task.purchase?.merchant ?? "")} · {shownMoney(task.gross)}</strong>
-          <span>{(task.purchase?.lines ?? []).map(l => `${l.qty} × ${l.name}`).join(", ")}</span>
-          <small>Allowance {allowances.find(a => a.id === task.purchase?.allowance_id)?.name ?? task.purchase?.allowance_id}</small>
-        </div>
-        <div className="paypal-actions" style={{ margin: 0 }}>
-          <Button label={`Approve ${shownMoney(task.gross)}`} isDisabled={busy} onClick={() => void act(async () => {
-            const receipt = await api<Receipt>(`/purchases/${task.id}/approve`, "POST", { digest: task.quote_digest });
-            if (live.current) onReceipt(receipt);
-          })} />
-          <Button label="Deny" variant="secondary" isDisabled={busy} onClick={() => void act(async () => {
-            await api(`/purchases/${task.id}/deny`, "POST", { reason: "Denied by buyer" });
-          })} />
-        </div>
-      </div>)}
-    </div>}
+    {buyer && showInbox && <ApprovalInbox approvals={approvals} merchants={merchants} allowances={allowances} busy={busy}
+      onApprove={task => act(async () => {
+        const receipt = await api<Receipt>(`/purchases/${task.id}/approve`, "POST", { digest: task.quote_digest });
+        if (live.current) onReceipt(receipt);
+      })}
+      onDecline={task => act(async () => { await api(`/purchases/${task.id}/deny`, "POST", { reason: "Denied by buyer" }); })} />}
 
     {buyer && <div className="paypal-allowance-builder">
-      <form className="paypal-form-grid" aria-label="New allowance" onSubmit={e => {
+      <form ref={builderRef} className="paypal-form-grid" aria-label="New allowance" onSubmit={e => {
         e.preventDefault();
         if (!formOk || !totalCents || !perCents) return;
         void act(async () => {
           const body = {
             request_id: requestId.current, name: name.trim(), total_cap_cents: jsonInt(totalCents), per_purchase_cap_cents: jsonInt(perCents),
             expires_at: expiresAt, cooldown_seconds: Number(cooldown), max_per_day: Number(maxPerDay), merchants: picked, mode,
+            ask_above_cents: mode === "ask_above" && askCents ? jsonInt(askCents) : undefined,
+            categories: categories.length ? categories : undefined,
             agent: agent.trim() || undefined, vault_source: source, card: source === "card" ? { number: card.number.replace(/\s/g, ""), expiry: card.expiry, name: card.name.trim() } : undefined,
           };
           await api("/allowances", "POST", body);
@@ -121,10 +123,11 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
         <label>Per purchase cap (USD)<input inputMode="decimal" value={perPurchase} required onChange={e => { setPerPurchase(e.target.value); touch(); }} aria-invalid={!perCents || (totalCents ? BigInt(perCents) > BigInt(totalCents) : false)} /></label>
         <fieldset className="paypal-choice">
           <legend>Mode</legend>
-          {(["agent_pays", "ask_first"] as const).map(m => <label key={m} className={mode === m ? "is-active" : ""}>
+          {(["agent_pays", "ask_above", "ask_first"] as const).map(m => <label key={m} className={mode === m ? "is-active" : ""}>
             <input type="radio" name="allowance-mode" value={m} checked={mode === m} onChange={() => { setMode(m); touch(); }} />{modeWord[m]}
           </label>)}
         </fieldset>
+        {mode === "ask_above" && <label>Ask me above (USD)<input inputMode="decimal" value={askAbove} required onChange={e => { setAskAbove(e.target.value); touch(); }} aria-invalid={!askOk} aria-describedby="ask-above-hint" /><small id="ask-above-hint" className="paypal-note">Under this the agent just pays. Over it, you get a tap to approve. Keep it below the per-purchase cap.</small></label>}
         <fieldset className="paypal-choice">
           <legend>Merchants</legend>
           {merchants.map(m => <label key={m.id} className={picked.includes(m.id) ? "is-active" : ""}>
@@ -132,6 +135,12 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
           </label>)}
           {!merchants.length && <p className="paypal-note">Catalog loading.</p>}
         </fieldset>
+        {kinds.length > 0 && <fieldset className="paypal-choice paypal-category-chips">
+          <legend>Categories (optional)</legend>
+          {kinds.map(k => <label key={k} className={categories.includes(k) ? "is-active" : ""}>
+            <input type="checkbox" checked={categories.includes(k)} onChange={e => { setCategories(e.target.checked ? [...categories, k] : categories.filter(c => c !== k)); touch(); }} />{kindLabel(k)}
+          </label>)}
+        </fieldset>}
         <label>Agent (optional)<input value={agent} maxLength={40} placeholder="Any agent" onChange={e => { setAgent(e.target.value); touch(); }} /></label>
         <label>Expires<input type="datetime-local" required value={expiry} onChange={e => { setExpiry(e.target.value); touch(); }} /></label>
         <label>Cooldown (seconds)<input inputMode="numeric" value={cooldown} required onChange={e => { setCooldown(e.target.value); touch(); }} /></label>
@@ -151,7 +160,7 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
         <button className="paypal-btn-primary" disabled={busy || !formOk}>Create allowance</button>
       </form>
 
-      <PermissionCard name={name} totalCents={totalCents} perCents={perCents} mode={mode} merchants={picked.map(merchantName)} agent={agent} expiresAt={expiresAt} cooldown={cooldown} maxPerDay={maxPerDay} />
+      <PermissionCard name={name} totalCents={totalCents} perCents={perCents} mode={mode} askCents={askCents} categories={categories.map(kindLabel)} merchants={picked.map(merchantName)} agent={agent} expiresAt={expiresAt} cooldown={cooldown} maxPerDay={maxPerDay} />
     </div>}
 
     {allowances.length === 0 && <p className="paypal-note">{buyer ? "No allowances yet. The card on the right rewrites as you type." : "No Active allowance names this agent yet."}</p>}
@@ -163,7 +172,7 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
           <div className="paypal-allowance-row-head">
             <div>
               <h3>{a.name}</h3>
-              <p className="paypal-note" style={{ margin: 0 }}>{modeWord[a.mode]} · {a.merchants.map(merchantName).join(", ")} · {a.agent ? `agent ${a.agent}` : "any agent"}</p>
+              <p className="paypal-note" style={{ margin: 0 }}>{modeLabel(a)} · {a.merchants.map(merchantName).join(", ")}{a.categories?.length ? ` · ${a.categories.map(kindLabel).join(", ")}` : ""} · {a.agent ? `agent ${a.agent}` : "any agent"}</p>
             </div>
             <span className={`paypal-pill is-${a.status.toLowerCase()}`}>{a.status}</span>
           </div>
@@ -194,14 +203,18 @@ export default function Allowances({ api, principal, onReceipt }: { api: ReturnT
 }
 
 // The blue slab. Every field change re-renders it, so the buyer reads exactly what they are about to sign off.
-function PermissionCard({ name, totalCents, perCents, mode, merchants, agent, expiresAt, cooldown, maxPerDay }: { name: string; totalCents: string | null; perCents: string | null; mode: Allowance["mode"]; merchants: string[]; agent: string; expiresAt: number; cooldown: string; maxPerDay: string }) {
+function PermissionCard({ name, totalCents, perCents, mode, askCents, categories, merchants, agent, expiresAt, cooldown, maxPerDay }: { name: string; totalCents: string | null; perCents: string | null; mode: AllowanceMode; askCents: string | null; categories: string[]; merchants: string[]; agent: string; expiresAt: number; cooldown: string; maxPerDay: string }) {
   const per = shownMoney(dollars(perCents));
   const total = shownMoney(dollars(totalCents));
   const who = agent.trim() ? `Agent ${agent.trim()}` : "Any agent";
   const where = merchants.length ? listWords(merchants) : "no merchant yet";
+  const ask = shownMoney(dollars(askCents));
   const until = Number.isFinite(expiresAt) ? new Date(expiresAt * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "an expiry you set";
+  const limits = `up to ${total} in total, at most ${maxPerDay || "?"} ${maxPerDay === "1" ? "time" : "times"} a day, until ${until}`;
   const sentence = mode === "agent_pays"
-    ? `${who} may pay up to ${per} per purchase at ${where}, up to ${total} in total, at most ${maxPerDay || "?"} ${maxPerDay === "1" ? "time" : "times"} a day, until ${until}.`
+    ? `${who} may pay up to ${per} per purchase at ${where}, ${limits}.`
+    : mode === "ask_above"
+    ? `${who} may pay up to ${ask} per purchase at ${where} on its own, and asks you for anything above that, up to ${per}. ${limits[0].toUpperCase()}${limits.slice(1)}.`
     : `${who} may ask to buy up to ${per} per purchase at ${where}, up to ${total} in total, at most ${maxPerDay || "?"} ${maxPerDay === "1" ? "time" : "times"} a day, until ${until}. You approve each one.`;
   return <aside className="paypal-permission-card" aria-live="polite" aria-label="Allowance preview">
     <div className="paypal-permission-card-head"><BrandLogo /><span className="paypal-permission-card-kind">Allowance</span></div>
@@ -209,8 +222,9 @@ function PermissionCard({ name, totalCents, perCents, mode, merchants, agent, ex
     <p className="paypal-permission-card-sentence">{sentence}</p>
     <dl className="paypal-permission-card-rows">
       <div><dt>Total</dt><dd>{total}</dd></div>
-      <div><dt>Mode</dt><dd>{modeWord[mode]}</dd></div>
+      <div><dt>Mode</dt><dd>{mode === "ask_above" ? `Ask above ${ask}` : modeWord[mode]}</dd></div>
       <div><dt>Merchants</dt><dd>{merchants.join(", ") || "None"}</dd></div>
+      {categories.length > 0 && <div><dt>Categories</dt><dd>{categories.join(", ")}</dd></div>}
       <div><dt>Agent</dt><dd>{agent.trim() || "Any"}</dd></div>
       <div><dt>Per day</dt><dd>{maxPerDay || "?"}</dd></div>
       <div><dt>Cooldown</dt><dd>{cooldown || "0"}s</dd></div>

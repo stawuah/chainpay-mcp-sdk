@@ -1,0 +1,96 @@
+/* PayPal tab inside the dashboard. The standalone workspace styles are scoped to
+   .paypal-shell; here that shell sits inside .dashboard-page, so it drops its own
+   page chrome (full-height canvas, gutters) and keeps the card styles. */
+
+html[data-astryx-theme] .paypal-shell.cp-paypal-tab {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+html[data-astryx-theme] .paypal-shell.cp-paypal-tab > * { min-width: 0; }
+html[data-astryx-theme] .paypal-shell.cp-paypal-tab .paypal-card { margin: 0; }
+html[data-astryx-theme] .paypal-shell.cp-paypal-tab .paypal-inbox { margin: 0; }
+html[data-astryx-theme] .paypal-shell.cp-paypal-tab .paypal-error { margin: 0; }
+
+/* Header badge (rendered by Dashboard's PageHeader, outside the shell). */
+.cp-paypal-sandbox-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-radius: 999px;
+  border: 1px solid #efd4a3; background: #fff6e5; color: #5c3708;
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.cp-paypal-sandbox-badge i { width: 8px; height: 8px; border-radius: 50%; background: #c0620a; }
+
+.cp-paypal-illustrative { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px; border: 1px dashed #b6c3d8; border-radius: 10px; background: #fff; color: #3d4757; font-size: 13px; }
+.cp-paypal-illustrative p { margin: 0; }
+.cp-paypal-illustrative b { font-weight: 600; color: var(--ink, #14213d); }
+.cp-paypal-illustrative svg { flex-shrink: 0; color: #4774ce; margin-top: 1px; }
+
+/* Sub-view switcher: scrolls sideways on a phone instead of squeezing five labels. */
+.cp-paypal-views { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.cp-paypal-views::-webkit-scrollbar { display: none; }
+.dashboard-app.cp-app .cp-paypal-views .cp-segmented { margin-bottom: 0; width: max-content; min-width: 100%; }
+
+.cp-paypal-gate h2 { margin: 0 0 6px; font-size: 18px; }
+
+/* Connect */
+.cp-paypal-connect-head { display: flex; align-items: flex-start; gap: 14px; }
+.cp-paypal-connect-head > div { flex: 1; min-width: 0; }
+.cp-paypal-connect-head h2 { margin: 0 0 4px; font-size: 20px; }
+.cp-paypal-connect-head .paypal-note { margin: 0; }
+.cp-paypal-link-dot { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border-radius: 12px; background: var(--pp-surface-subtle, #f8f9fc); color: var(--pp2-ink-3, #8a95a8); border: 1px solid var(--pp-line, #e6eaf3); }
+.cp-paypal-link-dot.is-on { background: var(--pp-blue-soft, #eef4ff); color: var(--pp-blue, #0052ff); border-color: var(--pp-blue-line, #c7d7ff); }
+.cp-paypal-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 18px 0 4px; }
+.cp-paypal-facts div { padding: 10px 12px; border-radius: 12px; background: var(--pp-surface-subtle, #f8f9fc); border: 1px solid var(--pp-line-soft, #edf0f6); min-width: 0; }
+.cp-paypal-facts dt { font-size: 12px; color: var(--pp2-ink-2, #56647d); margin-bottom: 2px; }
+.cp-paypal-facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.cp-paypal-steps { margin: 16px 0 12px; padding-left: 20px; display: grid; gap: 6px; color: var(--pp-body, #3d4c66); font-size: 14px; }
+.cp-paypal-steps b { color: var(--pp-ink, #14213d); font-weight: 600; }
+
+/* Allowances: PayPal and Solana limits side by side */
+.cp-paypal-limits { display: grid; gap: 10px; }
+.cp-paypal-limits-lede { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; color: var(--pp-body, #3d4c66); }
+.cp-paypal-limits-lede svg { color: var(--pp-blue, #0052ff); flex-shrink: 0; }
+.cp-paypal-limits-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.cp-paypal-limit-col h3 { margin: 6px 0 10px; font-size: 22px; font-variant-numeric: tabular-nums; }
+.cp-paypal-limit-col h3 small { font-size: 13px; font-weight: 500; color: var(--pp2-ink-2, #56647d); }
+.cp-paypal-limit-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.cp-paypal-limit-list li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--pp-line-soft, #edf0f6); background: var(--pp-surface-subtle, #f8f9fc); }
+.cp-paypal-limit-list li.paypal-note { display: block; }
+.cp-paypal-limit-list li > span:first-child { display: grid; gap: 2px; min-width: 0; }
+.cp-paypal-limit-list b { font-weight: 600; overflow-wrap: anywhere; }
+.cp-paypal-limit-list small { font-size: 12px; color: var(--pp2-ink-2, #56647d); overflow-wrap: anywhere; }
+.cp-paypal-limit-amount { display: grid; justify-items: end; gap: 2px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.cp-paypal-pyusd { margin-top: 14px; padding: 12px 14px; border-radius: 12px; border: 1px dashed var(--pp-blue-line, #c7d7ff); background: #fff; font-size: 14px; }
+.cp-paypal-pyusd p { margin: 4px 0; color: var(--pp-body, #3d4c66); }
+.cp-paypal-pyusd-mint { font-size: 12px; }
+html[data-astryx-theme] .paypal-shell .cp-paypal-pyusd button.paypal-link-button { padding: 0; font-family: inherit; font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+
+/* Activity */
+.cp-paypal-activity-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.cp-paypal-activity-row { display: flex; justify-content: space-between; gap: 16px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--pp-line, #e6eaf3); background: #fff; }
+.cp-paypal-activity-main { display: grid; gap: 3px; min-width: 0; }
+.cp-paypal-activity-main span { color: var(--pp-body, #3d4c66); overflow-wrap: anywhere; }
+.cp-paypal-activity-main small { font-size: 12px; color: var(--pp2-ink-2, #56647d); }
+.cp-paypal-activity-main .cp-paypal-restored { color: var(--pp-ok, #0d5c32); font-weight: 500; }
+.cp-paypal-activity-main .cp-paypal-disputed { color: var(--pp-warn, #5c3708); font-weight: 500; }
+.cp-paypal-activity-side { display: grid; justify-items: end; align-content: start; gap: 6px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.cp-paypal-activity-side b { font-size: 16px; }
+.cp-paypal-activity-side b.is-struck { text-decoration: line-through; color: var(--pp2-ink-3, #8a95a8); }
+.cp-paypal-activity-side small { font-size: 12px; color: var(--pp2-ink-2, #56647d); }
+
+@media (max-width: 860px) {
+  .cp-paypal-limits-grid { grid-template-columns: minmax(0, 1fr); }
+  .cp-paypal-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .cp-paypal-connect-head { flex-wrap: wrap; }
+  .cp-paypal-activity-row { flex-direction: column; gap: 10px; }
+  .cp-paypal-activity-side { justify-items: start; grid-auto-flow: column; align-items: center; justify-content: start; }
+}
+
+html[data-astryx-theme] .paypal-shell .cp-paypal-guard { display: flex; align-items: flex-start; gap: 6px; margin: 0; }
+html[data-astryx-theme] .paypal-shell .cp-paypal-guard svg { flex-shrink: 0; margin-top: 3px; }

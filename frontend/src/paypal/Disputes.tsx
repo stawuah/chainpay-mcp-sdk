@@ -4,7 +4,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { shownMoney, type client, type Dispute, type EvidencePack } from "./client";
 import { checkWords } from "./Marketplace";
 
-export default function Disputes({ api, onOpenTask }: { api: ReturnType<typeof client>; onOpenTask: (taskId: string) => void }) {
+export default function Disputes({ api, onOpenTask, canAct = true }: { api: ReturnType<typeof client>; onOpenTask: (taskId: string) => void; /** Sync, preview and submit are merchant actions. A buyer sees the cases read-only. */ canAct?: boolean }) {
   const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [packs, setPacks] = useState<Record<string, EvidencePack>>({});
   const [error, setError] = useState("");
@@ -31,13 +31,14 @@ export default function Disputes({ api, onOpenTask }: { api: ReturnType<typeof c
         <span className="paypal-eyebrow"><Gavel size={14} aria-hidden="true" />Merchant protection</span>
         <h2>Disputes</h2>
       </div>
-      <div className="paypal-actions" style={{ margin: 0 }}>
+      {canAct && <div className="paypal-actions" style={{ margin: 0 }}>
         <Button label="Sync from PayPal" variant="secondary" isDisabled={busy} onClick={() => void act(async () => { await api("/disputes/sync", "POST", {}); })} />
-      </div>
+      </div>}
     </div>
-    <p className="paypal-note">Each evidence pack is built from the task record: the allowance rules that passed, who approved, what was delivered, and any refund. Submitting it once is final.</p>
+    {canAct ? <p className="paypal-note">Each evidence pack is built from the task record: the allowance rules that passed, who approved, what was delivered, and any refund. Submitting it once is final.</p>
+      : <p className="paypal-note">The merchant answers a dispute with an evidence pack built from the purchase record: the allowance rules that passed, who approved, what was delivered, and any refund. You see where it stands here.</p>}
     {error && <p role="alert" className="paypal-error">{error}</p>}
-    {!disputes.length && <p className="paypal-note">No disputes on file. Sync pulls open cases for captured purchases.</p>}
+    {!disputes.length && <p className="paypal-note">{canAct ? "No disputes on file. Sync pulls open cases for captured purchases." : "No disputes on your purchases."}</p>}
     {disputes.length > 0 && <div className="paypal-table-wrap">
       <table className="paypal-dispute-table">
         <thead><tr><th>Dispute</th><th>Task</th><th>Status</th><th>Stage</th><th>Reason</th><th>Amount</th><th>Respond by</th><th>Evidence</th></tr></thead>
@@ -60,7 +61,7 @@ export default function Disputes({ api, onOpenTask }: { api: ReturnType<typeof c
       return <article key={d.id} className="paypal-dispute-detail">
         <div className="paypal-card-header" style={{ marginBottom: 6 }}>
           <h3>Dispute <code>{d.id}</code> · {shownMoney(d.amount)}</h3>
-          <div className="paypal-actions" style={{ margin: 0 }}>
+          {canAct && <div className="paypal-actions" style={{ margin: 0 }}>
             <Button label="Preview evidence pack" variant="secondary" isDisabled={busy} onClick={() => void act(async () => {
               const p = await api<EvidencePack>(`/disputes/${d.id}/evidence`);
               if (live.current) setPacks(old => ({ ...old, [d.id]: p }));
@@ -69,7 +70,7 @@ export default function Disputes({ api, onOpenTask }: { api: ReturnType<typeof c
               if (!pack) return;
               await api(`/disputes/${d.id}/evidence`, "POST", { digest: pack.digest });
             })} />}
-          </div>
+          </div>}
         </div>
         {d.evidence === "submitted" && <p className="paypal-note">Evidence submitted {when(d.evidence_submitted_at)} · digest <code>{d.evidence_digest}</code></p>}
         {d.evidence === "unknown" && <p className="paypal-notice">The submission did not confirm. Do not resend; sync again to learn what PayPal recorded.</p>}

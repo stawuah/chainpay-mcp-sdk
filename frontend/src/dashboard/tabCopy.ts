@@ -39,6 +39,11 @@ const STATIC: Record<Exclude<DashboardTab, "overview" | "mandates">, TabCopy> = 
     title: "Cards",
     subtitle: "Give an agent a card. Its limits stay hidden from the public chain.",
   },
+  paypal: {
+    kicker: "PAYPAL SANDBOX",
+    title: "PayPal",
+    subtitle: "Let your agent shop with PayPal, inside limits you set. Sandbox money for now.",
+  },
   payments: {
     kicker: "SETTLEMENT",
     title: "Payments",

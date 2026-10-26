@@ -1,6 +1,11 @@
 // Crossmint orders stay hidden until a devnet order has been paid through a
 // spending permission and Crossmint has marked it paid.
 export const CROSSMINT_ENABLED = import.meta.env.VITE_CHAINPAY_CROSSMINT === "true";
+// PayPal sandbox tab in the dashboard. Hidden from the nav and routes unless exactly "true".
+export const PAYPAL_TAB_ENABLED = import.meta.env.VITE_CHAINPAY_PAYPAL === "true";
+// Origin of the separate PayPal service (the same variable the standalone /paypal workspace reads).
+// Not a secret: the browser exchanges its wallet session there for a PayPal session kept in memory.
+export const PAYPAL_API_URL: string | undefined = import.meta.env.VITE_CHAINPAY_PAYPAL_API_ORIGIN || undefined;
 export const PROGRAM_ID = "3H9TV1EPR2BAQgVmcMqpufiZKPXbAMnjHp13LA9Lndv4";
 export const DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 export const DEVNET_PYUSD_TOKEN_2022_MINT = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM";
