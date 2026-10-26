@@ -110,7 +110,11 @@ impl Task {
                 .filter(|(_, u)| u.state == UnitState::Failed && u.history.is_empty())
                 .map(|(i, _)| i)
                 .collect();
-            if failed.len() as u64 * self.output_price()?.0 != self.refund_amount.0 {
+            let mut expected = 0;
+            for i in &failed {
+                expected += self.unit_price(*i)?.0;
+            }
+            if expected != self.refund_amount.0 {
                 return Err(Error::Invalid(
                     "Historical refund unit mapping requires merchant review",
                 ));
@@ -269,12 +273,15 @@ impl Task {
         }
         self.preserve_legacy_refund()?;
         self.validate_refund_bindings(&bindings)?;
-        let amount = Cents(
-            self.output_price()?
-                .0
-                .checked_mul(bindings.len() as u64)
-                .ok_or(Error::Conflict)?,
-        );
+        let mut amount = Cents(0);
+        for b in &bindings {
+            amount = Cents(
+                amount
+                    .0
+                    .checked_add(self.unit_price(b.unit)?.0)
+                    .ok_or(Error::Conflict)?,
+            );
+        }
         let digest = domain::hash(
             &serde_json::to_vec(&(&self.id, &self.capture_id, id, &bindings, &reason, amount))
                 .unwrap(),
@@ -657,6 +664,7 @@ mod tests {
             new_purchases: false,
             subscriptions: false,
             subscription_plan: None,
+            allowances: true,
         };
         let app = App {
             ai: Ai::fixture(format!("{base}/model")),
@@ -927,6 +935,7 @@ mod tests {
             new_purchases: false,
             subscriptions: false,
             subscription_plan: None,
+            allowances: true,
         };
         let app = App {
             ai: Ai::fixture("http://127.0.0.1:1/unused".into()),
@@ -1173,6 +1182,7 @@ mod tests {
             new_purchases: false,
             subscriptions: false,
             subscription_plan: None,
+            allowances: true,
         };
         let app = App {
             ai: Ai::fixture("http://127.0.0.1:1/unused".into()),

@@ -258,6 +258,7 @@ async fn subscription_payload_and_cancel_empty_204_are_bounded() {
         new_purchases: true,
         subscriptions: true,
         subscription_plan: Some("P-FIXTURE".into()),
+        allowances: true,
     };
     let provider = Provider::fixture(base, &config);
     provider

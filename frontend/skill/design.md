@@ -58,6 +58,18 @@ nothing but surfaces, scale and motion. Its headline number is the net buyer
 cost on a blue slab; the four lifecycle stages render as a ladder of bars; the
 sign-in page pairs the form with a blue slab that names the three roles.
 
+The allowance builder in that workspace (`Allowances.tsx`) carries the same
+live blue permission card as the Colosseum builder: `.paypal-permission-card`
+rewrites its plain-English sentence and its rows on every keystroke, so the
+buyer reads exactly what the agent will be allowed to do before creating it.
+Allowance status pills use only the words Active, Paused and Revoked; the
+buttons that move them are Pause, Resume and Revoke. Dollar amounts a person
+types become integer cents by regex and string work (`centsFromDollars`), never
+through `parseFloat`, and cents from the API are shown through `dollars()` and
+`shownMoney`. The agent's view of an allowance never includes the payment
+method; keep that word and the approval link out of any copy an agent can see.
+The marketplace quote verdict shows the reason code beside its plain words.
+
 ## Component system
 
 The runnable app is Vite and React with Astryx 0.6.1, its neutral theme, and

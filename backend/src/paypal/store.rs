@@ -153,7 +153,7 @@ impl Store {
 
     pub async fn get(&self, id: &str, p: &Principal) -> Result<Task, Error> {
         let value: Option<Value> = sqlx::query_scalar(
-            "SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND (principal=$3 OR $4 OR (record->'subscription_funding'->>'buyer'=$3 AND $5))",
+            "SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND (principal=$3 OR $4 OR ((record->'subscription_funding'->>'buyer'=$3 OR record->'purchase'->>'buyer'=$3) AND $5))",
         )
         .bind(id)
         .bind(&p.workspace)
@@ -167,13 +167,26 @@ impl Store {
     }
 
     pub async fn list(&self, p: &Principal) -> Result<Vec<Task>, Error> {
-        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE workspace=$1 AND (principal=$2 OR $3 OR (record->'subscription_funding'->>'buyer'=$2 AND $4)) ORDER BY created_at DESC,id LIMIT 100")
+        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE workspace=$1 AND (principal=$2 OR $3 OR ((record->'subscription_funding'->>'buyer'=$2 OR record->'purchase'->>'buyer'=$2) AND $4)) ORDER BY created_at DESC,id LIMIT 100")
             .bind(&p.workspace).bind(&p.id).bind(p.role == Role::Merchant).bind(p.role == Role::Buyer).fetch_all(&self.pool).await?;
         let mut tasks = Vec::new();
         for row in rows {
             tasks.push(self.refresh_funding(decode(row)?).await?);
         }
         Ok(tasks)
+    }
+
+    /// Purchases waiting on the buyer. A buyer sees the ones against their
+    /// allowances; an agent sees the ones it asked for.
+    pub async fn approvals(&self, p: &Principal) -> Result<Vec<Task>, Error> {
+        let owner = match p.role {
+            Role::Buyer => "record->'purchase'->>'buyer'",
+            Role::Agent => "principal",
+            Role::Merchant => return Err(Error::Forbidden),
+        };
+        let rows: Vec<Value> = sqlx::query_scalar(&format!("SELECT record FROM paypal_tasks WHERE workspace=$1 AND {owner}=$2 AND record->'purchase'->>'approval'='requested' ORDER BY created_at DESC,id LIMIT 100"))
+            .bind(&p.workspace).bind(&p.id).fetch_all(&self.pool).await?;
+        rows.into_iter().map(decode).collect()
     }
 
     async fn refresh_funding(&self, mut task: Task) -> Result<Task, Error> {
@@ -196,7 +209,7 @@ impl Store {
         change: impl FnOnce(&mut Task) -> Result<R, Error>,
     ) -> Result<(Task, R), Error> {
         let mut tx = self.pool.begin().await?;
-        let value: Option<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND (principal=$3 OR $4 OR (record->'subscription_funding'->>'buyer'=$3 AND $5)) FOR UPDATE")
+        let value: Option<Value> = sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 AND (principal=$3 OR $4 OR ((record->'subscription_funding'->>'buyer'=$3 OR record->'purchase'->>'buyer'=$3) AND $5)) FOR UPDATE")
             .bind(id).bind(&p.workspace).bind(&p.id).bind(p.role == Role::Merchant).bind(p.role == Role::Buyer).fetch_optional(&mut *tx).await?;
         let mut task = decode(value.ok_or(Error::NotFound)?)?;
         Store::account_allowance(&mut tx, &mut task).await?;

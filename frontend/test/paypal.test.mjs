@@ -34,9 +34,9 @@ test('mutating transport failures and unreadable successes preserve uncertainty,
  try {
   for(const response of [()=>{throw new TypeError('fetch failed');},()=>new Response('{}',{status:503}),()=>new Response('{}',{status:409}),()=>new Response('broken json',{status:200})]) {
    globalThis.fetch=async()=>response();
-   await assert.rejects(client('https://isolated.example','scoped-grant')('/tasks','POST',{request_id:'same'}),e=>e.constructor.name==='PayPalRequestUncertainError');
+   await assert.rejects(client('https://isolated.example','scoped-grant')('/purchases','POST',{request_id:'same'}),e=>e.constructor.name==='PayPalRequestUncertainError');
   }
-  globalThis.fetch=async()=>Response.json({error:'Quote expired'},{status:422});
-  await assert.rejects(client('https://isolated.example','scoped-grant')('/tasks','POST',{request_id:'same'}),e=>e.constructor.name==='Error' && e.message==='Quote expired');
+  globalThis.fetch=async()=>Response.json({error:'Allowance expired'},{status:422});
+  await assert.rejects(client('https://isolated.example','scoped-grant')('/purchases','POST',{request_id:'same'}),e=>e.constructor.name==='Error' && e.message==='Allowance expired');
  }finally{globalThis.fetch=original;}
 });

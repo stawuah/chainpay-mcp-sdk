@@ -103,6 +103,8 @@ pub struct Unit {
     pub result: Option<Value>,
     pub output_hash: Option<String>,
     pub reason: Option<String>,
+    #[serde(default)]
+    pub price: Option<Cents>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -113,6 +115,10 @@ pub struct Task {
     pub refunds: Vec<super::resolution::Refund>,
     #[serde(default)]
     pub legacy_refund_units: Option<Vec<usize>>,
+    #[serde(default)]
+    pub purchase: Option<super::catalog::Purchase>,
+    #[serde(default)]
+    pub dispute: Option<super::disputes::DisputeMark>,
     pub id: String,
     pub workspace: String,
     pub principal: String,
@@ -174,6 +180,7 @@ impl Task {
                 result: None,
                 output_hash: None,
                 reason: None,
+                price: None,
             })
             .collect();
         let units = if service_id == super::services::COMPARE {
@@ -199,6 +206,8 @@ impl Task {
             resolution: vec![],
             refunds: vec![],
             legacy_refund_units: None,
+            purchase: None,
+            dispute: None,
             id,
             workspace: principal.workspace.clone(),
             principal: principal.id.clone(),
@@ -236,6 +245,13 @@ impl Task {
         }
         Ok(Cents(self.amount.0 / count))
     }
+    /// Catalog units carry their own price; document units share the task amount evenly.
+    pub fn unit_price(&self, index: usize) -> Result<Cents, Error> {
+        match self.units.get(index).and_then(|u| u.price) {
+            Some(price) => Ok(price),
+            None => self.output_price(),
+        }
+    }
     pub fn allowance_units(&self) -> Result<u32, Error> {
         Ok(self.units.len() as u32
             * super::services::get(&self.offer_version)?.allowance_units_per_output)
@@ -251,7 +267,9 @@ impl Task {
                     && self
                         .subscription_funding
                         .as_ref()
-                        .is_some_and(|f| f.buyer == p.id)))
+                        .is_some_and(|f| f.buyer == p.id))
+                || (p.role == Role::Buyer
+                    && self.purchase.as_ref().is_some_and(|c| c.buyer == p.id)))
     }
     pub fn buyer(&self, p: &Principal) -> Result<(), Error> {
         if p.role != Role::Buyer || !self.can_read(p) {
@@ -269,7 +287,8 @@ impl Task {
     }
     pub fn start_checkout(&mut self, p: &Principal, digest: &str) -> Result<Option<String>, Error> {
         self.buyer(p)?;
-        if self.subscription_funding.is_some() {
+        // Catalog purchases are paid through the allowance only, never PayPal checkout.
+        if self.subscription_funding.is_some() || self.purchase.is_some() {
             return Err(Error::Conflict);
         }
         if digest != self.quote_digest {
@@ -280,6 +299,29 @@ impl Task {
         }
         if now() > self.quote_expires_at {
             return Err(Error::Invalid("Quote expired; no payment submitted"));
+        }
+        self.approved_at = Some(now());
+        let op = Operation::begin()?;
+        let key = op.key.clone();
+        self.order = Some(op);
+        Ok(Some(key))
+    }
+    /// Claims the vault charge for a catalog purchase. The policy verdict was
+    /// written inside the allowance transaction; an ask_first purchase also
+    /// needs the buyer's approval before any money moves.
+    pub fn start_vault_charge(&mut self, p: &Principal) -> Result<Option<String>, Error> {
+        if !matches!(p.role, Role::Buyer | Role::Agent) || !self.can_read(p) {
+            return Err(Error::Forbidden);
+        }
+        let purchase = self.purchase.as_ref().ok_or(Error::Conflict)?;
+        if !matches!(purchase.mode.as_str(), "agent_pays" | "ask_first")
+            || !purchase.policy.allowed
+            || (purchase.mode == "ask_first" && purchase.approval.as_deref() != Some("approved"))
+        {
+            return Err(Error::Conflict);
+        }
+        if self.order.is_some() {
+            return Ok(None);
         }
         self.approved_at = Some(now());
         let op = Operation::begin()?;
@@ -311,7 +353,10 @@ impl Task {
             .filter(|(_, u)| u.state == UnitState::Failed)
             .map(|(i, u)| (i, &u.input_hash))
             .collect();
-        let amount = Cents(failed.len() as u64 * self.output_price()?.0);
+        let mut amount = Cents(0);
+        for (i, _) in &failed {
+            amount = Cents(amount.0 + self.unit_price(*i)?.0);
+        }
         if amount.0 == 0 {
             return Err(Error::Invalid("No failed units to refund"));
         }
