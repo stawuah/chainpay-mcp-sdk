@@ -59,6 +59,7 @@ async fn fixture_checkout_capture_approved_refund_and_private_sharing_end_to_end
         })).with_state(fixture.clone());
     let (provider_origin, provider_task) = serve(provider_routes).await;
     let config = Config {
+        reporting_workspace: None,
         database_url: database,
         client_id: "fixture".into(),
         client_secret: "fixture".into(),
@@ -343,6 +344,7 @@ async fn service_quote_retries_preserve_identity_and_reject_mutated_terms() {
     };
     let token = store.issue_access(&p, 3600).await.unwrap();
     let config = Config {
+        reporting_workspace: None,
         database_url: database,
         client_id: "fixture".into(),
         client_secret: "fixture".into(),
@@ -517,6 +519,7 @@ async fn recommendation_route_projection_rejection_and_paid_capacity() {
         }
     }))).await;
     let config = Config {
+        reporting_workspace: None,
         database_url: database,
         client_id: "fixture".into(),
         client_secret: "fixture".into(),
@@ -724,6 +727,7 @@ fn vault_routes(f: VaultFixture) -> Router {
 }
 fn fixture_config(database: String) -> Config {
     Config {
+        reporting_workspace: None,
         database_url: database,
         client_id: "fixture".into(),
         client_secret: "fixture".into(),

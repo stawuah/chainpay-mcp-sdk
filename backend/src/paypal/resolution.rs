@@ -656,6 +656,7 @@ mod tests {
         let provider_server =
             tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
         let config = Config {
+            reporting_workspace: None,
             database_url: "unused".into(),
             client_id: "fixture".into(),
             client_secret: "fixture".into(),
@@ -930,6 +931,7 @@ mod tests {
         let provider_server =
             tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
         let config = Config {
+            reporting_workspace: None,
             database_url: "unused".into(),
             client_id: "fixture".into(),
             client_secret: "fixture".into(),
@@ -1180,6 +1182,7 @@ mod tests {
         let provider_server =
             tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
         let config = Config {
+            reporting_workspace: None,
             database_url: "unused".into(),
             client_id: "fixture".into(),
             client_secret: "fixture".into(),

@@ -362,6 +362,7 @@ async fn routes_preserve_unknown_operations_delegation_intent_and_sale_refunds()
     let p = buyer();
     let token = store.issue_access(&p, 3600).await.unwrap();
     let config = super::super::config::Config {
+        reporting_workspace: None,
         database_url: std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap(),
         client_id: "fixture".into(),
         client_secret: "fixture".into(),
@@ -676,6 +677,7 @@ async fn whole_history_precedes_grants_and_cutoff_is_explicit() {
     let origin = format!("http://{}", l.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(l, provider).await.unwrap() });
     let config = super::super::config::Config {
+        reporting_workspace: None,
         database_url: std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap(),
         client_id: "fixture".into(),
         client_secret: "fixture".into(),
