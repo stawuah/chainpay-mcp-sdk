@@ -259,6 +259,9 @@ async fn subscription_payload_and_cancel_empty_204_are_bounded() {
         subscriptions: true,
         subscription_plan: Some("P-FIXTURE".into()),
         allowances: true,
+        wallet_login: false,
+        relay_url: None,
+        extra_origins: vec![],
     };
     let provider = Provider::fixture(base, &config);
     provider

@@ -15,6 +15,11 @@ pub struct Config {
     pub subscriptions: bool,
     pub subscription_plan: Option<String>,
     pub allowances: bool,
+    /// Wallet sign-in through the ChainPay relay session; off unless flagged.
+    pub wallet_login: bool,
+    pub relay_url: Option<String>,
+    /// Exact extra browser origins (CORS and the wallet bridge), e.g. the main site.
+    pub extra_origins: Vec<String>,
 }
 
 impl Config {
@@ -51,22 +56,45 @@ impl Config {
             );
         }
         let public_origin = required("CHAINPAY_PAYPAL_PUBLIC_ORIGIN")?;
-        let origin = url::Url::parse(&public_origin)
-            .map_err(|_| "CHAINPAY_PAYPAL_PUBLIC_ORIGIN must be an explicit HTTP(S) origin")?;
-        let local = matches!(origin.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
-        if (origin.scheme() != "https" && !(local && origin.scheme() == "http"))
-            || origin.host_str().is_none()
-            || !origin.username().is_empty()
-            || origin.password().is_some()
-            || origin.path() != "/"
-            || origin.query().is_some()
-            || origin.fragment().is_some()
-            || origin.host_str().is_some_and(|h| {
-                h.contains('*') || h == "chainpayai.app" || h.ends_with(".chainpayai.app")
-            })
-        {
+        let origin = explicit_origin(&public_origin)
+            .ok_or("CHAINPAY_PAYPAL_PUBLIC_ORIGIN must be an explicit HTTP(S) origin")?;
+        if origin.host_str().is_some_and(|h| {
+            h.contains('*') || h == "chainpayai.app" || h.ends_with(".chainpayai.app")
+        }) {
             return Err("PayPal requires a separate HTTPS origin (HTTP only on localhost)".into());
         }
+        // Extra origins are callers only; the service's own origin stays separate.
+        let mut extra_origins = Vec::new();
+        for raw in get("CHAINPAY_PAYPAL_EXTRA_ORIGINS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let extra = explicit_origin(raw)
+                .filter(|u| u.host_str().is_some_and(|h| !h.contains('*')))
+                .ok_or("CHAINPAY_PAYPAL_EXTRA_ORIGINS must list exact HTTPS origins (HTTP only on localhost)")?
+                .origin()
+                .ascii_serialization();
+            if extra_origins.len() >= 10 {
+                return Err("CHAINPAY_PAYPAL_EXTRA_ORIGINS allows at most 10 origins".into());
+            }
+            if !extra_origins.contains(&extra) {
+                extra_origins.push(extra);
+            }
+        }
+        let wallet_login = flag(&get, "CHAINPAY_PAYPAL_WALLET_LOGIN", false)?;
+        let relay_url = if wallet_login {
+            let raw = required("CHAINPAY_PAYPAL_RELAY_URL")?;
+            Some(
+                explicit_origin(&raw)
+                    .ok_or("CHAINPAY_PAYPAL_RELAY_URL must be an HTTPS origin (HTTP only on localhost)")?
+                    .origin()
+                    .ascii_serialization(),
+            )
+        } else {
+            None
+        };
         Ok(Some(Self {
             database_url,
             client_id: required("PAYPAL_CLIENT_ID")?,
@@ -81,8 +109,33 @@ impl Config {
                 None
             },
             allowances: flag(&get, "CHAINPAY_PAYPAL_ALLOWANCES", false)?,
+            wallet_login,
+            relay_url,
+            extra_origins,
         }))
     }
+    /// Browser origins allowed to call the API: our own first, then the extras.
+    pub fn allowed_origins(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.public_origin.as_str())
+            .chain(self.extra_origins.iter().map(String::as_str))
+    }
+}
+
+/// HTTPS origin with no path, query or credentials; HTTP only on localhost.
+fn explicit_origin(raw: &str) -> Option<url::Url> {
+    let origin = url::Url::parse(raw).ok()?;
+    let local = matches!(origin.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    if (origin.scheme() != "https" && !(local && origin.scheme() == "http"))
+        || origin.host_str().is_none()
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+        || origin.path() != "/"
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+    {
+        return None;
+    }
+    Some(origin)
 }
 
 fn flag(get: &impl Fn(&str) -> Option<String>, name: &str, default: bool) -> Result<bool, String> {
@@ -155,7 +208,87 @@ mod tests {
         assert!(!c.subscriptions);
         assert!(c.subscription_plan.is_none());
         assert!(!c.allowances);
+        assert!(!c.wallet_login);
+        assert!(c.relay_url.is_none());
+        assert!(c.extra_origins.is_empty());
         assert_eq!(c.public_origin, "https://paypal.example.com");
+    }
+
+    #[test]
+    fn wallet_login_needs_its_flag_and_an_https_relay() {
+        let mut v = values();
+        v.insert("CHAINPAY_PAYPAL_RELAY_URL", "https://relay.example.com");
+        let c = Config::parse(|k| v.get(k).map(|s| s.to_string()))
+            .unwrap()
+            .unwrap();
+        assert!(!c.wallet_login);
+        assert!(c.relay_url.is_none());
+        v.insert("CHAINPAY_PAYPAL_WALLET_LOGIN", "true");
+        let c = Config::parse(|k| v.get(k).map(|s| s.to_string()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.relay_url.as_deref(), Some("https://relay.example.com"));
+        for ok in ["http://localhost:8787", "http://127.0.0.1:8787"] {
+            v.insert("CHAINPAY_PAYPAL_RELAY_URL", ok);
+            assert!(
+                Config::parse(|k| v.get(k).map(|s| s.to_string())).is_ok(),
+                "{ok}"
+            );
+        }
+        for bad in [
+            "http://relay.example.com",
+            "https://relay.example.com/v1",
+            "https://user:pw@relay.example.com",
+            "https://relay.example.com?x=1",
+            "relay.example.com",
+        ] {
+            v.insert("CHAINPAY_PAYPAL_RELAY_URL", bad);
+            assert!(
+                Config::parse(|k| v.get(k).map(|s| s.to_string())).is_err(),
+                "{bad}"
+            );
+        }
+        v.remove("CHAINPAY_PAYPAL_RELAY_URL");
+        assert!(Config::parse(|k| v.get(k).map(|s| s.to_string())).is_err());
+        v.insert("CHAINPAY_PAYPAL_WALLET_LOGIN", "yes");
+        assert!(Config::parse(|k| v.get(k).map(|s| s.to_string())).is_err());
+    }
+
+    #[test]
+    fn extra_origins_are_exact_and_never_replace_the_service_origin() {
+        let mut v = values();
+        v.insert(
+            "CHAINPAY_PAYPAL_EXTRA_ORIGINS",
+            "https://www.chainpayai.app, http://localhost:5173,https://www.chainpayai.app",
+        );
+        let c = Config::parse(|k| v.get(k).map(|s| s.to_string()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            c.extra_origins,
+            ["https://www.chainpayai.app", "http://localhost:5173"]
+        );
+        assert_eq!(
+            c.allowed_origins().collect::<Vec<_>>(),
+            [
+                "https://paypal.example.com",
+                "https://www.chainpayai.app",
+                "http://localhost:5173"
+            ]
+        );
+        for bad in [
+            "http://www.chainpayai.app",
+            "https://www.chainpayai.app/app",
+            "https://*.chainpayai.app",
+            "*",
+            "null",
+        ] {
+            v.insert("CHAINPAY_PAYPAL_EXTRA_ORIGINS", bad);
+            assert!(
+                Config::parse(|k| v.get(k).map(|s| s.to_string())).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

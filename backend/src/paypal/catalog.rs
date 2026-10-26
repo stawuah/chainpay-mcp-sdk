@@ -414,15 +414,19 @@ async fn purchase(
     app.store
         .rate_limit(&format!("purchase:{}", p.workspace), 30)
         .await?;
-    if !matches!(body.mode.as_str(), "agent_pays" | "ask_first") {
-        return Err(Error::Invalid("Purchase mode is agent_pays or ask_first"));
+    if !matches!(body.mode.as_str(), "agent_pays" | "ask_first" | "ask_above") {
+        return Err(Error::Invalid(
+            "Purchase mode is agent_pays, ask_first or ask_above",
+        ));
     }
     let a = app.store.allowance(&body.allowance_id, &p).await?;
     if body.mode != a.mode {
-        return Err(Error::Invalid(if a.mode == "agent_pays" {
-            "Allowance mode is agent_pays, not ask_first; use the purchase call"
-        } else {
-            "Allowance mode is ask_first, not agent_pays; ask the buyer for approval instead"
+        return Err(Error::Invalid(match a.mode.as_str() {
+            "agent_pays" => "Allowance mode is agent_pays, not ask_first; use the purchase call",
+            "ask_above" => {
+                "Allowance mode is ask_above; send mode ask_above and larger purchases wait for the buyer"
+            }
+            _ => "Allowance mode is ask_first, not agent_pays; ask the buyer for approval instead",
         }));
     }
     let fingerprint = domain::hash(
@@ -434,7 +438,8 @@ async fn purchase(
         .purchase(&task, &body.request_id, &fingerprint, &p)
         .await?;
     let purchase = task.purchase.as_ref().ok_or(Error::Conflict)?;
-    if purchase.policy.allowed && purchase.mode == "agent_pays" {
+    // agent_pays, or ask_above at or under its threshold: no approval was requested.
+    if purchase.policy.allowed && purchase.mode != "ask_first" && purchase.approval.is_none() {
         return Ok(Json(observations::receipt(
             &app.charge_purchase(&task.id, &p).await?,
             false,

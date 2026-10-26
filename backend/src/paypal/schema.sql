@@ -74,6 +74,16 @@ CREATE TABLE IF NOT EXISTS paypal_disputes (
 );
 CREATE INDEX IF NOT EXISTS paypal_disputes_workspace ON paypal_disputes(workspace, updated_at DESC);
 
+-- A confirmed refund on an allowance purchase writes a 'refund' row
+-- (entry_key refund:<provider refund id>) that gives its cents back; it still
+-- never writes a release. Widens the kind check once.
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='paypal_allowance_spend_kind_v2') THEN
+  ALTER TABLE paypal_allowance_spend DROP CONSTRAINT IF EXISTS paypal_allowance_spend_kind_check;
+  ALTER TABLE paypal_allowance_spend ADD CONSTRAINT paypal_allowance_spend_kind_v2 CHECK (kind IN ('reserve','release','refund'));
+ END IF;
+END $$;
+
 -- Every index on paypal_tasks sits at the end on purpose. CREATE INDEX IF NOT
 -- EXISTS still takes a share lock on the table for the rest of this
 -- transaction, and live transactions write the ledger, spend and dispute

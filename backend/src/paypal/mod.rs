@@ -11,6 +11,7 @@ pub mod observations;
 pub mod provider;
 pub mod routes;
 pub mod store;
+pub mod wallet;
 
 use axum::{Json, Router, http::StatusCode, routing::get};
 use serde_json::json;

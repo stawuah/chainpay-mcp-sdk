@@ -49,6 +49,19 @@ are still waiting; a request the rules fail at approval time comes back
 `paypal_request_refund` records a reason against the failed units and the
 merchant approves the refund in the workspace.
 
+An allowance may also use `mode: "ask_above"` with `ask_above_cents`
+(0 < threshold ≤ per-purchase cap): the purchase posts `mode: "ask_above"`,
+anything at or under the threshold is charged like `agent_pays`, and anything
+over it waits for the buyer exactly like `ask_first` (the SDK/MCP tools send
+only `agent_pays`/`ask_first` today, so they refuse an `ask_above` allowance
+until they learn the third mode). An optional `categories` list (catalog
+merchant kinds: `grocery`, `events`, `booking`, `print`) narrows the merchant
+list; an out-of-category purchase is refused with `category_not_allowed`. A
+confirmed refund on an allowance purchase gives its own cents back to the
+allowance once per PayPal refund ID (partial refunds give back only their
+amount). Revoking an allowance also deletes its vault token at PayPal; the
+revoke stands even if that call fails, and revoking again retries it.
+
 Prepare with a stable request ID and document text. Return the `review_url` to
 the buyer; they approve checkout and capture in the workspace. Then run the
 existing paid task and inspect its receipt. A proposal identifies the exact

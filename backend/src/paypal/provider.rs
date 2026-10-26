@@ -123,9 +123,10 @@ impl Provider {
                 ));
             }
         }
-        let permits_empty = method == Method::POST
+        let permits_empty = (method == Method::POST
             && path.starts_with("/v1/billing/subscriptions/")
-            && path.ends_with("/cancel");
+            && path.ends_with("/cancel"))
+            || (method == Method::DELETE && path.starts_with("/v3/vault/payment-tokens/"));
         let token = self.access_token().await?;
         let mut request = self
             .client
@@ -360,6 +361,18 @@ impl Provider {
             "/v3/vault/payment-tokens",
             Some(key),
             Some(json!({"payment_source":{"token":{"id":setup_token,"type":"SETUP_TOKEN"}}})),
+            &[],
+        )
+        .await
+    }
+    /// Deletes a vaulted payment token. PayPal answers an empty 204.
+    pub async fn delete_payment_token(&self, token: &str) -> Result<Value, ProviderError> {
+        id(token)?;
+        self.request(
+            Method::DELETE,
+            &format!("/v3/vault/payment-tokens/{token}"),
+            None,
+            None,
             &[],
         )
         .await

@@ -371,6 +371,9 @@ async fn routes_preserve_unknown_operations_delegation_intent_and_sale_refunds()
         subscriptions: true,
         subscription_plan: Some("P-FIXTURE".into()),
         allowances: true,
+        wallet_login: false,
+        relay_url: None,
+        extra_origins: vec![],
     };
     let app = App {
         store: store.clone(),
@@ -682,6 +685,9 @@ async fn whole_history_precedes_grants_and_cutoff_is_explicit() {
         subscriptions: true,
         subscription_plan: Some("P-FIXTURE".into()),
         allowances: true,
+        wallet_login: false,
+        relay_url: None,
+        extra_origins: vec![],
     };
     let app = App {
         store: store.clone(),

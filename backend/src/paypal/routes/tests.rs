@@ -68,6 +68,9 @@ async fn fixture_checkout_capture_approved_refund_and_private_sharing_end_to_end
         subscriptions: false,
         subscription_plan: None,
         allowances: true,
+        wallet_login: false,
+        relay_url: None,
+        extra_origins: vec![],
     };
     let provider = Provider::fixture(provider_origin, &config);
     let app = App {
@@ -349,6 +352,9 @@ async fn service_quote_retries_preserve_identity_and_reject_mutated_terms() {
         subscriptions: false,
         subscription_plan: None,
         allowances: true,
+        wallet_login: false,
+        relay_url: None,
+        extra_origins: vec![],
     };
     let app = App {
         ai: crate::paypal::ai::Ai::fixture("http://127.0.0.1:1/unused".into()),
@@ -520,6 +526,9 @@ async fn recommendation_route_projection_rejection_and_paid_capacity() {
         subscriptions: false,
         subscription_plan: None,
         allowances: true,
+        wallet_login: false,
+        relay_url: None,
+        extra_origins: vec![],
     };
     let ai = crate::paypal::ai::Ai::fixture(format!("{model_origin}/model"));
     let app = App {
@@ -645,15 +654,19 @@ struct VaultFixture {
     creates: Arc<AtomicUsize>,
     captures: Arc<AtomicUsize>,
     refunds: Arc<AtomicUsize>,
+    refund_records: Arc<Mutex<std::collections::BTreeMap<String, Value>>>,
+    deletes: Arc<AtomicUsize>,
+    delete_fails: Arc<std::sync::atomic::AtomicBool>,
 }
 fn vault_routes(f: VaultFixture) -> Router {
     Router::new()
         .route("/v1/oauth2/token",post(|| async { Json(json!({"access_token":"fixture","token_type":"Bearer","expires_in":3600})) }))
         .route("/v3/vault/setup-tokens",post(|State(f):State<VaultFixture>,Json(body):Json<Value>| async move {
-            f.setups.fetch_add(1,Ordering::SeqCst);
+            let n = f.setups.fetch_add(1,Ordering::SeqCst);
             if body["payment_source"].get("card").is_some() {
                 assert_eq!(body["payment_source"]["card"]["number"],"4111111111111111");
-                Json(json!({"id":"SETUP-CARD","status":"APPROVED"}))
+                // Unique per call: a revoke only deletes a token no other live allowance uses.
+                Json(json!({"id":format!("SETUP-CARD-{n}-{}",random_id().unwrap()),"status":"APPROVED"}))
             } else {
                 assert_eq!(body["payment_source"]["paypal"]["usage_type"],"MERCHANT");
                 Json(json!({"id":"SETUP-PP","status":"PAYER_ACTION_REQUIRED","links":[{"rel":"approve","href":"https://www.sandbox.paypal.com/agreements/approve?approval_session_id=SETUP-PP"}]}))
@@ -694,9 +707,18 @@ fn vault_routes(f: VaultFixture) -> Router {
             order["purchase_units"][0]["payments"] = json!({"captures":[{"id":format!("CAPTURE-C{n}"),"status":"COMPLETED","amount":amount}]});
             Json(order.clone())
         }))
-        .route("/v2/payments/captures/{id}/refund",post(|State(f):State<VaultFixture>,Json(body):Json<Value>| async move {
-            f.refunds.fetch_add(1,Ordering::SeqCst);
-            Json(json!({"id":"REFUND","status":"COMPLETED","amount":body["amount"]}))
+        .route("/v2/payments/captures/{id}/refund",post(|State(f):State<VaultFixture>,Path(capture):Path<String>,Json(body):Json<Value>| async move {
+            let n = f.refunds.fetch_add(1,Ordering::SeqCst);
+            let refund = json!({"id":format!("REFUND-{n}-{}",random_id().unwrap()),"status":"COMPLETED","amount":body["amount"],"invoice_id":body["invoice_id"],
+                "links":[{"rel":"up","href":format!("https://api.sandbox.paypal.com/v2/payments/captures/{capture}")}]});
+            f.refund_records.lock().await.insert(refund["id"].as_str().unwrap().into(), refund.clone());
+            Json(refund)
+        }))
+        .route("/v2/payments/refunds/{id}",get(|State(f):State<VaultFixture>,Path(id):Path<String>| async move { Json(f.refund_records.lock().await[&id].clone()) }))
+        .route("/v3/vault/payment-tokens/{id}",axum::routing::delete(|State(f):State<VaultFixture>,Path(id):Path<String>| async move {
+            assert!(id.starts_with("TOKEN-"));
+            f.deletes.fetch_add(1,Ordering::SeqCst);
+            if f.delete_fails.load(Ordering::SeqCst) { StatusCode::INTERNAL_SERVER_ERROR } else { StatusCode::NO_CONTENT }
         }))
         .with_state(f)
 }
@@ -711,6 +733,9 @@ fn fixture_config(database: String) -> Config {
         subscriptions: false,
         subscription_plan: None,
         allowances: true,
+        wallet_login: false,
+        relay_url: None,
+        extra_origins: vec![],
     }
 }
 async fn call(
@@ -1393,8 +1418,8 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     assert_eq!(refunded["refund"], "3.90");
     assert_eq!(refunded["net"], "3.90");
     assert_eq!(fixture.refunds.load(Ordering::SeqCst), 1);
-    // Refunds never give the allowance budget back.
-    let (_, still_spent) = call(
+    // A confirmed refund gives only its own cents back to the allowance.
+    let (_, credited) = call(
         &http,
         &reqwest::Method::GET,
         api(&format!("/allowances/{card_id}")),
@@ -1402,7 +1427,8 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
         None,
     )
     .await;
-    assert_eq!(still_spent["spent_cents"], 780 + 1250);
+    assert_eq!(credited["spent_cents"], 780 + 1250 - 390);
+    assert_eq!(credited["purchases_today"], 2);
     // Public receipt shows the merchant and rule only.
     let (_, shared) = call(
         &http,
@@ -1764,4 +1790,506 @@ async fn disputes_sync_evidence_pack_and_single_submission() {
     assert_eq!(receipt["dispute"]["evidence"], "submitted");
     server.abort();
     provider_task.abort();
+}
+
+async fn vault_app(fixture: &VaultFixture) -> (App, String, Vec<tokio::task::JoinHandle<()>>) {
+    let database = std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap();
+    let store = Store::connect(&database).await.unwrap();
+    let (provider_origin, provider_task) = serve(vault_routes(fixture.clone())).await;
+    let config = fixture_config(database);
+    let app = App {
+        ai: crate::paypal::ai::Ai::fixture("http://127.0.0.1:1/unused".into()),
+        store,
+        provider: Provider::fixture(provider_origin, &config),
+        config: Arc::new(config),
+    };
+    let (origin, server) = serve(router(app.clone())).await;
+    (app, origin, vec![provider_task, server])
+}
+
+async fn spent_cents(store: &Store, allowance: &str) -> u64 {
+    store
+        .usage(allowance, "", domain::now())
+        .await
+        .unwrap()
+        .spent
+        .0
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
+async fn threshold_categories_refund_credit_and_revoke_delete() {
+    let fixture = VaultFixture::default();
+    fixture.auto_capture.store(true, Ordering::SeqCst);
+    let (app, origin, tasks) = vault_app(&fixture).await;
+    let store = app.store.clone();
+    let p = Principal {
+        id: random_id().unwrap(),
+        workspace: random_id().unwrap(),
+        role: Role::Buyer,
+    };
+    let buyer = store.issue_access(&p, 3600).await.unwrap();
+    let mut m = p.clone();
+    m.role = Role::Merchant;
+    let merchant = store.issue_access(&m, 3600).await.unwrap();
+    let a = Principal {
+        id: random_id().unwrap(),
+        workspace: p.workspace.clone(),
+        role: Role::Agent,
+    };
+    let agent = store.issue_access(&a, 3600).await.unwrap();
+    let http = reqwest::Client::new();
+    let api = |path: &str| format!("{origin}/v1/paypal{path}");
+    let post = reqwest::Method::POST;
+    let body = |mode: &str, above: u64, categories: Value| {
+        json!({"request_id":random_id().unwrap(),"name":"Errands","total_cap_cents":5000,"per_purchase_cap_cents":2000,
+        "expires_at":domain::now()+86400,"cooldown_seconds":0,"max_per_day":20,"merchants":["grocer","tours"],"mode":mode,
+        "ask_above_cents":above,"categories":categories,
+        "vault_source":"card","card":{"number":"4111111111111111","expiry":"2030-01","name":"Test Buyer"}})
+    };
+    // The threshold must sit inside the per-purchase cap and only on ask_above; categories must be catalog kinds.
+    for bad in [
+        body("ask_above", 0, json!([])),
+        body("ask_above", 2001, json!([])),
+        body("agent_pays", 500, json!([])),
+        body("ask_above", 1000, json!(["groceries"])),
+    ] {
+        assert_eq!(
+            call(&http, &post, api("/allowances"), &buyer, Some(bad))
+                .await
+                .0,
+            422
+        );
+    }
+    let (status, made) = call(
+        &http,
+        &post,
+        api("/allowances"),
+        &buyer,
+        Some(body("ask_above", 1000, json!(["grocery", "grocery"]))),
+    )
+    .await;
+    assert_eq!(status, 200, "{made}");
+    assert_eq!(made["mode"], "ask_above");
+    assert_eq!(made["ask_above_cents"], 1000);
+    assert_eq!(made["categories"], json!(["grocery"]));
+    let id = made["id"].as_str().unwrap().to_string();
+    let buy = |items: Value, merchant: &str| json!({"request_id":random_id().unwrap(),"allowance_id":id,"mode":"ask_above","merchant":merchant,"items":items});
+    // Mode must still match what the caller expects.
+    let (status, wrong) = call(&http, &post, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":id,"mode":"agent_pays","merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await;
+    assert_eq!(status, 422, "{wrong}");
+    // At or under the threshold the agent pays straight away.
+    let (status, small) = call(
+        &http,
+        &post,
+        api("/purchases"),
+        &agent,
+        Some(buy(json!([{"id":"oat-milk","qty":2}]), "grocer")),
+    )
+    .await;
+    assert_eq!(status, 200, "{small}");
+    assert_eq!(small["captured"], true);
+    assert!(small["purchase"]["approval"].is_null());
+    // Above it, the same approval path ask_first uses.
+    let (_, big) = call(
+        &http,
+        &post,
+        api("/purchases"),
+        &agent,
+        Some(buy(json!([{"id":"coffee-beans","qty":1}]), "grocer")),
+    )
+    .await;
+    assert_eq!(big["purchase"]["approval"], "requested");
+    assert_eq!(big["captured"], false);
+    let creates = fixture.creates.load(Ordering::SeqCst);
+    let big_id = big["id"].as_str().unwrap().to_string();
+    let (status, approved) = call(
+        &http,
+        &post,
+        api(&format!("/purchases/{big_id}/approve")),
+        &buyer,
+        Some(json!({"digest":big["quote_digest"]})),
+    )
+    .await;
+    assert_eq!(status, 200, "{approved}");
+    assert_eq!(approved["purchase"]["approval"], "approved");
+    assert_eq!(approved["captured"], true);
+    assert_eq!(fixture.creates.load(Ordering::SeqCst), creates + 1);
+    // An under-threshold purchase has nothing to approve or deny.
+    let small_id = small["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        call(
+            &http,
+            &post,
+            api(&format!("/purchases/{small_id}/approve")),
+            &buyer,
+            Some(json!({"digest":small["quote_digest"]}))
+        )
+        .await
+        .0,
+        409
+    );
+    // A merchant on the list but outside the categories is refused with a reason.
+    let (_, tour) = call(
+        &http,
+        &post,
+        api("/purchases"),
+        &agent,
+        Some(buy(json!([{"id":"audio-guide","qty":1}]), "tours")),
+    )
+    .await;
+    assert_eq!(tour["purchase"]["policy"]["allowed"], false);
+    assert_eq!(
+        tour["purchase"]["policy"]["reason_code"],
+        "category_not_allowed"
+    );
+    assert_eq!(fixture.creates.load(Ordering::SeqCst), creates + 1);
+    assert_eq!(spent_cents(&store, &id).await, 780 + 1250);
+    // Partial refund: one of two units failed, so only 3.90 comes back.
+    call(
+        &http,
+        &post,
+        api(&format!("/tasks/{small_id}/fulfil")),
+        &merchant,
+        Some(json!({"outcomes":[{"unit":0,"state":"delivered"},{"unit":1,"state":"failed"}]})),
+    )
+    .await;
+    let (_, proposal) = call(
+        &http,
+        &reqwest::Method::GET,
+        api(&format!("/tasks/{small_id}/refund-proposal")),
+        &merchant,
+        None,
+    )
+    .await;
+    let (status, refunded) = call(
+        &http,
+        &post,
+        api(&format!("/tasks/{small_id}/refund")),
+        &merchant,
+        Some(json!({"digest":proposal["digest"]})),
+    )
+    .await;
+    assert_eq!(status, 200, "{refunded}");
+    assert_eq!(refunded["refund"], "3.90");
+    assert_eq!(spent_cents(&store, &id).await, 780 + 1250 - 390);
+    // The verified webhook for the same refund, delivered twice, never credits again.
+    let refund_id = refunded["refund_id"].as_str().unwrap().to_string();
+    let event = |n: &str| json!({"id":format!("WH-{n}-{}",random_id().unwrap()),"event_type":"PAYMENT.CAPTURE.REFUNDED","resource":{"id":refund_id}});
+    for n in ["a", "b"] {
+        store.insert_event(&event(n)).await.unwrap();
+        app.process_events().await.unwrap();
+        assert_eq!(spent_cents(&store, &id).await, 780 + 1250 - 390, "{n}");
+    }
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM paypal_allowance_spend WHERE allowance_id=$1 AND kind='refund'",
+    )
+    .bind(&id)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(rows, 1);
+    // A lost credit is written by the webhook path on its own, once.
+    sqlx::query("DELETE FROM paypal_allowance_spend WHERE allowance_id=$1 AND kind='refund'")
+        .bind(&id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(spent_cents(&store, &id).await, 780 + 1250);
+    for n in ["c", "d"] {
+        store.insert_event(&event(n)).await.unwrap();
+        app.process_events().await.unwrap();
+        assert_eq!(spent_cents(&store, &id).await, 780 + 1250 - 390, "{n}");
+    }
+    let (_, view) = call(
+        &http,
+        &reqwest::Method::GET,
+        api(&format!("/allowances/{id}")),
+        &buyer,
+        None,
+    )
+    .await;
+    assert_eq!(view["spent_cents"], 780 + 1250 - 390);
+    assert_eq!(view["remaining_cents"], 5000 - 780 - 1250 + 390);
+    // Revoke deletes the vault token at PayPal once and blocks every purchase.
+    let deletes = fixture.deletes.load(Ordering::SeqCst);
+    let (status, revoked) = call(
+        &http,
+        &post,
+        api(&format!("/allowances/{id}/status")),
+        &buyer,
+        Some(json!({"status":"Revoked"})),
+    )
+    .await;
+    assert_eq!(status, 200, "{revoked}");
+    assert_eq!(revoked["status"], "Revoked");
+    assert_eq!(revoked["vault"]["status"], "none");
+    assert_eq!(revoked["vault"]["delete_state"], "observed");
+    assert_eq!(fixture.deletes.load(Ordering::SeqCst), deletes + 1);
+    assert!(!revoked.to_string().contains("TOKEN-"));
+    call(
+        &http,
+        &post,
+        api(&format!("/allowances/{id}/status")),
+        &buyer,
+        Some(json!({"status":"Revoked"})),
+    )
+    .await;
+    assert_eq!(fixture.deletes.load(Ordering::SeqCst), deletes + 1);
+    assert_eq!(
+        call(
+            &http,
+            &post,
+            api("/purchases"),
+            &agent,
+            Some(buy(json!([{"id":"oat-milk","qty":1}]), "grocer"))
+        )
+        .await
+        .0,
+        404
+    );
+    let (status, own) = call(
+        &http,
+        &post,
+        api("/purchases"),
+        &buyer,
+        Some(buy(json!([{"id":"oat-milk","qty":1}]), "grocer")),
+    )
+    .await;
+    assert_eq!(status, 200, "{own}");
+    assert_eq!(
+        own["purchase"]["policy"]["reason_code"],
+        "allowance_not_active"
+    );
+    assert_eq!(own["captured"], false);
+    // PayPal's deletion webhook for a token we already deleted is still matched.
+    let token: String = sqlx::query_scalar("SELECT record->'vault'->'delete'->'observation'->>'token' FROM paypal_allowances WHERE id=$1").bind(&id).fetch_one(store.pool()).await.unwrap();
+    assert!(
+        app.vault_event(
+            &json!({"event_type":"VAULT.PAYMENT-TOKEN.DELETED","resource":{"id":token}})
+        )
+        .await
+        .unwrap()
+    );
+    // A failed delete never undoes the revoke; revoking again retries it.
+    fixture.delete_fails.store(true, Ordering::SeqCst);
+    let (_, other) = call(
+        &http,
+        &post,
+        api("/allowances"),
+        &buyer,
+        Some(body("agent_pays", 0, json!([]))),
+    )
+    .await;
+    let other_id = other["id"].as_str().unwrap().to_string();
+    let (status, failed) = call(
+        &http,
+        &post,
+        api(&format!("/allowances/{other_id}/status")),
+        &buyer,
+        Some(json!({"status":"Revoked"})),
+    )
+    .await;
+    assert_eq!(status, 200, "{failed}");
+    assert_eq!(failed["status"], "Revoked");
+    assert_eq!(failed["vault"]["delete_state"], "unknown");
+    let (_, blocked) = call(&http, &post, api("/purchases"), &buyer, Some(json!({"request_id":random_id().unwrap(),"allowance_id":other_id,"mode":"agent_pays","merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await;
+    assert_eq!(blocked["purchase"]["policy"]["allowed"], false);
+    fixture.delete_fails.store(false, Ordering::SeqCst);
+    let (_, retried) = call(
+        &http,
+        &post,
+        api(&format!("/allowances/{other_id}/status")),
+        &buyer,
+        Some(json!({"status":"Revoked"})),
+    )
+    .await;
+    assert_eq!(retried["vault"]["delete_state"], "observed");
+    assert_eq!(fixture.deletes.load(Ordering::SeqCst), deletes + 3);
+    // Pausing never deletes the token.
+    let (_, paused) = call(
+        &http,
+        &post,
+        api("/allowances"),
+        &buyer,
+        Some(body("agent_pays", 0, json!([]))),
+    )
+    .await;
+    call(
+        &http,
+        &post,
+        api(&format!(
+            "/allowances/{}/status",
+            paused["id"].as_str().unwrap()
+        )),
+        &buyer,
+        Some(json!({"status":"Paused"})),
+    )
+    .await;
+    assert_eq!(fixture.deletes.load(Ordering::SeqCst), deletes + 3);
+    for task in tasks {
+        task.abort();
+    }
+}
+
+#[test]
+fn wallet_keys_and_grant_length() {
+    use crate::paypal::wallet::{MAX_TTL, grant_ttl, valid_wallet};
+    assert!(valid_wallet(&bs58::encode([7u8; 32]).into_string()));
+    assert!(valid_wallet("11111111111111111111111111111111"));
+    assert!(!valid_wallet(&bs58::encode([7u8; 31]).into_string()));
+    assert!(!valid_wallet(&bs58::encode([7u8; 33]).into_string()));
+    assert!(!valid_wallet("0OIl0OIl0OIl0OIl0OIl0OIl0OIl0OIl"));
+    assert!(!valid_wallet(""));
+    let now = 1_800_000_000;
+    assert_eq!(grant_ttl((now + 3600) * 1000, now), 3600);
+    assert_eq!(grant_ttl((now + 86400) * 1000, now), MAX_TTL);
+    assert_eq!(grant_ttl((now - 1) * 1000, now), 0);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
+async fn wallet_session_bridge_trusts_only_the_relay_and_allowed_origins() {
+    let database = std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap();
+    let store = Store::connect(&database).await.unwrap();
+    let wallet = bs58::encode(random_id().unwrap().as_bytes()[..32].to_vec()).into_string();
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let relay_wallet = wallet.clone();
+    let relay = Router::new()
+        .route(
+            "/v1/auth/session",
+            get(|State((wallet, seen)): State<(String, Arc<Mutex<Vec<String>>>)>, headers: HeaderMap| async move {
+                let origin = headers.get("origin").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                let token = headers["authorization"].to_str().unwrap().trim_start_matches("Bearer ").to_string();
+                seen.lock().await.push(origin.clone());
+                let now_ms = domain::now() * 1000;
+                match token.as_str() {
+                    "good" => Json(json!({"wallet":wallet,"origin":origin,"expires_at_ms":now_ms+3_600_000})).into_response(),
+                    "long" => Json(json!({"wallet":wallet,"origin":origin,"expires_at_ms":now_ms+86_400_000})).into_response(),
+                    "expired" => Json(json!({"wallet":wallet,"origin":origin,"expires_at_ms":now_ms-1})).into_response(),
+                    "bad-wallet" => Json(json!({"wallet":"not-a-key","origin":origin,"expires_at_ms":now_ms+3_600_000})).into_response(),
+                    "elsewhere" => Json(json!({"wallet":wallet,"origin":"https://evil.example","expires_at_ms":now_ms+3_600_000})).into_response(),
+                    "redirect" => (StatusCode::FOUND, [("location", "https://evil.example/v1/auth/session")]).into_response(),
+                    _ => (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response(),
+                }
+            }),
+        )
+        .with_state((relay_wallet, seen.clone()));
+    let (relay_origin, relay_task) = serve(relay).await;
+    let app_for = |wallet_login: bool| {
+        let mut config = fixture_config(database.clone());
+        config.wallet_login = wallet_login;
+        config.relay_url = wallet_login.then(|| relay_origin.clone());
+        config.extra_origins = vec!["https://www.chainpayai.app".into()];
+        App {
+            ai: crate::paypal::ai::Ai::fixture("http://127.0.0.1:1/unused".into()),
+            store: store.clone(),
+            provider: Provider::fixture("http://127.0.0.1:1".into(), &config),
+            config: Arc::new(config),
+        }
+    };
+    let http = reqwest::Client::new();
+    let (off, off_task) = serve(router(app_for(false))).await;
+    let ask = |base: &str, token: &str, origin: Option<&str>| {
+        let mut r = http
+            .post(format!("{base}/v1/paypal/session/wallet"))
+            .bearer_auth(token);
+        if let Some(origin) = origin {
+            r = r.header("origin", origin);
+        }
+        r.send()
+    };
+    assert_eq!(
+        ask(&off, "good", Some("https://paypal.example.com"))
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    let (on, on_task) = serve(router(app_for(true))).await;
+    let (status, granted) = {
+        let r = ask(&on, "good", Some("https://paypal.example.com"))
+            .await
+            .unwrap();
+        (r.status().as_u16(), r.json::<Value>().await.unwrap())
+    };
+    assert_eq!(status, 200, "{granted}");
+    assert_eq!(granted["wallet"], wallet);
+    let expires = granted["expires_at"].as_u64().unwrap();
+    assert!(expires <= domain::now() + 3600 && expires + 60 > domain::now() + 3600);
+    let token = granted["token"].as_str().unwrap();
+    let session: Value = http
+        .get(format!("{on}/v1/paypal/session"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(session["id"], wallet);
+    assert_eq!(session["workspace"], format!("wallet:{wallet}"));
+    assert_eq!(session["role"], "buyer");
+    // The main site is an allowed caller too; the grant never outlives 12 hours.
+    let r = ask(&on, "long", Some("https://www.chainpayai.app"))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let long: Value = r.json().await.unwrap();
+    assert!(long["expires_at"].as_u64().unwrap() <= domain::now() + 12 * 3600);
+    let forwarded = seen.lock().await.clone();
+    assert_eq!(
+        forwarded,
+        ["https://paypal.example.com", "https://www.chainpayai.app"]
+    );
+    // No or unknown Origin never reaches the relay.
+    for origin in [None, Some("https://evil.example"), Some("null")] {
+        assert_eq!(ask(&on, "good", origin).await.unwrap().status(), 403);
+    }
+    assert_eq!(seen.lock().await.len(), 2);
+    for (token, status) in [
+        ("nope", 403),
+        ("expired", 403),
+        ("bad-wallet", 403),
+        ("elsewhere", 403),
+        ("redirect", 422),
+        ("bad token!", 403),
+    ] {
+        assert_eq!(
+            ask(&on, token, Some("https://paypal.example.com"))
+                .await
+                .unwrap()
+                .status(),
+            status,
+            "{token}"
+        );
+    }
+    // CORS answers the configured origins only.
+    for (origin, allowed) in [
+        ("https://www.chainpayai.app", true),
+        ("https://paypal.example.com", true),
+        ("https://chainpayai.app", false),
+    ] {
+        let r = http
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("{on}/v1/paypal/session/wallet"),
+            )
+            .header("origin", origin)
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", "authorization")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            r.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            allowed.then_some(origin),
+            "{origin}"
+        );
+    }
+    for task in [relay_task, off_task, on_task] {
+        task.abort();
+    }
 }

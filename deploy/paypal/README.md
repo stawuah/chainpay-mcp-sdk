@@ -86,10 +86,15 @@ One-time setup:
    | `CHAINPAY_PAYPAL_PUBLIC_ORIGIN` | `https://chainpay-paypal.vercel.app` (the project's own domain) |
    | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | sandbox REST app (mark the secret Sensitive) |
    | `PAYPAL_WEBHOOK_ID` | from step 5 |
-   | `CHAINPAY_PAYPAL_AI_KEY` | dedicated OpenRouter key with a spend cap (Sensitive) |
+   | `CHAINPAY_PAYPAL_AI_KEY` | dedicated OpenRouter or Vercel AI Gateway key with a spend cap (Sensitive), matching the endpoint below |
+   | `CHAINPAY_PAYPAL_AI_ENDPOINT` | optional; exactly `https://openrouter.ai/api/v1/chat/completions` (default) or `https://ai-gateway.vercel.sh/v1/chat/completions` |
+   | `CHAINPAY_PAYPAL_AI_MODEL` | optional `provider/model` slug, default `openai/gpt-5-mini` (for example `anthropic/claude-sonnet-5.5` on the gateway) |
    | `CHAINPAY_PAYPAL_CRON_SECRET` | 32+ random characters (Sensitive) |
    | `CHAINPAY_PAYPAL_SUBSCRIPTIONS`, `CHAINPAY_PAYPAL_SUBSCRIPTION_PLAN` | `false`, or `true` and the `P-…` plan |
    | `CHAINPAY_PAYPAL_ALLOWANCES` | `false` until the allowance acceptance run; gates `POST /allowances` and `POST /purchases` |
+   | `CHAINPAY_PAYPAL_WALLET_LOGIN` | `false` until wallet sign-in is reviewed; when off `POST /v1/paypal/session/wallet` is a 404 |
+   | `CHAINPAY_PAYPAL_RELAY_URL` | ChainPay relay origin (HTTPS), required when wallet login is on |
+   | `CHAINPAY_PAYPAL_EXTRA_ORIGINS` | optional, comma-separated exact origins allowed by CORS and the wallet bridge, e.g. `https://www.chainpayai.app` |
    | `VITE_CHAINPAY_PAYPAL` | `true` |
    | `VITE_CHAINPAY_PAYPAL_API_ORIGIN` | same as `CHAINPAY_PAYPAL_PUBLIC_ORIGIN` |
 
@@ -167,6 +172,33 @@ wait for the `CUSTOMER.DISPUTE.CREATED` webhook), preview the evidence pack,
 and submit it while the status is `WAITING_FOR_SELLER_RESPONSE`. The pack is
 built only from stored records and is submitted once per dispute; PayPal, not
 ChainPay, decides the outcome.
+
+With allowances on, a confirmed refund (route, reconcile or verified
+`PAYMENT.CAPTURE.REFUNDED` webhook) on an allowance purchase writes one
+`refund` spend row per PayPal refund ID, so the allowance gets exactly the
+refunded cents back and a replayed webhook never credits twice. Revoking an
+allowance calls `DELETE /v3/vault/payment-tokens/{id}` unless another live
+allowance uses the same token; the revoke stands if PayPal fails, the outcome
+is kept as an operation, and revoking again retries.
+
+### Wallet sign-in
+
+`CHAINPAY_PAYPAL_WALLET_LOGIN=true` with `CHAINPAY_PAYPAL_RELAY_URL` enables
+`POST /v1/paypal/session/wallet`. The browser sends its relay session token as
+`Authorization: Bearer …`; the service asks the relay `GET /v1/auth/session`
+with that bearer and the request's `Origin` (relay sessions are origin-bound),
+never following redirects or logging tokens. The `Origin` must be
+`CHAINPAY_PAYPAL_PUBLIC_ORIGIN` or one of `CHAINPAY_PAYPAL_EXTRA_ORIGINS`, and
+the relay must have issued the session for that same origin. The answer is
+`{token, wallet, expires_at}`: a buyer grant for principal `<wallet>` in
+workspace `wallet:<wallet>`, lasting the rest of the relay session and at most
+12 hours. It is rate limited and never issues agent or merchant grants.
+
+`CHAINPAY_PAYPAL_EXTRA_ORIGINS` adds exact origins (for example the main
+dashboard at `https://www.chainpayai.app`) to CORS for every API route and to
+the wallet bridge's allowed origins. It does not change the service's own
+public origin, which stays separate and is still the only return URL handed to
+PayPal.
 
 ### Judge access and financial exceptions
 
