@@ -1175,6 +1175,20 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     assert_eq!(requested["captured"], false);
     assert_eq!(fixture.creates.load(Ordering::SeqCst), creates_before);
     let requested_id = requested["id"].as_str().unwrap().to_string();
+    // Generic checkout capture cannot bypass the allowance authorization gate.
+    assert_eq!(
+        call(
+            &http,
+            &reqwest::Method::POST,
+            api(&format!("/tasks/{requested_id}/capture")),
+            &buyer,
+            Some(json!({"digest":requested["quote_digest"]}))
+        )
+        .await
+        .0,
+        409
+    );
+
     let (_, inbox) = call(
         &http,
         &reqwest::Method::GET,
