@@ -5,7 +5,7 @@ let backend = "";
 let allowedOrigins = new Set<string>();
 // Exact URLs (not origins) outside the relay that may receive the wallet session to exchange it
 // for their own session. Today only the PayPal service's POST /v1/paypal/session/wallet.
-const exchangeUrls = new Set<string>();
+const exchangeUrls = new Map<string, number>();
 let session: { token: string; expires_at_ms: number; wallet: string } | null = null;
 let pending: Promise<void> | null = null;
 let generation = 0;
@@ -46,7 +46,17 @@ export function configureSession(backendUrl: string, mcpUrl: string) {
 export function allowSessionExchange(url: string) {
   const parsed = new URL(url, location.href);
   if (parsed.search || parsed.hash || parsed.username || parsed.password) throw new Error("Session exchange URL must be a bare path");
-  exchangeUrls.add(parsed.href);
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  if (parsed.pathname !== "/v1/paypal/session/wallet" || (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:"))) throw new Error("Only the PayPal wallet session exchange is allowed");
+  exchangeUrls.set(parsed.href, (exchangeUrls.get(parsed.href) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const remaining = (exchangeUrls.get(parsed.href) ?? 1) - 1;
+    if (remaining > 0) exchangeUrls.set(parsed.href, remaining);
+    else exchangeUrls.delete(parsed.href);
+  };
 }
 export function setSessionWallet(next: ChainPayWallet | null) {
   const previous = session;
@@ -90,7 +100,9 @@ async function signIn() {
 }
 export async function authorizedFetch(input: string, init: RequestInit = {}, expected?: WalletBinding, mode: "interactive" | "passive" = "interactive"): Promise<Response> {
   const url = new URL(input, location.href);
-  if (!allowedOrigins.has(url.origin) && !exchangeUrls.has(url.href)) throw new Error("Refusing to send a wallet session to another service");
+  const exchanging = !allowedOrigins.has(url.origin) && exchangeUrls.has(url.href);
+  if (!allowedOrigins.has(url.origin) && !exchanging) throw new Error("Refusing to send a wallet session to another service");
+  if (exchanging && (init.method ?? "GET").toUpperCase() !== "POST") throw new Error("Session exchange requires POST");
   let active: NonNullable<typeof session>;
   try {
     if (mode === "passive") {
@@ -102,7 +114,7 @@ export async function authorizedFetch(input: string, init: RequestInit = {}, exp
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${active.token}`);
   const revision = generation;
-  const response = await fetch(input, { ...init, headers });
+  const response = await fetch(input, { ...init, ...(exchanging ? { redirect: "error" as const, credentials: "omit" as const, cache: "no-store" as const } : {}), headers });
   if (revision !== generation || wallet?.address !== active.wallet) throw new Error("Wallet changed while the request was pending. Refresh with the intended wallet.");
   if (response.status === 401 && session === active) { session = null; notifySession(); }
   return response;

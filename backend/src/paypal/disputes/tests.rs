@@ -88,3 +88,15 @@ fn evidence_pack_is_deterministic_and_only_uses_stored_records() {
     // The private inputs never leak through the public receipt digest path.
     assert!(!pack.to_string().contains("quote_digest"));
 }
+
+#[test]
+fn ordinary_checkout_dispute_does_not_invent_allowance_authorization() {
+    let mut task = purchase();
+    task.purchase = None;
+    let d = from_provider(&task, &provider_dispute("CAPTURE")).unwrap();
+    let pack = evidence_pack(&task, &d, None, "https://paypal.example.com");
+    let notes = pack["notes"].as_str().unwrap();
+    assert!(!notes.contains("allowance"));
+    assert!(!notes.contains("pre-approved"));
+    assert!(notes.contains("captured as CAPTURE"));
+}

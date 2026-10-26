@@ -50,6 +50,11 @@ impl Dispute {
             "amount_cents":self.amount,"amount":self.amount.decimal(),"currency":"USD","created_at":self.created_at,"updated_at":self.updated_at,
             "seller_response_due":self.seller_response_due,"evidence":self.evidence,"evidence_submitted_at":self.evidence_submitted_at,"evidence_digest":self.evidence_digest,"sandbox":true})
     }
+    fn buyer_view(&self) -> Value {
+        json!({"id":self.id,"task_id":self.task_id,"status":self.status,"stage":self.stage,"reason":self.reason,
+            "amount_cents":self.amount,"amount":self.amount.decimal(),"currency":"USD",
+            "created_at":self.created_at,"updated_at":self.updated_at,"sandbox":true})
+    }
     fn mark(&self) -> DisputeMark {
         DisputeMark {
             id: self.id.clone(),
@@ -148,13 +153,20 @@ pub fn evidence_pack(
         .filter(|u| u.state == UnitState::Failed)
         .count();
     let mut notes = format!(
-        "Purchase {} for {} USD was authorised under buyer allowance \"{}\" ({}) and captured as {}. ",
+        "Purchase {} for {} USD was captured as {}. ",
         task.id,
         task.amount.decimal(),
-        allowance.map(|a| a.name.as_str()).unwrap_or("unknown"),
-        policy.map(|p| p.rule.as_str()).unwrap_or("no policy"),
         dispute.capture_id
     );
+    if let Some(policy) = policy {
+        notes.push_str(&format!(
+            "The stored buyer allowance policy was {}{} . ",
+            policy.rule,
+            allowance
+                .map(|a| format!(" for allowance \"{}\"", a.name))
+                .unwrap_or_default()
+        ));
+    }
     if let Some(c) = purchase {
         match c.approval.as_deref() {
             Some(state) => notes.push_str(&format!(
@@ -199,11 +211,13 @@ pub fn evidence_pack(
 
 impl Store {
     pub async fn disputes(&self, p: &Principal) -> Result<Vec<Dispute>, Error> {
-        if p.role != Role::Merchant {
-            return Err(Error::Forbidden);
-        }
-        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_disputes WHERE workspace=$1 ORDER BY updated_at DESC,id LIMIT 100")
-            .bind(&p.workspace).fetch_all(self.pool()).await?;
+        let rows: Vec<Value> = match p.role {
+            Role::Merchant => sqlx::query_scalar("SELECT record FROM paypal_disputes WHERE workspace=$1 ORDER BY updated_at DESC,id LIMIT 100")
+                .bind(&p.workspace).fetch_all(self.pool()).await?,
+            Role::Buyer => sqlx::query_scalar("SELECT d.record FROM paypal_disputes d JOIN paypal_tasks t ON t.id=d.task_id AND t.workspace=d.workspace WHERE d.workspace=$1 AND (t.principal=$2 OR t.record->'purchase'->>'buyer'=$2 OR t.record->'subscription_funding'->>'buyer'=$2) ORDER BY d.updated_at DESC,d.id LIMIT 100")
+                .bind(&p.workspace).bind(&p.id).fetch_all(self.pool()).await?,
+            Role::Agent => return Err(Error::Forbidden),
+        };
         rows.into_iter().map(decode).collect()
     }
     pub async fn dispute(&self, id: &str, p: &Principal) -> Result<Dispute, Error> {
@@ -222,6 +236,11 @@ impl Store {
     pub async fn upsert_dispute(&self, task: &Task, value: &Value) -> Result<Dispute, Error> {
         let fresh = from_provider(task, value)?;
         let mut tx = self.pool().begin().await?;
+        // Serialize the initial insert too: SELECT FOR UPDATE cannot lock a missing row.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 770025))")
+            .bind(&fresh.id)
+            .execute(&mut *tx)
+            .await?;
         let old: Option<Value> =
             sqlx::query_scalar("SELECT record FROM paypal_disputes WHERE id=$1 FOR UPDATE")
                 .bind(&fresh.id)
@@ -233,33 +252,97 @@ impl Store {
                 if old.task_id != fresh.task_id || old.capture_id != fresh.capture_id {
                     return Err(Error::Conflict);
                 }
-                Dispute {
-                    status: fresh.status,
-                    stage: fresh.stage,
-                    reason: fresh.reason,
-                    amount: fresh.amount,
-                    updated_at: fresh.updated_at.max(old.updated_at),
-                    seller_response_due: fresh.seller_response_due.or(old.seller_response_due),
-                    ..old
+                if fresh.updated_at < old.updated_at {
+                    old
+                } else {
+                    Dispute {
+                        status: fresh.status,
+                        stage: fresh.stage,
+                        reason: fresh.reason,
+                        amount: fresh.amount,
+                        updated_at: fresh.updated_at.max(old.updated_at),
+                        seller_response_due: fresh.seller_response_due.or(old.seller_response_due),
+                        ..old
+                    }
                 }
             }
             None => fresh,
         };
         sqlx::query("INSERT INTO paypal_disputes(id,workspace,task_id,capture_id,record,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record,updated_at=EXCLUDED.updated_at")
             .bind(&d.id).bind(&d.workspace).bind(&d.task_id).bind(&d.capture_id).bind(json!(d)).bind(d.updated_at as i64).execute(&mut *tx).await?;
+        sqlx::query("UPDATE paypal_tasks SET record=jsonb_set(record,'{dispute}',$1) WHERE id=$2 AND workspace=$3")
+            .bind(json!(d.mark())).bind(&d.task_id).bind(&d.workspace).execute(&mut *tx).await?;
         tx.commit().await?;
-        let merchant = Principal {
-            id: task.principal.clone(),
-            workspace: task.workspace.clone(),
-            role: Role::Merchant,
-        };
-        let mark = d.mark();
-        self.update(&task.id, &merchant, |t| {
-            t.dispute = Some(mark);
-            Ok(())
-        })
-        .await?;
         Ok(d)
+    }
+    /// Bind the merchant-approved digest to the task and dispute while both are
+    /// locked, so concurrent fulfilment/refunds cannot silently change the pack.
+    async fn claim_evidence(
+        &self,
+        id: &str,
+        p: &Principal,
+        digest: &str,
+        origin: &str,
+    ) -> Result<(Dispute, Value, Option<String>), Error> {
+        if p.role != Role::Merchant {
+            return Err(Error::Forbidden);
+        }
+        let mut tx = self.pool().begin().await?;
+        let record: Option<Value> = sqlx::query_scalar(
+            "SELECT record FROM paypal_disputes WHERE id=$1 AND workspace=$2 FOR UPDATE",
+        )
+        .bind(id)
+        .bind(&p.workspace)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let mut d = decode(record.ok_or(Error::NotFound)?)?;
+        let task: Value = sqlx::query_scalar(
+            "SELECT record FROM paypal_tasks WHERE id=$1 AND workspace=$2 FOR UPDATE",
+        )
+        .bind(&d.task_id)
+        .bind(&p.workspace)
+        .fetch_one(&mut *tx)
+        .await?;
+        let task: Task =
+            serde_json::from_value(task).map_err(|_| Error::Invalid("Stored task is invalid"))?;
+        let allowance: Option<Allowance> = match &task.purchase {
+            Some(c) => {
+                let value: Option<Value> =
+                    sqlx::query_scalar("SELECT record FROM paypal_allowances WHERE id=$1")
+                        .bind(&c.allowance_id)
+                        .fetch_optional(&mut *tx)
+                        .await?;
+                value
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|_| Error::Invalid("Stored allowance is invalid"))?
+            }
+            None => None,
+        };
+        let pack = evidence_pack(&task, &d, allowance.as_ref(), origin);
+        if pack["digest"] != digest {
+            return Err(Error::Conflict);
+        }
+        let key = if d.submit.is_some() {
+            None
+        } else {
+            if d.status != "WAITING_FOR_SELLER_RESPONSE" {
+                return Err(Error::Invalid(
+                    "PayPal is not waiting for seller evidence on this dispute",
+                ));
+            }
+            let op = Operation::begin()?;
+            let key = op.key.clone();
+            d.submit = Some(op);
+            sqlx::query("UPDATE paypal_disputes SET record=$1 WHERE id=$2")
+                .bind(json!(d))
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            Some(key)
+        };
+        tx.commit().await?;
+        Ok((d, pack, key))
     }
     async fn update_dispute<R>(
         &self,
@@ -279,6 +362,8 @@ impl Store {
             .bind(id)
             .execute(&mut *tx)
             .await?;
+        sqlx::query("UPDATE paypal_tasks SET record=jsonb_set(record,'{dispute}',$1) WHERE id=$2 AND workspace=$3")
+            .bind(json!(d.mark())).bind(&d.task_id).bind(&d.workspace).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok((d, result))
     }
@@ -344,7 +429,7 @@ pub fn router() -> Router<App> {
 async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>, Error> {
     let p = app.principal(&headers).await?;
     Ok(Json(
-        json!({"disputes":app.store.disputes(&p).await?.iter().map(Dispute::view).collect::<Vec<_>>()}),
+        json!({"disputes":app.store.disputes(&p).await?.iter().map(|d| if p.role == Role::Buyer { d.buyer_view() } else { d.view() }).collect::<Vec<_>>()}),
     ))
 }
 /// Asks PayPal about every captured task in the workspace, newest 100.
@@ -400,28 +485,9 @@ async fn submit(
     Json(body): Json<Submission>,
 ) -> Result<Json<Value>, Error> {
     let p = app.principal(&headers).await?;
-    let d = app.store.dispute(&id, &p).await?;
-    let (task, pack) = app.pack(&d, &p).await?;
-    if pack["digest"] != body.digest {
-        return Err(Error::Conflict);
-    }
-    // One submission per dispute: claim the Operation under the row lock first.
-    let (d, key) = app
+    let (d, pack, key) = app
         .store
-        .update_dispute(&id, |d| {
-            if d.submit.is_some() {
-                return Ok(None);
-            }
-            if d.status != "WAITING_FOR_SELLER_RESPONSE" {
-                return Err(Error::Invalid(
-                    "PayPal is not waiting for seller evidence on this dispute",
-                ));
-            }
-            let op = Operation::begin()?;
-            let key = op.key.clone();
-            d.submit = Some(op);
-            Ok(Some(key))
-        })
+        .claim_evidence(&id, &p, &body.digest, &app.config.public_origin)
         .await?;
     if let Some(key) = key {
         let result = app
@@ -445,13 +511,6 @@ async fn submit(
                         d.submit.as_mut().unwrap().unknown();
                     }
                 }
-                Ok(())
-            })
-            .await?;
-        let mark = d.mark();
-        app.store
-            .update(&task.id, &p, |t| {
-                t.dispute = Some(mark);
                 Ok(())
             })
             .await?;

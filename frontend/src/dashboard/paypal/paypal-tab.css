@@ -94,3 +94,8 @@ html[data-astryx-theme] .paypal-shell .cp-paypal-pyusd button.paypal-link-button
 
 html[data-astryx-theme] .paypal-shell .cp-paypal-guard { display: flex; align-items: flex-start; gap: 6px; margin: 0; }
 html[data-astryx-theme] .paypal-shell .cp-paypal-guard svg { flex-shrink: 0; margin-top: 3px; }
+
+.cp-paypal-activity-row { flex-wrap: wrap; }
+.cp-paypal-receipt { flex: 1 0 100%; min-width: 0; border-top: 1px solid var(--pp-line); padding-top: 16px; }
+.cp-paypal-receipt:focus-visible, .cp-paypal-outcome:focus-visible { outline: 2px solid var(--pp-blue); outline-offset: 4px; }
+.cp-paypal-receipt dd { overflow-wrap: anywhere; }

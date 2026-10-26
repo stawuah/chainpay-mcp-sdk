@@ -92,7 +92,7 @@ impl App {
                     .await?;
             }
         }
-        self.credit_refunds(id, p).await?;
+        self.record_allowance_refunds(id, p).await?;
         self.store.get(id, p).await
     }
 
@@ -188,7 +188,7 @@ impl App {
                                 })
                                 .await
                                 .is_ok()
-                                && self.credit_refunds(&task.id, &p).await.is_ok();
+                                && self.record_allowance_refunds(&task.id, &p).await.is_ok();
                         } else if task
                             .refund_id
                             .as_deref()
@@ -202,7 +202,7 @@ impl App {
                                 .update(&task.id, &p, |t| observations::refund(t, value))
                                 .await
                                 .is_ok()
-                                && self.credit_refunds(&task.id, &p).await.is_ok();
+                                && self.record_allowance_refunds(&task.id, &p).await.is_ok();
                         }
                     }
                     if !known {
@@ -642,6 +642,9 @@ async fn capture(
     let p = app.principal(&headers).await?;
     let task = app.store.get(&id, &p).await?;
     task.buyer(&p)?;
+    if task.purchase.is_some() || task.subscription_funding.is_some() {
+        return Err(Error::Conflict);
+    }
     if body.digest != task.quote_digest || task.approved_at.is_none() {
         return Err(Error::Conflict);
     }
@@ -747,7 +750,7 @@ async fn refund(
                 app.store
                     .update(&id, &p, |t| observations::refund(t, value))
                     .await?;
-                app.credit_refunds(&id, &p).await?;
+                app.record_allowance_refunds(&id, &p).await?;
             }
             Err(_) => {
                 app.store
@@ -811,6 +814,14 @@ async fn webhook(
     headers: HeaderMap,
     Json(event): Json<Value>,
 ) -> Result<StatusCode, Error> {
+    // Bound unauthenticated requests before any authenticated PayPal call.
+    // Namespace by configured webhook, never by attacker-supplied headers.
+    app.store
+        .rate_limit(
+            &format!("webhook:{}", domain::hash(app.config.webhook_id.as_bytes())),
+            300,
+        )
+        .await?;
     if !app
         .provider
         .verify_webhook(&headers, event.clone())
@@ -929,7 +940,7 @@ async fn resolution_refund(
                 app.store
                     .update(&id, &p, |t| observations::ledger_refund(t, index, value))
                     .await?;
-                app.credit_refunds(&id, &p).await?;
+                app.record_allowance_refunds(&id, &p).await?;
             }
             Err(_) => {
                 app.store

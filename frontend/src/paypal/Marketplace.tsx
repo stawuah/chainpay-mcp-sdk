@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ShoppingBag, Store } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
 import { modeLabel } from "./Allowances";
-import { dollars, shownMoney, type Allowance, type client, type Merchant, type PolicyCheck, type Principal, type Quote, type Receipt } from "./client";
+import { PayPalRequestUncertainError, dollars, shownMoney, type Allowance, type client, type Merchant, type PolicyCheck, type Principal, type Quote, type Receipt } from "./client";
 
 // Plain words for the policy reason codes the server returns. The code itself is shown too.
 export const reasonWords: Record<string, string> = {
@@ -10,6 +10,7 @@ export const reasonWords: Record<string, string> = {
   allowance_expired: "This allowance has expired",
   agent_not_allowed: "This agent is not named on the allowance",
   merchant_not_allowed: "This merchant is not on the allowance",
+  category_not_allowed: "This merchant category is not on the allowance",
   per_purchase_cap: "Over the per-purchase cap",
   total_cap: "Over the total cap",
   max_per_day: "Daily purchase count reached",
@@ -18,7 +19,7 @@ export const reasonWords: Record<string, string> = {
   denied: "Denied by the buyer",
 };
 
-export default function Marketplace({ api, principal, onPurchased }: { api: ReturnType<typeof client>; principal: Principal; onPurchased: (r: Receipt) => void }) {
+export default function Marketplace({ api, principal, onPurchased, onOpenAllowances, onPendingChange }: { api: ReturnType<typeof client>; principal: Principal; onPurchased: (r: Receipt) => void; onOpenAllowances?: () => void; onPendingChange?: (pending: boolean) => void }) {
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [allowances, setAllowances] = useState<Allowance[]>([]);
   const [merchantId, setMerchantId] = useState("");
@@ -27,6 +28,14 @@ export default function Marketplace({ api, principal, onPurchased }: { api: Retu
   const [quote, setQuote] = useState<Quote>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
+  useEffect(() => { onPendingChange?.(busy || uncertain); }, [busy, uncertain, onPendingChange]);
+  useEffect(() => {
+    if (!busy && !uncertain) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy, uncertain]);
   const live = useRef(true);
   const requestId = useRef(crypto.randomUUID());
   const quoteCount = useRef(0);
@@ -50,8 +59,8 @@ export default function Marketplace({ api, principal, onPurchased }: { api: Retu
   // Re-quote whenever the basket or the allowance changes. Only the latest answer is kept.
   useEffect(() => {
     setQuote(undefined);
-    if (!merchantId || !items.length) return;
     const n = ++quoteCount.current;
+    if (!merchantId || !items.length) return;
     api<Quote>("/purchases/quote", "POST", { merchant: merchantId, items, allowance_id: allowanceId || undefined })
       .then(q => { if (live.current && n === quoteCount.current) setQuote(q); })
       .catch(e => { if (live.current && n === quoteCount.current) setError(e.message); });
@@ -67,7 +76,10 @@ export default function Marketplace({ api, principal, onPurchased }: { api: Retu
     requestId.current = crypto.randomUUID();
   }
 
-  const allowed = quote?.policy?.allowed === true;
+  const selectedAllowance = allowances.find(a => a.id === allowanceId);
+  const knownMode = selectedAllowance && ["agent_pays", "ask_first", "ask_above"].includes(selectedAllowance.mode);
+  const needsApproval = selectedAllowance?.mode === "ask_first" || (selectedAllowance?.mode === "ask_above" && quote && BigInt(quote.amount_cents) > BigInt(selectedAllowance.ask_above_cents ?? 0));
+  const allowed = Boolean(knownMode && quote?.policy?.allowed === true);
   const reason = quote?.policy?.reason_code;
 
   return <section className="paypal-card paypal-market" aria-label="Marketplace">
@@ -78,9 +90,13 @@ export default function Marketplace({ api, principal, onPurchased }: { api: Retu
       </div>
     </div>
     {error && <p role="alert" className="paypal-error">{error}</p>}
+    {!allowances.length && merchants.length > 0 && <div className="paypal-notice">
+      <p>{principal.role === "buyer" ? "Create or resume an allowance to buy from this catalog." : "Ask the buyer to create or resume an allowance before buying."}</p>
+      {principal.role === "buyer" && onOpenAllowances && <Button label="Open allowances" variant="secondary" onClick={onOpenAllowances} />}
+    </div>}
 
     <div className="paypal-merchant-grid" role="group" aria-label="Merchants">
-      {merchants.map(m => <button key={m.id} type="button" className={`paypal-merchant-tile${m.id === merchantId ? " is-active" : ""}`} disabled={busy} onClick={() => pickMerchant(m.id)}>
+      {merchants.map(m => <button key={m.id} type="button" className={`paypal-merchant-tile${m.id === merchantId ? " is-active" : ""}`} disabled={busy || uncertain} onClick={() => pickMerchant(m.id)}>
         <strong>{m.name}</strong>
         <small>{m.kind} · {m.items.length} items</small>
       </button>)}
@@ -98,9 +114,9 @@ export default function Marketplace({ api, principal, onPurchased }: { api: Retu
               <span>{shownMoney(dollars(item.price_cents))}{availabilityWords(item.availability) ? ` · ${availabilityWords(item.availability)}` : ""}</span>
             </div>
             <div className="paypal-stepper" role="group" aria-label={`${item.name} quantity`}>
-              <button type="button" aria-label={`Fewer ${item.name}`} disabled={busy || qty <= 0} onClick={() => setQty(item.id, qty - 1, max)}>−</button>
+              <button type="button" aria-label={`Fewer ${item.name}`} disabled={busy || uncertain || qty <= 0} onClick={() => setQty(item.id, qty - 1, max)}>−</button>
               <output aria-label={`${item.name} quantity`}>{qty}</output>
-              <button type="button" aria-label={`More ${item.name}`} disabled={busy || qty >= max} onClick={() => setQty(item.id, qty + 1, max)}>+</button>
+              <button type="button" aria-label={`More ${item.name}`} disabled={busy || uncertain || qty >= max} onClick={() => setQty(item.id, qty + 1, max)}>+</button>
             </div>
           </div>;
         })}
@@ -108,7 +124,7 @@ export default function Marketplace({ api, principal, onPurchased }: { api: Retu
 
       <div className="paypal-checkout-pane">
         <label htmlFor="market-allowance">Pay with allowance</label>
-        <select id="market-allowance" value={allowanceId} disabled={busy} onChange={e => { setAllowanceId(e.target.value); requestId.current = crypto.randomUUID(); }}>
+        <select id="market-allowance" value={allowanceId} disabled={busy || uncertain} onChange={e => { setAllowanceId(e.target.value); requestId.current = crypto.randomUUID(); }}>
           {!allowances.length && <option value="">No Active allowance</option>}
           {allowances.map(a => <option key={a.id} value={a.id}>{a.name} · {shownMoney(dollars(a.remaining_cents))} left · {modeLabel(a)}</option>)}
         </select>
@@ -121,7 +137,7 @@ export default function Marketplace({ api, principal, onPurchased }: { api: Retu
             {allowed ? "Allowed by the allowance rules." : `Refused: ${reason ? reasonWords[reason] ?? reason : "the rules did not pass"}.`}
             {reason && <code>{reason}</code>}
           </p>}
-          {!quote.policy && <p className="paypal-note">Pick an allowance to check the rules before buying.</p>}
+          {!quote.policy && allowances.length > 0 && <p className="paypal-note">Pick an allowance to check the rules before buying.</p>}
           {quote.policy?.checks && quote.policy.checks.length > 0 && <details>
             <summary>Rule checks</summary>
             <dl className="paypal-checks">{quote.policy.checks.map(c => <div key={c.rule}><dt>{c.rule}</dt><dd>{checkWords(c)}</dd></div>)}</dl>
@@ -129,17 +145,19 @@ export default function Marketplace({ api, principal, onPurchased }: { api: Retu
         </div>}
 
         <div className="paypal-actions">
-          <Button label={quote ? `Buy now · ${shownMoney(quote.amount)}` : "Buy now"} isDisabled={busy || !quote || !allowanceId || !allowed} onClick={() => void (async () => {
+          <Button label={uncertain ? "Retry original purchase" : quote ? `${needsApproval ? "Request approval" : "Buy now"} · ${shownMoney(quote.amount)}` : "Buy now"} isDisabled={busy || !quote || !allowanceId || !allowed} onClick={() => void (async () => {
             setBusy(true); setError("");
             try {
               const mode = allowances.find(a => a.id === allowanceId)?.mode;
               const receipt = await api<Receipt>("/purchases", "POST", { request_id: requestId.current, allowance_id: allowanceId, mode, merchant: merchantId, items });
               requestId.current = crypto.randomUUID();
+              setUncertain(false);
               if (live.current) { setBasket({}); onPurchased(receipt); }
-            } catch (e) { if (live.current) setError(e instanceof Error ? e.message : "Unavailable; keep the original operation"); }
+            } catch (e) { if (live.current) { setUncertain(previous => previous || e instanceof PayPalRequestUncertainError); setError(e instanceof Error ? e.message : "Unavailable; keep the original operation"); } }
             finally { if (live.current) setBusy(false); }
           })()} />
         </div>
+        {uncertain && <p className="paypal-notice" role="status">The purchase outcome is unknown. Your basket is locked so Retry original purchase uses the same request ID and cannot create a second purchase.</p>}
         <p className="paypal-note">{principal.role === "agent" ? "Ask-me-first allowances send the buyer a one-tap approval instead of paying." : "Buying as the buyer runs the same rule check your agent gets."}</p>
       </div>
     </div>}

@@ -19,7 +19,7 @@ try {
  await page.getByRole('button',{name:'Preview evidence pack'}).click();
  await page.getByText('pack-digest-fixture').waitFor();
  const pack=await page.locator('.paypal-evidence').innerText();
- assert.match(pack,/allowance-rules-v1/);assert.match(pack,/per_purchase_cap: \$3\.90 of \$8\.00 · within/);assert.match(pack,/Agent paid within the allowance/);
+ assert.match(pack,/allowance-rules-v1/);assert.match(pack,/per_purchase_cap: \$3\.90 of \$8\.00 · within/);assert.match(pack,/No per-purchase approval recorded/);
  assert.equal(await submit.isDisabled(),false);
  await submit.click();
  await page.getByText('Evidence submitted').waitFor();
@@ -61,15 +61,15 @@ try {
   assert.equal(await buyer.getByText(/A merchant must approve it/).count(),0);
   await buyer.close();
  }
- // Phone width: the dispute table scrolls inside its wrap, the page itself does not scroll sideways.
+ // Phone width: case facts and merchant deadlines are readable without horizontal scrolling.
  {
   const phone=await browser.newPage({viewport:{width:390,height:844}});
   await phone.goto(base+'?role=merchant');
   await phone.getByRole('button',{name:'Disputes',exact:true}).click();
-  await phone.getByRole('table').waitFor();
-  const widths=await phone.evaluate(()=>({page:document.documentElement.scrollWidth,wrap:document.querySelector('.paypal-table-wrap').clientWidth,table:document.querySelector('.paypal-dispute-table').scrollWidth}));
-  assert.ok(widths.page<=390,`page scrollWidth ${widths.page}`);
-  assert.ok(widths.wrap<=390&&widths.table>widths.wrap,`table ${widths.table} should scroll inside wrap ${widths.wrap}`);
+  const detail=phone.locator('.paypal-dispute-detail').first();await detail.waitFor();
+  assert.equal(await phone.getByRole('table').isVisible(),false);
+  for(const label of ['Status','Stage','Reason','Respond by','Evidence']) assert.ok((await detail.innerText()).includes(label), `${label}: ${await detail.innerText()}`);
+  assert.ok(await phone.evaluate(()=>document.documentElement.scrollWidth<=390));
   await phone.screenshot({path:(process.env.PAYPAL_SHOTS||'/tmp/chainpay-paypal')+'-disputes-390.png',fullPage:true});
   await phone.close();
  }

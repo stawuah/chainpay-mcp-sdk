@@ -96,12 +96,12 @@ test('delegated allowance tool rejects money and limit override arguments',async
 
 test('purchase tools forward exact arguments and reject anything that could widen the allowance',async()=>{
  const seen=[];
- const client={requireAgent:async()=>{},purchase:async(...args)=>{seen.push(args);return {kind:'receipt'};},quotePurchase:async(input)=>{seen.push(input);return {};},requestRefund:async(...args)=>{seen.push(args);return {};},findAllowance:async()=>({allowances:[]}),listApprovals:async()=>({approvals:[]}),searchCatalog:async(q)=>{seen.push(q);return {merchants:[]};}};
+ const client={requireAgent:async()=>{},purchase:async(...args)=>{seen.push(args);return {kind:'receipt'};},requestPurchaseApproval:async(...args)=>{seen.push(args);return {kind:'approval_requested'};},quotePurchase:async(input)=>{seen.push(input);return {};},requestRefund:async(...args)=>{seen.push(args);return {};},findAllowance:async()=>({allowances:[]}),listApprovals:async()=>({approvals:[]}),searchCatalog:async(q)=>{seen.push(q);return {merchants:[]};}};
  const args={request_id:'purchase-request-stays-same',allowance_id:'a'.repeat(32),merchant:'grocer',items:[{id:'oat-milk',qty:2}]};
  for(const [name,mode] of [['paypal_purchase','agent_pays'],['paypal_request_approval','ask_first']]){
   const ok=await handlePayPalMessage(message('tools/call',{name,arguments:args}),client);
   assert.equal(ok.result.isError,false);assert.deepEqual(seen.at(-1),['purchase-request-stays-same','a'.repeat(32),'grocer',[{id:'oat-milk',qty:2}],mode]);
-  for(const key of ['amount_cents','vault','approval','digest','per_purchase_cap_cents','mode']){const r=await handlePayPalMessage(message('tools/call',{name,arguments:{...args,[key]:'override'}}),client);assert.equal(r.error.code,-32602);}
+  for(const key of ['amount_cents','vault','approval','digest','per_purchase_cap_cents','approval_only']){const r=await handlePayPalMessage(message('tools/call',{name,arguments:{...args,[key]:'override'}}),client);assert.equal(r.error.code,-32602);}
   const missing=await handlePayPalMessage(message('tools/call',{name,arguments:{allowance_id:'a'.repeat(32),merchant:'grocer',items:args.items}}),client);
   assert.equal(missing.result.isError,true);
  }
@@ -144,7 +144,31 @@ test('purchase through the real SDK keeps request_id and never leaks the vault o
   assert.equal(first.result.structuredContent.kind,'approval_requested');
   assert.equal(first.result.structuredContent.review_url,`${origin}/paypal/?task=${'c'.repeat(32)}`);
   const posts=requests.filter(r=>r.path==='/v1/paypal/purchases');
-  assert.equal(posts.length,2);assert.deepEqual(posts[0].body,{...args,mode:'ask_first'});assert.deepEqual(posts[1].body,{...args,mode:'ask_first'});
+  assert.equal(posts.length,2);assert.deepEqual(posts[0].body,{...args,mode:'ask_first',approval_only:true});assert.deepEqual(posts[1].body,{...args,mode:'ask_first',approval_only:true});
   assert.ok(!JSON.stringify([first,again]).includes('secret'));
  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('threshold mode works through MCP and real SDK while approval requests remain approval-only', async () => {
+ const {PayPalAgentClient}=await import('@chainpayhq/sdk/paypal');
+ const old=globalThis.fetch;const posts=[];
+ globalThis.fetch=async(url, init)=>{
+  if(url.endsWith('/session'))return Response.json({role:'agent'});
+  const body=JSON.parse(init.body);posts.push(body);
+  return Response.json({id:'c'.repeat(32),purchase:{policy:{allowed:true},approval:'requested'}});
+ };
+ try {
+  const client=new PayPalAgentClient({enabled:true,apiOrigin:'https://paypal-api.example',workspaceOrigin:'https://paypal-ui.example',token:'a'.repeat(64)});
+  const args={request_id:'threshold-request-stable',allowance_id:'a'.repeat(32),merchant:'grocer',items:[{id:'oat-milk',qty:2}],mode:'ask_above'};
+  for(const name of ['paypal_purchase','paypal_request_approval']) {
+   const r=await handlePayPalMessage(message('tools/call',{name,arguments:args}),client);
+   assert.equal(r.result.isError,false);assert.equal(r.result.structuredContent.kind,'approval_requested');
+  }
+  assert.deepEqual(posts[0],args);assert.deepEqual(posts[1],{...args,approval_only:true});
+  for(const [name,mode] of [['paypal_request_approval','agent_pays'],['paypal_purchase','unknown'],['paypal_request_approval','unknown']]){
+   const r=await handlePayPalMessage(message('tools/call',{name,arguments:{...args,mode}}),client);
+   assert.equal(r.result.isError,true);
+  }
+  assert.equal(posts.length,2);
+ }finally{globalThis.fetch=old;}
 });

@@ -7,3 +7,6 @@ export { setPaypalSourceOverride } from "../../src/dashboard/paypal/source";
 export { createFixturePaypalSource } from "../../src/dashboard/paypal/fixtureSource";
 export { createLivePaypalSource } from "../../src/dashboard/paypal/liveSource";
 export { configureSession, setSessionWallet, ensureSessionReady, authorizedFetch } from "../../src/session";
+
+export { default as Marketplace } from "../../src/paypal/Marketplace";
+export { PayPalRequestUncertainError } from "../../src/paypal/client";

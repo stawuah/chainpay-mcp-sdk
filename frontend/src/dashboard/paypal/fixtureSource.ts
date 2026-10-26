@@ -8,7 +8,7 @@ import type { PaypalApi, PaypalSource } from "./source";
   reaches PayPal or moves money.
 
   Shape: two allowances (one "ask me above $20"), one purchase waiting for
-  approval, three purchases (one refunded with the allowance restored) and one
+  approval, three purchases (one refunded without replenishing the allowance) and one
   open dispute.
 */
 
@@ -230,8 +230,8 @@ function seed(now: number): FixtureState {
   const groceries: Allowance = {
     id: "al-groceries", name: "Weekly groceries", status: "Active", mode: "agent_pays", ask_above_cents: null, categories: ["grocery"],
     agent: "pantry-bot", merchants: ["grocer"], total_cap_cents: 6000, per_purchase_cap_cents: 1500,
-    // 20.30 paid; the 11.30 refund went back on the allowance.
-    spent_cents: 2030, remaining_cents: 3970, purchases_today: 1, max_per_day: 3, cooldown_seconds: 60,
+    // 20.30 paid plus 11.30 refunded: refunds do not replenish the lifetime cap.
+    spent_cents: 3160, remaining_cents: 2840, purchases_today: 1, max_per_day: 3, cooldown_seconds: 60,
     last_purchase_at: now - 2 * HOUR, expires_at: now + 26 * DAY, created_at: now - 4 * DAY, vault: { source: "paypal", status: "ready" }, sandbox: true,
   };
   const outings: Allowance = {
@@ -277,6 +277,7 @@ function seed(now: number): FixtureState {
 }
 
 function evidence(d: Dispute, state: FixtureState): EvidencePack {
+  if (!d.capture_id) throw new Error("Merchant evidence requires the capture record");
   const task = state.tasks.find((t) => t.id === d.task_id);
   const a = state.allowances.find((x) => x.id === task?.purchase?.allowance_id);
   return {

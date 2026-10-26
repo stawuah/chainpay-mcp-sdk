@@ -1427,7 +1427,7 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
         None,
     )
     .await;
-    assert_eq!(credited["spent_cents"], 780 + 1250 - 390);
+    assert_eq!(credited["spent_cents"], 780 + 1250);
     assert_eq!(credited["purchases_today"], 2);
     // Public receipt shows the merchant and rule only.
     let (_, shared) = call(
@@ -1617,7 +1617,7 @@ async fn disputes_sync_evidence_pack_and_single_submission() {
         call(&http, &reqwest::Method::GET, api("/disputes"), &buyer, None)
             .await
             .0,
-        403
+        200
     );
     assert_eq!(
         call(
@@ -1650,6 +1650,58 @@ async fn disputes_sync_evidence_pack_and_single_submission() {
     assert_eq!(d["amount"], "7.80");
     assert_eq!(d["evidence"], "none");
     assert_eq!(d["seller_response_due"], 1_793_354_400u64);
+    // Buyers read only their own disputes and never merchant evidence metadata.
+    let (status, own) = call(&http, &reqwest::Method::GET, api("/disputes"), &buyer, None).await;
+    assert_eq!(status, 200);
+    assert_eq!(own["disputes"][0]["id"], dispute_id);
+    for field in [
+        "capture_id",
+        "evidence",
+        "evidence_digest",
+        "evidence_submitted_at",
+        "seller_response_due",
+    ] {
+        assert!(own["disputes"][0].get(field).is_none(), "{field}");
+    }
+    for outsider in [
+        Principal {
+            id: random_id().unwrap(),
+            ..p.clone()
+        },
+        Principal {
+            workspace: random_id().unwrap(),
+            ..p.clone()
+        },
+    ] {
+        let token = store.issue_access(&outsider, 3600).await.unwrap();
+        let (status, view) =
+            call(&http, &reqwest::Method::GET, api("/disputes"), &token, None).await;
+        assert_eq!(status, 200);
+        assert_eq!(view["disputes"], json!([]));
+    }
+    let agent_token = store
+        .issue_access(
+            &Principal {
+                role: Role::Agent,
+                ..p.clone()
+            },
+            3600,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &http,
+            &reqwest::Method::GET,
+            api("/disputes"),
+            &agent_token,
+            None
+        )
+        .await
+        .0,
+        403
+    );
+
     let (_, receipt) = call(
         &http,
         &reqwest::Method::GET,
@@ -1743,6 +1795,24 @@ async fn disputes_sync_evidence_pack_and_single_submission() {
     .await;
     assert_eq!(updated["disputes"][0]["status"], "UNDER_REVIEW");
     assert_eq!(updated["disputes"][0]["evidence"], "submitted");
+    // A delayed provider response cannot regress status or erase the submission.
+    let mut stale = detail();
+    stale["update_time"] = "2026-10-20T10:00:00.000Z".into();
+    stale["status"] = "WAITING_FOR_SELLER_RESPONSE".into();
+    let retained = store.upsert_dispute(&task, &stale).await.unwrap();
+    assert_eq!(retained.status, "UNDER_REVIEW");
+    assert_eq!(retained.evidence, "submitted");
+    assert_eq!(
+        store
+            .get(&task.id, &p)
+            .await
+            .unwrap()
+            .dispute
+            .unwrap()
+            .status,
+        "UNDER_REVIEW"
+    );
+
     // The pack digest moved with the status; the stale one is refused and the
     // fresh one replays without a second upload.
     assert_eq!(
@@ -1818,7 +1888,7 @@ async fn spent_cents(store: &Store, allowance: &str) -> u64 {
 
 #[tokio::test]
 #[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
-async fn threshold_categories_refund_credit_and_revoke_delete() {
+async fn threshold_categories_refund_history_preserves_lifetime_cap_and_revoke_delete() {
     let fixture = VaultFixture::default();
     fixture.auto_capture.store(true, Ordering::SeqCst);
     let (app, origin, tasks) = vault_app(&fixture).await;
@@ -1878,6 +1948,24 @@ async fn threshold_categories_refund_credit_and_revoke_delete() {
     // Mode must still match what the caller expects.
     let (status, wrong) = call(&http, &post, api("/purchases"), &agent, Some(json!({"request_id":random_id().unwrap(),"allowance_id":id,"mode":"agent_pays","merchant":"grocer","items":[{"id":"oat-milk","qty":1}]}))).await;
     assert_eq!(status, 422, "{wrong}");
+    // Approval-only tools cannot charge below the threshold, even with the right mode.
+    let mut approval_small = buy(json!([{"id":"oat-milk","qty":2}]), "grocer");
+    approval_small["approval_only"] = true.into();
+    let before = fixture.creates.load(Ordering::SeqCst);
+    assert_eq!(
+        call(
+            &http,
+            &post,
+            api("/purchases"),
+            &agent,
+            Some(approval_small)
+        )
+        .await
+        .0,
+        422
+    );
+    assert_eq!(fixture.creates.load(Ordering::SeqCst), before);
+    assert_eq!(spent_cents(&store, &id).await, 0);
     // At or under the threshold the agent pays straight away.
     let (status, small) = call(
         &http,
@@ -1891,12 +1979,14 @@ async fn threshold_categories_refund_credit_and_revoke_delete() {
     assert_eq!(small["captured"], true);
     assert!(small["purchase"]["approval"].is_null());
     // Above it, the same approval path ask_first uses.
+    let mut approval_big = buy(json!([{"id":"coffee-beans","qty":1}]), "grocer");
+    approval_big["approval_only"] = true.into();
     let (_, big) = call(
         &http,
         &post,
         api("/purchases"),
         &agent,
-        Some(buy(json!([{"id":"coffee-beans","qty":1}]), "grocer")),
+        Some(approval_big.clone()),
     )
     .await;
     assert_eq!(big["purchase"]["approval"], "requested");
@@ -1915,6 +2005,40 @@ async fn threshold_categories_refund_credit_and_revoke_delete() {
     assert_eq!(approved["purchase"]["approval"], "approved");
     assert_eq!(approved["captured"], true);
     assert_eq!(fixture.creates.load(Ordering::SeqCst), creates + 1);
+    assert_eq!(
+        call(
+            &http,
+            &post,
+            api("/purchases"),
+            &agent,
+            Some(approval_big.clone())
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(fixture.creates.load(Ordering::SeqCst), creates + 1);
+    approval_big["approval_only"] = false.into();
+    assert_eq!(
+        call(&http, &post, api("/purchases"), &agent, Some(approval_big))
+            .await
+            .0,
+        409
+    );
+
+    // The ordinary capture endpoint must never bypass the allowance dispatch gate.
+    assert_eq!(
+        call(
+            &http,
+            &post,
+            api(&format!("/tasks/{}/capture", small["id"].as_str().unwrap())),
+            &buyer,
+            Some(json!({"digest":small["quote_digest"]}))
+        )
+        .await
+        .0,
+        409
+    );
     // An under-threshold purchase has nothing to approve or deny.
     let small_id = small["id"].as_str().unwrap().to_string();
     assert_eq!(
@@ -1972,14 +2096,14 @@ async fn threshold_categories_refund_credit_and_revoke_delete() {
     .await;
     assert_eq!(status, 200, "{refunded}");
     assert_eq!(refunded["refund"], "3.90");
-    assert_eq!(spent_cents(&store, &id).await, 780 + 1250 - 390);
-    // The verified webhook for the same refund, delivered twice, never credits again.
+    assert_eq!(spent_cents(&store, &id).await, 780 + 1250);
+    // The verified webhook for the same refund, delivered twice, never replenishes the lifetime cap.
     let refund_id = refunded["refund_id"].as_str().unwrap().to_string();
     let event = |n: &str| json!({"id":format!("WH-{n}-{}",random_id().unwrap()),"event_type":"PAYMENT.CAPTURE.REFUNDED","resource":{"id":refund_id}});
     for n in ["a", "b"] {
         store.insert_event(&event(n)).await.unwrap();
         app.process_events().await.unwrap();
-        assert_eq!(spent_cents(&store, &id).await, 780 + 1250 - 390, "{n}");
+        assert_eq!(spent_cents(&store, &id).await, 780 + 1250, "{n}");
     }
     let rows: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM paypal_allowance_spend WHERE allowance_id=$1 AND kind='refund'",
@@ -1989,7 +2113,7 @@ async fn threshold_categories_refund_credit_and_revoke_delete() {
     .await
     .unwrap();
     assert_eq!(rows, 1);
-    // A lost credit is written by the webhook path on its own, once.
+    // A lost audit row is written by the webhook path on its own, once.
     sqlx::query("DELETE FROM paypal_allowance_spend WHERE allowance_id=$1 AND kind='refund'")
         .bind(&id)
         .execute(store.pool())
@@ -1999,7 +2123,7 @@ async fn threshold_categories_refund_credit_and_revoke_delete() {
     for n in ["c", "d"] {
         store.insert_event(&event(n)).await.unwrap();
         app.process_events().await.unwrap();
-        assert_eq!(spent_cents(&store, &id).await, 780 + 1250 - 390, "{n}");
+        assert_eq!(spent_cents(&store, &id).await, 780 + 1250, "{n}");
     }
     let (_, view) = call(
         &http,
@@ -2009,8 +2133,8 @@ async fn threshold_categories_refund_credit_and_revoke_delete() {
         None,
     )
     .await;
-    assert_eq!(view["spent_cents"], 780 + 1250 - 390);
-    assert_eq!(view["remaining_cents"], 5000 - 780 - 1250 + 390);
+    assert_eq!(view["spent_cents"], 780 + 1250);
+    assert_eq!(view["remaining_cents"], 5000 - 780 - 1250);
     // Revoke deletes the vault token at PayPal once and blocks every purchase.
     let deletes = fixture.deletes.load(Ordering::SeqCst);
     let (status, revoked) = call(
@@ -2292,4 +2416,33 @@ async fn wallet_session_bridge_trusts_only_the_relay_and_allowed_origins() {
     for task in [relay_task, off_task, on_task] {
         task.abort();
     }
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
+async fn webhook_limits_untrusted_verification_before_provider_io() {
+    let database = std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap();
+    let store = Store::connect(&database).await.unwrap();
+    let mut config = fixture_config(database);
+    config.webhook_id = random_id().unwrap();
+    let bucket = format!("webhook:{}", domain::hash(config.webhook_id.as_bytes()));
+    sqlx::query("INSERT INTO paypal_rate_windows(identity,window_id,count) VALUES($1,$2,300)")
+        .bind(&bucket)
+        .bind((domain::now() / 60) as i64)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let app = App {
+        ai: crate::paypal::ai::Ai::fixture("http://127.0.0.1:1/unused".into()),
+        provider: Provider::fixture("http://127.0.0.1:1/unreachable".into(), &config),
+        store,
+        config: Arc::new(config),
+    };
+    let result = webhook(
+        State(app),
+        HeaderMap::new(),
+        Json(json!({"id":"untrusted"})),
+    )
+    .await;
+    assert!(matches!(result, Err(Error::Invalid(message)) if message.starts_with("Rate limit")));
 }

@@ -314,7 +314,10 @@ impl Task {
             return Err(Error::Forbidden);
         }
         let purchase = self.purchase.as_ref().ok_or(Error::Conflict)?;
-        if !purchase.policy.allowed
+        if !matches!(
+            purchase.mode.as_str(),
+            "agent_pays" | "ask_first" | "ask_above"
+        ) || !purchase.policy.allowed
             || ((purchase.mode == "ask_first" || purchase.approval.is_some())
                 && purchase.approval.as_deref() != Some("approved"))
         {

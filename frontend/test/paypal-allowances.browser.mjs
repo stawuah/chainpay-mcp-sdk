@@ -11,7 +11,7 @@ try {
   await page.goto(base+'?role=buyer');
   await page.getByRole('button',{name:'Allowances',exact:true}).click();
   const card=page.getByLabel('Allowance preview');
-  await card.waitFor();
+  await card.getByText(/per purchase at Corner Grocer,/).waitFor();
   assert.match(await card.innerText(),/\$8\.00 per purchase at Corner Grocer, up to \$20\.00 in total, at most 3 times a day/);
   await page.getByLabel('Per purchase cap (USD)').fill('12.5');
   await page.getByLabel('Total cap (USD)').fill('45');
@@ -157,7 +157,7 @@ try {
   await page.getByRole('button',{name:'Marketplace',exact:true}).click();
   await page.locator('.paypal-merchant-tile',{hasText:'Corner Grocer'}).click();
   await page.getByRole('button',{name:'More Oat milk 1L'}).click();
-  await page.getByText('Pick an allowance to check the rules before buying.').waitFor();
+  await page.getByText('Ask the buyer to create or resume an allowance before buying.').waitFor();
   const quote=(await calls(page)).find(c=>c.path==='/purchases/quote');
   assert.equal(quote.body.allowance_id,undefined);
   assert.equal(await page.locator('.paypal-verdict').count(),0);

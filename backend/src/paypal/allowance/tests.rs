@@ -302,3 +302,116 @@ fn confirmed_refunds_carry_their_own_partial_amounts() {
         ]
     );
 }
+
+#[test]
+fn unknown_modes_require_approval_and_cannot_dispatch() {
+    use crate::paypal::catalog::ItemInput;
+    let p = actor(Role::Buyer, "buyer");
+    let a = Allowance::fixture("buyer", "future_mode");
+    assert!(a.needs_approval(Cents(1)));
+    let mut task = Task::quote_purchase(
+        &p,
+        &a,
+        "grocer",
+        &[ItemInput {
+            id: "oat-milk".into(),
+            qty: 1,
+        }],
+    )
+    .unwrap();
+    task.purchase.as_mut().unwrap().policy.allowed = true;
+    assert!(task.start_vault_charge(&p).is_err());
+    assert!(task.order.is_none());
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
+async fn dispatch_waits_for_allowance_lock_and_respects_committed_pause() {
+    use crate::paypal::catalog::ItemInput;
+    let store = Store::connect(&std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let mut p = actor(Role::Buyer, &domain::random_id().unwrap());
+    p.workspace = domain::random_id().unwrap();
+    let mut a = Allowance::fixture(&p.id, "agent_pays");
+    a.id = domain::random_id().unwrap();
+    a.workspace = p.workspace.clone();
+    sqlx::query("INSERT INTO paypal_allowances(id,workspace,buyer,request_id,record,created_at) VALUES($1,$2,$3,$4,$5,$6)")
+        .bind(&a.id).bind(&a.workspace).bind(&a.buyer).bind(domain::random_id().unwrap()).bind(json!(a)).bind(a.created_at as i64)
+        .execute(store.pool()).await.unwrap();
+    let t = Task::quote_purchase(
+        &p,
+        &a,
+        "grocer",
+        &[ItemInput {
+            id: "oat-milk".into(),
+            qty: 1,
+        }],
+    )
+    .unwrap();
+    let t = store
+        .purchase(&t, &domain::random_id().unwrap(), "fixture", &p)
+        .await
+        .unwrap();
+    let mut tx = store.pool().begin().await.unwrap();
+    sqlx::query("SELECT id FROM paypal_allowances WHERE id=$1 FOR UPDATE")
+        .bind(&a.id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    let claim = tokio::spawn({
+        let store = store.clone();
+        let p = p.clone();
+        let id = t.id.clone();
+        async move { store.claim_purchase_dispatch(&id, &p, false).await }
+    });
+    a.status = "Paused".into();
+    sqlx::query("UPDATE paypal_allowances SET record=$1 WHERE id=$2")
+        .bind(json!(a))
+        .bind(&a.id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(matches!(claim.await.unwrap(), Err(Error::Conflict)));
+    assert!(store.get(&t.id, &p).await.unwrap().order.is_none());
+    // Resume and claim the order. A later pause must also prevent a capture claim.
+    store
+        .update_allowance(&a.id, |a| {
+            a.status = "Active".into();
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim_purchase_dispatch(&t.id, &p, false)
+            .await
+            .unwrap()
+            .2
+            .is_some()
+    );
+    store
+        .update(&t.id, &p, |t| {
+            t.order_id = Some("order".into());
+            t.order
+                .as_mut()
+                .unwrap()
+                .observe(json!({"status":"APPROVED"}));
+            Ok(())
+        })
+        .await
+        .unwrap();
+    store
+        .update_allowance(&a.id, |a| {
+            a.status = "Paused".into();
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.claim_purchase_dispatch(&t.id, &p, true).await,
+        Err(Error::Conflict)
+    ));
+    assert!(store.get(&t.id, &p).await.unwrap().capture.is_none());
+}

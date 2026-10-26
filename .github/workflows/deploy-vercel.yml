@@ -5,7 +5,7 @@ name: Deploy to Vercel
 # account's team, so Actions uploads the same staged roots as stage-vercel.mjs.
 on:
   workflow_run:
-    workflows: [Release checks]
+    workflows: [Release checks, PayPal extension checks]
     types: [completed]
     branches: [master]
   workflow_dispatch:
@@ -27,7 +27,8 @@ jobs:
     # Manual runs deploy master only, never another branch's unchecked code.
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.name == 'Release checks' &&
+       github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -115,6 +116,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Require both check suites for the current master revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          node scripts/check-deploy-revision.mjs
+          CHECK_WORKFLOW=paypal-checks.yml node scripts/check-deploy-revision.mjs
       - name: Stage paypal
         id: stage
         env:
