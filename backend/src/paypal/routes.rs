@@ -806,6 +806,14 @@ async fn webhook(
     headers: HeaderMap,
     Json(event): Json<Value>,
 ) -> Result<StatusCode, Error> {
+    // Bound unauthenticated requests before any authenticated PayPal call.
+    // Namespace by configured webhook, never by attacker-supplied headers.
+    app.store
+        .rate_limit(
+            &format!("webhook:{}", domain::hash(app.config.webhook_id.as_bytes())),
+            300,
+        )
+        .await?;
     if !app
         .provider
         .verify_webhook(&headers, event.clone())
