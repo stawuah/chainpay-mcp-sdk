@@ -307,16 +307,19 @@ impl Task {
         Ok(Some(key))
     }
     /// Claims the vault charge for a catalog purchase. The policy verdict was
-    /// written inside the allowance transaction; an ask_first purchase also
-    /// needs the buyer's approval before any money moves.
+    /// written inside the allowance transaction; an ask_first purchase, or an
+    /// ask_above one over its threshold, also needs the buyer's approval first.
     pub fn start_vault_charge(&mut self, p: &Principal) -> Result<Option<String>, Error> {
         if !matches!(p.role, Role::Buyer | Role::Agent) || !self.can_read(p) {
             return Err(Error::Forbidden);
         }
         let purchase = self.purchase.as_ref().ok_or(Error::Conflict)?;
-        if !matches!(purchase.mode.as_str(), "agent_pays" | "ask_first")
-            || !purchase.policy.allowed
-            || (purchase.mode == "ask_first" && purchase.approval.as_deref() != Some("approved"))
+        if !matches!(
+            purchase.mode.as_str(),
+            "agent_pays" | "ask_first" | "ask_above"
+        ) || !purchase.policy.allowed
+            || ((purchase.mode == "ask_first" || purchase.approval.is_some())
+                && purchase.approval.as_deref() != Some("approved"))
         {
             return Err(Error::Conflict);
         }

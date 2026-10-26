@@ -7,6 +7,40 @@ use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
+pub const OPENROUTER: &str = "https://openrouter.ai/api/v1/chat/completions";
+pub const VERCEL_GATEWAY: &str = "https://ai-gateway.vercel.sh/v1/chat/completions";
+pub const DEFAULT_MODEL: &str = "openai/gpt-5-mini";
+
+/// Endpoint and model from the environment. The endpoint is an exact
+/// allowlist; the model is one `provider/model` slug.
+pub fn settings(get: impl Fn(&str) -> Option<String>) -> Result<(String, String), String> {
+    let endpoint = get("CHAINPAY_PAYPAL_AI_ENDPOINT")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| OPENROUTER.into());
+    if endpoint != OPENROUTER && endpoint != VERCEL_GATEWAY {
+        return Err(format!(
+            "CHAINPAY_PAYPAL_AI_ENDPOINT must be {OPENROUTER} or {VERCEL_GATEWAY}"
+        ));
+    }
+    let model = get("CHAINPAY_PAYPAL_AI_MODEL")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_MODEL.into());
+    let valid = model.len() <= 80
+        && model.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-' | b'/')
+        })
+        && model.split_once('/').is_some_and(|(provider, name)| {
+            !provider.is_empty() && !name.is_empty() && !name.contains('/')
+        });
+    if !valid {
+        return Err(
+            "CHAINPAY_PAYPAL_AI_MODEL must be provider/model in [a-z0-9._-], at most 80 characters"
+                .into(),
+        );
+    }
+    Ok((endpoint, model))
+}
+
 #[derive(Clone)]
 pub struct Ai {
     client: reqwest::Client,
@@ -27,7 +61,11 @@ impl Ai {
             .ok()
             .filter(|s| !s.trim().is_empty())
             .ok_or("CHAINPAY_PAYPAL_AI_KEY is required before accepting paid work")?;
-        Self::new(key)
+        let (endpoint, model) = settings(|k| std::env::var(k).ok())?;
+        let mut ai = Self::new(key)?;
+        ai.endpoint = endpoint;
+        ai.model = model;
+        Ok(ai)
     }
     fn new(key: String) -> Result<Self, String> {
         Ok(Self {
@@ -39,8 +77,8 @@ impl Ai {
                 .build()
                 .map_err(|_| "Cannot initialize AI transport")?,
             key,
-            model: "openai/gpt-5-mini".into(),
-            endpoint: "https://openrouter.ai/api/v1/chat/completions".into(),
+            model: DEFAULT_MODEL.into(),
+            endpoint: OPENROUTER.into(),
             slots: Arc::new(Semaphore::new(2)),
             recommendation_slots: Arc::new(Semaphore::new(1)),
         })
@@ -370,6 +408,56 @@ fn validate_output(value: Value, input: &str) -> Result<Value, Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_is_allowlisted_and_model_is_one_slug() {
+        let with = |pairs: &[(&str, &str)]| {
+            let map: std::collections::HashMap<String, String> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            settings(move |k| map.get(k).cloned())
+        };
+        assert_eq!(
+            with(&[]).unwrap(),
+            (OPENROUTER.to_string(), DEFAULT_MODEL.to_string())
+        );
+        assert_eq!(
+            with(&[
+                ("CHAINPAY_PAYPAL_AI_ENDPOINT", VERCEL_GATEWAY),
+                ("CHAINPAY_PAYPAL_AI_MODEL", "anthropic/claude-sonnet-5.5"),
+            ])
+            .unwrap(),
+            (
+                VERCEL_GATEWAY.to_string(),
+                "anthropic/claude-sonnet-5.5".to_string()
+            )
+        );
+        for bad in [
+            "https://openrouter.ai/api/v1/chat/completions/",
+            "http://ai-gateway.vercel.sh/v1/chat/completions",
+            "https://ai-gateway.vercel.sh.evil.test/v1/chat/completions",
+            "https://api.openai.com/v1/chat/completions",
+        ] {
+            assert!(
+                with(&[("CHAINPAY_PAYPAL_AI_ENDPOINT", bad)]).is_err(),
+                "{bad}"
+            );
+        }
+        let long = format!("openai/{}", "a".repeat(80));
+        for bad in [
+            "gpt-5-mini",
+            "OpenAI/gpt-5-mini",
+            "openai/",
+            "/gpt",
+            "a/b/c",
+            "openai/gpt 5",
+            "openai/gpt?x=1",
+            long.as_str(),
+        ] {
+            assert!(with(&[("CHAINPAY_PAYPAL_AI_MODEL", bad)]).is_err(), "{bad}");
+        }
+    }
     use crate::paypal::domain::{Document, Role, Task};
     use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
     use std::sync::atomic::{AtomicUsize, Ordering};

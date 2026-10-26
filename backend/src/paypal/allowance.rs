@@ -1,7 +1,7 @@
 //! Buyer allowances: a cap an agent can spend from a vaulted PayPal or card
 //! funding source. The vault token never leaves this server.
 use super::{
-    domain::{self, Error, Operation, Principal, Role, Task},
+    domain::{self, Error, Operation, OperationState, Principal, Role, Task},
     money::Cents,
     observations,
     routes::App,
@@ -27,6 +27,9 @@ pub struct Vault {
     pub approval_url: Option<String>,
     pub setup: Operation,
     pub token: Option<Operation>,
+    /// DELETE of the payment token after a revoke; outcome kept like any call.
+    #[serde(default)]
+    pub delete: Option<Operation>,
 }
 impl Vault {
     pub fn status(&self) -> &'static str {
@@ -48,7 +51,13 @@ pub struct Allowance {
     pub name: String,
     pub status: String,
     pub mode: String,
+    /// ask_above only: purchases over this ask the buyer first.
+    #[serde(default)]
+    pub ask_above_cents: Cents,
     pub merchants: Vec<String>,
+    /// Merchant kinds from the catalog; empty means any kind.
+    #[serde(default)]
+    pub categories: Vec<String>,
     pub total_cap_cents: Cents,
     pub per_purchase_cap_cents: Cents,
     pub expires_at: u64,
@@ -70,7 +79,9 @@ impl Allowance {
             name: "Groceries".into(),
             status: "Active".into(),
             mode: mode.into(),
+            ask_above_cents: Cents(0),
             merchants: vec!["grocer".into()],
+            categories: vec![],
             total_cap_cents: Cents(5000),
             per_purchase_cap_cents: Cents(2000),
             expires_at: domain::now() + 86400,
@@ -84,8 +95,18 @@ impl Allowance {
                 approval_url: None,
                 setup: Operation::begin().unwrap(),
                 token: None,
+                delete: None,
             },
             fingerprint: String::new(),
+        }
+    }
+    /// Whether this purchase waits for the buyer: always for ask_first, over
+    /// the threshold for ask_above, never for agent_pays.
+    pub fn needs_approval(&self, amount: Cents) -> bool {
+        match self.mode.as_str() {
+            "agent_pays" => false,
+            "ask_above" => amount.0 > self.ask_above_cents.0,
+            _ => true,
         }
     }
 }
@@ -134,6 +155,9 @@ pub fn check(
     };
     let since_last = usage.last_purchase_at.map(|t| now.saturating_sub(t));
     let cooldown_ok = since_last.is_none_or(|s| s >= a.cooldown_seconds);
+    let kind = super::catalog::merchant(merchant)
+        .map(|m| m.kind)
+        .unwrap_or("unknown");
     let rows: Vec<(&str, &str, bool, Option<Cents>, Option<Cents>, String)> = vec![
         (
             "status",
@@ -166,6 +190,18 @@ pub fn check(
             None,
             None,
             merchant.into(),
+        ),
+        (
+            "category",
+            "category_not_allowed",
+            a.categories.is_empty() || a.categories.iter().any(|c| c == kind),
+            None,
+            None,
+            if a.categories.is_empty() {
+                format!("{kind}; any category allowed")
+            } else {
+                format!("{kind} is not in {}", a.categories.join(", "))
+            },
         ),
         (
             "per_purchase_cap",
@@ -237,8 +273,9 @@ pub fn check(
 fn decode(v: Value) -> Result<Allowance, Error> {
     serde_json::from_value(v).map_err(|_| Error::Invalid("Stored allowance is invalid"))
 }
-/// Reserve rows that have no release for the same task, excluding one task so
-/// an approval can re-check without counting itself.
+/// Lifetime spend includes every unreleased reservation. Refund observations
+/// remain audit history and never grant fresh spending authority. Exclude the
+/// current task only when rechecking its existing reservation at approval.
 async fn usage(
     conn: &mut sqlx::PgConnection,
     allowance_id: &str,
@@ -256,7 +293,12 @@ async fn usage(
     for row in rows {
         let cents: i64 = row.get("cents");
         let at: i64 = row.get("created_at");
-        u.spent = Cents(u.spent.0 + cents as u64);
+        u.spent = Cents(
+            u.spent
+                .0
+                .checked_add(cents as u64)
+                .ok_or(Error::Invalid("Allowance spend overflow"))?,
+        );
         if at as u64 >= day_start {
             u.purchases_today += 1;
         }
@@ -276,7 +318,37 @@ async fn spend(
     Ok(())
 }
 
+/// Confirmed refunds on a task, by provider refund id: the original refund
+/// and each resolution refund. Partial refunds carry only their own amount.
+pub fn confirmed_refunds(task: &Task) -> Vec<(String, Cents)> {
+    let mut out = Vec::new();
+    if let (true, Some(id)) = (task.refund_confirmed, &task.refund_id) {
+        out.push((id.clone(), task.refund_amount));
+    }
+    for r in task.refunds.iter().filter(|r| r.confirmed) {
+        if let Some(id) = &r.provider_id {
+            out.push((id.clone(), r.amount));
+        }
+    }
+    out
+}
+
 impl Store {
+    /// One audit row per provider refund id. Refunds never replenish the cap.
+    /// Takes no task lock: the insert
+    /// only key-share locks the allowance, keeping the allowance-first order.
+    pub(crate) async fn record_allowance_refunds(&self, task: &Task) -> Result<u64, Error> {
+        let Some(purchase) = &task.purchase else {
+            return Ok(0);
+        };
+        let mut added = 0;
+        for (refund_id, cents) in confirmed_refunds(task) {
+            added += sqlx::query("INSERT INTO paypal_allowance_spend(entry_key,allowance_id,task_id,kind,cents,created_at) VALUES($1,$2,$3,'refund',$4,$5) ON CONFLICT DO NOTHING")
+                .bind(format!("refund:{refund_id}")).bind(&purchase.allowance_id).bind(&task.id).bind(cents.0 as i64).bind(domain::now() as i64)
+                .execute(self.pool()).await?.rows_affected();
+        }
+        Ok(added)
+    }
     pub(crate) async fn allowance_record(&self, id: &str) -> Result<Allowance, Error> {
         let v: Option<Value> =
             sqlx::query_scalar("SELECT record FROM paypal_allowances WHERE id=$1")
@@ -326,13 +398,14 @@ impl Store {
     }
     pub async fn allowance_view(&self, a: &Allowance, p: &Principal) -> Result<Value, Error> {
         let u = self.usage(&a.id, "", domain::now()).await?;
-        let mut view = json!({"id":a.id,"name":a.name,"status":a.status,"mode":a.mode,"agent":a.agent,"merchants":a.merchants,
+        let mut view = json!({"id":a.id,"name":a.name,"status":a.status,"mode":a.mode,"ask_above_cents":a.ask_above_cents,"agent":a.agent,"merchants":a.merchants,"categories":a.categories,
             "total_cap_cents":a.total_cap_cents,"per_purchase_cap_cents":a.per_purchase_cap_cents,
             "spent_cents":u.spent,"remaining_cents":Cents(a.total_cap_cents.0.saturating_sub(u.spent.0)),
             "purchases_today":u.purchases_today,"max_per_day":a.max_per_day,"cooldown_seconds":a.cooldown_seconds,
             "last_purchase_at":u.last_purchase_at,"expires_at":a.expires_at,"created_at":a.created_at,"sandbox":true});
         if p.role == Role::Buyer && a.buyer == p.id {
-            let mut vault = json!({"source":a.vault.source,"status":a.vault.status()});
+            let mut vault = json!({"source":a.vault.source,"status":a.vault.status(),
+                "delete_state":a.vault.delete.as_ref().map(|o| &o.state)});
             if a.vault.payment_token_id.is_none() {
                 vault["approval_url"] = json!(a.vault.approval_url);
             }
@@ -399,7 +472,7 @@ impl Store {
             spend(&mut tx, "reserve", &a.id, &task.id, task.amount).await?;
         }
         let c = task.purchase.as_mut().unwrap();
-        if policy.allowed && a.mode == "ask_first" {
+        if policy.allowed && a.needs_approval(task.amount) {
             c.approval = Some("requested".into());
             c.approval_requested_at = Some(now);
         }
@@ -460,8 +533,12 @@ impl Store {
             } else {
                 let purchase = task.purchase.as_ref().ok_or(Error::Conflict)?;
                 if !purchase.policy.allowed
-                    || !matches!(purchase.mode.as_str(), "agent_pays" | "ask_first")
-                    || (a.mode == "ask_first" && purchase.approval.as_deref() != Some("approved"))
+                    || !matches!(
+                        purchase.mode.as_str(),
+                        "agent_pays" | "ask_first" | "ask_above"
+                    )
+                    || (a.needs_approval(task.amount)
+                        && purchase.approval.as_deref() != Some("approved"))
                     || task
                         .order
                         .as_ref()
@@ -515,7 +592,7 @@ impl Store {
         let mut tx = self.pool().begin().await?;
         let (mut task, a) = Store::lock_purchase_task(&mut tx, id, p).await?;
         let purchase = task.purchase.clone().ok_or(Error::NotFound)?;
-        if p.role != Role::Buyer || purchase.mode != "ask_first" {
+        if p.role != Role::Buyer || !matches!(purchase.mode.as_str(), "ask_first" | "ask_above") {
             return Err(Error::Forbidden);
         }
         match purchase.approval.as_deref() {
@@ -588,6 +665,20 @@ impl Store {
 }
 
 impl App {
+    /// Preserve confirmed refund audit history without restoring allowance spend.
+    /// Behind CHAINPAY_PAYPAL_ALLOWANCES; safe to call repeatedly.
+    pub(crate) async fn record_allowance_refunds(
+        &self,
+        id: &str,
+        p: &Principal,
+    ) -> Result<(), Error> {
+        if !self.config.allowances {
+            return Ok(());
+        }
+        let task = self.store.get(id, p).await?;
+        self.store.record_allowance_refunds(&task).await?;
+        Ok(())
+    }
     pub(crate) fn allowances_enabled(&self) -> Result<(), Error> {
         self.purchases()?;
         if !self.config.allowances {
@@ -665,8 +756,9 @@ impl App {
         let Some(token) = event["resource"]["id"].as_str() else {
             return Ok(false);
         };
+        // A token we deleted on revoke is matched through the delete record.
         let ids: Vec<String> = sqlx::query_scalar(
-            "SELECT id FROM paypal_allowances WHERE record->'vault'->>'payment_token_id'=$1",
+            "SELECT id FROM paypal_allowances WHERE record->'vault'->>'payment_token_id'=$1 OR record->'vault'->'delete'->'observation'->>'token'=$1",
         )
         .bind(token)
         .fetch_all(self.store.pool())
@@ -721,6 +813,10 @@ struct Create {
     merchants: Vec<String>,
     mode: String,
     #[serde(default)]
+    ask_above_cents: u64,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
     agent: Option<String>,
     vault_source: String,
     #[serde(default)]
@@ -761,6 +857,10 @@ async fn create(
     let mut merchants = body.merchants.clone();
     merchants.sort();
     merchants.dedup();
+    let kinds: Vec<&str> = super::catalog::merchants().iter().map(|m| m.kind).collect();
+    let mut categories = body.categories.clone();
+    categories.sort();
+    categories.dedup();
     if body.request_id.len() < 16
         || body.request_id.len() > 64
         || !body
@@ -780,7 +880,11 @@ async fn create(
         || body.max_per_day > 100
         || merchants.is_empty()
         || merchants.iter().any(|m| !known.contains(&m.as_str()))
-        || !matches!(body.mode.as_str(), "agent_pays" | "ask_first")
+        || !matches!(body.mode.as_str(), "agent_pays" | "ask_first" | "ask_above")
+        || (body.mode == "ask_above")
+            != (body.ask_above_cents > 0 && body.ask_above_cents <= body.per_purchase_cap_cents)
+        || (body.mode != "ask_above" && body.ask_above_cents != 0)
+        || categories.iter().any(|c| !kinds.contains(&c.as_str()))
         || body
             .agent
             .as_deref()
@@ -789,7 +893,7 @@ async fn create(
         || (body.vault_source == "card") != body.card.is_some()
     {
         return Err(Error::Invalid(
-            "Allowance needs a name, caps in cents, expiry within a year, known merchants, a mode and a vault source",
+            "Allowance needs a name, caps in cents, expiry within a year, known merchants and categories, a mode (ask_above needs 0 < ask_above_cents ≤ per_purchase_cap_cents) and a vault source",
         ));
     }
     if let Some(card) = &body.card {
@@ -807,20 +911,26 @@ async fn create(
             ));
         }
     }
-    // The card itself is never part of the fingerprint or the record.
+    // The card itself is never part of the fingerprint or the record. The
+    // threshold and categories join it only when set, so earlier retries match.
+    let base = (
+        &body.name,
+        body.total_cap_cents,
+        body.per_purchase_cap_cents,
+        body.expires_at,
+        body.cooldown_seconds,
+        body.max_per_day,
+        &merchants,
+        &body.mode,
+        &body.agent,
+        &body.vault_source,
+    );
     let fingerprint = domain::hash(
-        &serde_json::to_vec(&(
-            &body.name,
-            body.total_cap_cents,
-            body.per_purchase_cap_cents,
-            body.expires_at,
-            body.cooldown_seconds,
-            body.max_per_day,
-            &merchants,
-            &body.mode,
-            &body.agent,
-            &body.vault_source,
-        ))
+        &if body.ask_above_cents == 0 && categories.is_empty() {
+            serde_json::to_vec(&base)
+        } else {
+            serde_json::to_vec(&(base, body.ask_above_cents, &categories))
+        }
         .unwrap(),
     );
     let a = Allowance {
@@ -831,7 +941,9 @@ async fn create(
         name: body.name.trim().into(),
         status: "Active".into(),
         mode: body.mode.clone(),
+        ask_above_cents: Cents(body.ask_above_cents),
         merchants,
+        categories,
         total_cap_cents: Cents(body.total_cap_cents),
         per_purchase_cap_cents: Cents(body.per_purchase_cap_cents),
         expires_at: body.expires_at,
@@ -845,6 +957,7 @@ async fn create(
             approval_url: None,
             setup: Operation::begin()?,
             token: None,
+            delete: None,
         },
         fingerprint: fingerprint.clone(),
     };
@@ -1006,8 +1119,16 @@ async fn set_status(
     if !matches!(body.status.as_str(), "Active" | "Paused" | "Revoked") {
         return Err(Error::Invalid("Status is Active, Paused or Revoked"));
     }
-    app.store.allowance(&id, &p).await?;
-    let (a, _) = app
+    let before = app.store.allowance(&id, &p).await?;
+    // Revoke also deletes the vault token at PayPal, unless another live
+    // allowance still charges the same token.
+    let shared = match &before.vault.payment_token_id {
+        Some(token) => sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM paypal_allowances WHERE id<>$1 AND record->'vault'->>'payment_token_id'=$2 AND record->>'status'<>'Revoked')")
+            .bind(&id).bind(token).fetch_one(app.store.pool()).await?,
+        None => true,
+    };
+    let delete = body.status == "Revoked" && app.config.allowances && !shared;
+    let (a, claimed) = app
         .store
         .update_allowance(&id, |a| {
             if p.role != Role::Buyer || a.buyer != p.id {
@@ -1017,6 +1138,37 @@ async fn set_status(
                 return Err(Error::Conflict);
             }
             a.status = body.status.clone();
+            let retry = a
+                .vault
+                .delete
+                .as_ref()
+                .is_none_or(|o| o.state == OperationState::Unknown);
+            match (&a.vault.payment_token_id, delete && retry) {
+                (Some(token), true) => {
+                    a.vault.delete = Some(Operation::begin()?);
+                    Ok(Some(token.clone()))
+                }
+                _ => Ok(None),
+            }
+        })
+        .await?;
+    let Some(token) = claimed else {
+        return Ok(Json(app.store.allowance_view(&a, &p).await?));
+    };
+    // The revoke above stands whatever PayPal answers; a failure stays Unknown.
+    let result = app.provider.delete_payment_token(&token).await;
+    let (a, _) = app
+        .store
+        .update_allowance(&id, |a| {
+            let op = a.vault.delete.as_mut().ok_or(Error::Conflict)?;
+            match &result {
+                Ok(_) => {
+                    op.observe(json!({"token":token,"deleted":true}));
+                    a.vault.payment_token_id = None;
+                    a.vault.approval_url = None;
+                }
+                Err(_) => op.unknown(),
+            }
             Ok(())
         })
         .await?;

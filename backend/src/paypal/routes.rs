@@ -92,6 +92,7 @@ impl App {
                     .await?;
             }
         }
+        self.record_allowance_refunds(id, p).await?;
         self.store.get(id, p).await
     }
 
@@ -186,7 +187,8 @@ impl App {
                                     observations::ledger_refund(t, index, value.clone())
                                 })
                                 .await
-                                .is_ok();
+                                .is_ok()
+                                && self.record_allowance_refunds(&task.id, &p).await.is_ok();
                         } else if task
                             .refund_id
                             .as_deref()
@@ -199,7 +201,8 @@ impl App {
                                 .store
                                 .update(&task.id, &p, |t| observations::refund(t, value))
                                 .await
-                                .is_ok();
+                                .is_ok()
+                                && self.record_allowance_refunds(&task.id, &p).await.is_ok();
                         }
                     }
                     if !known {
@@ -277,9 +280,13 @@ async fn healthz(State(app): State<App>) -> impl IntoResponse {
 }
 
 pub fn router(app: App) -> Router {
-    let origin: axum::http::HeaderValue =
-        app.config.public_origin.parse().expect("validated origin");
+    let origins: Vec<axum::http::HeaderValue> = app
+        .config
+        .allowed_origins()
+        .map(|o| o.parse().expect("validated origin"))
+        .collect();
     Router::new()
+        .merge(super::wallet::router())
         .merge(super::subscriptions::router())
         .merge(super::allowance::router())
         .merge(super::catalog::router())
@@ -321,7 +328,7 @@ pub fn router(app: App) -> Router {
         .layer(DefaultBodyLimit::max(200_000))
         .layer(
             CorsLayer::new()
-                .allow_origin(origin)
+                .allow_origin(origins)
                 .allow_methods([
                     axum::http::Method::GET,
                     axum::http::Method::POST,
@@ -454,7 +461,7 @@ async fn reporting(
     ))
 }
 
-fn bearer(headers: &HeaderMap) -> Result<&str, Error> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Result<&str, Error> {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
@@ -743,6 +750,7 @@ async fn refund(
                 app.store
                     .update(&id, &p, |t| observations::refund(t, value))
                     .await?;
+                app.record_allowance_refunds(&id, &p).await?;
             }
             Err(_) => {
                 app.store
@@ -932,6 +940,7 @@ async fn resolution_refund(
                 app.store
                     .update(&id, &p, |t| observations::ledger_refund(t, index, value))
                     .await?;
+                app.record_allowance_refunds(&id, &p).await?;
             }
             Err(_) => {
                 app.store

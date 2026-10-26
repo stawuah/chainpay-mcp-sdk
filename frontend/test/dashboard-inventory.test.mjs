@@ -126,6 +126,8 @@ test("DashboardNav renders ordered workspace and secondary destinations", async 
     jsx: "automatic",
     outfile,
     external: ["react", "react-dom", "react/jsx-runtime"],
+    // nav.ts reads frontend flags (PayPal tab). Unset here: the default nav.
+    define: { "import.meta.env": "{}" },
     plugins: [{
       name: "astryx-stubs",
       setup(build) {

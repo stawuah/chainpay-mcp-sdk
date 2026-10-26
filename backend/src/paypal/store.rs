@@ -59,7 +59,8 @@ impl Store {
         Ok(Self { pool })
     }
 
-    /// Operator-only bootstrap. Never expose this as an unauthenticated route.
+    /// Operator bootstrap, or the wallet bridge after the relay vouched for the
+    /// wallet. Never expose this as an unauthenticated route.
     pub async fn issue_access(&self, principal: &Principal, ttl: u64) -> Result<String, Error> {
         if principal.workspace.is_empty()
             || principal.workspace.len() > 80

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ShoppingBag, Store } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
+import { modeLabel } from "./Allowances";
 import { PayPalRequestUncertainError, dollars, shownMoney, type Allowance, type client, type Merchant, type PolicyCheck, type Principal, type Quote, type Receipt } from "./client";
 
 // Plain words for the policy reason codes the server returns. The code itself is shown too.
@@ -9,6 +10,7 @@ export const reasonWords: Record<string, string> = {
   allowance_expired: "This allowance has expired",
   agent_not_allowed: "This agent is not named on the allowance",
   merchant_not_allowed: "This merchant is not on the allowance",
+  category_not_allowed: "This merchant category is not on the allowance",
   per_purchase_cap: "Over the per-purchase cap",
   total_cap: "Over the total cap",
   max_per_day: "Daily purchase count reached",
@@ -75,8 +77,8 @@ export default function Marketplace({ api, principal, onPurchased, onOpenAllowan
   }
 
   const selectedAllowance = allowances.find(a => a.id === allowanceId);
-  const knownMode = selectedAllowance && ["agent_pays", "ask_first"].includes(selectedAllowance.mode);
-  const needsApproval = selectedAllowance?.mode === "ask_first";
+  const knownMode = selectedAllowance && ["agent_pays", "ask_first", "ask_above"].includes(selectedAllowance.mode);
+  const needsApproval = selectedAllowance?.mode === "ask_first" || (selectedAllowance?.mode === "ask_above" && quote && BigInt(quote.amount_cents) > BigInt(selectedAllowance.ask_above_cents ?? 0));
   const allowed = Boolean(knownMode && quote?.policy?.allowed === true);
   const reason = quote?.policy?.reason_code;
 
@@ -124,7 +126,7 @@ export default function Marketplace({ api, principal, onPurchased, onOpenAllowan
         <label htmlFor="market-allowance">Pay with allowance</label>
         <select id="market-allowance" value={allowanceId} disabled={busy || uncertain} onChange={e => { setAllowanceId(e.target.value); requestId.current = crypto.randomUUID(); }}>
           {!allowances.length && <option value="">No Active allowance</option>}
-          {allowances.map(a => <option key={a.id} value={a.id}>{a.name} · {shownMoney(dollars(a.remaining_cents))} left · {a.mode === "ask_first" ? "Ask me first" : "Agent pays"}</option>)}
+          {allowances.map(a => <option key={a.id} value={a.id}>{a.name} · {shownMoney(dollars(a.remaining_cents))} left · {modeLabel(a)}</option>)}
         </select>
 
         {!items.length && <p className="paypal-note">Add something to see the quote and the rule check.</p>}

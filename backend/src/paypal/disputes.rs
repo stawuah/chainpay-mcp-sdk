@@ -50,6 +50,11 @@ impl Dispute {
             "amount_cents":self.amount,"amount":self.amount.decimal(),"currency":"USD","created_at":self.created_at,"updated_at":self.updated_at,
             "seller_response_due":self.seller_response_due,"evidence":self.evidence,"evidence_submitted_at":self.evidence_submitted_at,"evidence_digest":self.evidence_digest,"sandbox":true})
     }
+    fn buyer_view(&self) -> Value {
+        json!({"id":self.id,"task_id":self.task_id,"status":self.status,"stage":self.stage,"reason":self.reason,
+            "amount_cents":self.amount,"amount":self.amount.decimal(),"currency":"USD",
+            "created_at":self.created_at,"updated_at":self.updated_at,"sandbox":true})
+    }
     fn mark(&self) -> DisputeMark {
         DisputeMark {
             id: self.id.clone(),
@@ -206,11 +211,13 @@ pub fn evidence_pack(
 
 impl Store {
     pub async fn disputes(&self, p: &Principal) -> Result<Vec<Dispute>, Error> {
-        if p.role != Role::Merchant {
-            return Err(Error::Forbidden);
-        }
-        let rows: Vec<Value> = sqlx::query_scalar("SELECT record FROM paypal_disputes WHERE workspace=$1 ORDER BY updated_at DESC,id LIMIT 100")
-            .bind(&p.workspace).fetch_all(self.pool()).await?;
+        let rows: Vec<Value> = match p.role {
+            Role::Merchant => sqlx::query_scalar("SELECT record FROM paypal_disputes WHERE workspace=$1 ORDER BY updated_at DESC,id LIMIT 100")
+                .bind(&p.workspace).fetch_all(self.pool()).await?,
+            Role::Buyer => sqlx::query_scalar("SELECT d.record FROM paypal_disputes d JOIN paypal_tasks t ON t.id=d.task_id AND t.workspace=d.workspace WHERE d.workspace=$1 AND (t.principal=$2 OR t.record->'purchase'->>'buyer'=$2 OR t.record->'subscription_funding'->>'buyer'=$2) ORDER BY d.updated_at DESC,d.id LIMIT 100")
+                .bind(&p.workspace).bind(&p.id).fetch_all(self.pool()).await?,
+            Role::Agent => return Err(Error::Forbidden),
+        };
         rows.into_iter().map(decode).collect()
     }
     pub async fn dispute(&self, id: &str, p: &Principal) -> Result<Dispute, Error> {
@@ -422,7 +429,7 @@ pub fn router() -> Router<App> {
 async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>, Error> {
     let p = app.principal(&headers).await?;
     Ok(Json(
-        json!({"disputes":app.store.disputes(&p).await?.iter().map(Dispute::view).collect::<Vec<_>>()}),
+        json!({"disputes":app.store.disputes(&p).await?.iter().map(|d| if p.role == Role::Buyer { d.buyer_view() } else { d.view() }).collect::<Vec<_>>()}),
     ))
 }
 /// Asks PayPal about every captured task in the workspace, newest 100.

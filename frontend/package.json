@@ -31,7 +31,7 @@
     "test:bam-bam-browser": "node test/bam-bam.browser.mjs",
     "dev:paypal": "vite --config vite.paypal.config.ts",
     "build:paypal": "tsc --noEmit && vite build --config vite.paypal.config.ts",
-    "test:paypal-browser": "node test/paypal.browser.mjs && node test/paypal-preflight.browser.mjs && node test/paypal-subscriptions.browser.mjs && node test/paypal-resolution.browser.mjs && node test/paypal-allowances.browser.mjs && node test/paypal-disputes.browser.mjs"
+    "test:paypal-browser": "node test/paypal.browser.mjs && node test/paypal-preflight.browser.mjs && node test/paypal-subscriptions.browser.mjs && node test/paypal-resolution.browser.mjs && node test/paypal-allowances.browser.mjs && node test/paypal-disputes.browser.mjs && node test/paypal-tab.browser.mjs"
   },
   "dependencies": {
     "@astryxdesign/core": "0.6.1",

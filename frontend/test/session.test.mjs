@@ -143,3 +143,17 @@ test("challenge deployment rejection never asks the wallet to sign or sends a pr
   assert.equal(requests.length, 1);
   assert.match(requests[0], /auth\/challenge/);
 });
+
+test("PayPal exchange permission is exact, POST-only, redirect-safe and revocable", async t => {
+ const f=await fixture(t);
+ const url="https://paypal.example/v1/paypal/session/wallet";
+ for(const bad of ["https://paypal.example/other", "http://paypal.example/v1/paypal/session/wallet", url+"?token=x"]) assert.throws(()=>f.allowSessionExchange(bad));
+ const release=f.allowSessionExchange(url);
+ await assert.rejects(f.authorizedFetch(url),/requires POST/);
+ assert.equal(f.calls.length,0);
+ await f.authorizedFetch(url,{method:"POST",redirect:"follow",credentials:"include"});
+ const sent=f.calls.at(-1);
+ assert.equal(sent.init.redirect,"error");assert.equal(sent.init.credentials,"omit");
+ release();
+ await assert.rejects(f.authorizedFetch(url,{method:"POST"}),/another service/);
+});
