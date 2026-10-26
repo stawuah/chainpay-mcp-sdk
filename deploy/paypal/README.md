@@ -158,3 +158,17 @@ disputes product. Do not manually alter payment JSON to clear the warning. Revie
 provider records and add an audited repair path if a real case requires it.
 Unmatched webhook events rotate behind unattempted events; malformed observations
 do not prevent unrelated tasks from recovering. No recovery worker dispatches money.
+
+### Review hardening (26 October 2026)
+
+PayPal deployment now requires successful Release checks and PayPal extension
+checks for the current master revision. The PayPal workflow also runs on the
+stacked review branches and every master push. Database-backed provider fixtures
+run serially because they share one inbox; concurrency remains exercised inside
+the explicit concurrency tests.
+
+Cold starts skip unchanged schema DDL using a schema-digest ledger under the
+migration advisory lock. A changed schema still needs a coordinated release and
+an isolated migration rehearsal. Incoming webhook verification is capped at 300
+requests per configured webhook per minute before authenticated provider calls;
+trusted-edge ingress protection is still required for a public release.

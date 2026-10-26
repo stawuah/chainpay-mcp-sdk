@@ -1,18 +1,9 @@
 name: PayPal extension checks
 on:
   pull_request:
-    branches: ['master', 'paypal/**']
-    paths:
-      - 'backend/**'
-      - 'sdk/**'
-      - 'mcp-server/**'
-      - 'frontend/src/paypal/**'
-      - 'frontend/paypal.html'
-      - 'frontend/vite.paypal.config.ts'
-      - 'frontend/test/paypal*'
-      - 'deploy/paypal/**'
-      - 'scripts/stage-vercel.mjs'
-      - '.github/workflows/paypal-checks.yml'
+    branches: ['master', 'paypal/**', 'dre/paypal-*']
+  push:
+    branches: [master]
 permissions:
   contents: read
 concurrency:
@@ -30,13 +21,17 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm --prefix frontend ci --ignore-scripts
       - run: npm --prefix sdk run build
+      - run: npm --prefix sdk test
+      - run: npm --prefix mcp-server test
+      - run: npm run check
       - run: npm --prefix frontend test
+      - run: npm --prefix frontend run build
       - run: npm --prefix frontend run build:paypal
       - run: npx --prefix frontend playwright install --with-deps chrome
       - name: PayPal browser fixtures
         run: |
           VITE_CHAINPAY_PAYPAL=true VITE_CHAINPAY_PAYPAL_API_ORIGIN=http://127.0.0.1:8081 npm --prefix frontend run dev:paypal > /tmp/paypal-vite.log 2>&1 &
-          for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:5197/ > /dev/null && break; sleep 1; done
+          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:5197/ > /dev/null && break; sleep 1; done
           npm --prefix frontend run test:paypal-browser
   sandbox-extension:
     runs-on: ubuntu-latest
@@ -71,4 +66,4 @@ jobs:
             (cd "$dir" && cargo metadata --no-deps --format-version 1 > /dev/null)
           done
       - run: |
-          cargo test -p chainpay-backend --features paypal --locked paypal:: -- --include-ignored
+          cargo test -p chainpay-backend --features paypal --locked paypal:: -- --include-ignored --test-threads=1

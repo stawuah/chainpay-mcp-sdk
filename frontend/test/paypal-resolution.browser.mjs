@@ -27,7 +27,7 @@ try {
  await page.getByLabel('Review reason').fill('Source excerpt is missing.');
  for(const action of ['Accept','Challenge','Accept']){await page.getByRole('button',{name:`${action} output 1`,exact:true}).click();await review.getByText(action==='Accept'?'Accepted by buyer':'Challenged by buyer',{exact:true}).waitFor();}
  const accepts=calls.filter(c=>c.body?.action==='accept');assert.equal(accepts.length,2);assert.notEqual(accepts[0].body.request_id,accepts[1].body.request_id);
- loseDecision=true;await page.getByRole('button',{name:'Challenge output 1',exact:true}).click();await page.getByRole('alert').filter({hasText:/fetch/i}).waitFor();
+ loseDecision=true;await page.getByRole('button',{name:'Challenge output 1',exact:true}).click();await page.getByRole('alert').filter({hasText:"No response yet. Keep the original request and check it again; do not create another."}).waitFor();
  await page.getByRole('button',{name:'Challenge output 1',exact:true}).click();await review.getByText('Challenged by buyer',{exact:true}).waitFor();
  const challenges=calls.filter(c=>c.body?.action==='challenge');assert.equal(challenges.at(-1).body.request_id,challenges.at(-2).body.request_id);
  await page.getByRole('button',{name:'Challenge output 2',exact:true}).click();await page.waitForFunction(()=>[...document.querySelectorAll('p')].filter(p=>p.textContent==='Challenged by buyer').length===2);

@@ -33,9 +33,28 @@ impl Store {
         sqlx::query("SELECT pg_advisory_xact_lock(770024)")
             .execute(&mut *tx)
             .await?;
-        sqlx::raw_sql(include_str!("schema.sql"))
-            .execute(&mut *tx)
-            .await?;
+        // Even CREATE INDEX IF NOT EXISTS locks an existing table. Replaying
+        // all DDL on every serverless cold start can deadlock with live writes.
+        // The advisory lock serializes upgrades; unchanged schemas touch only
+        // this migration ledger, never the financial tables.
+        sqlx::query("CREATE TABLE IF NOT EXISTS paypal_schema_versions (digest TEXT PRIMARY KEY, applied_at BIGINT NOT NULL)")
+            .execute(&mut *tx).await?;
+        let schema = include_str!("schema.sql");
+        let digest = hash(schema.as_bytes());
+        let applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM paypal_schema_versions WHERE digest=$1)",
+        )
+        .bind(&digest)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !applied {
+            sqlx::raw_sql(schema).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO paypal_schema_versions(digest,applied_at) VALUES($1,$2)")
+                .bind(&digest)
+                .bind(now() as i64)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         Ok(Self { pool })
     }
@@ -384,5 +403,29 @@ mod tests {
         for id in ids {
             store.mark_event(&id).await.unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires isolated PAYPAL_TEST_DATABASE_URL"]
+    async fn unchanged_startup_does_not_lock_financial_tables() {
+        let url = std::env::var("PAYPAL_TEST_DATABASE_URL").unwrap();
+        let store = Store::connect(&url).await.unwrap();
+        let mut tx = store.pool().begin().await.unwrap();
+        sqlx::query("LOCK TABLE paypal_tasks IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let reconnect = tokio::time::timeout(Duration::from_secs(2), Store::connect(&url)).await;
+        tx.rollback().await.unwrap();
+        assert!(
+            reconnect.is_ok(),
+            "unchanged startup waited for a financial table lock"
+        );
+        reconnect.unwrap().unwrap();
     }
 }
