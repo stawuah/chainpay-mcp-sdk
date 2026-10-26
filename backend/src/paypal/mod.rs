@@ -74,3 +74,5 @@ pub mod services;
 pub mod subscriptions;
 
 pub mod resolution;
+
+pub mod reporting;

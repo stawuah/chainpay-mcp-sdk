@@ -250,6 +250,7 @@ async fn subscription_payload_and_cancel_empty_204_are_bounded() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
     let config = Config {
+        reporting_workspace: None,
         database_url: "unused".into(),
         client_id: "fixture".into(),
         client_secret: "fixture".into(),
@@ -291,5 +292,50 @@ async fn subscription_payload_and_cancel_empty_204_are_bounded() {
     assert!(reqs[0].1.get("plan").is_none());
     assert_eq!(reqs[1].1, json!({"reason":"buyer cancellation"}));
     assert_eq!(reqs[1].0["paypal-request-id"], "operation456");
+    server.abort();
+}
+
+#[tokio::test]
+async fn transaction_search_preserves_fixed_window_and_unbounded_continuation_page() {
+    use axum::extract::Query;
+    use std::collections::HashMap;
+    let fixture = Router::new()
+        .route(
+            "/v1/oauth2/token",
+            post(|| async {
+                Json(json!({"access_token":"fixture","token_type":"Bearer","expires_in":300}))
+            }),
+        )
+        .route(
+            "/v1/reporting/transactions",
+            get(|Query(q): Query<HashMap<String, String>>| async move {
+                assert_eq!(q["start_date"], "2026-10-24T00:00:00Z");
+                assert_eq!(q["end_date"], "2026-10-25T00:00:00Z");
+                assert_eq!(q["page"], "101");
+                assert_eq!(q["page_size"], "100");
+                assert_eq!(q["balance_affecting_records_only"], "N");
+                Json(json!({"page":101,"total_pages":102,"transaction_details":[]}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
+    let (mut p, _, old) = self::fixture().await;
+    p.base = base;
+    assert_eq!(
+        p.transactions("2026-10-24T00:00:00Z", "2026-10-25T00:00:00Z", 101)
+            .await
+            .unwrap()["page"],
+        101
+    );
+    for (start, end, page) in [
+        ("bad", "bad", 1),
+        ("2026-09-01T00:00:00Z", "2026-10-25T00:00:00Z", 1),
+        ("2026-10-25T00:00:00Z", "2026-10-24T00:00:00Z", 1),
+        ("2026-10-24T00:00:00Z", "2026-10-25T00:00:00Z", 0),
+    ] {
+        assert!(p.transactions(start, end, page).await.is_err());
+    }
+    old.abort();
     server.abort();
 }

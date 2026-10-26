@@ -20,6 +20,7 @@ pub struct Config {
     pub relay_url: Option<String>,
     /// Exact extra browser origins (CORS and the wallet bridge), e.g. the main site.
     pub extra_origins: Vec<String>,
+    pub reporting_workspace: Option<String>,
 }
 
 impl Config {
@@ -96,6 +97,16 @@ impl Config {
             None
         };
         Ok(Some(Self {
+            reporting_workspace: get("CHAINPAY_PAYPAL_REPORTING_WORKSPACE")
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| {
+                    if s.len() <= 80 && s.trim() == s {
+                        Ok(s)
+                    } else {
+                        Err("Invalid reporting workspace")
+                    }
+                })
+                .transpose()?,
             database_url,
             client_id: required("PAYPAL_CLIENT_ID")?,
             client_secret: required("PAYPAL_CLIENT_SECRET")?,

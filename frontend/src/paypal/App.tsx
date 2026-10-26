@@ -5,6 +5,7 @@ import { BrandLogo } from "../brand/Brand";
 import { RobotStill } from "../pet/RobotStill";
 import { checkoutUrl, client, dollars, exportReceipt, shownMoney, type Principal, type Proposal, type Receipt, type Service } from "./client";
 
+import ReportingInbox from "./ReportingInbox";
 import { Resolution } from "./Resolution";
 import Subscriptions from "./Subscriptions";
 import Allowances from "./Allowances";
@@ -404,6 +405,7 @@ export default function App({ origin }: { origin: string }) {
             setShare={setShare}
           />}
           {principal && !panel && <Subscriptions key={`subscriptions:${principal.workspace}:${principal.id}:${token}`} api={api} principal={principal} services={services} selected={selected} onAllocated={task => { select(task); void refresh(); }} />}
+          {principal?.role === "merchant" && !panel && <ReportingInbox key={`reporting:${principal.workspace}:${principal.id}:${token}`} api={api} />}
         </div>
       </div>}
     </main>
