@@ -28,3 +28,15 @@ test('client refuses redirects and never sends existing site cookies',async()=>{
 test('excluded production hosts reject trailing DNS dots',()=>{
   for(const host of ['chainpayai.app','www.chainpayai.app','a.b.chainpayai.app','chainpay-relay.vercel.app']) for(const suffix of ['', '.']) assert.throws(()=>apiOrigin(`https://${host}${suffix}`));
 });
+
+test('mutating transport failures and unreadable successes preserve uncertainty, explicit rejection does not',async()=>{
+ const original=globalThis.fetch;
+ try {
+  for(const response of [()=>{throw new TypeError('fetch failed');},()=>new Response('{}',{status:503}),()=>new Response('{}',{status:409}),()=>new Response('broken json',{status:200})]) {
+   globalThis.fetch=async()=>response();
+   await assert.rejects(client('https://isolated.example','scoped-grant')('/tasks','POST',{request_id:'same'}),e=>e.constructor.name==='PayPalRequestUncertainError');
+  }
+  globalThis.fetch=async()=>Response.json({error:'Quote expired'},{status:422});
+  await assert.rejects(client('https://isolated.example','scoped-grant')('/tasks','POST',{request_id:'same'}),e=>e.constructor.name==='Error' && e.message==='Quote expired');
+ }finally{globalThis.fetch=original;}
+});
