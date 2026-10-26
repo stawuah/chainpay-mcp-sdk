@@ -1150,6 +1150,20 @@ async fn allowances_vault_purchases_and_approvals_end_to_end() {
     assert_eq!(requested["captured"], false);
     assert_eq!(fixture.creates.load(Ordering::SeqCst), creates_before);
     let requested_id = requested["id"].as_str().unwrap().to_string();
+    // Generic checkout capture cannot bypass the allowance authorization gate.
+    assert_eq!(
+        call(
+            &http,
+            &reqwest::Method::POST,
+            api(&format!("/tasks/{requested_id}/capture")),
+            &buyer,
+            Some(json!({"digest":requested["quote_digest"]}))
+        )
+        .await
+        .0,
+        409
+    );
+
     let (_, inbox) = call(
         &http,
         &reqwest::Method::GET,
@@ -1717,6 +1731,24 @@ async fn disputes_sync_evidence_pack_and_single_submission() {
     .await;
     assert_eq!(updated["disputes"][0]["status"], "UNDER_REVIEW");
     assert_eq!(updated["disputes"][0]["evidence"], "submitted");
+    // A delayed provider response cannot regress status or erase the submission.
+    let mut stale = detail();
+    stale["update_time"] = "2026-10-20T10:00:00.000Z".into();
+    stale["status"] = "WAITING_FOR_SELLER_RESPONSE".into();
+    let retained = store.upsert_dispute(&task, &stale).await.unwrap();
+    assert_eq!(retained.status, "UNDER_REVIEW");
+    assert_eq!(retained.evidence, "submitted");
+    assert_eq!(
+        store
+            .get(&task.id, &p)
+            .await
+            .unwrap()
+            .dispute
+            .unwrap()
+            .status,
+        "UNDER_REVIEW"
+    );
+
     // The pack digest moved with the status; the stale one is refused and the
     // fresh one replays without a second upload.
     assert_eq!(

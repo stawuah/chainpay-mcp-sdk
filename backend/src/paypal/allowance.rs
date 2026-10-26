@@ -421,6 +421,72 @@ impl Store {
         serde_json::from_value(row.get("record"))
             .map_err(|_| Error::Invalid("Stored task is invalid"))
     }
+    /// Linearize pause/revoke and dispatch under the same allowance lock.
+    /// Network I/O happens only after the intent transaction commits.
+    async fn claim_purchase_dispatch(
+        &self,
+        id: &str,
+        p: &Principal,
+        capture: bool,
+    ) -> Result<(Task, Allowance, Option<String>), Error> {
+        let peek = self.get(id, p).await?;
+        let allowance_id = &peek.purchase.as_ref().ok_or(Error::Conflict)?.allowance_id;
+        let mut tx = self.pool().begin().await?;
+        let value: Option<Value> =
+            sqlx::query_scalar("SELECT record FROM paypal_allowances WHERE id=$1 FOR UPDATE")
+                .bind(allowance_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let a = decode(value.ok_or(Error::NotFound)?)?;
+        if a.status != "Active"
+            || a.expires_at <= domain::now()
+            || a.vault.payment_token_id.is_none()
+        {
+            return Err(Error::Conflict);
+        }
+        let value: Value =
+            sqlx::query_scalar("SELECT record FROM paypal_tasks WHERE id=$1 FOR UPDATE")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let mut task: Task =
+            serde_json::from_value(value).map_err(|_| Error::Invalid("Stored task is invalid"))?;
+        if !task.can_read(p) || !matches!(p.role, Role::Buyer | Role::Agent) {
+            return Err(Error::Forbidden);
+        }
+        let key = if capture {
+            if task.captured || task.capture.is_some() {
+                None
+            } else {
+                let purchase = task.purchase.as_ref().ok_or(Error::Conflict)?;
+                if !purchase.policy.allowed
+                    || !matches!(purchase.mode.as_str(), "agent_pays" | "ask_first")
+                    || (a.mode == "ask_first" && purchase.approval.as_deref() != Some("approved"))
+                    || task
+                        .order
+                        .as_ref()
+                        .and_then(|o| o.observation.as_ref())
+                        .and_then(|o| o["status"].as_str())
+                        != Some("APPROVED")
+                {
+                    return Err(Error::Conflict);
+                }
+                let operation = Operation::begin()?;
+                let key = operation.key.clone();
+                task.capture = Some(operation);
+                Some(key)
+            }
+        } else {
+            task.start_vault_charge(p)?
+        };
+        sqlx::query("UPDATE paypal_tasks SET record=$1 WHERE id=$2")
+            .bind(json!(task))
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok((task, a, key))
+    }
     /// Locks the allowance first, then the task, in the same order purchase()
     /// uses. The task's allowance id never changes, so an unlocked peek is enough.
     async fn lock_purchase_task(
@@ -535,20 +601,8 @@ impl App {
     /// buyer approvals. Never dispatches twice: the order Operation is claimed
     /// under the task lock before any provider call.
     pub async fn charge_purchase(&self, id: &str, p: &Principal) -> Result<Task, Error> {
-        let task = self.store.get(id, p).await?;
-        let purchase = task.purchase.as_ref().ok_or(Error::Conflict)?;
-        let a = self.store.allowance_record(&purchase.allowance_id).await?;
-        // The rules passed earlier, but the buyer may have paused it since.
-        if a.status != "Active" || a.expires_at <= domain::now() {
-            return Err(Error::Conflict);
-        }
-        let token = a.vault.payment_token_id.clone().ok_or(Error::Invalid(
-            "Vault not ready; finish the PayPal approval first",
-        ))?;
-        let (task, key) = self
-            .store
-            .update(id, p, |t| t.start_vault_charge(p))
-            .await?;
+        let (task, a, key) = self.store.claim_purchase_dispatch(id, p, false).await?;
+        let token = a.vault.payment_token_id.as_deref().ok_or(Error::Conflict)?;
         if let Some(key) = key {
             match self
                 .provider
@@ -581,18 +635,7 @@ impl App {
         if task.captured || task.capture.is_some() || !approved {
             return Ok(task);
         }
-        let (task, key) = self
-            .store
-            .update(id, p, |t| {
-                if t.capture.is_some() {
-                    return Ok(None);
-                }
-                let op = Operation::begin()?;
-                let key = op.key.clone();
-                t.capture = Some(op);
-                Ok(Some(key))
-            })
-            .await?;
+        let (task, _, key) = self.store.claim_purchase_dispatch(id, p, true).await?;
         if let Some(key) = key {
             let order_id = task.order_id.as_deref().ok_or(Error::Conflict)?;
             match self.provider.capture_order(order_id, &key).await {

@@ -635,6 +635,9 @@ async fn capture(
     let p = app.principal(&headers).await?;
     let task = app.store.get(&id, &p).await?;
     task.buyer(&p)?;
+    if task.purchase.is_some() || task.subscription_funding.is_some() {
+        return Err(Error::Conflict);
+    }
     if body.digest != task.quote_digest || task.approved_at.is_none() {
         return Err(Error::Conflict);
     }
