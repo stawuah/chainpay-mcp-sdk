@@ -96,3 +96,22 @@ CREATE INDEX IF NOT EXISTS paypal_tasks_capture_id ON paypal_tasks((record->>'ca
 CREATE INDEX IF NOT EXISTS paypal_tasks_refund_id ON paypal_tasks((record->>'refund_id'));
 CREATE INDEX IF NOT EXISTS paypal_tasks_purchase_buyer ON paypal_tasks((record->'purchase'->>'buyer'));
 CREATE INDEX IF NOT EXISTS paypal_tasks_purchase_approval ON paypal_tasks((record->'purchase'->>'approval'));
+-- Reporting evidence is separate from all task/funding state.
+CREATE TABLE IF NOT EXISTS paypal_reporting_cursor (
+ workspace TEXT PRIMARY KEY, coverage_start BIGINT NOT NULL,
+ window_start BIGINT NOT NULL, window_end BIGINT NOT NULL, next_page INTEGER NOT NULL DEFAULT 1,
+ completed BOOLEAN NOT NULL DEFAULT FALSE, watermark BIGINT, checked_at BIGINT,
+ lease_token TEXT, lease_until BIGINT
+);
+ALTER TABLE paypal_reporting_cursor ADD COLUMN IF NOT EXISTS expected_pages INTEGER;
+CREATE TABLE IF NOT EXISTS paypal_reporting_rows (
+ workspace TEXT NOT NULL, id TEXT NOT NULL, raw JSONB NOT NULL, observation_hash TEXT NOT NULL,
+ first_seen BIGINT NOT NULL, checked_at BIGINT NOT NULL,
+ PRIMARY KEY(workspace,id)
+);
+CREATE TABLE IF NOT EXISTS paypal_reporting_observations (
+ workspace TEXT NOT NULL, row_id TEXT NOT NULL, hash TEXT NOT NULL, raw JSONB NOT NULL,
+ first_seen BIGINT NOT NULL, checked_at BIGINT NOT NULL,
+ PRIMARY KEY(workspace,row_id,hash),
+ FOREIGN KEY(workspace,row_id) REFERENCES paypal_reporting_rows(workspace,id)
+);

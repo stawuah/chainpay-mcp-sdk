@@ -524,8 +524,15 @@ impl Provider {
         end: &str,
         page: u32,
     ) -> Result<Value, ProviderError> {
-        if start.len() > 40 || end.len() > 40 || page == 0 || page > 100 {
+        if start.len() > 40 || end.len() > 40 || page == 0 || page > i32::MAX as u32 {
             return Err(ProviderError::Invalid("invalid reporting range/page"));
+        }
+        let from = chrono::DateTime::parse_from_rfc3339(start)
+            .map_err(|_| ProviderError::Invalid("invalid reporting start"))?;
+        let to = chrono::DateTime::parse_from_rfc3339(end)
+            .map_err(|_| ProviderError::Invalid("invalid reporting end"))?;
+        if to <= from || (to - from).num_seconds() > 31 * 86400 {
+            return Err(ProviderError::Invalid("invalid reporting window"));
         }
         self.request(
             Method::GET,
@@ -538,6 +545,7 @@ impl Provider {
                 ("page", page.to_string()),
                 ("page_size", "100".into()),
                 ("fields", "all".into()),
+                ("balance_affecting_records_only", "N".into()),
             ],
         )
         .await

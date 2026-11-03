@@ -325,6 +325,12 @@ pub fn router(app: App) -> Router {
         .route("/v1/paypal/receipts/{token}", get(public_receipt))
         .route("/v1/paypal/webhooks", post(webhook))
         .route("/internal/cron/paypal/events", post(cron_events))
+        .route("/v1/paypal/reporting/sync", post(super::reporting::sync))
+        .route("/v1/paypal/reporting/inbox", get(super::reporting::inbox))
+        .route(
+            "/v1/paypal/reporting/rows/{id}/explain",
+            post(super::reporting::explain),
+        )
         .layer(DefaultBodyLimit::max(200_000))
         .layer(
             CorsLayer::new()

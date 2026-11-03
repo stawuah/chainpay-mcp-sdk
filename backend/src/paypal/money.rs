@@ -55,3 +55,25 @@ mod tests {
         }
     }
 }
+
+/// Reporting preserves signed decimal strings, including non-USD precision.
+/// No rounding, currency conversion or inference of a currency's exponent.
+pub fn reporting_amount(value: &serde_json::Value) -> Option<serde_json::Value> {
+    let amount = value["value"].as_str()?;
+    let currency = value["currency_code"].as_str()?;
+    let digits = amount.strip_prefix('-').unwrap_or(amount);
+    let mut parts = digits.split('.');
+    let whole = parts.next()?;
+    let fraction = parts.next();
+    if amount.len() > 64
+        || whole.is_empty()
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || fraction.is_some_and(|s| s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()))
+        || parts.next().is_some()
+        || currency.len() != 3
+        || !currency.bytes().all(|b| b.is_ascii_uppercase())
+    {
+        return None;
+    }
+    Some(serde_json::json!({"value":amount,"currency_code":currency}))
+}
