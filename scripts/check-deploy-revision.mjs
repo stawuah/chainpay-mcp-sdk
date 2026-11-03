@@ -25,14 +25,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository ?? "")) throw new Error("Invalid repository");
   if (!/^[a-f0-9]{40}$/.test(sha ?? "")) throw new Error("Invalid revision");
   const api = path => JSON.parse(execFileSync("gh", ["api", path], { encoding: "utf8" }));
-  const tip = api(`repos/${repository}/commits/master`).sha;
-  const listRuns = () => api(`repos/${repository}/actions/workflows/release-checks.yml/runs?head_sha=${sha}&event=push&per_page=100`).workflow_runs;
+  const workflow = process.env.CHECK_WORKFLOW ?? "release-checks.yml";
+  if (!["release-checks.yml", "paypal-checks.yml"].includes(workflow)) throw new Error("Unsupported deployment check workflow");
+  const listRuns = () => api(`repos/${repository}/actions/workflows/${workflow}/runs?head_sha=${sha}&event=push&per_page=100`).workflow_runs;
   let runs = listRuns();
   for (let attempt = 1; attempt <= 12 && revisionPending({ repository, sha, runs }); attempt++) {
-    console.log(`Release checks for ${sha} not shown as completed yet; checking again in 5s (${attempt}/12)`);
+    console.log(`${workflow} for ${sha} not shown as completed yet; checking again in 5s (${attempt}/12)`);
     await new Promise(resolve => setTimeout(resolve, 5000));
     runs = listRuns();
   }
+  const tip = api(`repos/${repository}/commits/master`).sha;
   assertDeployRevision({ repository, sha, tip, runs });
-  console.log(`Release checks passed for current master ${sha}`);
+  console.log(`${workflow} passed for current master ${sha}`);
 }

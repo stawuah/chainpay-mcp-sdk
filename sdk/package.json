@@ -10,8 +10,19 @@
   },
   "homepage": "https://github.com/stawuah/chainpay-mcp-sdk/tree/master/sdk#readme",
   "bugs": "https://github.com/stawuah/chainpay-mcp-sdk/issues",
-  "keywords": ["chainpay", "solana", "devnet", "stablecoin", "payments", "receipts"],
-  "files": ["dist", "README.md", "LICENSE"],
+  "keywords": [
+    "chainpay",
+    "solana",
+    "devnet",
+    "stablecoin",
+    "payments",
+    "receipts"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "publishConfig": {
     "access": "public"
   },
@@ -33,6 +44,14 @@
     "./cards/private-repayment": {
       "types": "./dist/cards/private-repayment.d.ts",
       "import": "./dist/cards/private-repayment.js"
+    },
+    "./paypal": {
+      "types": "./dist/paypal.d.ts",
+      "import": "./dist/paypal.js"
+    },
+    "./paypal-widget": {
+      "types": "./dist/paypal-widget.d.ts",
+      "import": "./dist/paypal-widget.js"
     }
   },
   "scripts": {

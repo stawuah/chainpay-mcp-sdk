@@ -28,7 +28,10 @@
     "test:community-pet-browser": "node test/community-pet.browser.mjs && node test/community-review.browser.mjs",
     "test:dashboard-workspace": "node test/dashboard-workspace.browser.mjs",
     "test:cards-browser": "node test/cards.browser.mjs",
-    "test:bam-bam-browser": "node test/bam-bam.browser.mjs"
+    "test:bam-bam-browser": "node test/bam-bam.browser.mjs",
+    "dev:paypal": "vite --config vite.paypal.config.ts",
+    "build:paypal": "tsc --noEmit && vite build --config vite.paypal.config.ts",
+    "test:paypal-browser": "node test/paypal.browser.mjs && node test/paypal-preflight.browser.mjs && node test/paypal-subscriptions.browser.mjs && node test/paypal-resolution.browser.mjs"
   },
   "dependencies": {
     "@astryxdesign/core": "0.6.1",
@@ -42,6 +45,8 @@
     "@wallet-standard/app": "^1.1.1",
     "@wallet-standard/base": "^1.1.1",
     "@wallet-standard/features": "^1.1.1",
+    "ag-studio": "3.0.0",
+    "ag-studio-react": "3.0.0",
     "buffer": "^6.0.3",
     "gsap": "^3.15.0",
     "lenis": "^1.3.26",

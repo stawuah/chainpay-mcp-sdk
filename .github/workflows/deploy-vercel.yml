@@ -5,7 +5,7 @@ name: Deploy to Vercel
 # account's team, so Actions uploads the same staged roots as stage-vercel.mjs.
 on:
   workflow_run:
-    workflows: [Release checks]
+    workflows: [Release checks, PayPal extension checks]
     types: [completed]
     branches: [master]
   workflow_dispatch:
@@ -27,7 +27,8 @@ jobs:
     # Manual runs deploy master only, never another branch's unchecked code.
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.name == 'Release checks' &&
+       github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -96,3 +97,42 @@ jobs:
           - service: frontend
             project: prj_Dj8Zwe3XCNYWkBkkMYA8uyaeVumF # chainpay-web
     steps: *deploy
+  paypal:
+    # The PayPal sandbox service: one separate Vercel project (Rust function +
+    # PayPal workspace). Independent of the Colosseum relay, MCP and Convex, so
+    # it runs beside them, not after them. Off until the repository variable
+    # PAYPAL_VERCEL_PROJECT_ID names that project.
+    if: >-
+      vars.PAYPAL_VERCEL_PROJECT_ID != '' && (
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require both check suites for the current master revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          node scripts/check-deploy-revision.mjs
+          CHECK_WORKFLOW=paypal-checks.yml node scripts/check-deploy-revision.mjs
+      - name: Stage paypal
+        id: stage
+        env:
+          CHAINPAY_RELEASE_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+        run: echo "dir=$(node scripts/stage-vercel.mjs paypal)" >> "$GITHUB_OUTPUT"
+      - name: Deploy paypal
+        env:
+          VERCEL_PROJECT_ID: ${{ vars.PAYPAL_VERCEL_PROJECT_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          test -n "$VERCEL_TOKEN" || { echo "::error::Add the VERCEL_TOKEN repository secret"; exit 1; }
+          npx --yes vercel@54.14.0 deploy "${{ steps.stage.outputs.dir }}" --prod --yes --token "$VERCEL_TOKEN" \
+            --meta githubCommitSha=${{ github.event.workflow_run.head_sha || github.sha }}

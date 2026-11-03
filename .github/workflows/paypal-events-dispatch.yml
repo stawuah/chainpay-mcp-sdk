@@ -1,0 +1,36 @@
+name: PayPal inbox pass
+# On Vercel there is no always-on worker, so verified webhook events that could
+# not be resolved when they arrived wait here for a later pass. Each run calls
+# one bounded inbox pass on the PayPal service. It only reads from PayPal; it
+# can never dispatch a charge or a refund. Overlapping runs are harmless.
+#
+# Off until configured. Needs, in the repository settings:
+#   variable PAYPAL_EVENTS_DISPATCH_URL   the PayPal service origin, e.g. https://chainpay-paypal.vercel.app
+#   secret   PAYPAL_CRON_SECRET            the service's CHAINPAY_PAYPAL_CRON_SECRET (16+ characters)
+#   secret   VERCEL_AUTOMATION_BYPASS_SECRET  only if the deployment is protected
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: paypal-events-dispatch
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    if: vars.PAYPAL_EVENTS_DISPATCH_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Run one inbox pass
+        env:
+          SERVICE: ${{ vars.PAYPAL_EVENTS_DISPATCH_URL }}
+          CRON_SECRET: ${{ secrets.PAYPAL_CRON_SECRET }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$CRON_SECRET" || { echo "PAYPAL_CRON_SECRET is not set"; exit 1; }
+          headers=(-H "authorization: Bearer $CRON_SECRET")
+          if [ -n "$BYPASS" ]; then headers+=(-H "x-vercel-protection-bypass: $BYPASS"); fi
+          curl -fsS --max-time 120 -X POST "${headers[@]}" "${SERVICE%/}/internal/cron/paypal/events"
+          echo

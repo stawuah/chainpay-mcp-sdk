@@ -5,6 +5,8 @@ pub mod catalog;
 pub mod connectors;
 pub mod delivery;
 pub mod mandate_request;
+#[cfg(feature = "paypal")]
+pub mod paypal;
 pub mod receipts;
 pub mod rpc;
 pub mod server;

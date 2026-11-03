@@ -2,16 +2,30 @@
 name = "chainpay-backend"
 version = "0.1.0"
 edition = "2024"
+default-run = "chainpay-backend"
+
+[[bin]]
+name = "chainpay-paypal"
+path = "src/bin/paypal.rs"
+required-features = ["paypal"]
 
 [[bin]]
 name = "relay"
 path = "api/relay.rs"
 required-features = ["vercel"]
 
+[[bin]]
+# The PayPal service as a Vercel function. Vercel matches the bin name to api/paypal.rs.
+name = "paypal"
+path = "api/paypal.rs"
+required-features = ["vercel", "paypal"]
+
 [features]
+paypal = ["dep:chrono"]
 vercel = ["dep:vercel_runtime", "dep:tower"]
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
 hmac = "0.12"
 sha2_010 = { package = "sha2", version = "0.10" }
 vercel_runtime = { version = "2.4", features = ["axum"], optional = true }

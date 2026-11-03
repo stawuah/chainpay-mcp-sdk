@@ -2,6 +2,7 @@
 **/target/
 node_modules/
 dist/
+frontend/dist-paypal/
 test/.tmp-*.mjs
 frontend/test/.tmp-*.mjs
 smart-contract/.anchor/

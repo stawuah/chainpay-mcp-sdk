@@ -1,0 +1,83 @@
+# Reviewable proposal only. Apply as a NEW Blueprint with unique resource names.
+# This file is not the repository-root Blueprint and does not update Colosseum.
+services:
+  - type: web
+    name: chainpay-paypal-v3-api
+    runtime: rust
+    plan: 0.5c-512mb
+    region: oregon
+    branch: master
+    autoDeployTrigger: "off"
+    buildCommand: cargo build --release --locked -p chainpay-backend --features paypal --bin chainpay-paypal
+    startCommand: ./target/release/chainpay-paypal
+    # No healthCheckPath while the flags ship off: disabled health is a
+    # deliberate 503, and Render fails a deploy whose health path is not 2xx.
+    # Add /healthz in the dashboard after CHAINPAY_PAYPAL_ENABLED=true.
+    envVars:
+      - key: RUSTUP_TOOLCHAIN
+        value: stable
+      - key: CHAINPAY_PAYPAL_HOST
+        value: 0.0.0.0
+      - key: CHAINPAY_PAYPAL_ENABLED
+        value: "false"
+      - key: CHAINPAY_PAYPAL_NEW_PURCHASES
+        value: "false"
+      - key: CHAINPAY_PAYPAL_DATABASE_URL
+        fromDatabase:
+          name: chainpay-paypal-v3-db
+          property: connectionString
+      - key: CHAINPAY_PAYPAL_PUBLIC_ORIGIN
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: CHAINPAY_PAYPAL_AI_KEY
+        sync: false
+  - type: web
+    name: chainpay-paypal-v3-web
+    runtime: static
+    branch: master
+    autoDeployTrigger: "off"
+    buildCommand: npm ci --ignore-scripts && npm --prefix sdk run build && npm --prefix frontend ci --ignore-scripts && npm --prefix frontend run build:paypal
+    staticPublishPath: frontend/dist-paypal
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: VITE_CHAINPAY_PAYPAL
+        value: "false"
+      - key: VITE_CHAINPAY_PAYPAL_API_ORIGIN
+        sync: false
+      - key: VITE_CHAINPAY_PAYPAL_STUDIO_LICENSE
+        sync: false
+    routes:
+      - type: rewrite
+        source: /paypal/*
+        destination: /paypal.html
+      - type: rewrite
+        source: /paypal
+        destination: /paypal.html
+      - type: rewrite
+        source: /
+        destination: /paypal.html
+    headers:
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+databases:
+  - name: chainpay-paypal-v3-db
+    databaseName: chainpay_paypal_judging
+    user: chainpay_paypal_operator
+    plan: 0.1c-256mb
+    diskSizeGB: 5
+    postgresMajorVersion: "17"
+    region: oregon
+    ipAllowList: []

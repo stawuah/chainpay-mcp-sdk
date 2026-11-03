@@ -1,5 +1,21 @@
 # ChainPay Scope
 
+## Isolated PayPal hackathon delta — 24 October 2026
+
+Dre approved implementation of [PayPal v3](proposals/paypal-v3.md) on a separate
+integration branch and deployment. For this entry it supersedes the historical
+v2 treasury/payout proposal below. It does not change the submitted Colosseum
+product, its deployment, or the Solana mandate authority described in this file.
+
+The sandbox extension buys actual AI processing through PayPal Orders, records
+work-unit outcomes alongside payment observations, and permits exact refunds
+only after explicit merchant approval. PayPal checkout/refund approvals are
+separate from Solana mandates; never claim they are enforced by the Anchor program.
+Axum remains the backend, with a separate entrypoint and database. New routes,
+flags, secrets and frontend origin are isolated. No treasury bridge, escrow,
+live PayPal money, program upgrade, or deployment to existing production services.
+Publish focused PRs to the PayPal stack; review does not imply a master merge.
+
 ## One-Line Definition
 
 ChainPay is an agentic, policy-controlled stablecoin payment protocol on Solana.
