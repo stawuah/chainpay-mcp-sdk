@@ -5,6 +5,7 @@ import "../theme/astryx.css";
 import { apiOrigin } from "./client";
 import App from "./App";
 import "./paypal.css";
+import "./paypal-two.css";
 
 const root = createRoot(document.getElementById("root")!);
 try {
