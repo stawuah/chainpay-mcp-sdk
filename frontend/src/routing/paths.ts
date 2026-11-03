@@ -2,6 +2,7 @@ export const DASHBOARD_TABS = [
   "overview",
   "mandates",
   "cards",
+  "paypal",
   "payments",
   "agents",
   "receipts",
@@ -17,6 +18,10 @@ export type DashboardTab = (typeof DASHBOARD_TABS)[number];
 /** Sections of one card's page: `/app/cards/<cardId>/<section>`. Activity is the default. */
 export const CARD_SECTIONS = ["activity", "statement", "sharing", "privacy"] as const;
 export type CardSection = (typeof CARD_SECTIONS)[number];
+
+/** Sub-views of the PayPal tab: `/app/paypal/<view>`. Connect is the default. The tab itself is flag-gated in AppShell and nav. */
+export const PAYPAL_VIEWS = ["connect", "allowances", "marketplace", "activity", "disputes"] as const;
+export type PaypalView = (typeof PAYPAL_VIEWS)[number];
 const CARD_ID_PATTERN = /^[0-9a-f]{64}$/;
 
 export type AppRoute =
@@ -39,6 +44,8 @@ export type AppRoute =
       /** `/app/cards/<64-hex cardId>[/<section>]`. */
       cardId?: string;
       cardSection?: CardSection;
+      /** `/app/paypal/<view>`. */
+      paypalView?: PaypalView;
     }
   | { kind: "app-not-found"; path: string }
   | { kind: "public-not-found"; path: string }
@@ -76,6 +83,11 @@ export function parsePathname(pathname: string): AppRoute {
         if (section === undefined) return { kind: "app", tab: "cards", cardId };
         if ((CARD_SECTIONS as readonly string[]).includes(section)) return { kind: "app", tab: "cards", cardId, cardSection: section as CardSection };
       }
+      return { kind: "app-not-found", path: normalized };
+    }
+    if (rest.startsWith("paypal/")) {
+      const view = rest.slice("paypal/".length);
+      if ((PAYPAL_VIEWS as readonly string[]).includes(view)) return { kind: "app", tab: "paypal", paypalView: view as PaypalView };
       return { kind: "app-not-found", path: normalized };
     }
     if (rest === "mandates/new") return { kind: "app", tab: "mandates", mandateBuilder: true };
@@ -147,6 +159,7 @@ export function buildPath(route: AppRoute): string {
     if (route.cardId) return `/app/cards/${route.cardId}${route.cardSection && route.cardSection !== "activity" ? `/${route.cardSection}` : ""}`;
     return "/app/cards";
   }
+  if (route.tab === "paypal") return route.paypalView && route.paypalView !== "connect" ? `/app/paypal/${route.paypalView}` : "/app/paypal";
   if (route.mandateBuilder && route.tab === "mandates") return "/app/mandates/new";
   if (route.mandateDetail && route.tab === "mandates") return `/app/mandates/${encodeURIComponent(route.mandateDetail)}`;
   if (route.receiptDetail && route.tab === "receipts") return `/app/receipts/${encodeURIComponent(route.receiptDetail)}`;

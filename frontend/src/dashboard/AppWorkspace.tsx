@@ -84,6 +84,7 @@ export default function AppWorkspace() {
           cardsNew={currentRoute.cardsNew}
           cardId={currentRoute.cardId}
           cardSection={currentRoute.cardSection}
+          paypalView={currentRoute.paypalView}
           onTabChange={(tab, options) => navigate({
             kind: "app",
             tab,
@@ -93,6 +94,7 @@ export default function AppWorkspace() {
             cardsNew: options?.cardsNew,
             cardId: options?.cardId,
             cardSection: options?.cardSection,
+            paypalView: options?.paypalView,
           })}
           onNavigateHome={() => navigate({ kind: "landing" })}
           onRefresh={wallet.refreshMandate}

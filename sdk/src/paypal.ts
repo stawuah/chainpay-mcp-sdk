@@ -12,6 +12,7 @@ function taskId(value: string): string {
   if (!/^[a-f0-9]{32}$/.test(value)) throw new Error("Invalid PayPal task ID");
   return value;
 }
+export type PayPalAllowanceMode = "agent_pays" | "ask_first" | "ask_above";
 export type PayPalPurchaseItem = { id: string; qty: number };
 function catalogId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-z0-9-]{1,40}$/.test(value)) throw new Error("Invalid catalog, merchant or allowance ID");
@@ -107,15 +108,21 @@ export class PayPalAgentClient {
   }
   // mode is what the caller expects; the server refuses when the allowance disagrees,
   // so an approval request can never turn into a charge.
-  async purchase(requestId: string, allowanceId: string, merchant: string, items: PayPalPurchaseItem[], mode: "agent_pays" | "ask_first") {
+  async purchase(requestId: string, allowanceId: string, merchant: string, items: PayPalPurchaseItem[], mode: PayPalAllowanceMode, approvalOnly = false) {
     if (!/^[a-zA-Z0-9-]{16,64}$/.test(requestId)) throw new Error("request_id of 16–64 chars is required; reuse it when retrying");
-    if (mode !== "agent_pays" && mode !== "ask_first") throw new Error("mode is agent_pays or ask_first");
-    const body = { request_id: requestId, allowance_id: catalogId(allowanceId), merchant: catalogId(merchant), items: purchaseItems(items), mode };
+    if (!["agent_pays", "ask_first", "ask_above"].includes(mode)) throw new Error("mode is agent_pays, ask_first or ask_above");
+    if (typeof approvalOnly !== "boolean") throw new Error("approvalOnly must be a boolean");
+    const body = { request_id: requestId, allowance_id: catalogId(allowanceId), merchant: catalogId(merchant), items: purchaseItems(items), mode, ...(approvalOnly ? { approval_only: true } : {}) };
     const receipt = agentView(await this.#request("/purchases", "POST", body));
     const purchase = (receipt.purchase ?? {}) as Record<string, unknown>;
     const policy = (purchase.policy ?? {}) as Record<string, unknown>;
     const kind = policy.allowed === false ? "refused" : purchase.approval === "requested" ? "approval_requested" : "receipt";
     return { kind, ...(kind === "refused" ? { reason_code: policy.reason_code } : {}), review_url: `${this.#workspace}/paypal/?task=${taskId(String(receipt.id))}`, receipt };
+  }
+  /** Ask only: the server refuses any basket that could charge without buyer approval. */
+  requestPurchaseApproval(requestId: string, allowanceId: string, merchant: string, items: PayPalPurchaseItem[], mode: "ask_first" | "ask_above" = "ask_first") {
+    if (mode !== "ask_first" && mode !== "ask_above") throw new Error("Approval requests require ask_first or ask_above");
+    return this.purchase(requestId, allowanceId, merchant, items, mode, true);
   }
   async listApprovals() {
     const result = await this.#request("/purchases/approvals");

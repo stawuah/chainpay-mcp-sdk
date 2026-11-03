@@ -22,7 +22,9 @@ import { setMintMetadataFetcherOverride } from "../../src/ui/amount/useMintMetad
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import Dashboard from "../../src/dashboard/Dashboard";
-import type { CardSection, DashboardTab } from "../../src/routing/paths";
+import type { CardSection, DashboardTab, PaypalView } from "../../src/routing/paths";
+import { setPaypalSourceOverride } from "../../src/dashboard/paypal/source";
+import { createFixturePaypalSource } from "../../src/dashboard/paypal/fixtureSource";
 import { CardsNotEnabledError, setCardsSourceOverride } from "../../src/dashboard/cards/source";
 import { createFixtureCardsSource, FIXTURE_CARD_IDS } from "../../src/dashboard/cards/fixtureSource";
 import { cardStatus } from "../../src/dashboard/cards/lifecycle";
@@ -423,6 +425,15 @@ setCardsSourceOverride(CARDS_OFF
   : CLEAR
     ? { ...fixtureCards, listCards: async () => (await fixtureCards.listCards()).filter((card) => !(CARD_ATTENTION_KEYS as readonly string[]).includes(cardStatus(card).key)) }
     : fixtureCards);
+// PayPal: `?tab=paypal[&view=connect|allowances|marketplace|activity|disputes][&paypal=empty|fail]`.
+// The tab only exists when the dev server runs with VITE_CHAINPAY_PAYPAL=true.
+// ILLUSTRATIVE sandbox data through the same request paths the PayPal service serves.
+setPaypalSourceOverride(createFixturePaypalSource({
+  wallet: OWNER,
+  empty: QUERY.get("paypal") === "empty" || EMPTY,
+  fail: QUERY.get("paypal") === "fail" || FAIL,
+  now: QUERY.has("paypal-clock") ? Number(QUERY.get("paypal-clock")) : undefined,
+}));
 const CARD_KEY = CARD_QUERY.get("card") as keyof typeof FIXTURE_CARD_IDS | null;
 type CardRoute = { cardsNew?: boolean; cardId?: string; cardSection?: CardSection };
 const noop = async () => {};
@@ -431,6 +442,7 @@ function Harness() {
   const [tab, setTab] = useState<DashboardTab>(
     (new URLSearchParams(location.search).get("tab") as DashboardTab) || "overview",
   );
+  const [paypalView, setPaypalView] = useState<PaypalView | undefined>((QUERY.get("view") as PaypalView) ?? undefined);
   const [cardRoute, setCardRoute] = useState<CardRoute>({
     cardsNew: CARD_QUERY.has("new") || undefined,
     cardId: CARD_KEY ? FIXTURE_CARD_IDS[CARD_KEY] : undefined,
@@ -457,7 +469,8 @@ function Harness() {
       cardsNew={cardRoute.cardsNew}
       cardId={cardRoute.cardId}
       cardSection={cardRoute.cardSection}
-      onTabChange={(next, options) => { setTab(next); setCardRoute({ cardsNew: options?.cardsNew, cardId: options?.cardId, cardSection: options?.cardSection }); }}
+      paypalView={paypalView}
+      onTabChange={(next, options) => { setTab(next); setPaypalView(options?.paypalView); setCardRoute({ cardsNew: options?.cardsNew, cardId: options?.cardId, cardSection: options?.cardSection }); }}
       onNavigateHome={() => {}}
       onRefresh={noop}
       onSelectMandate={() => {}}

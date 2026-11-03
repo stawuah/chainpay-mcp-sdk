@@ -72,7 +72,8 @@ their captures and submit one evidence pack built only from stored records.
 | `POST /purchases/{id}/deny` `{reason}` | buyer | releases the reserve |
 | `POST /tasks/{id}/fulfil` | merchant | moves Pending units to delivered or failed |
 | `POST /tasks/{id}/refund-request` | buyer, agent | stores the request; the merchant approves through `POST /tasks/{id}/refund` |
-| `GET /disputes`, `POST /disputes/sync` | merchant | sync asks PayPal per captured task, newest 100, rate limited |
+| `GET /disputes` | buyer, merchant | buyers receive only their own dispute status projection; merchant records remain private |
+| `POST /disputes/sync` | merchant | sync asks PayPal per captured task, newest 100, rate limited |
 | `GET /disputes/{id}/evidence`, `POST … {digest}` | merchant | preview the pack; submit it once |
 
 Receipts gain `purchase`, `dispute` and `funding_method: "paypal_vault"` in the
@@ -97,3 +98,14 @@ whether the sandbox app can vault a PayPal wallet and read the Disputes API.
 - Day boundaries for `max_per_day` are UTC. Weekday-only catalog items use UTC.
 - The evidence pack is text only; PayPal file uploads are not used.
 - Dispute sync is bounded to the newest 100 captured tasks in the workspace.
+
+## Review corrections — 26 October 2026
+
+The dashboard threshold mode `ask_above` asks the buyer above `ask_above_cents`;
+`categories` restricts catalog merchant kinds. SDK/MCP requests support these fields.
+`approval_only: true` on an explicit approval request must never dispatch money, even
+when a threshold would ordinarily permit an automatic purchase. Unknown modes fail
+closed. Refunds never replenish lifetime allowance caps; they still reduce net cost.
+Buyer dispute reads expose only owned task/dispute status fields, never raw provider
+records, merchant evidence or submission authority. See the production-readiness
+review for remaining external release gates.

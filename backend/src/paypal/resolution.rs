@@ -656,6 +656,7 @@ mod tests {
         let provider_server =
             tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
         let config = Config {
+            reporting_workspace: None,
             database_url: "unused".into(),
             client_id: "fixture".into(),
             client_secret: "fixture".into(),
@@ -665,6 +666,9 @@ mod tests {
             subscriptions: false,
             subscription_plan: None,
             allowances: true,
+            wallet_login: false,
+            relay_url: None,
+            extra_origins: vec![],
         };
         let app = App {
             ai: Ai::fixture(format!("{base}/model")),
@@ -927,6 +931,7 @@ mod tests {
         let provider_server =
             tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
         let config = Config {
+            reporting_workspace: None,
             database_url: "unused".into(),
             client_id: "fixture".into(),
             client_secret: "fixture".into(),
@@ -936,6 +941,9 @@ mod tests {
             subscriptions: false,
             subscription_plan: None,
             allowances: true,
+            wallet_login: false,
+            relay_url: None,
+            extra_origins: vec![],
         };
         let app = App {
             ai: Ai::fixture("http://127.0.0.1:1/unused".into()),
@@ -1174,6 +1182,7 @@ mod tests {
         let provider_server =
             tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
         let config = Config {
+            reporting_workspace: None,
             database_url: "unused".into(),
             client_id: "fixture".into(),
             client_secret: "fixture".into(),
@@ -1183,6 +1192,9 @@ mod tests {
             subscriptions: false,
             subscription_plan: None,
             allowances: true,
+            wallet_login: false,
+            relay_url: None,
+            extra_origins: vec![],
         };
         let app = App {
             ai: Ai::fixture("http://127.0.0.1:1/unused".into()),

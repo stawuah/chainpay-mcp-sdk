@@ -5,6 +5,7 @@ import { LandingPage } from "./landing/LandingPage";
 import { AppNotFoundPage, PublicNotFoundPage } from "./routing/NotFoundPages";
 import { usePublicWallet } from "./wallet/public-session";
 import { PetMount } from "./pet/PetMount";
+import { tabEnabled } from "./dashboard/nav";
 
 const WalletController = lazy(() => import("./wallet/WalletController"));
 const AppWorkspace = lazy(() => import("./dashboard/AppWorkspace"));
@@ -97,10 +98,12 @@ function Routes() {
     return <PublicNotFoundPage path={currentRoute.path} />;
   }
 
-  if (currentRoute.kind === "app-not-found") {
+  // A flag-gated tab that is switched off (PayPal) is not found, the same as a mistyped tab.
+  const disabledTab = currentRoute.kind === "app" && !tabEnabled(currentRoute.tab);
+  if (currentRoute.kind === "app-not-found" || disabledTab) {
     return (
       <AppNotFoundPage
-        path={currentRoute.path}
+        path={currentRoute.kind === "app-not-found" ? currentRoute.path : window.location.pathname}
         onOpenOverview={() => navigate({ kind: "app", tab: "overview" })}
       />
     );

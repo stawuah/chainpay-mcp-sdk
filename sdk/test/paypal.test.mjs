@@ -130,3 +130,20 @@ test('approvals inbox and refund request carry no approval digests',async()=>{
  await assert.rejects(client.requestRefund('b'.repeat(32),' '));
  }finally{globalThis.fetch=previous;}
 });
+
+test('threshold purchases preserve mode and approval-only requests cannot use a charging mode', async () => {
+ const previous=globalThis.fetch; const bodies=[];
+ try {
+  globalThis.fetch=async (_url, init) => {bodies.push(JSON.parse(init.body)); return Response.json({id:'b'.repeat(32),purchase:{approval:'requested',policy:{allowed:true}}});};
+  const client=new PayPalAgentClient(config);
+  const args=['threshold-purchase-stable','a'.repeat(32),'grocer',[{id:'oat-milk',qty:2}]];
+  const purchase=await client.purchase(...args,'ask_above');
+  assert.equal(purchase.kind,'approval_requested');assert.equal(bodies[0].mode,'ask_above');assert.equal(bodies[0].approval_only,undefined);
+  await client.requestPurchaseApproval(...args,'ask_above');
+  await client.requestPurchaseApproval(...args,'ask_above');
+  assert.deepEqual(bodies[1],{...bodies[0],approval_only:true});assert.deepEqual(bodies[2],bodies[1]);
+  assert.throws(()=>client.requestPurchaseApproval(...args,'agent_pays'),/Approval requests/);
+  await assert.rejects(client.purchase(...args,'unknown_mode'),/mode/);
+  assert.equal(bodies.length,3);
+ } finally {globalThis.fetch=previous;}
+});

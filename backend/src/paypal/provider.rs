@@ -123,9 +123,10 @@ impl Provider {
                 ));
             }
         }
-        let permits_empty = method == Method::POST
+        let permits_empty = (method == Method::POST
             && path.starts_with("/v1/billing/subscriptions/")
-            && path.ends_with("/cancel");
+            && path.ends_with("/cancel"))
+            || (method == Method::DELETE && path.starts_with("/v3/vault/payment-tokens/"));
         let token = self.access_token().await?;
         let mut request = self
             .client
@@ -364,6 +365,18 @@ impl Provider {
         )
         .await
     }
+    /// Deletes a vaulted payment token. PayPal answers an empty 204.
+    pub async fn delete_payment_token(&self, token: &str) -> Result<Value, ProviderError> {
+        id(token)?;
+        self.request(
+            Method::DELETE,
+            &format!("/v3/vault/payment-tokens/{token}"),
+            None,
+            None,
+            &[],
+        )
+        .await
+    }
     /// Merchant-initiated charge against a vaulted source. Same purchase unit
     /// shape as create_order so observations::order can check it.
     pub async fn create_vault_order(
@@ -511,8 +524,15 @@ impl Provider {
         end: &str,
         page: u32,
     ) -> Result<Value, ProviderError> {
-        if start.len() > 40 || end.len() > 40 || page == 0 || page > 100 {
+        if start.len() > 40 || end.len() > 40 || page == 0 || page > i32::MAX as u32 {
             return Err(ProviderError::Invalid("invalid reporting range/page"));
+        }
+        let from = chrono::DateTime::parse_from_rfc3339(start)
+            .map_err(|_| ProviderError::Invalid("invalid reporting start"))?;
+        let to = chrono::DateTime::parse_from_rfc3339(end)
+            .map_err(|_| ProviderError::Invalid("invalid reporting end"))?;
+        if to <= from || (to - from).num_seconds() > 31 * 86400 {
+            return Err(ProviderError::Invalid("invalid reporting window"));
         }
         self.request(
             Method::GET,
@@ -525,6 +545,7 @@ impl Provider {
                 ("page", page.to_string()),
                 ("page_size", "100".into()),
                 ("fields", "all".into()),
+                ("balance_affecting_records_only", "N".into()),
             ],
         )
         .await
