@@ -12,8 +12,18 @@ function taskId(value: string): string {
   if (!/^[a-f0-9]{32}$/.test(value)) throw new Error("Invalid PayPal task ID");
   return value;
 }
+export type PayPalPurchaseItem = { id: string; qty: number };
+function catalogId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-z0-9-]{1,40}$/.test(value)) throw new Error("Invalid catalog, merchant or allowance ID");
+  return value;
+}
+function purchaseItems(value: unknown): PayPalPurchaseItem[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 10 || value.some(i => !i || typeof i !== "object" || Array.isArray(i) || Object.keys(i).some(k => !["id", "qty"].includes(k)) || !Number.isInteger(i.qty) || i.qty < 1 || i.qty > 10)) throw new Error("Items must be 1–10 lines of {id, qty} with qty 1–10");
+  return value.map(i => ({ id: catalogId(i.id), qty: i.qty as number }));
+}
 function agentView(value: Record<string, unknown>): Record<string, unknown> {
-  const { quote_digest: _quote, share_token: _share, ...view } = value;
+  // The vault block holds the buyer's PayPal token ids; an agent never gets to see it.
+  const { quote_digest: _quote, share_token: _share, vault: _vault, ...view } = value;
   if (Array.isArray(view.refunds)) view.refunds = view.refunds.map((refund: Record<string, unknown>) => { const {digest: _digest, ...readOnly} = refund; return readOnly; });
   return view;
 }
@@ -84,4 +94,36 @@ export class PayPalAgentClient {
     return {...proposal,approval:"Merchant review and approval required in the workspace. This tool cannot refund."};
   }
   explain(id: string) { return this.#request(`/tasks/${taskId(id)}/explain`,"POST"); }
+  async findAllowance() {
+    const result = await this.#request("/allowances");
+    return { ...result, allowances: Array.isArray(result.allowances) ? result.allowances.map((a: Record<string, unknown>) => agentView(a)) : [] };
+  }
+  searchCatalog(q?: string) {
+    if (q !== undefined && (typeof q !== "string" || new TextEncoder().encode(q).length > 200)) throw new Error("Catalog search text must be at most 200 bytes");
+    return this.#request(q === undefined || !q.trim() ? "/catalog" : `/catalog?q=${encodeURIComponent(q)}`);
+  }
+  async quotePurchase(input: { merchant: string; items: PayPalPurchaseItem[]; allowance_id?: string }) {
+    return this.#request("/purchases/quote", "POST", { merchant: catalogId(input.merchant), items: purchaseItems(input.items), ...(input.allowance_id === undefined ? {} : { allowance_id: catalogId(input.allowance_id) }) });
+  }
+  // mode is what the caller expects; the server refuses when the allowance disagrees,
+  // so an approval request can never turn into a charge.
+  async purchase(requestId: string, allowanceId: string, merchant: string, items: PayPalPurchaseItem[], mode: "agent_pays" | "ask_first") {
+    if (!/^[a-zA-Z0-9-]{16,64}$/.test(requestId)) throw new Error("request_id of 16–64 chars is required; reuse it when retrying");
+    if (mode !== "agent_pays" && mode !== "ask_first") throw new Error("mode is agent_pays or ask_first");
+    const body = { request_id: requestId, allowance_id: catalogId(allowanceId), merchant: catalogId(merchant), items: purchaseItems(items), mode };
+    const receipt = agentView(await this.#request("/purchases", "POST", body));
+    const purchase = (receipt.purchase ?? {}) as Record<string, unknown>;
+    const policy = (purchase.policy ?? {}) as Record<string, unknown>;
+    const kind = policy.allowed === false ? "refused" : purchase.approval === "requested" ? "approval_requested" : "receipt";
+    return { kind, ...(kind === "refused" ? { reason_code: policy.reason_code } : {}), review_url: `${this.#workspace}/paypal/?task=${taskId(String(receipt.id))}`, receipt };
+  }
+  async listApprovals() {
+    const result = await this.#request("/purchases/approvals");
+    return { ...result, approvals: Array.isArray(result.approvals) ? result.approvals.map((r: Record<string, unknown>) => agentView(r)) : [] };
+  }
+  async requestRefund(id: string, reason: string) {
+    if (typeof reason !== "string" || !reason.trim() || new TextEncoder().encode(reason).length > 2000) throw new Error("Supply a refund reason of 1–2000 bytes");
+    const { digest: _approval, ...request } = await this.#request(`/tasks/${taskId(id)}/refund-request`, "POST", { reason });
+    return { ...request, approval: "Merchant review and approval required in the workspace. This tool cannot refund." };
+  }
 }

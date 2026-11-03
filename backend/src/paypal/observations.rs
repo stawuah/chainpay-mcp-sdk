@@ -126,19 +126,27 @@ pub fn receipt(task: &Task, public: bool) -> Value {
     let units: Vec<Value> = task.units.iter().enumerate().map(|(i,u)| {
         let decision = task.resolution.iter().rev().find(|e|e.intent.binding.unit==i && e.intent.binding.revision==u.revision && e.intent.binding.output_hash==u.output_hash && matches!(e.intent.action,super::resolution::Action::Accept|super::resolution::Action::Challenge));
         let mut view = json!({"buyer_review":decision.map(|e|&e.intent.action),"index":i,"state":u.state,"input_hash":u.input_hash,"output_hash":u.output_hash,"revision":u.revision,"source":"merchant work record"});
-        if !public { view["name"] = if task.offer_version == super::services::COMPARE { task.documents.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(" ↔ ") } else { task.documents[i].name.clone() }.into(); view["result"] = json!(u.result); view["reason"] = json!(u.reason); }
+        if !public { view["name"] = if task.offer_version == super::services::COMPARE { task.documents.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(" ↔ ") } else { task.documents[i].name.clone() }.into(); view["result"] = json!(u.result); view["reason"] = json!(u.reason); view["price"] = json!(task.unit_price(i).ok().map(Cents::decimal)); }
         view
     }).collect();
+    let service_name = match &task.purchase {
+        Some(c) => super::catalog::merchant(&c.merchant).ok().map(|m| m.name),
+        None => super::services::get(&task.offer_version)
+            .ok()
+            .map(|s| s.name),
+    };
     let mut view = json!({
         "id":task.id,"sandbox":true,"currency":"USD","offer_version":task.offer_version,
-        "service_name":super::services::get(&task.offer_version).ok().map(|s| s.name),
+        "service_name":service_name,
         "created_at":task.created_at,"approved_at":task.approved_at,
         "allowance_units":task.allowance_units().ok(),
         "gross":task.amount.decimal(),"captured":task.captured,"payment_review":task.payment_review,
         "refund":Cents(task.confirmed_refunds()).decimal(),"refund_confirmed":task.confirmed_refunds()>0,
         "refund_pending":task.refunds.iter().any(|r|r.operation.is_some() && !r.confirmed),
         "reserved_refunds":Cents(task.reserved_refunds()).decimal(),"confirmed_refunds":Cents(task.confirmed_refunds()).decimal(),
-        "funding_method":if task.subscription_funding.is_some(){"subscription_allowance"}else{"paypal_order"},
+        "funding_method":if task.purchase.is_some(){"paypal_vault"}else if task.subscription_funding.is_some(){"subscription_allowance"}else{"paypal_order"},
+        "purchase":task.purchase.as_ref().map(|c| json!({"merchant":c.merchant,"policy":{"rule":c.policy.rule}})),
+        "dispute":task.dispute.as_ref().map(|d| json!({"status":d.status})),
         "subscription_funding":task.subscription_funding.as_ref().map(|f|json!({"subscription_id":f.subscription_id,"payment_id":f.payment_id,"units":f.units,"period_start":f.period_start,"period_end":f.period_end})),"funded":task.verified_funded(),
         "net":task.net().map(Cents::decimal),"units":units,
         "order_id":task.order_id,"capture_id":task.capture_id,"refund_id":task.refund_id,
@@ -158,6 +166,8 @@ pub fn receipt(task: &Task, public: bool) -> Value {
         view["quote_expires_at"] = task.quote_expires_at.into();
         view["approval_url"] = json!(task.approval_url);
         view["share_token"] = json!(task.share_token);
+        view["purchase"] = json!(task.purchase);
+        view["dispute"] = json!(task.dispute);
     }
     view
 }

@@ -98,7 +98,10 @@ impl App {
     /// Inbox workers only perform reads; they can never dispatch a charge/refund.
     pub async fn process_events(&self) -> Result<(), Error> {
         for event in self.store.pending_events().await? {
-            if self.subscription_event(&event).await.unwrap_or(false) {
+            if self.subscription_event(&event).await.unwrap_or(false)
+                || self.dispute_event(&event).await.unwrap_or(false)
+                || self.vault_event(&event).await.unwrap_or(false)
+            {
                 self.store
                     .mark_event(event["id"].as_str().unwrap_or(""))
                     .await?;
@@ -278,6 +281,9 @@ pub fn router(app: App) -> Router {
         app.config.public_origin.parse().expect("validated origin");
     Router::new()
         .merge(super::subscriptions::router())
+        .merge(super::allowance::router())
+        .merge(super::catalog::router())
+        .merge(super::disputes::router())
         .route("/healthz", get(healthz))
         .route("/v1/paypal/session", get(session).delete(logout))
         .route("/v1/paypal/offers", get(offers))
@@ -344,6 +350,11 @@ async fn process(
 ) -> Result<StatusCode, Error> {
     let p = app.principal(&headers).await?;
     let (task, _) = app.store.update(&id, &p, |_| Ok(())).await?;
+    if task.purchase.is_some() {
+        return Err(Error::Invalid(
+            "Catalog purchases are fulfilled by the merchant, not processed here",
+        ));
+    }
     if !task.verified_funded() {
         return Err(Error::Invalid(
             "A verified capture is required before processing",
@@ -624,6 +635,9 @@ async fn capture(
     let p = app.principal(&headers).await?;
     let task = app.store.get(&id, &p).await?;
     task.buyer(&p)?;
+    if task.purchase.is_some() || task.subscription_funding.is_some() {
+        return Err(Error::Conflict);
+    }
     if body.digest != task.quote_digest || task.approved_at.is_none() {
         return Err(Error::Conflict);
     }
